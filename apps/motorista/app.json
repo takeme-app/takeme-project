@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "Take Me - Motorista",
+    "slug": "take-me-motorista",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": { "supportsTablet": true },
+    "android": { "adaptiveIcon": { "backgroundColor": "#ffffff" } },
+    "extra": { "eas": { "projectId": "" } }
+  }
+}

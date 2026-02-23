@@ -1,0 +1,22 @@
+{
+  "name": "take-me",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "cliente": "npm run start --workspace=cliente",
+    "motorista": "npm run start --workspace=motorista",
+    "preparador-encomendas": "npm run start --workspace=preparador-encomendas",
+    "preparador-excursoes": "npm run start --workspace=preparador-excursoes",
+    "admin": "npm run start --workspace=admin"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "overrides": {
+    "minimatch": "^10.2.1",
+    "tar": "^7.5.8"
+  }
+}
