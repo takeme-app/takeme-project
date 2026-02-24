@@ -5,10 +5,33 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "ios": { "supportsTablet": true },
-    "android": { "adaptiveIcon": { "backgroundColor": "#ffffff" } },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    },
     "extra": {
-      "eas": { "projectId": "" }
-    }
+      "eas": {
+        "projectId": ""
+      }
+    },
+    "experiments": {
+      "autolinkingModuleResolution": true
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "O app precisa acessar suas fotos para alterar a foto de perfil."
+        }
+      ],
+      ["@stripe/stripe-react-native",{"merchantIdentifier":"merchant.com.takeme.cliente"}]
+    ]
   }
 }

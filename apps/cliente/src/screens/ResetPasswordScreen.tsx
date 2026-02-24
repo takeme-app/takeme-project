@@ -1,0 +1,225 @@
+import { useState } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
+import { StatusBar } from 'expo-status-bar';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../navigation/types';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+
+type Props = NativeStackScreenProps<RootStackParamList, 'ResetPassword'>;
+
+export function ResetPasswordScreen({ navigation }: Props) {
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [hidePassword, setHidePassword] = useState(true);
+  const [hideConfirm, setHideConfirm] = useState(true);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async () => {
+    if (password.length < 8) {
+      Alert.alert('Atenção', 'A senha deve ter no mínimo 8 caracteres.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      Alert.alert('Atenção', 'As senhas não coincidem.');
+      return;
+    }
+    if (!isSupabaseConfigured) {
+      Alert.alert(
+        'Configuração',
+        'Serviço não configurado. Verifique as variáveis do Supabase.'
+      );
+      return;
+    }
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw error;
+      navigation.navigate('ResetPasswordSuccess');
+    } catch (e: unknown) {
+      const message =
+        e && typeof e === 'object' && 'message' in e
+          ? String((e as { message: string }).message)
+          : 'Não foi possível atualizar a senha. Abra o link do e-mail novamente e tente de novo.';
+      Alert.alert('Erro', message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <StatusBar style="dark" />
+      <TouchableOpacity
+        style={styles.backButton}
+        onPress={() => navigation.goBack()}
+        activeOpacity={0.7}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+      >
+        <Text style={styles.backArrow}>←</Text>
+      </TouchableOpacity>
+
+      <Text style={styles.title}>Defina sua nova senha</Text>
+      <Text style={styles.subtitle}>
+        Tudo certo! Agora é só definir uma nova senha para acessar sua conta.
+      </Text>
+
+      <View style={styles.passwordRow}>
+        <TextInput
+          style={[styles.input, styles.inputPassword]}
+          placeholder="Insira sua senha"
+          placeholderTextColor="#9CA3AF"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry={hidePassword}
+        />
+        <TouchableOpacity
+          style={styles.eyeButton}
+          onPress={() => setHidePassword((v) => !v)}
+        >
+          <View style={styles.eyeIconWrap}>
+            <MaterialIcons
+              name={hidePassword ? 'visibility' : 'visibility-off'}
+              size={22}
+              color="#6B7280"
+              style={styles.eyeIconCenter}
+            />
+          </View>
+        </TouchableOpacity>
+      </View>
+      <View style={styles.passwordRow}>
+        <TextInput
+          style={[styles.input, styles.inputPassword]}
+          placeholder="Confirme sua nova senha"
+          placeholderTextColor="#9CA3AF"
+          value={confirmPassword}
+          onChangeText={setConfirmPassword}
+          secureTextEntry={hideConfirm}
+        />
+        <TouchableOpacity
+          style={styles.eyeButton}
+          onPress={() => setHideConfirm((v) => !v)}
+        >
+          <View style={styles.eyeIconWrap}>
+            <MaterialIcons
+              name={hideConfirm ? 'visibility' : 'visibility-off'}
+              size={22}
+              color="#6B7280"
+              style={styles.eyeIconCenter}
+            />
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      <TouchableOpacity
+        style={[styles.submitButton, loading && styles.submitButtonDisabled]}
+        activeOpacity={0.8}
+        onPress={handleSubmit}
+        disabled={loading}
+      >
+        {loading ? (
+          <ActivityIndicator color="#FFFFFF" />
+        ) : (
+          <Text style={styles.submitButtonText}>Atualizar senha</Text>
+        )}
+      </TouchableOpacity>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 24,
+    paddingTop: 60,
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 24,
+  },
+  backArrow: {
+    fontSize: 22,
+    color: '#000000',
+    fontWeight: '600',
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#000000',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 15,
+    color: '#6B7280',
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+  input: {
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    color: '#000000',
+  },
+  passwordRow: {
+    position: 'relative',
+    marginBottom: 0,
+  },
+  inputPassword: {
+    paddingRight: 48,
+  },
+  eyeButton: {
+    position: 'absolute',
+    right: 12,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  eyeIconWrap: {
+    height: 24,
+    width: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  eyeIconCenter: {
+    marginTop: -3,
+  },
+  submitButton: {
+    backgroundColor: '#000000',
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  submitButtonDisabled: {
+    opacity: 0.7,
+  },
+  submitButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+});

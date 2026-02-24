@@ -1,0 +1,19 @@
+# Edge Functions chamadas durante o cadastro/login sem sessão de usuário.
+# Sem verify_jwt = false, o gateway retorna 401 ao invocar com anon key.
+# Segurança: as funções validam os dados no body (email, código, etc.).
+
+[functions.send-email-verification-code]
+verify_jwt = false
+
+[functions.verify-email-code]
+verify_jwt = false
+
+[functions.send-welcome-email]
+verify_jwt = false
+
+# Cartão/Stripe: gateway não repassa Authorization; a função valida o JWT com getClaims().
+[functions.save-payment-method]
+verify_jwt = false
+
+[functions.ensure-stripe-customer]
+verify_jwt = false

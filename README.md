@@ -45,6 +45,15 @@ Monorepo do Take Me — app tipo Uber com 5 ambientes: Cliente, Motorista, Prepa
 
    Não coloque `SUPABASE_SERVICE_ROLE_KEY` em nenhum app; use apenas em Edge Functions ou backends privados.
 
+3. **Storage (foto de perfil)**  
+   O app cliente envia a foto de perfil para o bucket **avatars**. Para criar o bucket automaticamente, na raiz do projeto adicione no `.env` a **SUPABASE_SERVICE_ROLE_KEY** (Dashboard > Settings > API > service_role) e rode:
+
+   ```bash
+   npm run create-avatars-bucket
+   ```
+
+   Se preferir criar manualmente: [Storage](https://supabase.com/dashboard/project/xdxzxyzdgwpucwuaxvik/storage/buckets) → **New bucket** → id: `avatars`, marque como **Public**.
+
 ## Rodar os apps
 
 Na raiz:
@@ -65,4 +74,13 @@ Ou entre na pasta do app e rode `npm run start` (ou `npx expo start`).
 ## MCP
 
 - **Supabase:** use o MCP user-supabase para migrations, SQL, tipos (`generate_typescript_types`) e Edge Functions. Configure o MCP para o projeto **xdxzxyzdgwpucwuaxvik** ([dashboard](https://supabase.com/dashboard/project/xdxzxyzdgwpucwuaxvik)).
-- **Figma:** adicione o MCP do Figma nas configurações do Cursor quando quiser alinhar UI aos designs.
+- **Figma (local):** use o **Figma Desktop MCP Server** para alinhar UI aos designs.
+  1. Abra o **Figma Desktop** (não o navegador), vá em **Preferences** e ative **Dev Mode MCP Server**.
+  2. O servidor sobe em `http://127.0.0.1:3845/mcp`.
+  3. No Cursor: **Settings → Cursor Settings → MCP** → "Add new global MCP server" e adicione:
+     ```json
+     "figma-desktop": {
+       "url": "http://127.0.0.1:3845/mcp"
+     }
+     ```
+  4. Requer Figma Desktop atualizado e assinatura Dev/Full (Professional/Organization/Enterprise). Depois de conectar, você pode usar contexto de design, gerar código a partir de frames e Code Connect.
