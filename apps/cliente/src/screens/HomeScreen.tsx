@@ -1,7 +1,10 @@
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { useState } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Image, Modal, Pressable } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
+import type { MainTabParamList } from '../navigation/MainTabs';
 
 // Tokens do Figma: neutral-100 white, black-500 #0d0d0d, neutral-300 #f1f1f1, neutral-400 #e2e2e2, neutral-700 #767676
 const COLORS = {
@@ -18,13 +21,46 @@ const RECENT_DESTINATIONS = [
 ];
 
 const SERVICES = [
-  { id: 'viagens', label: 'Viagens', icon: 'directions-car' as const },
-  { id: 'envios', label: 'Envios', icon: 'local-shipping' as const },
-  { id: 'dependentes', label: 'Envios de\ndependentes', icon: 'accessible' as const },
-  { id: 'excursões', label: 'Excursões', icon: 'groups' as const },
+  { id: 'viagens', label: 'Viagens', image: require('../../assets/icon-viagens.png') },
+  { id: 'envios', label: 'Envios', image: require('../../assets/icon-envios.png') },
+  { id: 'dependentes', label: 'Envios de\ndependentes', image: require('../../assets/icon-excursoes.png') },
+  { id: 'excursões', label: 'Excursões', image: require('../../assets/icon-dependentes.png') },
 ];
 
-export function HomeScreen() {
+type HomeScreenProps = BottomTabScreenProps<MainTabParamList, 'Home'>;
+
+function openTripFlow(navigation: HomeScreenProps['navigation'], screen?: 'SearchTrip' | 'PlanRide') {
+  const root = navigation.getParent() as { navigate: (name: string, params?: { screen: string }) => void } | undefined;
+  if (root) {
+    if (screen) root.navigate('TripStack', { screen });
+    else root.navigate('TripStack');
+  }
+}
+
+export function HomeScreen({ navigation }: HomeScreenProps) {
+  const [whenSheetVisible, setWhenSheetVisible] = useState(false);
+  const [whenOption, setWhenOption] = useState<'now' | 'later' | null>(null);
+
+  const openWhenSheet = () => {
+    setWhenOption(null);
+    setWhenSheetVisible(true);
+  };
+
+  const closeWhenSheet = () => {
+    setWhenSheetVisible(false);
+    setWhenOption(null);
+  };
+
+  const handleWhenContinue = () => {
+    if (whenOption === 'now') {
+      closeWhenSheet();
+      openTripFlow(navigation, 'SearchTrip');
+    } else if (whenOption === 'later') {
+      closeWhenSheet();
+      openTripFlow(navigation, 'PlanRide');
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
@@ -44,7 +80,7 @@ export function HomeScreen() {
               placeholderTextColor={COLORS.neutral700}
               editable={false}
             />
-            <TouchableOpacity style={styles.agendarButton} activeOpacity={0.8}>
+            <TouchableOpacity style={styles.agendarButton} activeOpacity={0.8} onPress={openWhenSheet}>
               <MaterialIcons name="event" size={24} color={COLORS.black} />
               <Text style={styles.agendarText}>Agendar</Text>
             </TouchableOpacity>
@@ -58,6 +94,7 @@ export function HomeScreen() {
               key={index}
               style={styles.recentRow}
               activeOpacity={0.7}
+              onPress={openWhenSheet}
             >
               <View style={styles.recentIconWrap}>
                 <MaterialIcons name="access-time" size={24} color={COLORS.black} />
@@ -80,9 +117,10 @@ export function HomeScreen() {
                   key={service.id}
                   style={styles.serviceCard}
                   activeOpacity={0.8}
+                  onPress={() => service.id === 'viagens' && openWhenSheet()}
                 >
                   <View style={styles.serviceIconWrap}>
-                    <MaterialIcons name={service.icon} size={52} color={COLORS.black} />
+                    <Image source={service.image} style={styles.serviceImage} resizeMode="contain" />
                   </View>
                   <Text style={styles.serviceLabel}>{service.label}</Text>
                 </TouchableOpacity>
@@ -96,7 +134,7 @@ export function HomeScreen() {
                   activeOpacity={0.8}
                 >
                   <View style={styles.serviceIconWrap}>
-                    <MaterialIcons name={service.icon} size={52} color={COLORS.black} />
+                    <Image source={service.image} style={styles.serviceImage} resizeMode="contain" />
                   </View>
                   <Text style={styles.serviceLabel}>{service.label}</Text>
                 </TouchableOpacity>
@@ -105,6 +143,63 @@ export function HomeScreen() {
           </View>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={whenSheetVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={closeWhenSheet}
+      >
+        <Pressable style={styles.sheetOverlay} onPress={closeWhenSheet}>
+          <Pressable style={styles.sheetContent} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>Para quando você precisa da viagem?</Text>
+
+            <TouchableOpacity
+              style={[styles.sheetOption, whenOption === 'now' && styles.sheetOptionSelected]}
+              onPress={() => setWhenOption('now')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.sheetOptionIcon}>
+                <MaterialIcons name="schedule" size={28} color={COLORS.black} />
+              </View>
+              <View style={styles.sheetOptionTextWrap}>
+                <Text style={styles.sheetOptionLabel}>Agora</Text>
+                <Text style={styles.sheetOptionSubtitle}>Chame um carro imediatamente</Text>
+              </View>
+              <View style={[styles.sheetRadio, whenOption === 'now' && styles.sheetRadioSelected]}>
+                {whenOption === 'now' && <View style={styles.sheetRadioInner} />}
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.sheetOption, whenOption === 'later' && styles.sheetOptionSelected]}
+              onPress={() => setWhenOption('later')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.sheetOptionIcon}>
+                <MaterialIcons name="event" size={28} color={COLORS.black} />
+              </View>
+              <View style={styles.sheetOptionTextWrap}>
+                <Text style={styles.sheetOptionLabel}>Mais tarde</Text>
+                <Text style={styles.sheetOptionSubtitle}>Agende para o horário que preferir</Text>
+              </View>
+              <View style={[styles.sheetRadio, whenOption === 'later' && styles.sheetRadioSelected]}>
+                {whenOption === 'later' && <View style={styles.sheetRadioInner} />}
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.sheetContinueButton, !whenOption && styles.sheetContinueButtonDisabled]}
+              onPress={handleWhenContinue}
+              disabled={!whenOption}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.sheetContinueButtonText}>Continuar</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -228,10 +323,91 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  serviceImage: {
+    width: 52,
+    height: 52,
+  },
   serviceLabel: {
     fontSize: 14,
     fontWeight: '600',
     color: COLORS.black,
     textAlign: 'center',
   },
+  sheetOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  sheetContent: {
+    backgroundColor: COLORS.background,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    paddingBottom: 34,
+  },
+  sheetHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: COLORS.neutral400,
+    alignSelf: 'center',
+    marginBottom: 24,
+  },
+  sheetTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: COLORS.black,
+    marginBottom: 24,
+  },
+  sheetOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.background,
+    borderWidth: 1,
+    borderColor: COLORS.neutral400,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+  },
+  sheetOptionSelected: {
+    borderColor: COLORS.black,
+  },
+  sheetOptionIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: COLORS.neutral300,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 16,
+  },
+  sheetOptionTextWrap: { flex: 1 },
+  sheetOptionLabel: { fontSize: 16, fontWeight: '600', color: COLORS.black },
+  sheetOptionSubtitle: { fontSize: 14, color: COLORS.neutral700, marginTop: 2 },
+  sheetRadio: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: COLORS.neutral400,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetRadioSelected: { borderColor: COLORS.black },
+  sheetRadioInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: COLORS.black,
+  },
+  sheetContinueButton: {
+    backgroundColor: COLORS.black,
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 24,
+  },
+  sheetContinueButtonDisabled: { opacity: 0.5 },
+  sheetContinueButtonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
 });

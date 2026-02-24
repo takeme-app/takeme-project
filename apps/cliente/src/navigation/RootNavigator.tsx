@@ -18,6 +18,7 @@ import { ResetPasswordSuccessScreen } from '../screens/ResetPasswordSuccessScree
 import { TermsOfUseScreen } from '../screens/TermsOfUseScreen';
 import { PrivacyPolicyScreen } from '../screens/PrivacyPolicyScreen';
 import { MainTabs } from './MainTabs';
+import { TripStack } from './TripStack';
 import type { RootStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -47,6 +48,7 @@ export function RootNavigator() {
           component={CardRegisteredSuccessScreen}
         />
         <Stack.Screen name="Main" component={MainTabs} />
+        <Stack.Screen name="TripStack" component={TripStack} />
         <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
         <Stack.Screen
           name="ForgotPasswordEmailSent"

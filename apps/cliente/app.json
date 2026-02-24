@@ -2,6 +2,7 @@
   "expo": {
     "name": "Take Me - Cliente",
     "slug": "take-me-cliente",
+    "scheme": "take-me-cliente",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -31,7 +32,13 @@
           "photosPermission": "O app precisa acessar suas fotos para alterar a foto de perfil."
         }
       ],
-      ["@stripe/stripe-react-native",{"merchantIdentifier":"merchant.com.takeme.cliente"}]
+      [
+        "@stripe/stripe-react-native",
+        {
+          "merchantIdentifier": "merchant.com.takeme.cliente"
+        }
+      ],
+      "expo-web-browser"
     ]
   }
 }
