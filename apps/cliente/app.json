@@ -27,6 +27,12 @@
     },
     "plugins": [
       [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "O Take Me usa sua localização para definir o ponto de partida e mostrar motoristas próximos."
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "photosPermission": "O app precisa acessar suas fotos para alterar a foto de perfil."

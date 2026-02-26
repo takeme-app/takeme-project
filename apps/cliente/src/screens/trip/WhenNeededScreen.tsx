@@ -21,7 +21,7 @@ export function WhenNeededScreen({ navigation }: Props) {
 
   const handleContinue = () => {
     if (selected === 'now') {
-      navigation.navigate('SearchTrip');
+      navigation.navigate('SearchTrip', { immediateTrip: true });
     } else if (selected === 'later') {
       navigation.navigate('PlanRide');
     }

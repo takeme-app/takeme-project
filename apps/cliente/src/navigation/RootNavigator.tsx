@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { NavigationContainer, type NavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AuthRecoveryHandler } from './AuthRecoveryHandler';
+import { RootNavigationProvider } from './RootNavigationContext';
 import { SplashScreen } from '../screens/SplashScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
 import { LoginScreen } from '../screens/LoginScreen';
@@ -29,6 +30,7 @@ export function RootNavigator() {
   return (
     <NavigationContainer ref={navigationRef}>
       <AuthRecoveryHandler navigationRef={navigationRef} />
+      <RootNavigationProvider navigationRef={navigationRef}>
       <Stack.Navigator
         screenOptions={{
           headerShown: false,
@@ -62,6 +64,7 @@ export function RootNavigator() {
         <Stack.Screen name="TermsOfUse" component={TermsOfUseScreen} />
         <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
       </Stack.Navigator>
+      </RootNavigationProvider>
     </NavigationContainer>
   );
 }

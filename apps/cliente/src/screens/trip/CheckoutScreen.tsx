@@ -1,21 +1,34 @@
-import { useState } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  TextInput,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import MapView from 'react-native-maps';
+import MapView, { Marker, Polyline } from 'react-native-maps';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { TripStackParamList } from '../../navigation/types';
+import type { TripStackParamList, TripDriverParam, PaymentConfirmedBookingParam } from '../../navigation/types';
+import { getRoutePolyline, type RoutePoint } from '../../lib/route';
+import { supabase } from '../../lib/supabase';
 
 type Props = NativeStackScreenProps<TripStackParamList, 'Checkout'>;
+
+const DEFAULT_DRIVER: TripDriverParam = {
+  id: '0',
+  name: 'Carlos Silva',
+  rating: 4.8,
+  badge: 'Take Me',
+  departure: '14:00',
+  arrival: '16:30',
+  seats: 3,
+  bags: 3,
+};
 
 const COLORS = {
   background: '#FFFFFF',
@@ -27,22 +40,126 @@ const COLORS = {
 };
 
 const DEFAULT_REGION = {
-  latitude: -23.5505,
-  longitude: -46.6333,
+  latitude: -7.3289,
+  longitude: -35.3328,
   latitudeDelta: 0.02,
   longitudeDelta: 0.02,
 };
 
-type PaymentMethod = 'credit' | 'debit' | 'pix' | 'cash';
+type SavedPaymentMethod = { id: string; type: string; last_four: string | null; holder_name: string | null; brand: string | null };
 
-export function CheckoutScreen({ navigation }: Props) {
-  const [payment, setPayment] = useState<PaymentMethod>('credit');
+export function CheckoutScreen({ navigation, route }: Props) {
+  const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
+  const [paymentMethods, setPaymentMethods] = useState<SavedPaymentMethod[]>([]);
+  const [methodsLoading, setMethodsLoading] = useState(true);
+  const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | null>(null);
+
+  const driver = route.params?.driver ?? DEFAULT_DRIVER;
+  const origin = route.params?.origin;
+  const destination = route.params?.destination;
+  const passengersParam = route.params?.passengers ?? [];
+  const bagsCount = route.params?.bags_count ?? driver.bags ?? 0;
+  const scheduledTripId = route.params?.scheduled_trip_id;
+  const amountCents = driver.amount_cents ?? 6400;
+  const fareFormatted = `R$ ${(amountCents / 100).toFixed(2)}`;
+
+  const loadPaymentMethods = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      setMethodsLoading(false);
+      return;
+    }
+    const { data } = await supabase
+      .from('payment_methods')
+      .select('id, type, last_four, holder_name, brand')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+    setPaymentMethods((data ?? []) as SavedPaymentMethod[]);
+    setSelectedPaymentMethodId((prev) => (prev && data?.some((m) => m.id === prev)) ? prev : (data?.[0]?.id ?? null));
+    setMethodsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    loadPaymentMethods();
+  }, [loadPaymentMethods]);
+
+  useEffect(() => {
+    if (!origin || !destination) {
+      setRouteCoords(null);
+      return;
+    }
+    let cancelled = false;
+    getRoutePolyline(origin, destination).then((coords) => {
+      if (!cancelled) setRouteCoords(coords?.length ? coords : null);
+    });
+    return () => { cancelled = true; };
+  }, [origin?.latitude, origin?.longitude, destination?.latitude, destination?.longitude]);
+
+  const mapRegion = useMemo(() => {
+    if (origin && destination) {
+      const latMin = Math.min(origin.latitude, destination.latitude);
+      const latMax = Math.max(origin.latitude, destination.latitude);
+      const lngMin = Math.min(origin.longitude, destination.longitude);
+      const lngMax = Math.max(origin.longitude, destination.longitude);
+      const padding = 0.004;
+      return {
+        latitude: (latMin + latMax) / 2,
+        longitude: (lngMin + lngMax) / 2,
+        latitudeDelta: Math.max(0.02, latMax - latMin + padding * 2),
+        longitudeDelta: Math.max(0.02, lngMax - lngMin + padding * 2),
+      };
+    }
+    if (origin) {
+      return {
+        latitude: origin.latitude,
+        longitude: origin.longitude,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      };
+    }
+    return DEFAULT_REGION;
+  }, [origin, destination]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
       <View style={styles.mapWrap}>
-        <MapView style={styles.map} initialRegion={DEFAULT_REGION} scrollEnabled={false} />
+        <MapView style={styles.map} initialRegion={mapRegion} scrollEnabled={false}>
+          {origin && (
+            <Marker
+              coordinate={{ latitude: origin.latitude, longitude: origin.longitude }}
+              anchor={{ x: 0.5, y: 1 }}
+              title="Partida"
+              description={origin.address}
+              pinColor="#0d0d0d"
+              tracksViewChanges={false}
+            />
+          )}
+          {destination && (
+            <Marker
+              coordinate={{ latitude: destination.latitude, longitude: destination.longitude }}
+              anchor={{ x: 0.5, y: 1 }}
+              title="Destino"
+              description={destination.address}
+              pinColor="#dc2626"
+              tracksViewChanges={false}
+            />
+          )}
+          {origin && destination && (
+            <Polyline
+              coordinates={
+                routeCoords?.length
+                  ? routeCoords
+                  : [
+                      { latitude: origin.latitude, longitude: origin.longitude },
+                      { latitude: destination.latitude, longitude: destination.longitude },
+                    ]
+              }
+              strokeColor={COLORS.black}
+              strokeWidth={4}
+            />
+          )}
+        </MapView>
       </View>
       <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
         <Text style={styles.backArrow}>←</Text>
@@ -60,81 +177,94 @@ export function CheckoutScreen({ navigation }: Props) {
           <View style={styles.driverRow}>
             <View style={styles.driverAvatar} />
             <View style={styles.driverInfo}>
-              <Text style={styles.driverName}>Carlos Silva</Text>
-              <Text style={styles.driverRating}>★ 4.8</Text>
+              <Text style={styles.driverName}>{driver.name}</Text>
+              <Text style={styles.driverRating}>★ {driver.rating}</Text>
             </View>
-            <Text style={styles.fare}>R$ 64,00</Text>
+            <Text style={styles.fare}>{fareFormatted}</Text>
           </View>
-          <Text style={styles.meta}>Saída 14:00 · Chegada 16:30</Text>
+          <Text style={styles.meta}>Saída {driver.departure} · Chegada {driver.arrival}</Text>
           <View style={styles.metaRow}>
             <MaterialIcons name="directions-car" size={18} color={COLORS.neutral700} />
             <Text style={styles.metaText}>Argo Sedan • Placa RIO 2877</Text>
           </View>
           <View style={styles.metaRow}>
             <MaterialIcons name="work-outline" size={18} color={COLORS.neutral700} />
-            <Text style={styles.metaText}>3 malas</Text>
+            <Text style={styles.metaText}>{bagsCount} malas</Text>
           </View>
         </View>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Passageiros</Text>
-          <View style={styles.passengerRow}>
-            <MaterialIcons name="person-outline" size={20} color={COLORS.neutral700} />
-            <Text style={styles.passengerText}>João Silva · CPF: 123.456.789-00</Text>
-          </View>
-          <View style={styles.passengerRow}>
-            <MaterialIcons name="person-outline" size={20} color={COLORS.neutral700} />
-            <Text style={styles.passengerText}>Maria Santos · CPF: 987.654.321-00</Text>
-          </View>
-          <Text style={styles.bagsNote}>2 malas adicionadas</Text>
+          {passengersParam.length > 0 ? (
+            <>
+              {passengersParam.map((p, i) => (
+                <View key={i} style={styles.passengerRow}>
+                  <MaterialIcons name="person-outline" size={20} color={COLORS.neutral700} />
+                  <Text style={styles.passengerText}>
+                    {p.name || `Passageiro ${i + 1}`}{p.cpf ? ` · CPF: ${p.cpf}` : ''}
+                  </Text>
+                </View>
+              ))}
+              <Text style={styles.bagsNote}>{bagsCount} malas adicionadas</Text>
+            </>
+          ) : (
+            <>
+              <View style={styles.passengerRow}>
+                <MaterialIcons name="person-outline" size={20} color={COLORS.neutral700} />
+                <Text style={styles.passengerText}>Passageiros não informados</Text>
+              </View>
+              <Text style={styles.bagsNote}>{bagsCount} malas</Text>
+            </>
+          )}
         </View>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Método de pagamento</Text>
-          {(
-            [
-              { id: 'credit' as const, label: 'Cartão de crédito', icon: 'credit-card' as const },
-              { id: 'debit' as const, label: 'Cartão de débito', icon: 'credit-card' as const },
-              { id: 'pix' as const, label: 'Pix', icon: 'qr-code' as const },
-              { id: 'cash' as const, label: 'Dinheiro', icon: 'payments' as const },
-            ] as const
-          ).map(({ id, label, icon }) => (
-            <TouchableOpacity
-              key={id}
-              style={styles.paymentRow}
-              onPress={() => setPayment(id)}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons name={icon} size={22} color={COLORS.black} />
-              <Text style={styles.paymentLabel}>{label}</Text>
-              <View style={[styles.radio, payment === id && styles.radioSelected]}>
-                {payment === id && <View style={styles.radioInner} />}
-              </View>
-            </TouchableOpacity>
-          ))}
-
-          {payment === 'credit' && (
-            <View style={styles.paymentForm}>
-              <Text style={styles.paymentFormTitle}>Dados do cartão</Text>
-              <TextInput style={styles.input} placeholder="Nome do cartão" placeholderTextColor={COLORS.neutral700} />
-              <TextInput style={styles.input} placeholder="Número do cartão" placeholderTextColor={COLORS.neutral700} keyboardType="number-pad" />
-              <View style={styles.row}>
-                <TextInput style={[styles.input, styles.half]} placeholder="Validade" placeholderTextColor={COLORS.neutral700} />
-                <TextInput style={[styles.input, styles.half]} placeholder="CVV" placeholderTextColor={COLORS.neutral700} keyboardType="number-pad" />
-              </View>
-              <TextInput style={styles.input} placeholder="CPF/CNPJ" placeholderTextColor={COLORS.neutral700} keyboardType="number-pad" />
+          {methodsLoading ? (
+            <View style={styles.paymentLoading}>
+              <ActivityIndicator size="small" color={COLORS.black} />
+              <Text style={styles.paymentLoadingText}>Carregando...</Text>
             </View>
-          )}
-          {payment === 'cash' && (
-            <Text style={styles.cashNote}>
-              O pagamento deverá ser realizado diretamente ao motorista no momento do embarque. Você receberá o comprovante digital assim que o pagamento for registrado no sistema.
-            </Text>
+          ) : paymentMethods.length === 0 ? (
+            <Text style={styles.paymentEmpty}>Adicione um cartão na Carteira para pagar.</Text>
+          ) : (
+            paymentMethods.map((m) => (
+              <TouchableOpacity
+                key={m.id}
+                style={styles.paymentRow}
+                onPress={() => setSelectedPaymentMethodId(m.id)}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="credit-card" size={22} color={COLORS.black} />
+                <Text style={styles.paymentLabel}>
+                  {m.type === 'credit' ? 'Crédito' : 'Débito'}
+                  {m.last_four ? ` •••• ${m.last_four}` : ''}
+                  {m.holder_name ? ` · ${m.holder_name}` : ''}
+                </Text>
+                <View style={[styles.radio, selectedPaymentMethodId === m.id && styles.radioSelected]}>
+                  {selectedPaymentMethodId === m.id && <View style={styles.radioInner} />}
+                </View>
+              </TouchableOpacity>
+            ))
           )}
         </View>
 
         <TouchableOpacity
-          style={styles.confirmButton}
-          onPress={() => navigation.navigate('PaymentConfirmed')}
+          style={[styles.confirmButton, (!origin || !destination) && styles.primaryButtonDisabled]}
+          onPress={() => {
+            if (!origin || !destination) return;
+            const summary: PaymentConfirmedBookingParam = {
+              booking_id: 'pending',
+              origin_address: origin.address,
+              destination_address: destination.address,
+              departure: driver.departure,
+              arrival: driver.arrival,
+              amount_cents: amountCents,
+              driver_name: driver.name,
+            };
+            navigation.replace('PaymentConfirmed', { booking: summary, immediateTrip: route.params?.immediateTrip });
+          }}
+          disabled={!origin || !destination}
           activeOpacity={0.8}
         >
           <Text style={styles.confirmButtonText}>Confirmar pagamento</Text>
@@ -198,12 +328,9 @@ const styles = StyleSheet.create({
   radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: COLORS.neutral400, alignItems: 'center', justifyContent: 'center' },
   radioSelected: { borderColor: COLORS.black },
   radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: COLORS.black },
-  paymentForm: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: COLORS.neutral300, gap: 12 },
-  paymentFormTitle: { fontSize: 14, fontWeight: '600', color: COLORS.black },
-  input: { borderWidth: 1, borderColor: COLORS.neutral400, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, color: COLORS.black },
-  row: { flexDirection: 'row', gap: 12 },
-  half: { flex: 1 },
-  cashNote: { fontSize: 13, color: COLORS.neutral700, marginTop: 8 },
+  paymentLoading: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 },
+  paymentLoadingText: { fontSize: 14, color: COLORS.neutral700 },
+  paymentEmpty: { fontSize: 14, color: COLORS.neutral700, paddingVertical: 8 },
   confirmButton: {
     backgroundColor: COLORS.black,
     paddingVertical: 16,
@@ -213,6 +340,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   confirmButtonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
+  primaryButtonDisabled: { opacity: 0.5 },
   policy: { gap: 4 },
   policyText: { fontSize: 13, color: COLORS.neutral700 },
 });

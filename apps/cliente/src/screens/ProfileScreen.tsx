@@ -227,7 +227,7 @@ export function ProfileScreen({ navigation }: Props) {
         <View style={styles.actions}>
           <TouchableOpacity
             style={styles.actionRow}
-            onPress={() => (navigation.getParent() as any)?.getParent()?.getParent()?.navigate('ForgotPassword')}
+            onPress={() => navigation.navigate('ChangePassword')}
             activeOpacity={0.7}
           >
             <View style={styles.actionIconWrap}>
@@ -238,7 +238,7 @@ export function ProfileScreen({ navigation }: Props) {
           <View style={styles.actionDivider} />
           <TouchableOpacity
             style={styles.actionRow}
-            onPress={() => (navigation.getParent() as any)?.getParent()?.getParent()?.navigate('ForgotPassword')}
+            onPress={() => (navigation.getParent() as any)?.getParent()?.navigate('ForgotPassword')}
             activeOpacity={0.7}
           >
             <View style={styles.actionIconWrap}>

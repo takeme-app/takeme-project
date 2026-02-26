@@ -36,7 +36,7 @@ export function ChooseTimeScreen({ navigation }: Props) {
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
 
   const handleSelect = () => {
-    if (selectedSlot) navigation.navigate('SearchTrip');
+    if (selectedSlot) navigation.navigate('SearchTrip', { immediateTrip: false });
   };
 
   return (

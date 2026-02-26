@@ -2,7 +2,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
 import { HomeScreen } from '../screens/HomeScreen';
 import { ServicesScreen } from '../screens/ServicesScreen';
-import { ActivitiesScreen } from '../screens/ActivitiesScreen';
+import { ActivitiesStack } from './ActivitiesStack';
 import { ProfileStack } from './ProfileStack';
 
 export type MainTabParamList = {
@@ -69,7 +69,7 @@ export function MainTabs() {
       />
       <Tab.Screen
         name="Activities"
-        component={ActivitiesScreen}
+        component={ActivitiesStack}
         options={{
           title: 'Atividades',
           tabBarIcon: ({ color }) => (

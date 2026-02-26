@@ -21,6 +21,7 @@
     "expo-auth-session": "~7.0.10",
     "expo-document-picker": "~14.0.3",
     "expo-image-picker": "~17.0.10",
+    "expo-location": "~18.0.0",
     "expo-linear-gradient": "~15.0.8",
     "expo-linking": "~8.0.11",
     "expo-status-bar": "~3.0.9",

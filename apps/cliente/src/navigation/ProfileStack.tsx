@@ -22,6 +22,7 @@ import { EditEmailScreen } from '../screens/profile/EditEmailScreen';
 import { EditPhoneScreen } from '../screens/profile/EditPhoneScreen';
 import { EditCpfScreen } from '../screens/profile/EditCpfScreen';
 import { EditLocationScreen } from '../screens/profile/EditLocationScreen';
+import { ChangePasswordScreen } from '../screens/profile/ChangePasswordScreen';
 import { EditAvatarScreen } from '../screens/profile/EditAvatarScreen';
 import { DeleteAccountStep1Screen } from '../screens/profile/DeleteAccountStep1Screen';
 import { DeleteAccountStep2Screen } from '../screens/profile/DeleteAccountStep2Screen';
@@ -92,6 +93,11 @@ export function ProfileStack() {
       <Stack.Screen
         name="EditLocation"
         component={EditLocationScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <Stack.Screen
+        name="ChangePassword"
+        component={ChangePasswordScreen}
         options={{ presentation: 'modal' }}
       />
       <Stack.Screen

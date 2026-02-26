@@ -22,6 +22,7 @@ export type ProfileStackParamList = {
   EditPhone: undefined;
   EditCpf: undefined;
   EditLocation: undefined;
+  ChangePassword: undefined;
   DeleteAccountStep1: undefined;
   DeleteAccountStep2: undefined;
   DeleteDependent: { dependentId: string };

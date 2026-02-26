@@ -8,12 +8,55 @@ import type { TripStackParamList } from '../../navigation/types';
 
 type Props = NativeStackScreenProps<TripStackParamList, 'PaymentConfirmed'>;
 
-export function PaymentConfirmedScreen({ navigation }: Props) {
+const COLORS = {
+  background: '#FFFFFF',
+  black: '#0d0d0d',
+  grey: '#767676',
+};
+
+export function PaymentConfirmedScreen({ navigation, route }: Props) {
   const [showBookingModal, setShowBookingModal] = useState(true);
+  const booking = route.params?.booking;
+  const immediateTrip = route.params?.immediateTrip === true;
+
+  const destinationLabel = booking?.destination_address ?? 'destino';
+  const tripSummary = booking
+    ? `Saída ${booking.departure} · Chegada ${booking.arrival}. Motorista: ${booking.driver_name}. Valor: R$ ${(booking.amount_cents / 100).toFixed(2)}.`
+    : '';
 
   const goToMain = () => {
     navigation.getParent()?.navigate('Main');
   };
+
+  const goToActivities = () => {
+    navigation.getParent()?.navigate('Main', { screen: 'Activities' });
+  };
+
+  if (immediateTrip) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <StatusBar style="dark" />
+        <View style={styles.iconWrap}>
+          <MaterialIcons name="check" size={48} color="#FFFFFF" />
+        </View>
+        <Text style={styles.title}>Pagamento confirmado!</Text>
+        <Text style={styles.subtitleGrey}>Seu motorista já está a caminho.</Text>
+        <Text style={styles.instruction}>
+          Acompanhe em tempo real a localização e a previsão de chegada.
+        </Text>
+        <TouchableOpacity
+          style={styles.primaryButton}
+          onPress={() => navigation.navigate('DriverOnTheWay')}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.primaryButtonText}>Acompanhar viagem</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.secondaryButton} onPress={goToMain} activeOpacity={0.8}>
+          <Text style={styles.secondaryButtonText}>Voltar para Início</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -23,8 +66,9 @@ export function PaymentConfirmedScreen({ navigation }: Props) {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Agendamento confirmado!</Text>
             <Text style={styles.modalText}>
-              Sua viagem para São Paulo, SP foi agendada para 3 de outubro de 2025.
+              Sua viagem para {destinationLabel} foi agendada.
             </Text>
+            {tripSummary ? <Text style={styles.modalText}>{tripSummary}</Text> : null}
             <Text style={styles.modalText}>Você receberá uma confirmação em breve.</Text>
             <TouchableOpacity
               style={styles.modalButton}
@@ -45,7 +89,7 @@ export function PaymentConfirmedScreen({ navigation }: Props) {
       <TouchableOpacity style={styles.primaryButton} onPress={() => navigation.navigate('DriverOnTheWay')} activeOpacity={0.8}>
         <Text style={styles.primaryButtonText}>Acompanhar viagem</Text>
       </TouchableOpacity>
-      <TouchableOpacity style={styles.linkButton} onPress={goToMain}>
+      <TouchableOpacity style={styles.linkButton} onPress={goToActivities}>
         <Text style={styles.linkButtonText}>Ver em Atividades</Text>
       </TouchableOpacity>
       <TouchableOpacity style={styles.secondaryButton} onPress={goToMain}>
@@ -66,9 +110,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 24,
   },
-  title: { fontSize: 22, fontWeight: '700', color: '#0d0d0d', marginBottom: 8, textAlign: 'center' },
-  subtitle: { fontSize: 16, color: '#0d0d0d', marginBottom: 8, textAlign: 'center' },
-  hint: { fontSize: 14, color: '#767676', marginBottom: 32, textAlign: 'center' },
+  title: { fontSize: 22, fontWeight: '700', color: COLORS.black, marginBottom: 8, textAlign: 'center' },
+  subtitle: { fontSize: 16, color: COLORS.black, marginBottom: 8, textAlign: 'center' },
+  subtitleGrey: { fontSize: 16, color: COLORS.grey, marginBottom: 16, textAlign: 'center' },
+  instruction: { fontSize: 15, color: COLORS.black, marginBottom: 32, textAlign: 'center', lineHeight: 22, paddingHorizontal: 8 },
+  hint: { fontSize: 14, color: COLORS.grey, marginBottom: 32, textAlign: 'center' },
   primaryButton: {
     backgroundColor: '#0d0d0d',
     paddingVertical: 16,
@@ -81,7 +127,7 @@ const styles = StyleSheet.create({
   linkButton: { paddingVertical: 12 },
   linkButtonText: { fontSize: 16, fontWeight: '500', color: '#0d0d0d' },
   secondaryButton: { paddingVertical: 12 },
-  secondaryButtonText: { fontSize: 16, fontWeight: '500', color: '#0d0d0d' },
+  secondaryButtonText: { fontSize: 16, fontWeight: '500', color: COLORS.black },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',

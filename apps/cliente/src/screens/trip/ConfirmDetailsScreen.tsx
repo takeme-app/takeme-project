@@ -6,12 +6,14 @@ import {
   StyleSheet,
   ScrollView,
   TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { TripStackParamList } from '../../navigation/types';
+import type { TripStackParamList, TripPassengerParam } from '../../navigation/types';
 
 type Props = NativeStackScreenProps<TripStackParamList, 'ConfirmDetails'>;
 
@@ -23,7 +25,19 @@ const COLORS = {
   neutral700: '#767676',
 };
 
-export function ConfirmDetailsScreen({ navigation }: Props) {
+/** Formata valor digitado como CPF: 000.000.000-00 (apenas números, máx. 11) */
+function formatCpf(value: string): string {
+  const digits = value.replace(/\D/g, '').slice(0, 11);
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+  if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+}
+
+export function ConfirmDetailsScreen({ navigation, route }: Props) {
+  const driver = route.params?.driver;
+  const origin = route.params?.origin;
+  const destination = route.params?.destination;
   const [bags, setBags] = useState(2);
   const [passengers, setPassengers] = useState(2);
   const [passengerData, setPassengerData] = useState<Record<number, { name: string; cpf: string; bags: string }>>({
@@ -44,12 +58,18 @@ export function ConfirmDetailsScreen({ navigation }: Props) {
       <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
         <Text style={styles.backArrow}>←</Text>
       </TouchableOpacity>
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoid}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          keyboardDismissMode="on-drag"
+        >
         <Text style={styles.title}>Confirme os detalhes da sua viagem</Text>
 
         <Text style={styles.sectionLabel}>Quantas malas você vai levar?</Text>
@@ -104,11 +124,12 @@ export function ConfirmDetailsScreen({ navigation }: Props) {
             />
             <TextInput
               style={styles.input}
-              placeholder="CPF do passageiro"
+              placeholder="CPF do passageiro (000.000.000-00)"
               placeholderTextColor={COLORS.neutral700}
               value={passengerData[i]?.cpf ?? ''}
-              onChangeText={(v) => updatePassenger(i, 'cpf', v)}
+              onChangeText={(v) => updatePassenger(i, 'cpf', formatCpf(v))}
               keyboardType="number-pad"
+              maxLength={14}
             />
             <TextInput
               style={styles.input}
@@ -123,12 +144,28 @@ export function ConfirmDetailsScreen({ navigation }: Props) {
 
         <TouchableOpacity
           style={styles.confirmButton}
-          onPress={() => navigation.navigate('Checkout')}
+          onPress={() => {
+            const passengerList: TripPassengerParam[] = Array.from({ length: passengers }, (_, i) => ({
+              name: passengerData[i]?.name ?? '',
+              cpf: passengerData[i]?.cpf ?? '',
+              bags: passengerData[i]?.bags ?? '',
+            }));
+            navigation.navigate('Checkout', {
+              driver,
+              origin,
+              destination,
+              scheduled_trip_id: route.params?.scheduled_trip_id,
+              passengers: passengerList,
+              bags_count: bags,
+              immediateTrip: route.params?.immediateTrip,
+            });
+          }}
           activeOpacity={0.8}
         >
           <Text style={styles.confirmButtonText}>Confirmar viagem</Text>
         </TouchableOpacity>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -147,8 +184,9 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   backArrow: { fontSize: 22, color: COLORS.black, fontWeight: '600' },
+  keyboardAvoid: { flex: 1 },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 24, paddingBottom: 32 },
+  scrollContent: { paddingHorizontal: 24, paddingBottom: 120 },
   title: { fontSize: 22, fontWeight: '700', color: COLORS.black, marginBottom: 24 },
   sectionLabel: { fontSize: 16, fontWeight: '600', color: COLORS.black, marginBottom: 12 },
   stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 24 },
