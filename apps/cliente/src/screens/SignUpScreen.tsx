@@ -30,11 +30,11 @@ function formatPhone(value: string): string {
 
 export function SignUpScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
-  const [fullName, setFullName] = useState('Diego Barbosa');
-  const [phone, setPhone] = useState('(83) 99347-2535');
-  const [email, setEmail] = useState('diego.barbosa@fraktalsoftwares.com.br');
-  const [password, setPassword] = useState('157enois');
-  const [confirmPassword, setConfirmPassword] = useState('157enois');
+  const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [hidePassword, setHidePassword] = useState(true);
   const [hideConfirm, setHideConfirm] = useState(true);
   const [agreeTerms, setAgreeTerms] = useState(false);

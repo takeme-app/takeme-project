@@ -50,6 +50,14 @@ function formatDatePtBR(d: Date): string {
   return `${d.getDate()} de ${MONTH_NAMES_FULL[d.getMonth()]}`;
 }
 
+const ACTIVITIES_FILTER_KEY = 'activities_filter';
+
+type ActivitiesFilterValue = {
+  category: ActivityCategory;
+  dateStart: string | null;
+  dateEnd: string | null;
+};
+
 export function ActivitiesScreen({ navigation }: Props) {
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,6 +68,39 @@ export function ActivitiesScreen({ navigation }: Props) {
   const [supportSheetVisible, setSupportSheetVisible] = useState(false);
   const insets = useSafeAreaInsets();
   const fabBottom = insets.bottom + 24 + 56;
+
+  const loadFilterPreferences = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data } = await supabase
+      .from('user_preferences')
+      .select('value')
+      .eq('user_id', user.id)
+      .eq('key', ACTIVITIES_FILTER_KEY)
+      .maybeSingle();
+    const v = (data as { value?: ActivitiesFilterValue } | null)?.value;
+    if (v?.category) setFilterCategory(v.category as ActivityCategory);
+    if (v?.dateStart) setFilterDateStart(new Date(v.dateStart));
+    if (v?.dateEnd) setFilterDateEnd(new Date(v.dateEnd));
+  }, []);
+
+  const saveFilterPreferences = useCallback(async (category: ActivityCategory, dateStart: Date | null, dateEnd: Date | null) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await supabase.from('user_preferences').upsert(
+      {
+        user_id: user.id,
+        key: ACTIVITIES_FILTER_KEY,
+        value: {
+          category,
+          dateStart: dateStart ? dateStart.toISOString() : null,
+          dateEnd: dateEnd ? dateEnd.toISOString() : null,
+        },
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'user_id,key' }
+    );
+  }, []);
 
   const loadActivities = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -100,6 +141,10 @@ export function ActivitiesScreen({ navigation }: Props) {
   useEffect(() => {
     loadActivities();
   }, [loadActivities]);
+
+  useEffect(() => {
+    loadFilterPreferences();
+  }, [loadFilterPreferences]);
 
   const filteredActivities = useMemo(() => {
     let list = filterCategory === 'todas'
@@ -245,7 +290,10 @@ export function ActivitiesScreen({ navigation }: Props) {
           filterDateEnd={filterDateEnd}
           onSelectDateStart={setFilterDateStart}
           onSelectDateEnd={setFilterDateEnd}
-          onApply={() => setFilterModalVisible(false)}
+          onApply={() => {
+            setFilterModalVisible(false);
+            saveFilterPreferences(filterCategory, filterDateStart, filterDateEnd);
+          }}
           onClose={() => setFilterModalVisible(false)}
         />
       )}

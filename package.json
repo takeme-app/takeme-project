@@ -12,12 +12,14 @@
     "preparador-excursoes": "npm run start --workspace=preparador-excursoes",
     "admin": "npm run start --workspace=admin",
     "deploy:verify-email-code": "npx supabase functions deploy verify-email-code --no-verify-jwt",
-    "create-avatars-bucket":"node scripts/create-avatars-bucket.js","db:push":"supabase db push","deploy:functions": "npx supabase functions deploy send-email-verification-code --no-verify-jwt && npx supabase functions deploy verify-email-code --no-verify-jwt && npx supabase functions deploy send-welcome-email --no-verify-jwt"
+    "create-avatars-bucket":"node scripts/create-avatars-bucket.js","db:push":"supabase db push","deploy:functions": "npx supabase functions deploy send-email-verification-code --no-verify-jwt && npx supabase functions deploy verify-email-code --no-verify-jwt && npx supabase functions deploy send-welcome-email --no-verify-jwt",
+    "resize-map-markers": "node scripts/resize-map-markers.js"
   },
   "engines": {
     "node": ">=18"
   },
   "devDependencies": {
+    "sharp": "^0.33.5",
     "supabase": "^2.0.0"
   },
   "overrides": {

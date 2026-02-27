@@ -149,24 +149,35 @@ export function TripInProgressScreen({ navigation }: Props) {
         <MapView style={styles.map} initialRegion={DEFAULT_REGION} scrollEnabled={true}>
           <Polyline coordinates={ROUTE_COORDS} strokeColor={COLORS.black} strokeWidth={4} />
           {steps.map((step, i) => (
-            <Marker
-              key={step.id}
-              coordinate={{ latitude: step.latitude, longitude: step.longitude }}
-              title={step.name}
-              description={step.address}
-            >
-              <View style={styles.markerWrap}>
-                {step.completed ? (
-                  <MaterialIcons name="check-circle" size={32} color={COLORS.green} />
-                ) : i === currentStepIndex ? (
-                  <MaterialIcons name="play-circle-filled" size={32} color={COLORS.amber} />
-                ) : step.type === 'coleta' ? (
-                  <MaterialIcons name="person" size={28} color={COLORS.black} />
-                ) : (
-                  <MaterialIcons name="inventory-2" size={28} color={COLORS.black} />
-                )}
-              </View>
-            </Marker>
+            Platform.OS === 'android' ? (
+              <Marker
+                key={step.id}
+                coordinate={{ latitude: step.latitude, longitude: step.longitude }}
+                title={step.name}
+                description={step.address}
+                pinColor={step.completed ? COLORS.green : i === currentStepIndex ? COLORS.amber : COLORS.neutral700}
+                tracksViewChanges={false}
+              />
+            ) : (
+              <Marker
+                key={step.id}
+                coordinate={{ latitude: step.latitude, longitude: step.longitude }}
+                title={step.name}
+                description={step.address}
+              >
+                <View style={styles.markerWrap}>
+                  {step.completed ? (
+                    <MaterialIcons name="check-circle" size={32} color={COLORS.green} />
+                  ) : i === currentStepIndex ? (
+                    <MaterialIcons name="play-circle-filled" size={32} color={COLORS.amber} />
+                  ) : step.type === 'coleta' ? (
+                    <MaterialIcons name="person" size={28} color={COLORS.black} />
+                  ) : (
+                    <MaterialIcons name="inventory-2" size={28} color={COLORS.black} />
+                  )}
+                </View>
+              </Marker>
+            )
           ))}
         </MapView>
         <View style={styles.timeBadge}>

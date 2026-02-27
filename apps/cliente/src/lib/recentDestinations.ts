@@ -57,6 +57,7 @@ export async function getRecentDestinations(): Promise<RecentDestination[]> {
 
   const { data: { user } } = await supabase.auth.getUser();
   if (user) {
+    mergeAsyncStorageToSupabaseOnce(user.id).catch(() => {});
     const { data } = await supabase
       .from('recent_destinations')
       .select('address, city, state, cep, latitude, longitude')
@@ -78,29 +79,62 @@ export async function getRecentDestinations(): Promise<RecentDestination[]> {
   return deduped;
 }
 
-/** Adiciona um destino: grava no Supabase (se logado) e mantém AsyncStorage. Sem duplicatas (mesmo endereço normalizado). */
+/** Adiciona um destino: grava no Supabase (se logado) e mantém AsyncStorage quando não logado. Atualiza used_at se o endereço já existir. */
 export async function addRecentDestination(item: RecentDestination): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
   const list = await getRecentDestinations();
   const newKey = normalizeKey(item.address, item.city);
   const filtered = list.filter((x) => normalizeKey(x.address, x.city) !== newKey);
-  const next = [{ ...item, address: item.address.trim(), city: (item.city ?? '').trim() || item.address.trim() }, ...filtered].slice(0, MAX_ITEMS);
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  const normalizedItem = { ...item, address: item.address.trim(), city: (item.city ?? '').trim() || item.address.trim() };
+  const next = [normalizedItem, ...filtered].slice(0, MAX_ITEMS);
+  if (!user) {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    return;
+  }
 
-  const { data: { user } } = await supabase.auth.getUser();
-  if (user) {
-    const { data: existingRows } = await supabase
-      .from('recent_destinations')
-      .select('address, city')
-      .eq('user_id', user.id);
-    const recentList = (existingRows ?? []) as RecentDestination[];
-    const alreadyExists = recentList.some((r) => normalizeKey(r.address, r.city) === newKey);
-    if (alreadyExists) return;
+  const { data: existingRows } = await supabase
+    .from('recent_destinations')
+    .select('id, address, city')
+    .eq('user_id', user.id);
+  const existing = (existingRows ?? []).find((r) => normalizeKey(r.address, r.city) === newKey);
+  if (existing) {
+    await supabase.from('recent_destinations').update({ used_at: new Date().toISOString() }).eq('id', existing.id);
+  } else {
     await supabase.from('recent_destinations').insert({
       user_id: user.id,
-      address: item.address.trim(),
-      city: (item.city ?? '').trim() || item.address.trim(),
-      latitude: item.latitude ?? null,
-      longitude: item.longitude ?? null,
+      address: normalizedItem.address,
+      city: normalizedItem.city,
+      state: normalizedItem.state ?? null,
+      cep: normalizedItem.cep ?? null,
+      latitude: normalizedItem.latitude ?? null,
+      longitude: normalizedItem.longitude ?? null,
     });
+  }
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+}
+
+/** Merge único: envia itens do AsyncStorage para o Supabase quando o usuário está logado (ex.: após login em novo dispositivo). */
+async function mergeAsyncStorageToSupabaseOnce(userId: string): Promise<void> {
+  const mergeKey = `${STORAGE_KEY}_merged`;
+  try {
+    const alreadyMerged = await AsyncStorage.getItem(mergeKey);
+    if (alreadyMerged === '1') return;
+    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      await AsyncStorage.setItem(mergeKey, '1');
+      return;
+    }
+    const parsed = JSON.parse(raw) as RecentDestination[];
+    const items = Array.isArray(parsed) ? parsed : [];
+    for (const it of items.slice(0, MAX_ITEMS)) {
+      const row = { address: (it.address ?? '').trim(), city: (it.city ?? '').trim() || (it.address ?? '').trim(), state: it.state ?? null, cep: it.cep ?? null, latitude: it.latitude ?? null, longitude: it.longitude ?? null };
+      const { data: existing } = await supabase.from('recent_destinations').select('id').eq('user_id', userId).eq('address', row.address).eq('city', row.city).maybeSingle();
+      if (!existing) {
+        await supabase.from('recent_destinations').insert({ user_id: userId, ...row });
+      }
+    }
+    await AsyncStorage.setItem(mergeKey, '1');
+  } catch {
+    // ignore
   }
 }

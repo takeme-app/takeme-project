@@ -9,6 +9,7 @@ import { getCurrentPlace, requestLocationPermission, getCurrentPosition } from '
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
 import { DriverMarkerIcon } from '../../components/DriverMarkerIcon';
 import { MyLocationMarkerIcon } from '../../components/MyLocationMarkerIcon';
+import { useNativePinOnAndroid } from '../../lib/mapMarkers';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList, TripDriverParam } from '../../navigation/types';
 import { getRecentDestinations, addRecentDestination, formatRecentDestinationDisplay, type RecentDestination } from '../../lib/recentDestinations';
@@ -602,14 +603,24 @@ export function SearchTripScreen({ navigation, route }: Props) {
           />
         )}
         {userLocationCoords && (
-          <Marker
-            coordinate={userLocationCoords}
-            anchor={{ x: 0.5, y: 1 }}
-            title="Sua localização"
-            tracksViewChanges={markersTrackView}
-          >
-            <MyLocationMarkerIcon />
-          </Marker>
+          useNativePinOnAndroid ? (
+            <Marker
+              coordinate={userLocationCoords}
+              anchor={{ x: 0.5, y: 1 }}
+              title="Sua localização"
+              pinColor="#2563eb"
+              tracksViewChanges={false}
+            />
+          ) : (
+            <Marker
+              coordinate={userLocationCoords}
+              anchor={{ x: 0.5, y: 1 }}
+              title="Sua localização"
+              tracksViewChanges={markersTrackView}
+            >
+              <MyLocationMarkerIcon />
+            </Marker>
+          )
         )}
         {(!userLocationCoords || Math.abs(origin.latitude - userLocationCoords.latitude) > 1e-5 || Math.abs(origin.longitude - userLocationCoords.longitude) > 1e-5) && (
           <Marker
@@ -633,16 +644,28 @@ export function SearchTripScreen({ navigation, route }: Props) {
         )}
         {/* Marcadores de viagens disponíveis no local de partida (cada viagem tem um motorista responsável) */}
         {scheduledTrips.map((trip) => (
-          <Marker
-            key={trip.id}
-            coordinate={{ latitude: trip.origin_lat, longitude: trip.origin_lng }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            title={trip.title}
-            description={`Viagem · ${trip.driverName} · Saída ${trip.departure}`}
-            tracksViewChanges={markersTrackView}
-          >
-            <DriverMarkerIcon />
-          </Marker>
+          useNativePinOnAndroid ? (
+            <Marker
+              key={trip.id}
+              coordinate={{ latitude: trip.origin_lat, longitude: trip.origin_lng }}
+              anchor={{ x: 0.5, y: 1 }}
+              title={trip.title}
+              description={`Viagem · ${trip.driverName} · Saída ${trip.departure}`}
+              pinColor="#0d0d0d"
+              tracksViewChanges={false}
+            />
+          ) : (
+            <Marker
+              key={trip.id}
+              coordinate={{ latitude: trip.origin_lat, longitude: trip.origin_lng }}
+              anchor={{ x: 0.5, y: 0.5 }}
+              title={trip.title}
+              description={`Viagem · ${trip.driverName} · Saída ${trip.departure}`}
+              tracksViewChanges={markersTrackView}
+            >
+              <DriverMarkerIcon />
+            </Marker>
+          )
         ))}
       </MapView>
       )}
