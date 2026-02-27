@@ -7,7 +7,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { MainTabParamList } from '../navigation/MainTabs';
 import { useRootNavigation } from '../navigation/RootNavigationContext';
-import { getRecentDestinations, type RecentDestination } from '../lib/recentDestinations';
+import { getRecentDestinations, formatRecentDestinationDisplay, type RecentDestination } from '../lib/recentDestinations';
 import { getDateCarouselOptions, ALL_TIME_SLOTS, getAvailableTimeSlots, toISODate } from '../lib/dateTimeSlots';
 
 // Tokens do Figma: neutral-100 white, black-500 #0d0d0d, neutral-300 #f1f1f1, neutral-400 #e2e2e2, neutral-700 #767676
@@ -173,7 +173,9 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
         {/* Destinos recentes (máx. 2) — só exibe quando houver histórico */}
         {recentDestinations.length > 0 && (
           <View style={styles.recentCard}>
-            {recentDestinations.slice(0, 2).map((item, index) => (
+            {recentDestinations.slice(0, 2).map((item, index) => {
+              const { line1, line2 } = formatRecentDestinationDisplay(item);
+              return (
               <TouchableOpacity
                 key={index}
                 style={styles.recentRow}
@@ -192,11 +194,12 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
                   <MaterialIcons name="access-time" size={24} color={COLORS.black} />
                 </View>
                 <View style={styles.recentTextWrap}>
-                  <Text style={styles.recentAddress} numberOfLines={1}>{item.address}</Text>
-                  <Text style={styles.recentCity}>{item.city}</Text>
+                  <Text style={styles.recentAddress} numberOfLines={1}>{line1}</Text>
+                  <Text style={styles.recentCity} numberOfLines={1}>{line2}</Text>
                 </View>
               </TouchableOpacity>
-            ))}
+            );
+            })}
           </View>
         )}
 

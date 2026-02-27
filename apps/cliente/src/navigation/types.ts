@@ -67,5 +67,5 @@ export type TripStackParamList = {
   PaymentConfirmed: { booking?: PaymentConfirmedBookingParam; immediateTrip?: boolean };
   DriverOnTheWay: undefined;
   TripInProgress: undefined;
-  RateTrip: undefined;
+  RateTrip: { bookingId?: string };
 };

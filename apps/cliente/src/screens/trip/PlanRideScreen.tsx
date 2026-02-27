@@ -84,8 +84,12 @@ export function PlanRideScreen({ navigation, route }: Props) {
       const pt = d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
       return `${pt} · ${scheduledTimeSlot.split(' - ')[0]}`;
     }
-    return '3 de outubro de 2025';
+    const today = new Date();
+    return today.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
   });
+  /** Data e horário usados para filtrar a lista: vêm dos params ou da seleção no sheet. */
+  const [filterDateId, setFilterDateId] = useState<string>(() => scheduledDateId ?? toISODate(new Date()));
+  const [filterTimeSlot, setFilterTimeSlot] = useState<string | null>(() => scheduledTimeSlot ?? null);
   const [timeSheetVisible, setTimeSheetVisible] = useState(false);
   const [selectedDay, setSelectedDay] = useState<string>(() => toISODate(new Date()));
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
@@ -114,6 +118,10 @@ export function PlanRideScreen({ navigation, route }: Props) {
   }, [origin.latitude, origin.longitude, destination?.latitude, destination?.longitude]);
 
   useEffect(() => {
+    setSelectedTripId(null);
+  }, [filterDateId, filterTimeSlot]);
+
+  useEffect(() => {
     if (!timeSheetVisible) return;
     timeSheetOverlayOpacity.setValue(0);
     timeSheetTranslateY.setValue(TIME_SHEET_SLIDE);
@@ -123,7 +131,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
     ]).start();
   }, [timeSheetVisible]);
 
-  /** Lista filtrada por origem, destino e (opcional) data/horário da tela anterior. Só exibe viagens quando origem e destino estão definidos. */
+  /** Lista filtrada por ponto de partida, destino e data/hora. Só exibe viagens quando origem e destino estão definidos. */
   const scheduledTrips = useMemo(() => {
     if (!origin?.latitude || !origin?.longitude || !destination?.latitude || !destination?.longitude) return [];
     const oLat = origin.latitude;
@@ -137,21 +145,23 @@ export function PlanRideScreen({ navigation, route }: Props) {
         Math.abs(t.latitude - dLat) <= ROUTE_MATCH_DEGREES &&
         Math.abs(t.longitude - dLng) <= ROUTE_MATCH_DEGREES
     );
-    if (scheduledDateId && scheduledTimeSlot && list.length > 0) {
-      const slot = parseTimeSlot(scheduledTimeSlot);
-      if (slot) {
-        list = list.filter((t) => {
-          if (!t.departure_at) return true;
-          const tripDate = toISODateOnly(t.departure_at);
-          if (tripDate !== scheduledDateId) return false;
+    if (filterDateId && list.length > 0) {
+      list = list.filter((t) => {
+        if (!t.departure_at) return false;
+        const tripDate = toISODateOnly(t.departure_at);
+        if (tripDate !== filterDateId) return false;
+        if (filterTimeSlot) {
+          const slot = parseTimeSlot(filterTimeSlot);
+          if (!slot) return true;
           const dep = new Date(t.departure_at);
           const depMinutes = dep.getHours() * 60 + dep.getMinutes();
           return depMinutes >= slot.startMinutes && depMinutes < slot.endMinutes;
-        });
-      }
+        }
+        return true;
+      });
     }
-    return list;
-  }, [allScheduledTrips, origin?.latitude, origin?.longitude, destination?.latitude, destination?.longitude, scheduledDateId, scheduledTimeSlot]);
+    return [...list].sort((a, b) => (a.badge === 'Take Me' ? 0 : 1) - (b.badge === 'Take Me' ? 0 : 1));
+  }, [allScheduledTrips, origin?.latitude, origin?.longitude, destination?.latitude, destination?.longitude, filterDateId, filterTimeSlot]);
 
   useEffect(() => {
     let cancelled = false;
@@ -277,6 +287,9 @@ export function PlanRideScreen({ navigation, route }: Props) {
       const d = new Date(selectedDay + 'T12:00:00');
       const pt = d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
       setDateLabel(`${pt} · ${selectedSlot.split(' - ')[0]}`);
+      setFilterDateId(selectedDay);
+      setFilterTimeSlot(selectedSlot);
+      setSelectedTripId(null);
       closeTimeSheet();
     }
   };

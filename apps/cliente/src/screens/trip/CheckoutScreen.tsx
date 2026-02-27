@@ -6,7 +6,6 @@ import {
   StyleSheet,
   ScrollView,
   Platform,
-  ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
@@ -46,13 +45,18 @@ const DEFAULT_REGION = {
   longitudeDelta: 0.02,
 };
 
-type SavedPaymentMethod = { id: string; type: string; last_four: string | null; holder_name: string | null; brand: string | null };
+type PaymentMethodType = 'pix' | 'debito' | 'credito' | 'dinheiro';
+
+const PAYMENT_OPTIONS: { type: PaymentMethodType; label: string; icon: keyof typeof MaterialIcons.glyphMap }[] = [
+  { type: 'pix', label: 'Pix', icon: 'qr-code-2' },
+  { type: 'debito', label: 'Débito', icon: 'credit-card' },
+  { type: 'credito', label: 'Crédito', icon: 'credit-card' },
+  { type: 'dinheiro', label: 'Dinheiro', icon: 'payments' },
+];
 
 export function CheckoutScreen({ navigation, route }: Props) {
   const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
-  const [paymentMethods, setPaymentMethods] = useState<SavedPaymentMethod[]>([]);
-  const [methodsLoading, setMethodsLoading] = useState(true);
-  const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | null>(null);
+  const [selectedPaymentType, setSelectedPaymentType] = useState<PaymentMethodType | null>('credito');
 
   const driver = route.params?.driver ?? DEFAULT_DRIVER;
   const origin = route.params?.origin;
@@ -60,28 +64,35 @@ export function CheckoutScreen({ navigation, route }: Props) {
   const passengersParam = route.params?.passengers ?? [];
   const bagsCount = route.params?.bags_count ?? driver.bags ?? 0;
   const scheduledTripId = route.params?.scheduled_trip_id;
+  const immediateTrip = route.params?.immediateTrip === true;
   const amountCents = driver.amount_cents ?? 6400;
   const fareFormatted = `R$ ${(amountCents / 100).toFixed(2)}`;
-
-  const loadPaymentMethods = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setMethodsLoading(false);
-      return;
-    }
-    const { data } = await supabase
-      .from('payment_methods')
-      .select('id, type, last_four, holder_name, brand')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
-    setPaymentMethods((data ?? []) as SavedPaymentMethod[]);
-    setSelectedPaymentMethodId((prev) => (prev && data?.some((m) => m.id === prev)) ? prev : (data?.[0]?.id ?? null));
-    setMethodsLoading(false);
-  }, []);
+  const [tripDateLabel, setTripDateLabel] = useState<string | null>(null);
 
   useEffect(() => {
-    loadPaymentMethods();
-  }, [loadPaymentMethods]);
+    if (!scheduledTripId) {
+      setTripDateLabel(immediateTrip ? 'Hoje' : null);
+      return;
+    }
+    let cancelled = false;
+    supabase
+      .from('scheduled_trips')
+      .select('departure_at')
+      .eq('id', scheduledTripId)
+      .single()
+      .then(({ data }) => {
+        if (cancelled || !data?.departure_at) {
+          if (!cancelled) setTripDateLabel(immediateTrip ? 'Hoje' : null);
+          return;
+        }
+        const d = new Date(data.departure_at);
+        setTripDateLabel(d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' }));
+      })
+      .catch(() => {
+        if (!cancelled) setTripDateLabel(immediateTrip ? 'Hoje' : null);
+      });
+    return () => { cancelled = true; };
+  }, [scheduledTripId, immediateTrip]);
 
   useEffect(() => {
     if (!origin || !destination) {
@@ -182,7 +193,9 @@ export function CheckoutScreen({ navigation, route }: Props) {
             </View>
             <Text style={styles.fare}>{fareFormatted}</Text>
           </View>
-          <Text style={styles.meta}>Saída {driver.departure} · Chegada {driver.arrival}</Text>
+          <Text style={styles.meta}>
+            {tripDateLabel ? `${tripDateLabel} · ` : ''}Saída {driver.departure} · Chegada {driver.arrival}
+          </Text>
           <View style={styles.metaRow}>
             <MaterialIcons name="directions-car" size={18} color={COLORS.neutral700} />
             <Text style={styles.metaText}>Argo Sedan • Placa RIO 2877</Text>
@@ -220,33 +233,25 @@ export function CheckoutScreen({ navigation, route }: Props) {
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Método de pagamento</Text>
-          {methodsLoading ? (
-            <View style={styles.paymentLoading}>
-              <ActivityIndicator size="small" color={COLORS.black} />
-              <Text style={styles.paymentLoadingText}>Carregando...</Text>
-            </View>
-          ) : paymentMethods.length === 0 ? (
-            <Text style={styles.paymentEmpty}>Adicione um cartão na Carteira para pagar.</Text>
-          ) : (
-            paymentMethods.map((m) => (
+          <View style={styles.paymentButtonsRow}>
+            {PAYMENT_OPTIONS.map((opt) => (
               <TouchableOpacity
-                key={m.id}
-                style={styles.paymentRow}
-                onPress={() => setSelectedPaymentMethodId(m.id)}
+                key={opt.type}
+                style={[styles.paymentMethodButton, selectedPaymentType === opt.type && styles.paymentMethodButtonSelected]}
+                onPress={() => setSelectedPaymentType(opt.type)}
                 activeOpacity={0.7}
               >
-                <MaterialIcons name="credit-card" size={22} color={COLORS.black} />
-                <Text style={styles.paymentLabel}>
-                  {m.type === 'credit' ? 'Crédito' : 'Débito'}
-                  {m.last_four ? ` •••• ${m.last_four}` : ''}
-                  {m.holder_name ? ` · ${m.holder_name}` : ''}
+                <MaterialIcons
+                  name={opt.icon}
+                  size={24}
+                  color={selectedPaymentType === opt.type ? '#FFFFFF' : COLORS.black}
+                />
+                <Text style={[styles.paymentMethodLabel, selectedPaymentType === opt.type && styles.paymentMethodLabelSelected]}>
+                  {opt.label}
                 </Text>
-                <View style={[styles.radio, selectedPaymentMethodId === m.id && styles.radioSelected]}>
-                  {selectedPaymentMethodId === m.id && <View style={styles.radioInner} />}
-                </View>
               </TouchableOpacity>
-            ))
-          )}
+            ))}
+          </View>
         </View>
 
         <TouchableOpacity
@@ -323,14 +328,24 @@ const styles = StyleSheet.create({
   passengerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
   passengerText: { flex: 1, fontSize: 14, color: COLORS.black },
   bagsNote: { fontSize: 13, color: COLORS.neutral700, marginTop: 4 },
-  paymentRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 12 },
-  paymentLabel: { flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.black },
-  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: COLORS.neutral400, alignItems: 'center', justifyContent: 'center' },
-  radioSelected: { borderColor: COLORS.black },
-  radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: COLORS.black },
-  paymentLoading: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 },
-  paymentLoadingText: { fontSize: 14, color: COLORS.neutral700 },
-  paymentEmpty: { fontSize: 14, color: COLORS.neutral700, paddingVertical: 8 },
+  paymentButtonsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  paymentMethodButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: COLORS.neutral400,
+    backgroundColor: '#FFFFFF',
+  },
+  paymentMethodButtonSelected: {
+    borderColor: COLORS.black,
+    backgroundColor: COLORS.black,
+  },
+  paymentMethodLabel: { fontSize: 14, fontWeight: '600', color: COLORS.black },
+  paymentMethodLabelSelected: { color: '#FFFFFF' },
   confirmButton: {
     backgroundColor: COLORS.black,
     paddingVertical: 16,

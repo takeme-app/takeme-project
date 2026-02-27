@@ -11,7 +11,7 @@ import { DriverMarkerIcon } from '../../components/DriverMarkerIcon';
 import { MyLocationMarkerIcon } from '../../components/MyLocationMarkerIcon';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList, TripDriverParam } from '../../navigation/types';
-import { getRecentDestinations, addRecentDestination, type RecentDestination } from '../../lib/recentDestinations';
+import { getRecentDestinations, addRecentDestination, formatRecentDestinationDisplay, type RecentDestination } from '../../lib/recentDestinations';
 import { getRoutePolyline, type RoutePoint } from '../../lib/route';
 import { supabase } from '../../lib/supabase';
 
@@ -144,20 +144,21 @@ export function SearchTripScreen({ navigation, route }: Props) {
   const [tripsError, setTripsError] = useState<string | null>(null);
   const [planWhenModalVisible, setPlanWhenModalVisible] = useState(false);
 
-  /** Lista filtrada por origem/destino quando ambos estão definidos (ex.: Itabaiana → João Pessoa; Itabaiana → Recife não mostra as de João Pessoa). */
+  /** Lista filtrada por origem/destino; Take Me primeiro na ordem. */
   const scheduledTrips = useMemo(() => {
-    if (!origin?.latitude || !destination?.latitude) return allScheduledTrips;
+    if (!origin?.latitude || !destination?.latitude) return [...allScheduledTrips].sort((a, b) => (a.badge === 'Take Me' ? 0 : 1) - (b.badge === 'Take Me' ? 0 : 1));
     const oLat = origin.latitude;
     const oLng = origin.longitude;
     const dLat = destination.latitude;
     const dLng = destination.longitude;
-    return allScheduledTrips.filter(
+    const filtered = allScheduledTrips.filter(
       (t) =>
         Math.abs(t.origin_lat - oLat) <= ROUTE_MATCH_DEGREES &&
         Math.abs(t.origin_lng - oLng) <= ROUTE_MATCH_DEGREES &&
         Math.abs(t.latitude - dLat) <= ROUTE_MATCH_DEGREES &&
         Math.abs(t.longitude - dLng) <= ROUTE_MATCH_DEGREES
     );
+    return [...filtered].sort((a, b) => (a.badge === 'Take Me' ? 0 : 1) - (b.badge === 'Take Me' ? 0 : 1));
   }, [allScheduledTrips, origin?.latitude, origin?.longitude, destination?.latitude, destination?.longitude]);
 
   /** Endereços recentes ordenados pela menor distância da origem (para a página Planeje sua corrida). */
@@ -545,6 +546,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
                 latitude: item.latitude ?? DEFAULT_DESTINATION_COORDS.latitude,
                 longitude: item.longitude ?? DEFAULT_DESTINATION_COORDS.longitude,
               };
+              const { line1, line2 } = formatRecentDestinationDisplay(item);
               return (
                 <TouchableOpacity
                   key={index}
@@ -566,8 +568,8 @@ export function SearchTripScreen({ navigation, route }: Props) {
                     )}
                   </View>
                   <View style={styles.recentTextWrap}>
-                    <Text style={styles.recentAddress} numberOfLines={1}>{item.address}</Text>
-                    <Text style={styles.recentCity}>{item.city}</Text>
+                    <Text style={styles.recentAddress} numberOfLines={1}>{line1}</Text>
+                    <Text style={styles.recentCity} numberOfLines={1}>{line2}</Text>
                   </View>
                 </TouchableOpacity>
               );
@@ -744,6 +746,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
                 .map((item, index) => {
                 const distKm = distanceKm(origin.latitude, origin.longitude, item.latitude, item.longitude);
                 const distanceLabel = distKm != null ? formatDistanceKm(distKm) : null;
+                const { line1, line2 } = formatRecentDestinationDisplay(item);
                 return (
                   <TouchableOpacity
                     key={index}
@@ -764,8 +767,8 @@ export function SearchTripScreen({ navigation, route }: Props) {
                       )}
                     </View>
                     <View style={styles.recentTextWrap}>
-                      <Text style={styles.recentAddress} numberOfLines={1}>{item.address}</Text>
-                      <Text style={styles.recentCity}>{item.city}</Text>
+                      <Text style={styles.recentAddress} numberOfLines={1}>{line1}</Text>
+                      <Text style={styles.recentCity} numberOfLines={1}>{line2}</Text>
                     </View>
                   </TouchableOpacity>
                 );
@@ -784,6 +787,22 @@ export function SearchTripScreen({ navigation, route }: Props) {
           ) : tripsError ? (
             <View style={styles.tripsErrorRow}>
               <Text style={styles.tripsErrorText}>{tripsError}</Text>
+            </View>
+          ) : scheduledTrips.length === 0 && destination ? (
+            <View style={styles.tripsEmptyWrap}>
+              <Text style={styles.tripsEmptyText}>Nenhuma viagem encontrada para esta rota no momento.</Text>
+              <TouchableOpacity
+                style={styles.agendarOutroDiaButton}
+                onPress={() =>
+                  navigation.navigate('PlanRide', {
+                    origin: { address: origin.address, latitude: origin.latitude, longitude: origin.longitude },
+                    destination: { address: destination.address, latitude: destination.latitude, longitude: destination.longitude },
+                  })
+                }
+                activeOpacity={0.8}
+              >
+                <Text style={styles.agendarOutroDiaButtonText}>Agendar para outro dia</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             scheduledTrips.map((trip) => {
@@ -1285,6 +1304,17 @@ const styles = StyleSheet.create({
   tripsLoadingText: { fontSize: 14, color: COLORS.neutral700 },
   tripsErrorRow: { paddingVertical: 16 },
   tripsErrorText: { fontSize: 14, color: '#dc2626' },
+  tripsEmptyWrap: { paddingVertical: 24, paddingHorizontal: 8, alignItems: 'center', gap: 16 },
+  tripsEmptyText: { fontSize: 15, color: COLORS.neutral700, textAlign: 'center' },
+  agendarOutroDiaButton: {
+    backgroundColor: COLORS.black,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+  },
+  agendarOutroDiaButtonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
   primaryButton: {
     backgroundColor: COLORS.black,
     paddingVertical: 16,

@@ -7,9 +7,23 @@ const MAX_ITEMS = 10;
 export type RecentDestination = {
   address: string;
   city: string;
+  state?: string;
+  cep?: string;
   latitude?: number;
   longitude?: number;
 };
+
+/** Formata para exibição no histórico: linha 1 = Rua, Número; linha 2 = Cidade - UF, CEP */
+export function formatRecentDestinationDisplay(item: RecentDestination): { line1: string; line2: string } {
+  const line1 = (item.address ?? '').trim();
+  const city = (item.city ?? '').trim();
+  if (item.state && city) {
+    const cityUf = `${city} - ${item.state}`;
+    const line2 = item.cep ? `${cityUf}, ${item.cep}` : cityUf;
+    return { line1, line2 };
+  }
+  return { line1, line2: city };
+}
 
 /** Chave normalizada para comparar endereços (evita duplicatas como "Recife, PE" vs "Recife-PE"). */
 function normalizeKey(address: string, city: string): string {
@@ -45,7 +59,7 @@ export async function getRecentDestinations(): Promise<RecentDestination[]> {
   if (user) {
     const { data } = await supabase
       .from('recent_destinations')
-      .select('address, city, latitude, longitude')
+      .select('address, city, state, cep, latitude, longitude')
       .eq('user_id', user.id)
       .order('used_at', { ascending: false })
       .limit(MAX_ITEMS * 2);

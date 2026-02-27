@@ -86,11 +86,11 @@ export function PaymentConfirmedScreen({ navigation, route }: Props) {
       <Text style={styles.title}>Pagamento confirmado!</Text>
       <Text style={styles.subtitle}>Sua viagem foi agendada com sucesso.</Text>
       <Text style={styles.hint}>Você poderá acompanhar o status e detalhes em Atividades.</Text>
-      <TouchableOpacity style={styles.primaryButton} onPress={() => navigation.navigate('DriverOnTheWay')} activeOpacity={0.8}>
-        <Text style={styles.primaryButtonText}>Acompanhar viagem</Text>
+      <TouchableOpacity style={styles.primaryButton} onPress={goToActivities} activeOpacity={0.8}>
+        <Text style={styles.primaryButtonText}>Ver em Atividades</Text>
       </TouchableOpacity>
-      <TouchableOpacity style={styles.linkButton} onPress={goToActivities}>
-        <Text style={styles.linkButtonText}>Ver em Atividades</Text>
+      <TouchableOpacity style={styles.linkButton} onPress={() => navigation.navigate('DriverOnTheWay')}>
+        <Text style={styles.linkButtonText}>Acompanhar viagem</Text>
       </TouchableOpacity>
       <TouchableOpacity style={styles.secondaryButton} onPress={goToMain}>
         <Text style={styles.secondaryButtonText}>Voltar para Início</Text>

@@ -5,7 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList } from '../../navigation/types';
-import { getRecentDestinations, addRecentDestination, type RecentDestination } from '../../lib/recentDestinations';
+import { getRecentDestinations, addRecentDestination, formatRecentDestinationDisplay, type RecentDestination } from '../../lib/recentDestinations';
 import { getCurrentPlace } from '../../lib/location';
 import { getDateCarouselOptions, ALL_TIME_SLOTS, getAvailableTimeSlots, toISODate } from '../../lib/dateTimeSlots';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
@@ -504,6 +504,7 @@ export function PlanTripScreen({ navigation }: Props) {
           const distanceLabel = distKm != null ? formatDistanceKm(distKm) : null;
           const lat = item.latitude ?? DEFAULT_COORDS.latitude;
           const lng = item.longitude ?? DEFAULT_COORDS.longitude;
+          const { line1, line2 } = formatRecentDestinationDisplay(item);
           return (
             <TouchableOpacity
               key={index}
@@ -525,8 +526,8 @@ export function PlanTripScreen({ navigation }: Props) {
                 )}
               </View>
               <View style={styles.recentTextWrap}>
-                <Text style={styles.recentAddress} numberOfLines={1}>{item.address}</Text>
-                <Text style={styles.recentCity}>{item.city}</Text>
+                <Text style={styles.recentAddress} numberOfLines={1}>{line1}</Text>
+                <Text style={styles.recentCity} numberOfLines={1}>{line2}</Text>
               </View>
             </TouchableOpacity>
           );

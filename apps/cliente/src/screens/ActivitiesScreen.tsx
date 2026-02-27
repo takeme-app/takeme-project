@@ -1,11 +1,14 @@
-import { useState, useCallback, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../navigation/ActivitiesStackTypes';
 import { supabase } from '../lib/supabase';
+import { StatusBadge, type ActivitySectionBadge } from '../components/StatusBadge';
+import { CalendarPicker } from '../components/CalendarPicker';
+import { SupportSheet } from '../components/SupportSheet';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ActivitiesList'>;
 
@@ -15,9 +18,13 @@ export type ActivityItem = {
   id: string;
   type: 'viagem' | 'envio' | 'dependente' | 'excursao';
   title: string;
+  originAddress?: string;
   dateTime: string;
   priceFormatted: string;
   categoryLabel: string;
+  sectionBadge: ActivitySectionBadge;
+  bookingStatus?: string;
+  created_at: string;
 };
 
 const COLORS = {
@@ -38,11 +45,19 @@ function formatBookingDate(iso: string): string {
   return `${day} ${month} • ${hours}:${minutes}`;
 }
 
+const MONTH_NAMES_FULL = 'janeiro fevereiro março abril maio junho julho agosto setembro outubro novembro dezembro'.split(' ');
+function formatDatePtBR(d: Date): string {
+  return `${d.getDate()} de ${MONTH_NAMES_FULL[d.getMonth()]}`;
+}
+
 export function ActivitiesScreen({ navigation }: Props) {
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterCategory, setFilterCategory] = useState<ActivityCategory>('todas');
+  const [filterDateStart, setFilterDateStart] = useState<Date | null>(null);
+  const [filterDateEnd, setFilterDateEnd] = useState<Date | null>(null);
   const [filterModalVisible, setFilterModalVisible] = useState(false);
+  const [supportSheetVisible, setSupportSheetVisible] = useState(false);
   const insets = useSafeAreaInsets();
   const fabBottom = insets.bottom + 24 + 56;
 
@@ -55,18 +70,29 @@ export function ActivitiesScreen({ navigation }: Props) {
     }
     const { data: bookings } = await supabase
       .from('bookings')
-      .select('id, destination_address, amount_cents, status, created_at')
+      .select('id, origin_address, destination_address, amount_cents, status, created_at')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(50);
-    const items: ActivityItem[] = (bookings ?? []).map((b) => ({
-      id: b.id,
-      type: 'viagem',
-      title: b.destination_address ?? 'Viagem',
-      dateTime: formatBookingDate(b.created_at),
-      priceFormatted: b.amount_cents != null ? `R$ ${(b.amount_cents / 100).toFixed(2)}` : 'R$ —',
-      categoryLabel: 'Viagem',
-    }));
+    const items: ActivityItem[] = (bookings ?? []).map((b) => {
+      const s = (b as { status?: string }).status?.toLowerCase() ?? '';
+      const sectionBadge: ActivitySectionBadge =
+        s === 'paid' || s === 'in_progress' || s === 'confirmed' ? 'confirmada' : 'planejada';
+      const dest = (b as { destination_address?: string }).destination_address ?? 'Viagem';
+      const origin = (b as { origin_address?: string }).origin_address;
+      return {
+        id: b.id,
+        type: 'viagem',
+        title: dest,
+        originAddress: origin,
+        dateTime: formatBookingDate(b.created_at),
+        priceFormatted: b.amount_cents != null ? `R$ ${(b.amount_cents / 100).toFixed(2)}` : 'R$ —',
+        categoryLabel: 'Viagem',
+        sectionBadge,
+        bookingStatus: (b as { status?: string }).status,
+        created_at: (b as { created_at: string }).created_at,
+      };
+    });
     setActivities(items);
     setLoading(false);
   }, []);
@@ -75,16 +101,39 @@ export function ActivitiesScreen({ navigation }: Props) {
     loadActivities();
   }, [loadActivities]);
 
-  const filteredActivities =
-    filterCategory === 'todas'
+  const filteredActivities = useMemo(() => {
+    let list = filterCategory === 'todas'
       ? activities
       : filterCategory === 'viagens'
         ? activities.filter((a) => a.type === 'viagem')
         : activities.filter((a) => a.type === filterCategory);
+    if (filterDateStart) {
+      const start = filterDateStart.getTime();
+      list = list.filter((a) => new Date(a.created_at).getTime() >= start);
+    }
+    if (filterDateEnd) {
+      const end = new Date(filterDateEnd);
+      end.setHours(23, 59, 59, 999);
+      const endTime = end.getTime();
+      list = list.filter((a) => new Date(a.created_at).getTime() <= endTime);
+    }
+    return list;
+  }, [activities, filterCategory, filterDateStart, filterDateEnd]);
+
+  const confirmedActivities = useMemo(
+    () => filteredActivities.filter((a) => a.sectionBadge === 'confirmada'),
+    [filteredActivities]
+  );
+  const plannedActivities = useMemo(
+    () => filteredActivities.filter((a) => a.sectionBadge === 'planejada'),
+    [filteredActivities]
+  );
 
   const openFilter = () => setFilterModalVisible(true);
 
-  const renderItem = ({ item }: { item: ActivityItem }) => {
+  const displayId = (id: string) => id.length >= 6 ? `VG${id.slice(-6).toUpperCase()}` : id;
+
+  const renderActivityCard = (item: ActivityItem) => {
     const iconName =
       item.type === 'viagem'
         ? 'directions-car'
@@ -93,8 +142,13 @@ export function ActivitiesScreen({ navigation }: Props) {
           : item.type === 'excursao'
             ? 'groups'
             : 'person';
+    const routeLabel = item.originAddress
+      ? `${item.originAddress} → ${item.title}`
+      : item.title;
+    const isPlanned = item.sectionBadge === 'planejada';
     return (
       <TouchableOpacity
+        key={item.id}
         style={styles.activityRow}
         onPress={() => { if (item.type === 'viagem') navigation.navigate('TripDetail', { bookingId: item.id }); }}
         activeOpacity={0.7}
@@ -103,11 +157,15 @@ export function ActivitiesScreen({ navigation }: Props) {
           <MaterialIcons name={iconName as any} size={24} color={COLORS.neutral700} />
         </View>
         <View style={styles.activityContent}>
-          <Text style={styles.activityTitle} numberOfLines={1}>{item.title}</Text>
+          <View style={styles.activityCardHeader}>
+            <Text style={styles.activityId}>{displayId(item.id)}</Text>
+            <StatusBadge variant={item.sectionBadge} />
+          </View>
+          <Text style={styles.activityTitle} numberOfLines={1}>{routeLabel}</Text>
           <Text style={styles.activityDateTime}>{item.dateTime}</Text>
           <Text style={styles.activityPrice}>{item.priceFormatted} • {item.categoryLabel}</Text>
+          <Text style={styles.activityLink}>{isPlanned ? 'Editar rota' : 'Ver detalhes'}</Text>
         </View>
-        <Text style={styles.verDetalhes}>Ver detalhes</Text>
       </TouchableOpacity>
     );
   };
@@ -123,6 +181,14 @@ export function ActivitiesScreen({ navigation }: Props) {
           </TouchableOpacity>
         </View>
         <Text style={styles.title}>Atividades</Text>
+        <TouchableOpacity
+          style={styles.historyChip}
+          onPress={() => navigation.navigate('TravelHistory')}
+          activeOpacity={0.8}
+        >
+          <MaterialIcons name="access-time" size={20} color={COLORS.black} />
+          <Text style={styles.historyChipText}>Histórico de Viagens</Text>
+        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -134,27 +200,51 @@ export function ActivitiesScreen({ navigation }: Props) {
           <Text style={styles.subtitle}>Nenhuma atividade ainda</Text>
         </View>
       ) : (
-        <FlatList
-          data={filteredActivities}
-          keyExtractor={(item) => item.id}
-          renderItem={renderItem}
+        <ScrollView
+          style={styles.scroll}
           contentContainerStyle={styles.listContent}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
           showsVerticalScrollIndicator={false}
-        />
+        >
+          {confirmedActivities.length > 0 && (
+            <>
+              <Text style={[styles.sectionTitle, styles.sectionTitleGreen]}>Viagens confirmadas</Text>
+              {confirmedActivities.map((item) => renderActivityCard(item))}
+            </>
+          )}
+          {plannedActivities.length > 0 && (
+            <>
+              <Text style={[styles.sectionTitle, styles.sectionTitleGray]}>Viagens planejadas</Text>
+              {plannedActivities.map((item) => renderActivityCard(item))}
+            </>
+          )}
+        </ScrollView>
       )}
 
       <TouchableOpacity
         style={[styles.fab, { right: 24, bottom: fabBottom }]}
+        onPress={() => setSupportSheetVisible(true)}
         activeOpacity={0.8}
       >
         <MaterialIcons name="chat-bubble-outline" size={28} color={COLORS.black} />
       </TouchableOpacity>
 
+      <SupportSheet
+        visible={supportSheetVisible}
+        onClose={() => setSupportSheetVisible(false)}
+        onOpenChat={() => {
+          setSupportSheetVisible(false);
+          navigation.navigate('Chat', { contactName: 'Suporte Take Me' });
+        }}
+      />
+
       {filterModalVisible && (
         <FilterModal
           selectedCategory={filterCategory}
           onSelectCategory={setFilterCategory}
+          filterDateStart={filterDateStart}
+          filterDateEnd={filterDateEnd}
+          onSelectDateStart={setFilterDateStart}
+          onSelectDateEnd={setFilterDateEnd}
           onApply={() => setFilterModalVisible(false)}
           onClose={() => setFilterModalVisible(false)}
         />
@@ -166,11 +256,25 @@ export function ActivitiesScreen({ navigation }: Props) {
 type FilterModalProps = {
   selectedCategory: ActivityCategory;
   onSelectCategory: (c: ActivityCategory) => void;
+  filterDateStart: Date | null;
+  filterDateEnd: Date | null;
+  onSelectDateStart: (d: Date | null) => void;
+  onSelectDateEnd: (d: Date | null) => void;
   onApply: () => void;
   onClose: () => void;
 };
 
-function FilterModal({ selectedCategory, onSelectCategory, onApply, onClose }: FilterModalProps) {
+function FilterModal({
+  selectedCategory,
+  onSelectCategory,
+  filterDateStart,
+  filterDateEnd,
+  onSelectDateStart,
+  onSelectDateEnd,
+  onApply,
+  onClose,
+}: FilterModalProps) {
+  const [calendarFor, setCalendarFor] = useState<'start' | 'end' | null>(null);
   const categories: { key: ActivityCategory; label: string }[] = [
     { key: 'todas', label: 'Todas' },
     { key: 'viagens', label: 'Viagens' },
@@ -181,24 +285,63 @@ function FilterModal({ selectedCategory, onSelectCategory, onApply, onClose }: F
     <View style={styles.modalOverlay}>
       <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onClose} activeOpacity={1} />
       <View style={styles.modalContent}>
-        <Text style={styles.modalTitle}>Filtrar atividades</Text>
-        <Text style={styles.modalSectionLabel}>Categoria</Text>
-        <View style={styles.chipRow}>
-          {categories.map(({ key, label }) => (
-            <TouchableOpacity
-              key={key}
-              style={[styles.chip, selectedCategory === key && styles.chipSelected]}
-              onPress={() => onSelectCategory(key)}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.chipText, selectedCategory === key && styles.chipTextSelected]}>{label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        <ScrollView showsVerticalScrollIndicator={false}>
+          <Text style={styles.modalTitle}>Filtrar atividades</Text>
+          <Text style={styles.modalSectionLabel}>Categoria</Text>
+          <View style={styles.chipRow}>
+            {categories.map(({ key, label }) => (
+              <TouchableOpacity
+                key={key}
+                style={[styles.chip, selectedCategory === key && styles.chipSelected]}
+                onPress={() => onSelectCategory(key)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.chipText, selectedCategory === key && styles.chipTextSelected]}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={styles.modalSectionLabel}>Data da atividade</Text>
+          <TouchableOpacity
+            style={styles.dateField}
+            onPress={() => setCalendarFor('start')}
+            activeOpacity={0.8}
+          >
+            <MaterialIcons name="calendar-today" size={20} color={COLORS.neutral700} />
+            <Text style={styles.dateFieldText}>
+              {filterDateStart ? formatDatePtBR(filterDateStart) : 'Data inicial'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.dateField, { marginTop: 8 }]}
+            onPress={() => setCalendarFor('end')}
+            activeOpacity={0.8}
+          >
+            <MaterialIcons name="calendar-today" size={20} color={COLORS.neutral700} />
+            <Text style={styles.dateFieldText}>
+              {filterDateEnd ? formatDatePtBR(filterDateEnd) : 'Data final'}
+            </Text>
+          </TouchableOpacity>
+        </ScrollView>
         <TouchableOpacity style={styles.applyButton} onPress={onApply} activeOpacity={0.8}>
           <Text style={styles.applyButtonText}>Aplicar filtro</Text>
         </TouchableOpacity>
       </View>
+      <Modal visible={calendarFor !== null} transparent animationType="fade">
+        <View style={styles.calendarModalOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setCalendarFor(null)} activeOpacity={1} />
+          <View style={styles.calendarModalContent}>
+            <CalendarPicker
+              initialDate={calendarFor === 'start' ? (filterDateStart ?? new Date()) : (filterDateEnd ?? new Date())}
+              selectedDate={calendarFor === 'start' ? filterDateStart : filterDateEnd}
+              onSelectDate={(date) => {
+                if (calendarFor === 'start') onSelectDateStart(date);
+                else onSelectDateEnd(date);
+                setCalendarFor(null);
+              }}
+            />
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -222,12 +365,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   title: { fontSize: 28, fontWeight: '700', color: COLORS.black },
-  listContent: { paddingBottom: 100 },
+  historyChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: COLORS.neutral300,
+    alignSelf: 'flex-start',
+  },
+  historyChipText: { fontSize: 14, fontWeight: '600', color: COLORS.black },
+  scroll: { flex: 1 },
+  listContent: { paddingBottom: 100, paddingHorizontal: 24 },
+  sectionTitle: { fontSize: 16, fontWeight: '700', marginTop: 20, marginBottom: 8 },
+  sectionTitleGreen: { color: '#166534' },
+  sectionTitleGray: { color: COLORS.neutral700 },
   activityRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 16,
-    paddingHorizontal: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.neutral400,
   },
   activityIconWrap: {
     width: 48,
@@ -239,10 +399,12 @@ const styles = StyleSheet.create({
     marginRight: 16,
   },
   activityContent: { flex: 1 },
-  activityTitle: { fontSize: 16, fontWeight: '600', color: COLORS.black },
+  activityCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  activityId: { fontSize: 15, fontWeight: '700', color: COLORS.black },
+  activityTitle: { fontSize: 14, fontWeight: '500', color: COLORS.black },
   activityDateTime: { fontSize: 14, color: COLORS.neutral700, marginTop: 2 },
   activityPrice: { fontSize: 14, color: COLORS.neutral700, marginTop: 2 },
-  verDetalhes: { fontSize: 14, color: COLORS.black, textDecorationLine: 'underline', marginLeft: 8 },
+  activityLink: { fontSize: 14, color: COLORS.black, textDecorationLine: 'underline', marginTop: 4 },
   separator: { height: 1, backgroundColor: COLORS.neutral400, marginLeft: 88 },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   subtitle: { fontSize: 15, color: COLORS.neutral700 },
@@ -284,6 +446,28 @@ const styles = StyleSheet.create({
   chipSelected: { backgroundColor: COLORS.black },
   chipText: { fontSize: 14, fontWeight: '500', color: COLORS.black },
   chipTextSelected: { color: '#FFFFFF' },
+  dateField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: COLORS.neutral300,
+  },
+  dateFieldText: { fontSize: 15, color: COLORS.black, flex: 1 },
+  calendarModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  calendarModalContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    maxHeight: 420,
+  },
   applyButton: {
     backgroundColor: COLORS.black,
     paddingVertical: 16,
