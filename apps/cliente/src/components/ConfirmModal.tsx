@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Modal } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, Modal } from 'react-native';
+import { Text } from './Text';
 
 const COLORS = {
   background: '#FFFFFF',

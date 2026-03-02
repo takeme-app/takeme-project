@@ -6,6 +6,7 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
+    "sync-env": "node -e \"const fs=require('fs'),path=require('path');const r=path.join(__dirname,'.env');['cliente','motorista','admin','preparador-encomendas','preparador-excursoes'].forEach(a=>{const d=path.join(__dirname,'apps',a,'.env');try{fs.copyFileSync(r,d);console.log('apps/'+a);}catch(e){}})\"",
     "cliente": "npm run start --workspace=cliente",
     "motorista": "npm run start --workspace=motorista",
     "preparador-encomendas": "npm run start --workspace=preparador-encomendas",

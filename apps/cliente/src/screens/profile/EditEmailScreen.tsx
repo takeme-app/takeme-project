@@ -1,21 +1,21 @@
 import { useState, useEffect } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
+import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'EditEmail'>;
 
@@ -27,6 +27,7 @@ const COLORS = {
 };
 
 export function EditEmailScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -42,14 +43,14 @@ export function EditEmailScreen({ navigation }: Props) {
   const handleUpdate = async () => {
     const trimmed = email.trim();
     if (!trimmed) {
-      Alert.alert('Erro', 'Informe um e-mail válido.');
+      showAlert('Erro', 'Informe um e-mail válido.');
       return;
     }
     setLoading(true);
     const { error } = await supabase.auth.updateUser({ email: trimmed });
     setLoading(false);
     if (error) {
-      Alert.alert('Erro', error.message);
+      showAlert('Erro', error.message);
       return;
     }
     navigation.goBack();

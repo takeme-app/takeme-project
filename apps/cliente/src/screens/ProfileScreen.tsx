@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react';
 import {
   View,
-  Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
@@ -9,6 +8,7 @@ import {
   ActivityIndicator,
   useWindowDimensions,
 } from 'react-native';
+import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';

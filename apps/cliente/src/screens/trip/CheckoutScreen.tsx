@@ -1,16 +1,16 @@
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   View,
-  Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
   Platform,
 } from 'react-native';
+import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import { MapboxMap, MapboxMarker, MapboxPolyline } from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList, TripDriverParam, PaymentConfirmedBookingParam } from '../../navigation/types';
 import { getRoutePolyline, type RoutePoint } from '../../lib/route';
@@ -135,29 +135,29 @@ export function CheckoutScreen({ navigation, route }: Props) {
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
       <View style={styles.mapWrap}>
-        <MapView style={styles.map} initialRegion={mapRegion} scrollEnabled={false}>
+        <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled={false}>
           {origin && (
-            <Marker
+            <MapboxMarker
+              id="origin"
               coordinate={{ latitude: origin.latitude, longitude: origin.longitude }}
               anchor={{ x: 0.5, y: 1 }}
               title="Partida"
               description={origin.address}
               pinColor="#0d0d0d"
-              tracksViewChanges={false}
             />
           )}
           {destination && (
-            <Marker
+            <MapboxMarker
+              id="destination"
               coordinate={{ latitude: destination.latitude, longitude: destination.longitude }}
               anchor={{ x: 0.5, y: 1 }}
               title="Destino"
               description={destination.address}
               pinColor="#dc2626"
-              tracksViewChanges={false}
             />
           )}
           {origin && destination && (
-            <Polyline
+            <MapboxPolyline
               coordinates={
                 routeCoords?.length
                   ? routeCoords
@@ -170,7 +170,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
               strokeWidth={4}
             />
           )}
-        </MapView>
+        </MapboxMap>
       </View>
       <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
         <Text style={styles.backArrow}>←</Text>

@@ -1,9 +1,11 @@
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'About'>;
 
@@ -37,6 +39,13 @@ const CARDS = [
     screen: 'CancellationPolicy' as const,
   },
   {
+    id: 'consent',
+    title: 'Termo de Consentimento (LGPD)',
+    description: 'Consentimentos para tratamento de dados pessoais.',
+    icon: 'policy' as const,
+    screen: 'ConsentTerm' as const,
+  },
+  {
     id: 'data-export',
     title: 'Solicitar cópia dos meus dados',
     description: 'Peça acesso aos dados obrigatórios já fornecidos à plataforma.',
@@ -46,14 +55,14 @@ const CARDS = [
 ];
 
 export function AboutScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const handleCardPress = (item: (typeof CARDS)[number]) => {
     if ('screen' in item && item.screen) {
       navigation.navigate(item.screen);
     } else if (item.action === 'requestDataExport') {
-      Alert.alert(
+      showAlert(
         'Solicitar cópia dos dados',
-        'Sua solicitação será processada e você receberá um e-mail com o link para download dos seus dados.',
-        [{ text: 'OK' }]
+        'Sua solicitação será processada e você receberá um e-mail com o link para download dos seus dados.'
       );
       // TODO: chamar Edge Function request-data-export quando implementada
     }

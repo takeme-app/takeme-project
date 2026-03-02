@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, Pressable, Animated, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Image } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, ScrollView, Modal, Pressable, Animated, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from 'react-native';
+import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -7,6 +8,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList } from '../../navigation/types';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
 import { getCurrentPlace } from '../../lib/location';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 import { addRecentDestination } from '../../lib/recentDestinations';
 import { supabase } from '../../lib/supabase';
 import { getDateCarouselOptions, ALL_TIME_SLOTS, getAvailableTimeSlots, toISODate } from '../../lib/dateTimeSlots';
@@ -65,6 +67,7 @@ const COLORS = {
 };
 
 export function PlanRideScreen({ navigation, route }: Props) {
+  const { showAlert } = useAppAlert();
   const [origin, setOrigin] = useState<Place>(() => {
     const o = route.params?.origin;
     if (o && o.latitude != null && o.longitude != null) return { address: o.address, latitude: o.latitude, longitude: o.longitude };
@@ -243,10 +246,10 @@ export function PlanRideScreen({ navigation, route }: Props) {
         setOrigin({ address: place.address, latitude: place.latitude, longitude: place.longitude });
         setEditOrigin(place.address);
       } else {
-        Alert.alert('Localização', 'Não foi possível usar sua localização. Verifique se o app tem permissão nas configurações.');
+        showAlert('Localização', 'Não foi possível usar sua localização. Verifique se o app tem permissão nas configurações.');
       }
     } catch {
-      Alert.alert('Localização', 'Não foi possível obter seu endereço. Tente novamente.');
+      showAlert('Localização', 'Não foi possível obter seu endereço. Tente novamente.');
     } finally {
       setLocationLoading(false);
     }

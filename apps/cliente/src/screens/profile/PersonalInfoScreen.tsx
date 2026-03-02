@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   View,
-  Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
   Image,
   ActivityIndicator,
 } from 'react-native';
+import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useFocusEffect } from '@react-navigation/native';
@@ -30,6 +30,17 @@ const COLORS = {
 };
 
 const AVATAR_SIZE = 78;
+
+function formatPhoneDisplay(value: string | null | undefined): string {
+  const raw = (value ?? '').trim();
+  if (!raw) return '';
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length >= 10 && digits.length <= 11) {
+    if (digits.length === 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+  }
+  return raw;
+}
 
 export function PersonalInfoScreen({ navigation }: Props) {
   const [profile, setProfile] = useState<{
@@ -69,12 +80,13 @@ export function PersonalInfoScreen({ navigation }: Props) {
       return;
     }
 
+    const phoneNorm = (phoneFromAuth || '').replace(/\D/g, '').trim() || null;
     if (!row) {
       await supabase.from('profiles').upsert(
         {
           id: user.id,
           full_name: nameFromAuth || null,
-          phone: phoneFromAuth || null,
+          phone: phoneNorm,
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'id' }
@@ -102,7 +114,7 @@ export function PersonalInfoScreen({ navigation }: Props) {
     ? (profile.avatar_url.startsWith('http') ? profile.avatar_url : `${supabaseUrl}/storage/v1/object/public/avatars/${profile.avatar_url}`)
     : null;
   const displayName = profile?.full_name?.trim() || authFallback.full_name || '—';
-  const displayPhone = profile?.phone?.trim() || authFallback.phone || '—';
+  const displayPhone = formatPhoneDisplay(profile?.phone || authFallback.phone) || '—';
   const displayCpf = formatCpfDisplay(profile?.cpf ?? null);
   const displayLocation = [profile?.city, profile?.state].filter(Boolean).join(' - ') || '—';
   const displayEmail = email || '—';

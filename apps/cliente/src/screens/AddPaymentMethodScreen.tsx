@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
@@ -9,13 +8,14 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
+import { Text } from '../components/Text';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { CardField, useStripe } from '@stripe/stripe-react-native';
 import { supabase } from '../lib/supabase';
+import { useAppAlert } from '../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AddPaymentMethod'>;
 
@@ -23,6 +23,7 @@ type PaymentType = 'credit' | 'debit' | null;
 
 export function AddPaymentMethodScreen({ navigation }: Props) {
   const { createPaymentMethod } = useStripe();
+  const { showAlert } = useAppAlert();
   const [selected, setSelected] = useState<PaymentType>(null);
   const [cardName, setCardName] = useState('');
   const [cardComplete, setCardComplete] = useState(false);
@@ -40,18 +41,18 @@ export function AddPaymentMethodScreen({ navigation }: Props) {
         },
       });
       if (pmError) {
-        Alert.alert('Erro', pmError.message ?? 'Falha ao processar o cartão.');
+        showAlert('Erro', pmError.message ?? 'Falha ao processar o cartão.');
         return;
       }
       if (!paymentMethod?.id) {
-        Alert.alert('Erro', 'Não foi possível obter o método de pagamento.');
+        showAlert('Erro', 'Não foi possível obter o método de pagamento.');
         return;
       }
       await supabase.auth.refreshSession();
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       const token = session?.access_token;
       if (!token) {
-        Alert.alert('Erro', sessionError?.message ?? 'Sessão expirada. Faça login novamente.');
+        showAlert('Erro', sessionError?.message ?? 'Sessão expirada. Faça login novamente.');
         return;
       }
       const url = `${process.env.EXPO_PUBLIC_SUPABASE_URL ?? ''}/functions/v1/save-payment-method`;
@@ -73,16 +74,16 @@ export function AddPaymentMethodScreen({ navigation }: Props) {
         });
       } catch (e) {
         const err = e as Error;
-        Alert.alert('Erro', err?.message?.includes('Network') ? 'Sem conexão. Verifique a internet.' : (err?.message ?? 'Falha ao enviar. Tente de novo.'));
+        showAlert('Erro', err?.message?.includes('Network') ? 'Sem conexão. Verifique a internet.' : (err?.message ?? 'Falha ao enviar. Tente de novo.'));
         return;
       }
       const data = await res.json().catch(() => ({})) as { error?: string; ok?: boolean };
       if (!res.ok) {
-        Alert.alert('Erro', data?.error ?? `Erro do servidor (${res.status}).`);
+        showAlert('Erro', data?.error ?? `Erro do servidor (${res.status}).`);
         return;
       }
       if (data?.error) {
-        Alert.alert('Erro', data.error);
+        showAlert('Erro', data.error);
         return;
       }
       navigation.navigate('CardRegisteredSuccess');

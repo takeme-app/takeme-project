@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
@@ -9,8 +8,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
+import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -18,6 +17,7 @@ import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '../../lib/supabase';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'AddDependent'>;
 
@@ -38,6 +38,7 @@ function getExtension(name: string): string {
 }
 
 export function AddDependentScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [fullName, setFullName] = useState('');
   const [age, setAge] = useState('');
   const [observations, setObservations] = useState('');
@@ -63,7 +64,7 @@ export function AddDependentScreen({ navigation }: Props) {
       if (which === 'dependent') setDocumentFile(file);
       else setRepresentativeFile(file);
     } catch (e) {
-      Alert.alert('Erro', e instanceof Error ? e.message : 'Não foi possível abrir o seletor de arquivos.');
+      showAlert('Erro', e instanceof Error ? e.message : 'Não foi possível abrir o seletor de arquivos.');
     }
   };
 
@@ -80,14 +81,14 @@ export function AddDependentScreen({ navigation }: Props) {
   const handleSubmit = async () => {
     const name = fullName.trim();
     if (!name) {
-      Alert.alert('Erro', 'Informe o nome completo do dependente.');
+      showAlert('Erro', 'Informe o nome completo do dependente.');
       return;
     }
     setSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       setSaving(false);
-      Alert.alert('Erro', 'Sessão expirada.');
+      showAlert('Erro', 'Sessão expirada.');
       return;
     }
 
@@ -105,7 +106,7 @@ export function AddDependentScreen({ navigation }: Props) {
 
     if (insertError) {
       setSaving(false);
-      Alert.alert('Erro', insertError.message);
+      showAlert('Erro', insertError.message);
       return;
     }
 

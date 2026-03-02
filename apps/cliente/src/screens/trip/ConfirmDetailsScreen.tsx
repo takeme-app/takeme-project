@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import {
   View,
-  Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
@@ -9,6 +8,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
 import { CommonActions } from '@react-navigation/native';
 import type { NavigationContainerRef } from '@react-navigation/native';
 import type { RootStackParamList } from './types';
@@ -37,6 +37,44 @@ function clearAuthParamsFromUrl(): void {
   }
 }
 
+const RESET_PASSWORD_PATH = 'reset-password';
+
+function isResetPasswordDeepLink(url: string): boolean {
+  return url.includes(RESET_PASSWORD_PATH) || url.includes('reset-password');
+}
+
+async function handleRecoveryUrl(
+  url: string,
+  navigationRef: React.RefObject<NavigationContainerRef<RootStackParamList> | null>
+): Promise<boolean> {
+  const { access_token, refresh_token, type } = parseAuthParamsFromUrl(url);
+  const hasTokens = type === 'recovery' && access_token;
+
+  if (hasTokens) {
+    try {
+      await supabase.auth.setSession({ access_token, refresh_token: refresh_token ?? '' });
+      clearAuthParamsFromUrl();
+    } catch {
+      return false;
+    }
+  }
+
+  const nav = navigationRef.current;
+  if (!nav) return hasTokens;
+
+  const goToResetPassword = () => {
+    navigationRef.current?.dispatch(
+      CommonActions.reset({
+        index: 0,
+        routes: [{ name: 'ResetPassword' }],
+      })
+    );
+  };
+
+  setTimeout(goToResetPassword, 300);
+  return true;
+}
+
 type Props = {
   navigationRef: React.RefObject<NavigationContainerRef<RootStackParamList> | null>;
 };
@@ -45,29 +83,23 @@ export function AuthRecoveryHandler({ navigationRef }: Props) {
   const handled = useRef(false);
 
   useEffect(() => {
-    if (handled.current) return;
-    const url = Platform.OS === 'web' ? getCurrentUrl() : null;
-    if (!url) return;
+    const run = async (url: string | null) => {
+      if (!url || handled.current) return;
+      const isRecovery = url.includes('access_token') || isResetPasswordDeepLink(url);
+      if (!isRecovery) return;
+      const didHandle = await handleRecoveryUrl(url, navigationRef);
+      if (didHandle) handled.current = true;
+    };
 
-    const { access_token, refresh_token, type } = parseAuthParamsFromUrl(url);
-    if (type !== 'recovery' || !access_token) return;
+    if (Platform.OS === 'web') {
+      const url = getCurrentUrl();
+      run(url);
+      return;
+    }
 
-    handled.current = true;
-
-    (async () => {
-      try {
-        await supabase.auth.setSession({ access_token, refresh_token: refresh_token ?? '' });
-        clearAuthParamsFromUrl();
-        navigationRef.current?.dispatch(
-          CommonActions.reset({
-            index: 0,
-            routes: [{ name: 'ResetPassword' }],
-          })
-        );
-      } catch {
-        handled.current = false;
-      }
-    })();
+    Linking.getInitialURL().then(run);
+    const sub = Linking.addEventListener('url', ({ url }) => run(url));
+    return () => sub.remove();
   }, [navigationRef]);
 
   return null;

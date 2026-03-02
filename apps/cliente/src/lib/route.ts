@@ -7,7 +7,7 @@ export type RoutePoint = { latitude: number; longitude: number };
 
 /**
  * Retorna as coordenadas da rota de carro entre origem e destino, ou null se falhar.
- * Formato pronto para Polyline do react-native-maps.
+ * Formato pronto para MapboxPolyline / polylines no mapa.
  */
 export async function getRoutePolyline(
   origin: RoutePoint,

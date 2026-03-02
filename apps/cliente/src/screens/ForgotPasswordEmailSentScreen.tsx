@@ -1,17 +1,17 @@
 import { useState, useEffect } from 'react';
 import {
   View,
-  Text,
   TouchableOpacity,
   StyleSheet,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
+import { Text } from '../components/Text';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { getLastRecoveryEmail } from '../lib/lastRecoveryEmail';
+import { useAppAlert } from '../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPasswordEmailSent'>;
 
@@ -19,6 +19,7 @@ const RESEND_COOLDOWN_SEC = 60;
 
 export function ForgotPasswordEmailSentScreen({ navigation, route }: Props) {
   const email = (route.params?.email ?? getLastRecoveryEmail()).trim();
+  const { showAlert } = useAppAlert();
   const [countdown, setCountdown] = useState(RESEND_COOLDOWN_SEC);
   const [resendLoading, setResendLoading] = useState(false);
 
@@ -32,16 +33,15 @@ export function ForgotPasswordEmailSentScreen({ navigation, route }: Props) {
 
   const handleResend = async () => {
     if (!email.trim() || !isSupabaseConfigured) {
-      if (!email.trim()) Alert.alert('Atenção', 'E-mail não disponível para reenvio.');
+      if (!email.trim()) showAlert('Atenção', 'E-mail não disponível para reenvio.');
       return;
     }
     setResendLoading(true);
     try {
-      const redirectTo = process.env.EXPO_PUBLIC_APP_SCHEME
-        ? `${process.env.EXPO_PUBLIC_APP_SCHEME}://reset-password`
-        : undefined;
+      const scheme = process.env.EXPO_PUBLIC_APP_SCHEME ?? 'take-me-cliente';
+      const redirectTo = `${scheme}://reset-password`;
       const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        ...(redirectTo && { redirectTo }),
+        redirectTo,
       });
       if (error) throw error;
       setCountdown(RESEND_COOLDOWN_SEC);
@@ -50,7 +50,7 @@ export function ForgotPasswordEmailSentScreen({ navigation, route }: Props) {
         e && typeof e === 'object' && 'message' in e
           ? String((e as { message: string }).message)
           : 'Não foi possível reenviar o e-mail. Tente novamente.';
-      Alert.alert('Erro', message);
+      showAlert('Erro', message);
     } finally {
       setResendLoading(false);
     }

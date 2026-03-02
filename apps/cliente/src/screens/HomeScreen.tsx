@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Image, Modal, Pressable, Animated } from 'react-native';
+import { View, TextInput, TouchableOpacity, StyleSheet, ScrollView, Image, Modal, Pressable, Animated } from 'react-native';
+import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';

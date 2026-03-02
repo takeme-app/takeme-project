@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Modal, Linking } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, Modal, Linking } from 'react-native';
+import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
 
 const COLORS = {

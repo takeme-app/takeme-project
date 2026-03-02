@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
   View,
-  Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
@@ -11,10 +10,11 @@ import {
   Modal,
   TextInput,
 } from 'react-native';
+import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import { MapboxMap, MapboxMarker, MapboxPolyline } from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
@@ -224,21 +224,23 @@ export function TripDetailScreen({ navigation, route }: Props) {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {mapRegion && (
           <View style={styles.mapWrap}>
-            <MapView style={styles.map} initialRegion={mapRegion} scrollEnabled={false}>
-              <Marker
+            <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled={false}>
+              <MapboxMarker
+                id="origin"
                 coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }}
                 anchor={{ x: 0.5, y: 1 }}
                 pinColor="#0d0d0d"
               />
-              <Marker
+              <MapboxMarker
+                id="destination"
                 coordinate={{ latitude: detail.destination_lat, longitude: detail.destination_lng }}
                 anchor={{ x: 0.5, y: 1 }}
                 pinColor="#dc2626"
               />
               {routeCoords && routeCoords.length > 0 && (
-                <Polyline coordinates={routeCoords} strokeColor={COLORS.black} strokeWidth={4} />
+                <MapboxPolyline coordinates={routeCoords} strokeColor={COLORS.black} strokeWidth={4} />
               )}
-            </MapView>
+            </MapboxMap>
             <TouchableOpacity style={styles.trackButton} activeOpacity={0.8}>
               <MaterialIcons name="explore" size={20} color={COLORS.neutral700} />
               <Text style={styles.trackButtonText}>Acompanhar em tempo real</Text>

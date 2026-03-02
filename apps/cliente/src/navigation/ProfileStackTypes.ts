@@ -16,6 +16,7 @@ export type ProfileStackParamList = {
   TermsOfUse: undefined;
   PrivacyPolicy: undefined;
   CancellationPolicy: undefined;
+  ConsentTerm: undefined;
   EditName: undefined;
   EditEmail: undefined;
   EditAvatar: undefined;

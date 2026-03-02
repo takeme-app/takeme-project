@@ -1,11 +1,24 @@
-import { useEffect } from 'react';
-import { Linking } from 'react-native';
+import { useEffect, useCallback } from 'react';
+import { Linking, View } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
+import {
+  useFonts,
+  Inter_400Regular,
+  Inter_600SemiBold,
+  Inter_700Bold,
+} from '@expo-google-fonts/inter';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StripeProvider } from '@stripe/stripe-react-native';
+import Mapbox from '@rnmapbox/maps';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { createSessionFromUrl } from './src/lib/oauth';
+import { AppAlertProvider } from './src/contexts/AppAlertContext';
+
+SplashScreen.preventAutoHideAsync();
 
 const stripePublishableKey = process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? '';
+const mapboxToken = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
+if (mapboxToken) Mapbox.setAccessToken(mapboxToken);
 
 function useAuthDeepLink() {
   useEffect(() => {
@@ -24,12 +37,33 @@ function useAuthDeepLink() {
 }
 
 export default function App() {
+  const [fontsLoaded, fontError] = useFonts({
+    Inter_400Regular,
+    Inter_600SemiBold,
+    Inter_700Bold,
+  });
+
+  const onLayoutRootView = useCallback(async () => {
+    if (fontsLoaded || fontError) {
+      await SplashScreen.hideAsync();
+    }
+  }, [fontsLoaded, fontError]);
+
   useAuthDeepLink();
+
+  if (!fontsLoaded && !fontError) {
+    return null;
+  }
+
   return (
-    <StripeProvider publishableKey={stripePublishableKey}>
-      <SafeAreaProvider>
-        <RootNavigator />
-      </SafeAreaProvider>
-    </StripeProvider>
+    <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
+      <StripeProvider publishableKey={stripePublishableKey}>
+        <SafeAreaProvider>
+          <AppAlertProvider>
+            <RootNavigator />
+          </AppAlertProvider>
+        </SafeAreaProvider>
+      </StripeProvider>
+    </View>
   );
 }

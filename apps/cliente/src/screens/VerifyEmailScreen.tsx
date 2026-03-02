@@ -1,15 +1,22 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
+  NativeSyntheticEvent,
+  TextInputKeyPressEventData,
+  Dimensions,
+  ScrollView,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
+import { Text } from '../components/Text';
+import { useAppAlert } from '../contexts/AppAlertContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -18,27 +25,67 @@ import { supabase } from '../lib/supabase';
 type Props = NativeStackScreenProps<RootStackParamList, 'VerifyEmail'>;
 
 const CODE_LENGTH = 4;
+const OTP_BOX_DESKTOP = 85;
+const OTP_GAP = 10;
+const CONTENT_PADDING = 48; // 24 * 2
+
+function getOtpBoxSize(): number {
+  const { width } = Dimensions.get('window');
+  const available = width - CONTENT_PADDING;
+  const boxSize = (available - OTP_GAP * 3) / 4;
+  return Math.min(OTP_BOX_DESKTOP, Math.max(52, Math.floor(boxSize)));
+}
 
 export function VerifyEmailScreen({ navigation, route }: Props) {
   const { email, password, fullName, phone } = route.params;
-  const [code, setCode] = useState('');
+  const { showAlert } = useAppAlert();
+  const [digits, setDigits] = useState<string[]>(['', '', '', '']);
+  const [focusedIndex, setFocusedIndex] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<TextInput>(null);
+  const inputRefs = useRef<(TextInput | null)[]>([]);
 
-  const digits = code.padEnd(CODE_LENGTH, '').split('');
+  const code = digits.join('');
   const isComplete = code.length === CODE_LENGTH;
+  const otpBoxSize = getOtpBoxSize();
+  const insets = useSafeAreaInsets();
+  const titleTopPadding = 96;
 
   useEffect(() => {
-    const t = setTimeout(() => inputRef.current?.focus(), 300);
+    const t = setTimeout(() => inputRefs.current[0]?.focus(), 400);
     return () => clearTimeout(t);
   }, []);
 
-  const handleChange = (value: string) => {
-    const cleaned = value.replace(/\D/g, '').slice(0, CODE_LENGTH);
-    setCode(cleaned);
+  const setDigit = (index: number, value: string) => {
+    const onlyNums = value.replace(/\D/g, '');
+    if (onlyNums.length > 1) {
+      const arr = onlyNums.slice(0, CODE_LENGTH).split('');
+      const next = [...digits];
+      arr.forEach((c, i) => { next[i] = c; });
+      setDigits(next);
+      setError(null);
+      const lastIdx = Math.min(arr.length, CODE_LENGTH) - 1;
+      setFocusedIndex(lastIdx);
+      setTimeout(() => inputRefs.current[lastIdx]?.focus(), 50);
+      return;
+    }
+    const num = onlyNums.slice(-1);
+    const next = [...digits];
+    next[index] = num;
+    setDigits(next);
     setError(null);
+    if (num && index < CODE_LENGTH - 1) {
+      setFocusedIndex(index + 1);
+      setTimeout(() => inputRefs.current[index + 1]?.focus(), 50);
+    }
+  };
+
+  const handleKeyPress = (index: number, e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
+    if (e.nativeEvent.key === 'Backspace' && !digits[index] && index > 0) {
+      setFocusedIndex(index - 1);
+      inputRefs.current[index - 1]?.focus();
+    }
   };
 
   const handleConfirm = async () => {
@@ -61,7 +108,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
           ? String((err as { message: unknown }).message)
           : 'Código inválido ou expirado. Tente novamente.';
       setError(message);
-      Alert.alert('Erro', message);
+      showAlert('Erro', message);
     } finally {
       setLoading(false);
     }
@@ -76,134 +123,122 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
         { body: { email } }
       );
       if (fnError) throw fnError;
-      setCode('');
-      inputRef.current?.focus();
+      setDigits(['', '', '', '']);
+      setFocusedIndex(0);
+      inputRefs.current[0]?.focus();
     } catch (err: unknown) {
       const message =
         err && typeof err === 'object' && 'message' in err
           ? String((err as { message: unknown }).message)
           : 'Não foi possível reenviar o código.';
       setError(message);
-      Alert.alert('Erro', message);
+      showAlert('Erro', message);
     } finally {
       setResendLoading(false);
     }
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <StatusBar style="dark" />
-      <TouchableOpacity
-        style={styles.backButton}
-        onPress={() => navigation.goBack()}
-        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
       >
-        <Text style={styles.backArrow}>←</Text>
-      </TouchableOpacity>
-
-      <View style={styles.content}>
-        <Text style={styles.title}>Vamos confirmar seu e-mail</Text>
-        <Text style={styles.subtitle}>
-          Enviamos um código para seu e-mail. Digite abaixo para confirmar.
-        </Text>
-
-        <View style={styles.otpWrapper}>
-          <TouchableOpacity
-            style={styles.otpRow}
-            onPress={() => inputRef.current?.focus()}
-            activeOpacity={1}
-          >
-            {digits.map((digit, index) => {
-              const filled = !!digit;
-              const emptyFocused = !filled && index === code.length;
-              const filledLast = filled && index === code.length - 1;
-              const filledPrev = filled && index < code.length - 1;
-              return (
-                <View
-                  key={index}
-                  style={[
-                    styles.otpCircle,
-                    emptyFocused && styles.otpCircleEmptyFocused,
-                    filledLast && styles.otpCircleFilledLast,
-                    filledPrev && styles.otpCircleFilledPrev,
-                    !filled && !emptyFocused && styles.otpCircleEmpty,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.otpDigit,
-                      filledLast && styles.otpDigitWhite,
-                      filledPrev && styles.otpDigitBlack,
-                      emptyFocused && !digit && styles.otpDigitWhite,
-                    ]}
-                  >
-                    {digit || '\u200B'}
-                  </Text>
-                </View>
-              );
-            })}
-          </TouchableOpacity>
-          <TextInput
-            ref={inputRef}
-            style={styles.hiddenInput}
-            value={code}
-            onChangeText={handleChange}
-            keyboardType="number-pad"
-            maxLength={CODE_LENGTH}
-            autoFocus
-          />
-        </View>
-
-        <TouchableOpacity
-          style={styles.resendLink}
-          onPress={handleResendCode}
-          disabled={resendLoading}
+        <StatusBar style="dark" />
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
         >
-          {resendLoading ? (
-            <ActivityIndicator size="small" color="#2563EB" />
-          ) : (
-            <Text style={styles.resendLinkText}>Reenviar código por e-mail</Text>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.footer}>
-        <TouchableOpacity
-          style={styles.footerBackButton}
-          onPress={() => navigation.goBack()}
-          activeOpacity={0.7}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        >
-          <Text style={styles.footerBack}>←</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.confirmButton,
-            isComplete && styles.confirmButtonActive,
-            loading && styles.confirmButtonDisabled,
-          ]}
-          onPress={handleConfirm}
-          disabled={!isComplete || loading}
-          activeOpacity={0.8}
-        >
-          {loading ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <Text
-              style={[
-                styles.confirmButtonText,
-                isComplete && styles.confirmButtonTextActive,
-              ]}
-            >
-              Confirmar código
+          <View style={[styles.content, { paddingTop: insets.top + titleTopPadding }]}>
+            <Text style={styles.title}>Vamos confirmar seu e-mail</Text>
+            <Text style={styles.subtitle}>
+              Enviamos um código para seu e-mail.{'\n'}Digite abaixo para confirmar.
             </Text>
-          )}
-        </TouchableOpacity>
-      </View>
-    </KeyboardAvoidingView>
+
+            <View style={styles.otpWrapper}>
+              {[0, 1, 2, 3].map((index) => {
+                const isFocused = focusedIndex === index;
+                return (
+                  <TextInput
+                    key={index}
+                    ref={(el) => { inputRefs.current[index] = el; }}
+                    style={[
+                      styles.otpInput,
+                      {
+                        width: otpBoxSize,
+                        height: otpBoxSize,
+                        borderRadius: otpBoxSize / 2,
+                        marginHorizontal: OTP_GAP / 2,
+                        fontSize: Math.round(otpBoxSize * 0.4),
+                      },
+                      isFocused ? styles.otpInputFocused : styles.otpInputDefault,
+                    ]}
+                    value={digits[index]}
+                    onChangeText={(v) => setDigit(index, v)}
+                    onKeyPress={(e) => handleKeyPress(index, e)}
+                    onFocus={() => setFocusedIndex(index)}
+                    keyboardType="number-pad"
+                    maxLength={1}
+                    selectTextOnFocus
+                    autoFocus={index === 0}
+                  />
+                );
+              })}
+            </View>
+
+            <TouchableOpacity
+              style={styles.resendLink}
+              onPress={handleResendCode}
+              disabled={resendLoading}
+            >
+              {resendLoading ? (
+                <ActivityIndicator size="small" color="#2563EB" />
+              ) : (
+                <Text style={styles.resendLinkText}>Reenviar código por e-mail</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+
+        <View style={[styles.footer, { paddingBottom: insets.bottom }]}>
+          <TouchableOpacity
+            style={styles.footerBackButton}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Text style={styles.footerBack}>←</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.confirmButton,
+              isComplete && styles.confirmButtonActive,
+              loading && styles.confirmButtonDisabled,
+            ]}
+            onPress={handleConfirm}
+            disabled={!isComplete || loading}
+            activeOpacity={0.8}
+          >
+            {loading ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text
+                style={[
+                  styles.confirmButtonText,
+                  isComplete && styles.confirmButtonTextActive,
+                ]}
+              >
+                Confirmar código
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </TouchableWithoutFeedback>
   );
 }
 
@@ -212,121 +247,68 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FFFFFF',
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F3F4F6',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginHorizontal: 24,
-    marginTop: 60,
-    marginBottom: 8,
+  scroll: {
+    flex: 1,
   },
-  backArrow: {
-    fontSize: 22,
-    color: '#000000',
-    fontWeight: '600',
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: 24,
   },
   content: {
-    flex: 1,
     paddingHorizontal: 24,
     alignItems: 'center',
-    paddingTop: 24,
   },
   title: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#000000',
+    color: '#0D0D0D',
     textAlign: 'center',
+    fontSize: 24,
+    fontWeight: '600',
     marginBottom: 8,
   },
   subtitle: {
-    fontSize: 15,
-    color: '#6B7280',
+    color: '#767676',
     textAlign: 'center',
-    lineHeight: 22,
+    fontSize: 14,
+    fontWeight: '400',
+    lineHeight: 21,
     marginBottom: 32,
   },
   otpWrapper: {
-    height: 64,
-    marginBottom: 24,
-    position: 'relative',
-  },
-  otpRow: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    height: 64,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
+    marginBottom: 28,
   },
-  otpCircle: {
-    width: 64,
-    height: 64,
-    minWidth: 64,
-    minHeight: 64,
-    marginHorizontal: 8,
-    borderRadius: 32,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#E5E7EB',
-    borderColor: '#9CA3AF',
-    opacity: 1,
-  },
-  otpCircleEmpty: {
-    borderColor: '#9CA3AF',
-    backgroundColor: '#E5E7EB',
-  },
-  otpCircleEmptyFocused: {
-    borderColor: '#000000',
-    backgroundColor: '#000000',
-  },
-  otpCircleFilledLast: {
-    borderColor: '#000000',
-    backgroundColor: '#000000',
-  },
-  otpCircleFilledPrev: {
-    borderColor: '#000000',
-    backgroundColor: '#FFFFFF',
-  },
-  otpDigit: {
-    fontSize: 28,
+  otpInput: {
     fontWeight: '700',
-    color: '#000000',
+    color: '#0D0D0D',
+    textAlign: 'center',
+    padding: 0,
   },
-  otpDigitWhite: {
-    color: '#FFFFFF',
+  otpInputDefault: {
+    backgroundColor: '#F1F1F1',
+    borderWidth: 0,
   },
-  otpDigitBlack: {
-    color: '#000000',
-  },
-  hiddenInput: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    width: 1,
-    height: 1,
-    opacity: 0,
-    zIndex: -1,
+  otpInputFocused: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#0D0D0D',
   },
   resendLink: {
     paddingVertical: 8,
+    alignSelf: 'center',
   },
   resendLinkText: {
     fontSize: 14,
     fontWeight: '500',
     color: '#2563EB',
+    textAlign: 'center',
   },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 24,
-    paddingBottom: 48,
     paddingTop: 24,
   },
   footerBackButton: {
@@ -343,16 +325,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   confirmButton: {
-    backgroundColor: '#F3F4F6',
+    backgroundColor: '#E5E7EB',
     paddingVertical: 14,
-    paddingHorizontal: 24,
+    paddingHorizontal: 28,
     borderRadius: 12,
+    minWidth: 160,
   },
   confirmButtonActive: {
-    backgroundColor: '#000000',
+    backgroundColor: '#0D0D0D',
   },
   confirmButtonDisabled: {
-    opacity: 0.8,
+    opacity: 1,
   },
   confirmButtonText: {
     fontSize: 16,

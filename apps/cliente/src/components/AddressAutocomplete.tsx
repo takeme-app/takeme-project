@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { View, TextInput, TouchableOpacity, Text, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
+import { View, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
+import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { searchAddress, type AddressSuggestion } from '../lib/location';
 

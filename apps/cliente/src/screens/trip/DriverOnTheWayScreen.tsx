@@ -1,8 +1,9 @@
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Platform } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, ScrollView, Platform } from 'react-native';
+import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import MapView from 'react-native-maps';
+import { MapboxMap } from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList } from '../../navigation/types';
 
@@ -29,7 +30,7 @@ export function DriverOnTheWayScreen({ navigation }: Props) {
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
       <View style={styles.mapWrap}>
-        <MapView style={styles.map} initialRegion={DEFAULT_REGION} scrollEnabled={false} />
+        <MapboxMap style={styles.map} initialRegion={DEFAULT_REGION} scrollEnabled={false} />
       </View>
       <View style={styles.banner}>
         <MaterialIcons name="check-circle" size={24} color="#FFFFFF" />

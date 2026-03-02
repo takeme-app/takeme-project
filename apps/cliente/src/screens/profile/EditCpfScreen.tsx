@@ -1,15 +1,14 @@
 import { useState, useEffect } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
+import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -17,6 +16,7 @@ import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { formatCpf, onlyDigits } from '../../utils/formatCpf';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'EditCpf'>;
 
@@ -28,6 +28,7 @@ const COLORS = {
 };
 
 export function EditCpfScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [cpf, setCpf] = useState('');
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -60,7 +61,7 @@ export function EditCpfScreen({ navigation }: Props) {
       .eq('id', user.id);
     setLoading(false);
     if (error) {
-      Alert.alert('Erro', error.message);
+      showAlert('Erro', error.message);
       return;
     }
     navigation.goBack();
