@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
   View,
-  Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
@@ -9,10 +8,11 @@ import {
   Modal,
   TextInput,
 } from 'react-native';
+import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import { MapboxMap, MapboxMarker, MapboxPolyline } from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList } from '../../navigation/types';
 import { ConfirmModal } from '../../components/ConfirmModal';
@@ -146,40 +146,31 @@ export function TripInProgressScreen({ navigation }: Props) {
       <StatusBar style="dark" />
 
       <View style={styles.mapWrap}>
-        <MapView style={styles.map} initialRegion={DEFAULT_REGION} scrollEnabled={true}>
-          <Polyline coordinates={ROUTE_COORDS} strokeColor={COLORS.black} strokeWidth={4} />
+        <MapboxMap style={styles.map} initialRegion={DEFAULT_REGION} scrollEnabled={true}>
+          <MapboxPolyline coordinates={ROUTE_COORDS} strokeColor={COLORS.black} strokeWidth={4} />
           {steps.map((step, i) => (
-            Platform.OS === 'android' ? (
-              <Marker
-                key={step.id}
-                coordinate={{ latitude: step.latitude, longitude: step.longitude }}
-                title={step.name}
-                description={step.address}
-                pinColor={step.completed ? COLORS.green : i === currentStepIndex ? COLORS.amber : COLORS.neutral700}
-                tracksViewChanges={false}
-              />
-            ) : (
-              <Marker
-                key={step.id}
-                coordinate={{ latitude: step.latitude, longitude: step.longitude }}
-                title={step.name}
-                description={step.address}
-              >
-                <View style={styles.markerWrap}>
-                  {step.completed ? (
-                    <MaterialIcons name="check-circle" size={32} color={COLORS.green} />
-                  ) : i === currentStepIndex ? (
-                    <MaterialIcons name="play-circle-filled" size={32} color={COLORS.amber} />
-                  ) : step.type === 'coleta' ? (
-                    <MaterialIcons name="person" size={28} color={COLORS.black} />
-                  ) : (
-                    <MaterialIcons name="inventory-2" size={28} color={COLORS.black} />
-                  )}
-                </View>
-              </Marker>
-            )
+            <MapboxMarker
+              key={step.id}
+              id={`step-${step.id}`}
+              coordinate={{ latitude: step.latitude, longitude: step.longitude }}
+              title={step.name}
+              description={step.address}
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              <View style={styles.markerWrap}>
+                {step.completed ? (
+                  <MaterialIcons name="check-circle" size={32} color={COLORS.green} />
+                ) : i === currentStepIndex ? (
+                  <MaterialIcons name="play-circle-filled" size={32} color={COLORS.amber} />
+                ) : step.type === 'coleta' ? (
+                  <MaterialIcons name="person" size={28} color={COLORS.black} />
+                ) : (
+                  <MaterialIcons name="inventory-2" size={28} color={COLORS.black} />
+                )}
+              </View>
+            </MapboxMarker>
           ))}
-        </MapView>
+        </MapboxMap>
         <View style={styles.timeBadge}>
           <Text style={styles.timeBadgeText}>20 min</Text>
         </View>

@@ -1,16 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   View,
-  Text,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
   Modal,
   FlatList,
 } from 'react-native';
+import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -18,6 +17,7 @@ import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { BRAZIL_STATES, fetchCitiesByState } from '../../data/brazilStates';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'EditLocation'>;
 
@@ -32,6 +32,7 @@ const COLORS = {
 type CityOption = { id: number; nome: string };
 
 export function EditLocationScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [stateUf, setStateUf] = useState<string | null>(null);
   const [stateName, setStateName] = useState<string>('');
   const [city, setCity] = useState('');
@@ -78,7 +79,7 @@ export function EditLocationScreen({ navigation }: Props) {
 
   const openCityModal = useCallback(async () => {
     if (!stateUf) {
-      Alert.alert('Selecione o estado', 'Escolha o estado (UF) antes de selecionar a cidade.');
+      showAlert('Selecione o estado', 'Escolha o estado (UF) antes de selecionar a cidade.');
       return;
     }
     setCityModalVisible(true);
@@ -103,7 +104,7 @@ export function EditLocationScreen({ navigation }: Props) {
 
   const handleUpdate = async () => {
     if (!stateUf) {
-      Alert.alert('Campo obrigatório', 'Selecione o estado (UF).');
+      showAlert('Campo obrigatório', 'Selecione o estado (UF).');
       return;
     }
     setLoading(true);
@@ -122,7 +123,7 @@ export function EditLocationScreen({ navigation }: Props) {
       .eq('id', user.id);
     setLoading(false);
     if (error) {
-      Alert.alert('Erro', error.message);
+      showAlert('Erro', error.message);
       return;
     }
     navigation.goBack();

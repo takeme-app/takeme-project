@@ -17,6 +17,7 @@ import { ProfileCardRegisteredSuccessScreen } from '../screens/profile/ProfileCa
 import { TermsOfUseScreen } from '../screens/TermsOfUseScreen';
 import { PrivacyPolicyScreen } from '../screens/PrivacyPolicyScreen';
 import { CancellationPolicyScreen } from '../screens/CancellationPolicyScreen';
+import { ConsentTermScreen } from '../screens/ConsentTermScreen';
 import { EditNameScreen } from '../screens/profile/EditNameScreen';
 import { EditEmailScreen } from '../screens/profile/EditEmailScreen';
 import { EditPhoneScreen } from '../screens/profile/EditPhoneScreen';
@@ -70,6 +71,7 @@ export function ProfileStack() {
       <Stack.Screen name="TermsOfUse" component={TermsOfUseWrapper} />
       <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyWrapper} />
       <Stack.Screen name="CancellationPolicy" component={CancellationPolicyScreen} />
+      <Stack.Screen name="ConsentTerm" component={ConsentTermScreen} />
       <Stack.Screen
         name="EditName"
         component={EditNameScreen}

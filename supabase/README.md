@@ -60,9 +60,51 @@ supabase secrets set RESEND_FROM_EMAIL=Take Me <noreply@seudominio.com>
 
 As três funções usam o mesmo `RESEND_API_KEY` e `RESEND_FROM_EMAIL`. Sem `RESEND_API_KEY`, o código de verificação só aparece nos **logs** da função no Dashboard (útil para desenvolvimento), e o **e-mail de boas-vindas não é enviado** — só é registrado um log no Dashboard.
 
-### 3. Confirmar e-mail no Supabase
+### 3. E-mails e Resend (resumo)
 
-No Dashboard do Supabase: **Authentication** → **Providers** → **Email** → em “Confirm email” você pode desativar a confirmação por link para usar só o fluxo do código de 4 dígitos (e a Edge Function `verify-email-code` quando estiver implementada).
+| E-mail | Enviado por | Resend |
+|--------|-------------|--------|
+| Código de verificação (cadastro) | Edge Function `send-email-verification-code` | Sim (com `RESEND_API_KEY`) |
+| Boas-vindas (após confirmar e-mail) | Edge Function `verify-email-code` | Sim (com `RESEND_API_KEY`) |
+| Boas-vindas (standalone) | Edge Function `send-welcome-email` | Sim (com `RESEND_API_KEY`) |
+| **Recuperação de senha** | **Supabase Auth** (não é Edge Function) | Opcional: configurar SMTP do projeto com Resend (veja abaixo) |
+
+### 4. Recuperação de senha (redirect para o app)
+
+O link de recuperação de senha é enviado pelo **Supabase Auth**. Para o usuário abrir o **app** (e não o localhost/navegador):
+
+1. **Redirect URL no Supabase**  
+   No Dashboard: **Authentication** → **URL Configuration** → **Redirect URLs** → adicione:
+   - `take-me-cliente://reset-password`  
+   ou, com wildcard: `take-me-cliente://**`
+
+2. **Site URL**  
+   O "Site URL" do projeto não precisa ser localhost em produção; pode ser uma URL pública ou o mesmo scheme, mas o link do e-mail usará o `redirectTo` que o app envia (`take-me-cliente://reset-password`), desde que esteja na lista de Redirect URLs acima.
+
+3. **Enviar o e-mail de recuperação pelo Resend (opcional)**  
+   Para que o próprio e-mail de recuperação saia pelo Resend (mesmo conteúdo, só mudando o envio):
+   - Dashboard → **Project Settings** → **Auth** → **SMTP Settings** → ative "Enable Custom SMTP".
+   - Use as credenciais SMTP do Resend (em [Resend → SMTP](https://resend.com/docs/dashboard/sending-domains/smtp)): host `smtp.resend.com`, porta 465, usuário `resend`, senha = sua API key.
+   - Assim, o Supabase continua gerando o link (com seu `redirectTo`), mas o envio do e-mail passa pelo Resend.
+   - **Importante:** o endereço "Sender email" (De) no SMTP do Supabase deve estar **verificado** no Resend (domínio ou e-mail único). Caso contrário o Resend rejeita e o Supabase devolve erro ao enviar.
+
+**Erro "Error sending recovery email" (ou similar)**  
+Confira nesta ordem:
+
+1. **Redirect URL**  
+   Em **Authentication** → **URL Configuration** → **Redirect URLs** deve existir `take-me-cliente://reset-password` ou `take-me-cliente://**`. Se não estiver na lista, o Supabase pode falhar ao enviar.
+
+2. **SMTP (Resend)**  
+   - **Project Settings** → **Auth** → **SMTP Settings**: Enable Custom SMTP = On.  
+   - Host: `smtp.resend.com` | Port: `465` (SSL) | User: `resend` | Password: sua **API Key** do Resend (não o ID do domínio).  
+   - **Sender email**: use um endereço cujo **domínio** (ou o e-mail) esteja verificado no [Resend → Domains](https://resend.com/domains) (ou em "From" no Resend). Se o Remetente não estiver verificado, o Resend recusa e o Supabase retorna erro.
+
+3. **Logs do Supabase**  
+   Em **Authentication** → **Logs** veja se aparece algum erro ao disparar "Recovery requested"; a mensagem ajuda a saber se foi bloqueio de redirect, SMTP ou provedor.
+
+### 5. Confirmar e-mail no Supabase
+
+No Dashboard do Supabase: **Authentication** → **Providers** → **Email** → em “Confirm email” você pode desativar a confirmação por link para usar só o fluxo do código de 4 dígitos (e a Edge Function `verify-email-code`).
 
 ---
 

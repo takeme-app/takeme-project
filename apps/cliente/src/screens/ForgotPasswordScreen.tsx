@@ -1,35 +1,36 @@
 import { useState } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
+import { Text } from '../components/Text';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { setLastRecoveryEmail } from '../lib/lastRecoveryEmail';
+import { useAppAlert } from '../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPassword'>;
 
 export function ForgotPasswordScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async () => {
     const trimmed = email.trim();
     if (!trimmed) {
-      Alert.alert('Atenção', 'Digite seu e-mail.');
+      showAlert('Atenção', 'Digite seu e-mail.');
       return;
     }
     if (!isSupabaseConfigured) {
-      Alert.alert(
+      showAlert(
         'Configuração',
         'Serviço de recuperação não configurado. Verifique as variáveis do Supabase.'
       );
@@ -37,11 +38,10 @@ export function ForgotPasswordScreen({ navigation }: Props) {
     }
     setLoading(true);
     try {
-      const redirectTo = process.env.EXPO_PUBLIC_APP_SCHEME
-        ? `${process.env.EXPO_PUBLIC_APP_SCHEME}://reset-password`
-        : undefined;
+      const scheme = process.env.EXPO_PUBLIC_APP_SCHEME ?? 'take-me-cliente';
+      const redirectTo = `${scheme}://reset-password`;
       const { error } = await supabase.auth.resetPasswordForEmail(trimmed, {
-        ...(redirectTo && { redirectTo }),
+        redirectTo,
       });
       if (error) throw error;
       setLastRecoveryEmail(trimmed);
@@ -51,7 +51,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
         e && typeof e === 'object' && 'message' in e
           ? String((e as { message: string }).message)
           : 'Não foi possível enviar o e-mail. Tente novamente.';
-      Alert.alert('Erro', message);
+      showAlert('Erro ao enviar e-mail', message);
     } finally {
       setLoading(false);
     }

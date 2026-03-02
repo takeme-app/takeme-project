@@ -100,13 +100,29 @@ Deno.serve(async (req) => {
 
     await admin.from("email_verification_codes").delete().eq("id", row.id);
 
+    const phoneDigits = typeof phone === "string" ? phone.replace(/\D/g, "").trim() || null : null;
+    if (phoneDigits) {
+      const { data: existing } = await admin
+        .from("profiles")
+        .select("id")
+        .eq("phone", phoneDigits)
+        .limit(1)
+        .maybeSingle();
+      if (existing) {
+        return new Response(
+          JSON.stringify({ error: "Este telefone já está em uso. Use outro número ou faça login na conta existente." }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
     const { data: createData, error: createError } = await admin.auth.admin.createUser({
       email: email.trim().toLowerCase(),
       password,
       email_confirm: true,
       user_metadata: {
         full_name: fullName ?? null,
-        phone: phone ?? null,
+        phone: phoneDigits ?? null,
       },
     });
 

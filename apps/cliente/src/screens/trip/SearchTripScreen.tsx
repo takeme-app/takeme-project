@@ -1,15 +1,16 @@
 import { useRef, useMemo, useState, useEffect, useCallback } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Animated, Dimensions, PanResponder, Modal, Pressable, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Image } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, ScrollView, Animated, Dimensions, PanResponder, Modal, Pressable, ActivityIndicator, KeyboardAvoidingView, Platform, Image, StatusBar as RNStatusBar } from 'react-native';
+import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import { MapboxMap, MapboxMarker, MapboxPolyline, type MapboxMapRef } from '../../components/mapbox';
 import { getCurrentPlace, requestLocationPermission, getCurrentPosition } from '../../lib/location';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
 import { DriverMarkerIcon } from '../../components/DriverMarkerIcon';
 import { MyLocationMarkerIcon } from '../../components/MyLocationMarkerIcon';
-import { useNativePinOnAndroid } from '../../lib/mapMarkers';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList, TripDriverParam } from '../../navigation/types';
 import { getRecentDestinations, addRecentDestination, formatRecentDestinationDisplay, type RecentDestination } from '../../lib/recentDestinations';
@@ -119,8 +120,9 @@ const RECENT_LIST_SIZE_DEFAULT = 2;
 const RECENT_LIST_SIZE_PLAN = 10;
 
 export function SearchTripScreen({ navigation, route }: Props) {
-  const mapRef = useRef<MapView>(null);
+  const mapRef = useRef<MapboxMapRef>(null);
   const insets = useSafeAreaInsets();
+  const { showAlert } = useAppAlert();
   const [sheetVisible, setSheetVisible] = useState(true);
   const [origin, setOrigin] = useState<Place>(PLACEHOLDER_ORIGIN);
   const [destination, setDestination] = useState<Place | null>(() => {
@@ -144,6 +146,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
   const [tripsLoading, setTripsLoading] = useState(true);
   const [tripsError, setTripsError] = useState<string | null>(null);
   const [planWhenModalVisible, setPlanWhenModalVisible] = useState(false);
+  const [tripCallout, setTripCallout] = useState<ScheduledTripItem | null>(null);
 
   /** Lista filtrada por origem/destino; Take Me primeiro na ordem. */
   const scheduledTrips = useMemo(() => {
@@ -178,7 +181,6 @@ export function SearchTripScreen({ navigation, route }: Props) {
       .slice(0, RECENT_LIST_SIZE_PLAN);
   }, [recentDestinations, origin.latitude, origin.longitude]);
 
-  const [markersTrackView, setMarkersTrackView] = useState(true);
   const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
   const sheetTranslateY = useRef(new Animated.Value(0)).current;
   const lastTranslateY = useRef(0);
@@ -220,15 +222,12 @@ export function SearchTripScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (!userLocationCoords) return;
     const t = setTimeout(() => {
-      mapRef.current?.animateToRegion(
-        {
-          latitude: userLocationCoords.latitude,
-          longitude: userLocationCoords.longitude,
-          latitudeDelta: 0.015,
-          longitudeDelta: 0.015,
-        },
-        400
-      );
+      mapRef.current?.animateToRegion({
+        latitude: userLocationCoords.latitude,
+        longitude: userLocationCoords.longitude,
+        latitudeDelta: 0.015,
+        longitudeDelta: 0.015,
+      }, 400);
     }, 300);
     return () => clearTimeout(t);
   }, [userLocationCoords]);
@@ -287,11 +286,6 @@ export function SearchTripScreen({ navigation, route }: Props) {
       setTripsLoading(false);
     })();
     return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    const t = setTimeout(() => setMarkersTrackView(false), 1000);
-    return () => clearTimeout(t);
   }, []);
 
   useEffect(() => {
@@ -363,21 +357,18 @@ export function SearchTripScreen({ navigation, route }: Props) {
     try {
       const granted = await requestLocationPermission();
       if (!granted) {
-        Alert.alert('Localização', 'Ative a localização nas configurações para centralizar o mapa.');
+        showAlert('Localização', 'Ative a localização nas configurações para centralizar o mapa.');
         return;
       }
       const coords = await getCurrentPosition();
-      mapRef.current?.animateToRegion(
-        {
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        },
-        400
-      );
+      mapRef.current?.animateToRegion({
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }, 400);
     } catch {
-      Alert.alert('Localização', 'Não foi possível obter sua posição.');
+      showAlert('Localização', 'Não foi possível obter sua posição.');
     } finally {
       setMapCentering(false);
     }
@@ -392,10 +383,10 @@ export function SearchTripScreen({ navigation, route }: Props) {
         setEditOrigin(place.address);
         setUserLocationCoords({ latitude: place.latitude, longitude: place.longitude });
       } else {
-        Alert.alert('Localização', 'Não foi possível usar sua localização. Verifique se o app tem permissão nas configurações.');
+        showAlert('Localização', 'Não foi possível usar sua localização. Verifique se o app tem permissão nas configurações.');
       }
     } catch {
-      Alert.alert('Localização', 'Não foi possível obter seu endereço. Tente novamente.');
+      showAlert('Localização', 'Não foi possível obter seu endereço. Tente novamente.');
     } finally {
       setLocationLoading(false);
     }
@@ -472,6 +463,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
   return (
     <View style={styles.container}>
       <StatusBar style="dark" />
+      <RNStatusBar backgroundColor="transparent" translucent />
 
       {/* Página completa "Planeje sua corrida": sem mapa, sem bottom sheet — só header, pill, card e lista de endereços */}
       {isPlanPage && (
@@ -579,17 +571,24 @@ export function SearchTripScreen({ navigation, route }: Props) {
         </View>
       )}
 
-      {/* Mapa: só na tela com sheet (quando não estamos na página completa Planeje sua corrida) */}
+      {/* Mapa: só na tela com sheet. Com sheet visível: altura fixa (mapa só em cima). Com sheet oculto: flex 1 (tela inteira, sem espaço cinza). */}
       {!isPlanPage && (
-      <MapView
+      <View
+        style={[
+          styles.mapContainer,
+          sheetVisible
+            ? { height: SCREEN_HEIGHT - sheetHeightState + 24 }
+            : styles.mapContainerFullScreen,
+        ]}
+      >
+      <MapboxMap
         ref={mapRef}
         style={styles.map}
         initialRegion={DEFAULT_REGION}
-        showsUserLocation={false}
-        showsMyLocationButton={false}
+        scrollEnabled={true}
       >
         {destination && (
-          <Polyline
+          <MapboxPolyline
             coordinates={
               routeCoords && routeCoords.length > 0
                 ? routeCoords
@@ -603,71 +602,83 @@ export function SearchTripScreen({ navigation, route }: Props) {
           />
         )}
         {userLocationCoords && (
-          useNativePinOnAndroid ? (
-            <Marker
-              coordinate={userLocationCoords}
-              anchor={{ x: 0.5, y: 1 }}
-              title="Sua localização"
-              pinColor="#2563eb"
-              tracksViewChanges={false}
-            />
-          ) : (
-            <Marker
-              coordinate={userLocationCoords}
-              anchor={{ x: 0.5, y: 1 }}
-              title="Sua localização"
-              tracksViewChanges={markersTrackView}
-            >
-              <MyLocationMarkerIcon />
-            </Marker>
-          )
+          <MapboxMarker
+            id="user-location"
+            coordinate={userLocationCoords}
+            anchor={{ x: 0.5, y: 1 }}
+            title="Sua localização"
+          >
+            <MyLocationMarkerIcon />
+          </MapboxMarker>
         )}
         {(!userLocationCoords || Math.abs(origin.latitude - userLocationCoords.latitude) > 1e-5 || Math.abs(origin.longitude - userLocationCoords.longitude) > 1e-5) && (
-          <Marker
+          <MapboxMarker
+            id="origin"
             coordinate={{ latitude: origin.latitude, longitude: origin.longitude }}
             anchor={{ x: 0.5, y: 1 }}
             title="Partida"
             description={origin.address}
             pinColor="#0d0d0d"
-            tracksViewChanges={false}
           />
         )}
         {destination && (
-          <Marker
+          <MapboxMarker
+            id="destination"
             coordinate={{ latitude: destination.latitude, longitude: destination.longitude }}
             anchor={{ x: 0.5, y: 1 }}
             title="Destino"
             description={destination.address}
             pinColor="#dc2626"
-            tracksViewChanges={false}
           />
         )}
-        {/* Marcadores de viagens disponíveis no local de partida (cada viagem tem um motorista responsável) */}
         {scheduledTrips.map((trip) => (
-          useNativePinOnAndroid ? (
-            <Marker
-              key={trip.id}
-              coordinate={{ latitude: trip.origin_lat, longitude: trip.origin_lng }}
-              anchor={{ x: 0.5, y: 1 }}
-              title={trip.title}
-              description={`Viagem · ${trip.driverName} · Saída ${trip.departure}`}
-              pinColor="#0d0d0d"
-              tracksViewChanges={false}
-            />
-          ) : (
-            <Marker
-              key={trip.id}
-              coordinate={{ latitude: trip.origin_lat, longitude: trip.origin_lng }}
-              anchor={{ x: 0.5, y: 0.5 }}
-              title={trip.title}
-              description={`Viagem · ${trip.driverName} · Saída ${trip.departure}`}
-              tracksViewChanges={markersTrackView}
-            >
-              <DriverMarkerIcon />
-            </Marker>
-          )
+          <MapboxMarker
+            key={trip.id}
+            id={`trip-${trip.id}`}
+            coordinate={{ latitude: trip.origin_lat, longitude: trip.origin_lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            title={trip.title}
+            description={`Viagem · ${trip.driverName} · Saída ${trip.departure}`}
+            onPress={() => setTripCallout(trip)}
+          >
+            <DriverMarkerIcon />
+          </MapboxMarker>
         ))}
-      </MapView>
+        {/* Balão preso ao ícone: MarkerView na mesma coordenada, anchor no pé do balão para acompanhar o mapa */}
+        {tripCallout && (
+          <MapboxMarker
+            id="trip-callout"
+            coordinate={{ latitude: tripCallout.origin_lat, longitude: tripCallout.origin_lng }}
+            anchor={{ x: 0.5, y: 1 }}
+          >
+            <View style={styles.tripCalloutBubble}>
+              <View style={styles.tripCalloutBubbleTail} />
+              <TouchableOpacity
+                style={styles.tripCalloutBubbleClose}
+                onPress={() => setTripCallout(null)}
+                hitSlop={8}
+              >
+                <MaterialIcons name="close" size={18} color={COLORS.neutral700} />
+              </TouchableOpacity>
+              <Text style={styles.tripCalloutBubbleDriver} numberOfLines={1}>{tripCallout.driverName}</Text>
+              <Text style={styles.tripCalloutBubbleTime} numberOfLines={1}>
+                ★ {tripCallout.rating} · {tripCallout.departure} – {tripCallout.arrival} · {tripCallout.seats} lug. · {tripCallout.bags} malas
+              </Text>
+              <TouchableOpacity
+                style={styles.tripCalloutBubbleSelect}
+                onPress={() => {
+                  setSelectedTripId(tripCallout.id);
+                  setTripCallout(null);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.tripCalloutBubbleSelectText}>Selecionar</Text>
+              </TouchableOpacity>
+            </View>
+          </MapboxMarker>
+        )}
+      </MapboxMap>
+      </View>
       )}
 
       {/* Em modo Planeje sua corrida sem destino: área em branco no lugar do mapa */}
@@ -987,8 +998,11 @@ export function SearchTripScreen({ navigation, route }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  map: { ...StyleSheet.absoluteFillObject },
+  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  mapContainer: { width: '100%', overflow: 'hidden' },
+  /** Com sheet oculto: preenche a tela inteira por cima (top: 0), evitando faixa preta no topo ao trocar de layout. */
+  mapContainerFullScreen: { ...StyleSheet.absoluteFillObject },
+  map: { flex: 1, width: '100%' },
   mapPlaceholder: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: COLORS.background,
@@ -1027,6 +1041,59 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 4,
     elevation: 4,
+  },
+  tripCalloutBubble: {
+    width: 260,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    paddingRight: 32,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  tripCalloutBubbleTail: {
+    position: 'absolute',
+    bottom: -6,
+    left: '50%',
+    marginLeft: -6,
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 6,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: '#FFFFFF',
+  },
+  tripCalloutBubbleClose: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    zIndex: 1,
+  },
+  tripCalloutBubbleDriver: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.black,
+  },
+  tripCalloutBubbleTime: {
+    fontSize: 12,
+    color: COLORS.neutral700,
+    marginTop: 2,
+  },
+  tripCalloutBubbleSelect: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+  },
+  tripCalloutBubbleSelectText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.black,
+    textDecorationLine: 'underline',
   },
   sheet: {
     position: 'absolute',

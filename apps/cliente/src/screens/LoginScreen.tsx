@@ -1,43 +1,43 @@
 import { useState } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
+import { Text } from '../components/Text';
+import { useAppAlert } from '../contexts/AppAlertContext';
+import { MaterialIcons, Ionicons } from '@expo/vector-icons';
+import { GoogleLogo } from '../components/GoogleLogo';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { signInWithOAuthProvider } from '../lib/oauth';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
 
 export function LoginScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [phoneOrEmail, setPhoneOrEmail] = useState('');
   const [password, setPassword] = useState('');
   const [hidePassword, setHidePassword] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [socialLoading, setSocialLoading] = useState<'google' | 'apple' | null>(null);
 
   const handleLogin = async () => {
     const input = phoneOrEmail.trim();
     if (!input) {
-      Alert.alert('Atenção', 'Digite seu e-mail ou telefone.');
+      showAlert('Atenção', 'Digite seu e-mail ou telefone.');
       return;
     }
     if (!password) {
-      Alert.alert('Atenção', 'Digite sua senha.');
+      showAlert('Atenção', 'Digite sua senha.');
       return;
     }
     if (!isSupabaseConfigured) {
-      Alert.alert(
+      showAlert(
         'Configuração',
         'Login não configurado. Verifique as variáveis do Supabase no .env.'
       );
@@ -77,34 +77,17 @@ export function LoginScreen({ navigation }: Props) {
         : e && typeof e === 'object' && 'message' in e
           ? String((e as { message: string }).message)
           : 'Não foi possível entrar. Verifique e-mail/senha ou telefone/senha.';
-      Alert.alert(isNetworkError ? 'Erro de conexão' : 'Erro no login', msg);
+      showAlert(isNetworkError ? 'Erro de conexão' : 'Erro no login', msg);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSocialSignIn = async (provider: 'google' | 'apple') => {
-    if (!isSupabaseConfigured) {
-      Alert.alert(
-        'Configuração',
-        'Login não configurado. Verifique as variáveis do Supabase no .env.'
-      );
-      return;
-    }
-    setSocialLoading(provider);
-    try {
-      const { success, error } = await signInWithOAuthProvider(provider);
-      if (success) {
-        navigation.reset({
-          index: 0,
-          routes: [{ name: 'Main' }],
-        });
-      } else if (error) {
-        Alert.alert('Erro no login', error);
-      }
-    } finally {
-      setSocialLoading(null);
-    }
+  const handleSocialSignIn = (_provider: 'google' | 'apple') => {
+    showAlert(
+      'Em desenvolvimento',
+      'Os logins com Google e Apple ainda estão em desenvolvimento. Por favor, use e-mail ou telefone com senha para continuar.'
+    );
   };
 
   return (
@@ -184,29 +167,19 @@ export function LoginScreen({ navigation }: Props) {
       </View>
 
       <TouchableOpacity
-        style={[styles.socialButton, socialLoading && styles.socialButtonDisabled]}
+        style={styles.socialButton}
         activeOpacity={0.8}
         onPress={() => handleSocialSignIn('google')}
-        disabled={!!socialLoading}
       >
-        {socialLoading === 'google' ? (
-          <ActivityIndicator size="small" color="#000000" style={styles.socialLoader} />
-        ) : (
-          <Text style={styles.socialIcon}>G</Text>
-        )}
+        <GoogleLogo size={22} style={styles.socialIconImage} />
         <Text style={styles.socialButtonText}>Continuar com Google</Text>
       </TouchableOpacity>
       <TouchableOpacity
-        style={[styles.socialButton, socialLoading && styles.socialButtonDisabled]}
+        style={styles.socialButton}
         activeOpacity={0.8}
         onPress={() => handleSocialSignIn('apple')}
-        disabled={!!socialLoading}
       >
-        {socialLoading === 'apple' ? (
-          <ActivityIndicator size="small" color="#000000" style={styles.socialLoader} />
-        ) : (
-          <Text style={styles.socialIcon}></Text>
-        )}
+        <Ionicons name="logo-apple" size={22} color="#000000" style={styles.socialIconImage} />
         <Text style={styles.socialButtonText}>Continuar com Apple</Text>
       </TouchableOpacity>
     </KeyboardAvoidingView>
@@ -318,22 +291,15 @@ const styles = StyleSheet.create({
   socialButton: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#F3F4F6',
     paddingVertical: 14,
     paddingHorizontal: 16,
     borderRadius: 12,
     marginBottom: 12,
   },
-  socialButtonDisabled: {
-    opacity: 0.7,
-  },
-  socialLoader: {
+  socialIconImage: {
     marginRight: 12,
-  },
-  socialIcon: {
-    fontSize: 20,
-    marginRight: 12,
-    color: '#000000',
   },
   socialButtonText: {
     fontSize: 16,

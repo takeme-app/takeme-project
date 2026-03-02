@@ -1,21 +1,21 @@
 import { useState, useEffect } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
+import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'EditPhone'>;
 
@@ -26,7 +26,16 @@ const COLORS = {
   neutral700: '#767676',
 };
 
+function formatPhone(value: string): string {
+  const digits = value.replace(/\D/g, '').slice(0, 11);
+  if (digits.length === 0) return '';
+  if (digits.length <= 2) return `(${digits}`;
+  if (digits.length <= 7) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+}
+
 export function EditPhoneScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -39,13 +48,13 @@ export function EditPhoneScreen({ navigation }: Props) {
         return;
       }
       const { data } = await supabase.from('profiles').select('phone').eq('id', user.id).single();
-      setPhone((data?.phone ?? '').trim());
+      setPhone(formatPhone((data?.phone ?? '').trim()));
       setInitialLoading(false);
     })();
   }, []);
 
   const handleUpdate = async () => {
-    const trimmed = phone.trim();
+    const phoneDigits = phone.replace(/\D/g, '').trim() || null;
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -54,11 +63,15 @@ export function EditPhoneScreen({ navigation }: Props) {
     }
     const { error } = await supabase
       .from('profiles')
-      .update({ phone: trimmed || null, updated_at: new Date().toISOString() })
+      .update({ phone: phoneDigits, updated_at: new Date().toISOString() })
       .eq('id', user.id);
     setLoading(false);
     if (error) {
-      Alert.alert('Erro', error.message);
+      const isDuplicate = error.code === '23505' || String(error.message).toLowerCase().includes('unique');
+      showAlert(
+        'Erro',
+        isDuplicate ? 'Este telefone já está em uso em outra conta. Use outro número.' : error.message
+      );
       return;
     }
     navigation.goBack();
@@ -83,7 +96,7 @@ export function EditPhoneScreen({ navigation }: Props) {
         <TextInput
           style={styles.input}
           value={phone}
-          onChangeText={setPhone}
+          onChangeText={(text) => setPhone(formatPhone(text))}
           placeholder="(11) 995479867"
           placeholderTextColor={COLORS.neutral700}
           keyboardType="phone-pad"

@@ -1,22 +1,22 @@
 import { useState, useEffect } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
   ScrollView,
 } from 'react-native';
+import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'ChangePassword'>;
 
@@ -28,6 +28,7 @@ const COLORS = {
 };
 
 export function ChangePasswordScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -43,15 +44,15 @@ export function ChangePasswordScreen({ navigation }: Props) {
 
   const handleUpdate = async () => {
     if (newPassword.length < 8) {
-      Alert.alert('Atenção', 'A nova senha deve ter no mínimo 8 caracteres.');
+      showAlert('Atenção', 'A nova senha deve ter no mínimo 8 caracteres.');
       return;
     }
     if (newPassword !== confirmPassword) {
-      Alert.alert('Atenção', 'As senhas não coincidem.');
+      showAlert('Atenção', 'As senhas não coincidem.');
       return;
     }
     if (hasEmail && !currentPassword.trim()) {
-      Alert.alert('Atenção', 'Informe sua senha atual.');
+      showAlert('Atenção', 'Informe sua senha atual.');
       return;
     }
 
@@ -62,7 +63,7 @@ export function ChangePasswordScreen({ navigation }: Props) {
         const email = user?.email;
         if (!email) {
           setLoading(false);
-          Alert.alert('Erro', 'Não foi possível obter seu e-mail.');
+          showAlert('Erro', 'Não foi possível obter seu e-mail.');
           return;
         }
         const { error: signInError } = await supabase.auth.signInWithPassword({
@@ -71,22 +72,22 @@ export function ChangePasswordScreen({ navigation }: Props) {
         });
         if (signInError) {
           setLoading(false);
-          Alert.alert('Senha atual incorreta', 'Verifique a senha atual e tente novamente.');
+          showAlert('Senha atual incorreta', 'Verifique a senha atual e tente novamente.');
           return;
         }
       }
 
       const { error } = await supabase.auth.updateUser({ password: newPassword });
       if (error) throw error;
-      Alert.alert('Sucesso', 'Sua senha foi alterada.', [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ]);
+      showAlert('Sucesso', 'Sua senha foi alterada.', {
+        onClose: () => navigation.goBack(),
+      });
     } catch (e: unknown) {
       const message =
         e && typeof e === 'object' && 'message' in e
           ? String((e as { message: string }).message)
           : 'Não foi possível alterar a senha. Tente novamente.';
-      Alert.alert('Erro', message);
+      showAlert('Erro', message);
     } finally {
       setLoading(false);
     }

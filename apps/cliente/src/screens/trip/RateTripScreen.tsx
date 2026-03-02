@@ -1,16 +1,19 @@
 import { useState } from 'react';
-import { View, Text, TouchableOpacity, TextInput, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import { View, TouchableOpacity, TextInput, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
+import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList } from '../../navigation/types';
 import { supabase } from '../../lib/supabase';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<TripStackParamList, 'RateTrip'>;
 
 export function RateTripScreen({ navigation, route }: Props) {
   const bookingId = route.params?.bookingId;
+  const { showAlert } = useAppAlert();
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -30,9 +33,9 @@ export function RateTripScreen({ navigation, route }: Props) {
         );
         if (error) throw error;
       }
-      Alert.alert('Avaliação enviada!', 'Obrigado por avaliar sua viagem.', [{ text: 'OK', onPress: goToMain }]);
+      showAlert('Avaliação enviada!', 'Obrigado por avaliar sua viagem.', { onClose: goToMain });
     } catch (e) {
-      Alert.alert('Erro', 'Não foi possível enviar a avaliação. Tente novamente.', [{ text: 'OK' }]);
+      showAlert('Erro', 'Não foi possível enviar a avaliação. Tente novamente.');
     } finally {
       setSubmitting(false);
     }

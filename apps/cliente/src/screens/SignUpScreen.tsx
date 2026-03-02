@@ -1,22 +1,22 @@
 import { useState } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
+import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { useAppAlert } from '../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SignUp'>;
 
@@ -28,16 +28,26 @@ function formatPhone(value: string): string {
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
 }
 
+// Valores iniciais para facilitar testes do fluxo de cadastro (remover em produção)
+const TEST_PREFILL = {
+  fullName: 'Diego Barbosa Silva',
+  email: 'ydiegosilvanwd@gmail.com',
+  phone: '(88) 9999-9999',
+  password: '157enois',
+  confirmPassword: '157enois',
+};
+
 export function SignUpScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
-  const [fullName, setFullName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+  const { showAlert } = useAppAlert();
+  const [fullName, setFullName] = useState(TEST_PREFILL.fullName);
+  const [phone, setPhone] = useState(TEST_PREFILL.phone);
+  const [email, setEmail] = useState(TEST_PREFILL.email);
+  const [password, setPassword] = useState(TEST_PREFILL.password);
+  const [confirmPassword, setConfirmPassword] = useState(TEST_PREFILL.confirmPassword);
   const [hidePassword, setHidePassword] = useState(true);
   const [hideConfirm, setHideConfirm] = useState(true);
-  const [agreeTerms, setAgreeTerms] = useState(false);
+  const [agreeTerms, setAgreeTerms] = useState(true);
   const [agreeOffers, setAgreeOffers] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,31 +65,37 @@ export function SignUpScreen({ navigation }: Props) {
     if (!fullName.trim()) {
       const msg = 'Preencha seu nome.';
       setError(msg);
-      Alert.alert('Atenção', msg);
+      showAlert('Atenção', msg);
       return;
     }
     if (!email.trim()) {
       const msg = 'Preencha o e-mail.';
       setError(msg);
-      Alert.alert('Atenção', msg);
+      showAlert('Atenção', msg);
       return;
     }
     if (password.length < 8) {
       const msg = 'A senha deve ter no mínimo 8 caracteres.';
       setError(msg);
-      Alert.alert('Atenção', msg);
+      showAlert('Atenção', msg);
       return;
     }
     if (password !== confirmPassword) {
       const msg = 'As senhas não coincidem.';
       setError(msg);
-      Alert.alert('Atenção', msg);
+      showAlert('Atenção', msg);
       return;
     }
     if (!agreeTerms) {
       const msg = 'Aceite os Termos de Uso e a Política de Privacidade.';
       setError(msg);
-      Alert.alert('Atenção', msg);
+      showAlert('Atenção', msg);
+      return;
+    }
+    if (phoneDigits.length < 10) {
+      const msg = 'Preencha o telefone com DDD e número.';
+      setError(msg);
+      showAlert('Atenção', msg);
       return;
     }
 
@@ -87,17 +103,53 @@ export function SignUpScreen({ navigation }: Props) {
       const msg =
         'Supabase não configurado. Adicione EXPO_PUBLIC_SUPABASE_URL e EXPO_PUBLIC_SUPABASE_ANON_KEY no .env do app e reinicie o Metro.';
       setError(msg);
-      Alert.alert('Erro', msg);
+      showAlert('Erro', msg);
       return;
     }
 
     setLoading(true);
     try {
-      const { error: fnError } = await supabase.functions.invoke(
+      const { data: fnData, error: fnError } = await supabase.functions.invoke(
         'send-email-verification-code',
-        { body: { email: email.trim() } }
+        { body: { email: email.trim(), phone: phoneDigits } }
       );
-      if (fnError) throw fnError;
+      const apiErrorMsg =
+        fnData && typeof fnData === 'object' && fnData !== null && 'error' in fnData
+          ? String((fnData as { error: unknown }).error)
+          : null;
+      if (apiErrorMsg) {
+        setError(apiErrorMsg);
+        showAlert('Atenção', apiErrorMsg);
+        setLoading(false);
+        return;
+      }
+      if (fnError) {
+        const err = fnError as unknown as {
+          message?: string;
+          context?: { json?: () => Promise<unknown>; body?: unknown };
+        };
+        let bodyError: string | null = null;
+        if (err?.context && typeof (err.context as { json?: () => Promise<unknown> }).json === 'function') {
+          try {
+            const body = await (err.context as { json: () => Promise<Record<string, unknown>> }).json();
+            if (body && typeof body === 'object' && body !== null && 'error' in body) {
+              bodyError = String((body as { error: unknown }).error);
+            }
+          } catch (_) {
+            /* ignorar falha ao parsear */
+          }
+        }
+        if (!bodyError && err?.context?.body && typeof err.context.body === 'object' && err.context.body !== null && 'error' in (err.context.body as object)) {
+          bodyError = String((err.context.body as { error: unknown }).error);
+        }
+        if (bodyError) {
+          setError(bodyError);
+          showAlert('Atenção', bodyError);
+          setLoading(false);
+          return;
+        }
+        throw fnError;
+      }
 
       navigation.navigate('VerifyEmail', {
         email: email.trim(),
@@ -120,7 +172,7 @@ export function SignUpScreen({ navigation }: Props) {
         }
       }
       setError(message);
-      Alert.alert('Erro', message);
+      showAlert('Atenção', message);
     } finally {
       setLoading(false);
     }

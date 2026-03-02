@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
 import {
   View,
-  Text,
   TouchableOpacity,
   StyleSheet,
   Image,
   ActivityIndicator,
   Alert,
 } from 'react-native';
+import { Text } from '../../components/Text';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -15,6 +15,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'EditAvatar'>;
 
@@ -28,6 +29,7 @@ const COLORS = {
 const AVATAR_SIZE = 120;
 
 export function EditAvatarScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [profile, setProfile] = useState<{ avatar_url: string | null } | null>(null);
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -55,7 +57,7 @@ export function EditAvatarScreen({ navigation }: Props) {
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permissão necessária', 'Permita o acesso às fotos para alterar a foto de perfil.');
+      showAlert('Permissão necessária', 'Permita o acesso às fotos para alterar a foto de perfil.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -100,7 +102,7 @@ export function EditAvatarScreen({ navigation }: Props) {
         const msg = isBucketMissing
           ? 'O bucket de fotos ainda não foi criado. No Supabase Dashboard vá em Storage > New bucket, crie um bucket com id "avatars" e marque como público.'
           : uploadError.message;
-        Alert.alert('Erro ao enviar foto', msg);
+        showAlert('Erro ao enviar foto', msg);
         setLoading(false);
         return;
       }
@@ -111,14 +113,14 @@ export function EditAvatarScreen({ navigation }: Props) {
         .eq('id', user.id);
 
       if (updateError) {
-        Alert.alert('Erro', updateError.message);
+        showAlert('Erro', updateError.message);
         setLoading(false);
         return;
       }
       setProfile({ avatar_url: path });
       navigation.goBack();
     } catch (e) {
-      Alert.alert('Erro', e instanceof Error ? e.message : 'Não foi possível enviar a foto.');
+      showAlert('Erro', e instanceof Error ? e.message : 'Não foi possível enviar a foto.');
     }
     setLoading(false);
   };

@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'DeleteCard'>;
 
@@ -19,6 +21,7 @@ const COLORS = {
 
 export function DeleteCardScreen({ navigation, route }: Props) {
   const { paymentMethodId } = route.params;
+  const { showAlert } = useAppAlert();
   const [loading, setLoading] = useState(false);
 
   const handleDelete = async () => {
@@ -26,7 +29,7 @@ export function DeleteCardScreen({ navigation, route }: Props) {
     const { error } = await supabase.from('payment_methods').delete().eq('id', paymentMethodId);
     setLoading(false);
     if (error) {
-      Alert.alert('Erro', error.message);
+      showAlert('Erro', error.message);
       return;
     }
     navigation.goBack();

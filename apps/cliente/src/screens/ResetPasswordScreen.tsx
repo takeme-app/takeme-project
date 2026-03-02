@@ -1,24 +1,25 @@
 import { useState } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
+import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { useAppAlert } from '../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ResetPassword'>;
 
 export function ResetPasswordScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [hidePassword, setHidePassword] = useState(true);
@@ -27,15 +28,15 @@ export function ResetPasswordScreen({ navigation }: Props) {
 
   const handleSubmit = async () => {
     if (password.length < 8) {
-      Alert.alert('Atenção', 'A senha deve ter no mínimo 8 caracteres.');
+      showAlert('Atenção', 'A senha deve ter no mínimo 8 caracteres.');
       return;
     }
     if (password !== confirmPassword) {
-      Alert.alert('Atenção', 'As senhas não coincidem.');
+      showAlert('Atenção', 'As senhas não coincidem.');
       return;
     }
     if (!isSupabaseConfigured) {
-      Alert.alert(
+      showAlert(
         'Configuração',
         'Serviço não configurado. Verifique as variáveis do Supabase.'
       );
@@ -51,7 +52,7 @@ export function ResetPasswordScreen({ navigation }: Props) {
         e && typeof e === 'object' && 'message' in e
           ? String((e as { message: string }).message)
           : 'Não foi possível atualizar a senha. Abra o link do e-mail novamente e tente de novo.';
-      Alert.alert('Erro', message);
+      showAlert('Erro', message);
     } finally {
       setLoading(false);
     }

@@ -1,14 +1,13 @@
 import { useState, useCallback } from 'react';
 import {
   View,
-  Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
   ActivityIndicator,
   Linking,
-  Alert,
 } from 'react-native';
+import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useFocusEffect } from '@react-navigation/native';
@@ -16,6 +15,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 const BUCKET_DOCS = 'dependent-documents';
 const SIGNED_URL_EXPIRY = 3600;
@@ -47,6 +47,7 @@ type Dependent = {
 
 export function DependentDetailScreen({ navigation, route }: Props) {
   const { dependentId } = route.params;
+  const { showAlert } = useAppAlert();
   const [dep, setDep] = useState<Dependent | null>(null);
   const [loading, setLoading] = useState(true);
   const [signedDocUrl, setSignedDocUrl] = useState<string | null>(null);
@@ -78,7 +79,7 @@ export function DependentDetailScreen({ navigation, route }: Props) {
 
   const openDoc = (url: string | null) => {
     if (!url) return;
-    Linking.openURL(url).catch(() => Alert.alert('Erro', 'Não foi possível abrir o documento.'));
+    Linking.openURL(url).catch(() => showAlert('Erro', 'Não foi possível abrir o documento.'));
   };
 
   if (loading) {
