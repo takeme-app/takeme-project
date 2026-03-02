@@ -19,6 +19,9 @@ web-build/
 *.mobileprovision
 *.orig.*
 
+# Android local paths (machine-specific; do not commit)
+**/android/local.properties
+
 # IDE
 .idea/
 .vscode/
