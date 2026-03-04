@@ -4,11 +4,11 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
-
 type Props = NativeStackScreenProps<RootStackParamList, 'Splash'>;
 
-const SPLASH_MIN_MS = 1500;
+const SPLASH_MIN_MS = 500;
 
+/** Usada quando o app redireciona para Splash (ex.: logout). Na abertura do app a splash nativa é usada e vamos direto para Welcome/Main. */
 export function SplashScreen({ navigation }: Props) {
   useEffect(() => {
     let mounted = true;

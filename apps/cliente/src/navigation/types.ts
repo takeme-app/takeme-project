@@ -19,6 +19,99 @@ export type RootStackParamList = {
   PrivacyPolicy: undefined;
   // Fluxo de viagens (stack dedicado); aceita tela inicial ao abrir a partir do bottom sheet
   TripStack: NavigatorScreenParams<TripStackParamList>;
+  // Fluxo de envios (guia Serviços)
+  ShipmentStack: NavigatorScreenParams<ShipmentStackParamList>;
+  // Fluxo de envio de dependentes (Serviços / Início)
+  DependentShipmentStack: NavigatorScreenParams<DependentShipmentStackParamList>;
+  // Fluxo de excursões (Serviços / Início)
+  ExcursionStack: NavigatorScreenParams<ExcursionStackParamList>;
+};
+
+export type ExcursionStackParamList = {
+  ExcursionRequestForm: undefined;
+  ExcursionSuccess: { requestId?: string };
+};
+
+/** Origem ou destino de um envio */
+export type ShipmentPlaceParam = {
+  address: string;
+  latitude: number;
+  longitude: number;
+};
+
+/** Destinatário do envio */
+export type ShipmentRecipientParam = {
+  name: string;
+  email: string;
+  phone: string;
+  instructions?: string;
+  photoUri?: string;
+};
+
+export type ShipmentStackParamList = {
+  SelectShipmentAddress: undefined;
+  Recipient: {
+    origin: ShipmentPlaceParam;
+    destination: ShipmentPlaceParam;
+    whenOption: 'now' | 'later';
+    whenLabel?: string;
+    packageSize: 'pequeno' | 'medio' | 'grande';
+    packageSizeLabel: string;
+  };
+  ConfirmShipment: {
+    origin: ShipmentPlaceParam;
+    destination: ShipmentPlaceParam;
+    whenOption: 'now' | 'later';
+    whenLabel?: string;
+    packageSize: 'pequeno' | 'medio' | 'grande';
+    packageSizeLabel: string;
+    recipient: ShipmentRecipientParam;
+    /** Valor total final (já com taxa administrativa quando vier do backend). */
+    amountCents: number;
+    /** Opcional: quando o backend enviar breakdown, exibir Subtotal + Taxa = Total */
+    subtotalCents?: number;
+    feeCents?: number;
+    orderId?: string;
+    shipmentId?: string;
+  };
+  ShipmentSuccess: {
+    orderId: string;
+    shipmentId?: string;
+    isLargePackage: boolean;
+    paymentProcessed: boolean;
+  };
+};
+
+/** Params do formulário de envio de dependente (nome, contato, bagagens, instruções) */
+export type DependentShipmentFormParams = {
+  fullName: string;
+  contactPhone: string;
+  bagsCount: number;
+  instructions?: string;
+  dependentId?: string;
+};
+
+export type DependentShipmentStackParamList = {
+  DependentShipmentForm: undefined;
+  AddDependent: undefined;
+  DependentSuccess: undefined;
+  DefineDependentTrip: DependentShipmentFormParams;
+  ConfirmDependentShipment: {
+    origin: ShipmentPlaceParam;
+    destination: ShipmentPlaceParam;
+    whenOption: 'now' | 'later';
+    whenLabel?: string;
+    fullName: string;
+    contactPhone: string;
+    bagsCount: number;
+    instructions?: string;
+    dependentId?: string;
+    amountCents: number;
+  };
+  DependentShipmentSuccess: {
+    orderId: string;
+    shipmentId?: string;
+  };
 };
 
 /** Dados do motorista/viagem selecionada (Procurando viagem → Confirmação → Checkout) */

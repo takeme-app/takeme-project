@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MapboxMap, MapboxMarker, MapboxPolyline, type MapboxMapRef } from '../../components/mapbox';
 import { getCurrentPlace, requestLocationPermission, getCurrentPosition } from '../../lib/location';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
 import { DriverMarkerIcon } from '../../components/DriverMarkerIcon';
 import { MyLocationMarkerIcon } from '../../components/MyLocationMarkerIcon';
@@ -16,6 +17,7 @@ import type { TripStackParamList, TripDriverParam } from '../../navigation/types
 import { getRecentDestinations, addRecentDestination, formatRecentDestinationDisplay, type RecentDestination } from '../../lib/recentDestinations';
 import { getRoutePolyline, type RoutePoint } from '../../lib/route';
 import { supabase } from '../../lib/supabase';
+import { getUserErrorMessage } from '../../utils/errorMessage';
 
 type Place = { address: string; latitude: number; longitude: number };
 
@@ -123,6 +125,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
   const mapRef = useRef<MapboxMapRef>(null);
   const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
+  const { currentPlace, refreshLocation } = useCurrentLocation();
   const [sheetVisible, setSheetVisible] = useState(true);
   const [origin, setOrigin] = useState<Place>(PLACEHOLDER_ORIGIN);
   const [destination, setDestination] = useState<Place | null>(() => {
@@ -183,6 +186,19 @@ export function SearchTripScreen({ navigation, route }: Props) {
 
   const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
   const sheetTranslateY = useRef(new Animated.Value(0)).current;
+
+  // Mapa nasce centralizado na localização atual quando disponível (contexto pré-carregado)
+  const initialMapRegion = useMemo(() => {
+    if (currentPlace) {
+      return {
+        latitude: currentPlace.latitude,
+        longitude: currentPlace.longitude,
+        latitudeDelta: 0.008,
+        longitudeDelta: 0.008,
+      };
+    }
+    return DEFAULT_REGION;
+  }, [currentPlace?.latitude, currentPlace?.longitude]);
   const lastTranslateY = useRef(0);
   const editOverlayOpacity = useRef(new Animated.Value(0)).current;
   const editSheetTranslateY = useRef(new Animated.Value(EDIT_SHEET_SLIDE)).current;
@@ -203,21 +219,27 @@ export function SearchTripScreen({ navigation, route }: Props) {
     [initialSheetHeight, maxSheetHeight, scrollGrowthDistance]
   );
 
+  // Origem inicial e centro do mapa: usar localização pré-carregada do contexto quando disponível; senão buscar (fallback)
   useEffect(() => {
-    let cancelled = false;
-    getCurrentPlace().then((place) => {
-      if (cancelled) return;
-      if (place) {
-        setOrigin({ address: place.address, latitude: place.latitude, longitude: place.longitude });
-        setUserLocationCoords({ latitude: place.latitude, longitude: place.longitude });
-      } else {
-        setOrigin(FALLBACK_ORIGIN);
-      }
-    }).catch(() => {
-      if (!cancelled) setOrigin(FALLBACK_ORIGIN);
-    });
-    return () => { cancelled = true; };
-  }, []);
+    if (currentPlace) {
+      setOrigin({ address: currentPlace.address, latitude: currentPlace.latitude, longitude: currentPlace.longitude });
+      setUserLocationCoords({ latitude: currentPlace.latitude, longitude: currentPlace.longitude });
+    } else {
+      let cancelled = false;
+      getCurrentPlace().then((place) => {
+        if (cancelled) return;
+        if (place) {
+          setOrigin({ address: place.address, latitude: place.latitude, longitude: place.longitude });
+          setUserLocationCoords({ latitude: place.latitude, longitude: place.longitude });
+        } else {
+          setOrigin(FALLBACK_ORIGIN);
+        }
+      }).catch(() => {
+        if (!cancelled) setOrigin(FALLBACK_ORIGIN);
+      });
+      return () => { cancelled = true; };
+    }
+  }, [currentPlace?.latitude, currentPlace?.longitude, currentPlace?.address]);
 
   useEffect(() => {
     if (!userLocationCoords) return;
@@ -250,7 +272,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
         .order('departure_at');
       if (cancelled) return;
       if (tripsErr) {
-        setTripsError(tripsErr.message);
+        setTripsError(getUserErrorMessage(tripsErr, 'Não foi possível carregar as viagens.'));
         setAllScheduledTrips([]);
         setTripsLoading(false);
         return;
@@ -377,7 +399,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
   const useMyLocationForOrigin = async () => {
     setLocationLoading(true);
     try {
-      const place = await getCurrentPlace();
+      const place = await refreshLocation();
       if (place) {
         setOrigin({ address: place.address, latitude: place.latitude, longitude: place.longitude });
         setEditOrigin(place.address);
@@ -584,7 +606,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
       <MapboxMap
         ref={mapRef}
         style={styles.map}
-        initialRegion={DEFAULT_REGION}
+        initialRegion={initialMapRegion}
         scrollEnabled={true}
       >
         {destination && (

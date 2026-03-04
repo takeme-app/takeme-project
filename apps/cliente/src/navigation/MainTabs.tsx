@@ -1,5 +1,6 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HomeScreen } from '../screens/HomeScreen';
 import { ServicesScreen } from '../screens/ServicesScreen';
 import { ActivitiesStack } from './ActivitiesStack';
@@ -17,11 +18,21 @@ const Tab = createBottomTabNavigator<MainTabParamList>();
 const TAB_ACTIVE = '#0d0d0d';
 const TAB_INACTIVE = '#767676';
 
+/** Altura fixa da área de conteúdo (ícone + rótulo) para evitar corte em qualquer dispositivo */
+const TAB_BAR_CONTENT_HEIGHT = 62;
+/** Inset mínimo quando o sistema não reporta */
+const MIN_BOTTOM_INSET = 8;
+
 export function MainTabs() {
+  const insets = useSafeAreaInsets();
+  const bottomPadding = Math.max(insets.bottom, MIN_BOTTOM_INSET);
+  const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + bottomPadding;
+
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
+        tabBarShowLabel: true,
         tabBarActiveTintColor: TAB_ACTIVE,
         tabBarInactiveTintColor: TAB_INACTIVE,
         tabBarLabelStyle: {
@@ -37,9 +48,11 @@ export function MainTabs() {
           shadowOpacity: 0.15,
           shadowRadius: 12,
           elevation: 8,
+          height: tabBarHeight,
+          paddingBottom: bottomPadding,
         },
         tabBarItemStyle: {
-          paddingVertical: 12,
+          paddingVertical: 8,
         },
       }}
     >

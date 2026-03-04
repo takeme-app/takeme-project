@@ -16,6 +16,7 @@ import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../../utils/errorMessage';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'EditPhone'>;
 
@@ -70,7 +71,7 @@ export function EditPhoneScreen({ navigation }: Props) {
       const isDuplicate = error.code === '23505' || String(error.message).toLowerCase().includes('unique');
       showAlert(
         'Erro',
-        isDuplicate ? 'Este telefone já está em uso em outra conta. Use outro número.' : error.message
+        isDuplicate ? 'Este telefone já está em uso em outra conta. Use outro número.' : getUserErrorMessage(error, 'Não foi possível atualizar o telefone.')
       );
       return;
     }

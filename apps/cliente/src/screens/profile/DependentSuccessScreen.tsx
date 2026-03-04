@@ -8,8 +8,23 @@ import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'DependentSuccess'>;
 
+/** Detecta se esta tela está dentro do DependentShipmentStack (fluxo Envio de dependentes). */
+function isInDependentShipmentStack(navigation: Props['navigation']): boolean {
+  const state = navigation.getParent()?.getState() as { routeNames?: string[] } | undefined;
+  return state?.routeNames?.includes('DependentShipmentForm') ?? false;
+}
+
 export function DependentSuccessScreen({ navigation }: Props) {
+  const inDependentShipmentFlow = isInDependentShipmentStack(navigation);
+
   const goToActivities = () => {
+    if (inDependentShipmentFlow) {
+      const root = navigation.getParent()?.getParent();
+      if (root && typeof (root as any).navigate === 'function') {
+        (root as any).navigate('Main', { screen: 'Activities' });
+      }
+      return;
+    }
     navigation.dispatch(
       CommonActions.reset({
         index: 0,
@@ -23,6 +38,10 @@ export function DependentSuccessScreen({ navigation }: Props) {
   };
 
   const goToProfileStart = () => {
+    if (inDependentShipmentFlow) {
+      navigation.getParent()?.dispatch(CommonActions.popToTop());
+      return;
+    }
     navigation.dispatch(
       CommonActions.reset({
         index: 0,

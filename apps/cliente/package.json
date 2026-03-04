@@ -1,12 +1,14 @@
 {
   "name": "cliente",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "private": true,
   "main": "index.ts",
   "scripts": {
     "prestart": "node -e \"const fs=require('fs'),path=require('path');const r=path.resolve(__dirname,'../../.env');const d=path.resolve(__dirname,'.env');if(fs.existsSync(r))fs.copyFileSync(r,d);\"",
     "start": "expo start --port 8085",
     "android": "node scripts/run-android.js",
+    "android:run": "node scripts/run-android-dev.js",
+    "android:release": "node scripts/build-release-apk.js",
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint"

@@ -9,6 +9,7 @@ import type { TripStackParamList } from '../../navigation/types';
 import { getRecentDestinations, addRecentDestination, formatRecentDestinationDisplay, type RecentDestination } from '../../lib/recentDestinations';
 import { getCurrentPlace } from '../../lib/location';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
 import { getDateCarouselOptions, ALL_TIME_SLOTS, getAvailableTimeSlots, toISODate } from '../../lib/dateTimeSlots';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
 
@@ -54,6 +55,7 @@ function formatDistanceKm(km: number): string {
 export function PlanTripScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
+  const { currentPlace, refreshLocation } = useCurrentLocation();
   const [originAddress, setOriginAddress] = useState('Obtendo sua localização...');
   const [originLat, setOriginLat] = useState(DEFAULT_COORDS.latitude);
   const [originLng, setOriginLng] = useState(DEFAULT_COORDS.longitude);
@@ -93,9 +95,16 @@ export function PlanTripScreen({ navigation }: Props) {
     getRecentDestinations().then(setRecentDestinations);
   }, []);
 
+  // Origem inicial: usar localização pré-carregada do contexto quando disponível; senão buscar (fallback)
   useEffect(() => {
-    loadOrigin();
-  }, [loadOrigin]);
+    if (currentPlace) {
+      setOriginAddress(currentPlace.address);
+      setOriginLat(currentPlace.latitude);
+      setOriginLng(currentPlace.longitude);
+    } else {
+      loadOrigin();
+    }
+  }, [currentPlace?.latitude, currentPlace?.longitude, currentPlace?.address, loadOrigin]);
 
   useEffect(() => {
     loadRecentDestinations();
@@ -131,7 +140,7 @@ export function PlanTripScreen({ navigation }: Props) {
   const useMyLocationForOrigin = useCallback(async () => {
     setLocationLoading(true);
     try {
-      const place = await getCurrentPlace();
+      const place = await refreshLocation();
       if (place) {
         setOriginAddress(place.address);
         setOriginLat(place.latitude);
@@ -145,7 +154,7 @@ export function PlanTripScreen({ navigation }: Props) {
     } finally {
       setLocationLoading(false);
     }
-  }, []);
+  }, [refreshLocation, showAlert]);
 
   const savePlaces = useCallback(() => {
     const newOriginAddress = editOrigin.trim() || originAddress;

@@ -17,6 +17,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAppAlert } from '../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../utils/errorMessage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SignUp'>;
 
@@ -28,26 +29,17 @@ function formatPhone(value: string): string {
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
 }
 
-// Valores iniciais para facilitar testes do fluxo de cadastro (remover em produção)
-const TEST_PREFILL = {
-  fullName: 'Diego Barbosa Silva',
-  email: 'ydiegosilvanwd@gmail.com',
-  phone: '(88) 9999-9999',
-  password: '157enois',
-  confirmPassword: '157enois',
-};
-
 export function SignUpScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
-  const [fullName, setFullName] = useState(TEST_PREFILL.fullName);
-  const [phone, setPhone] = useState(TEST_PREFILL.phone);
-  const [email, setEmail] = useState(TEST_PREFILL.email);
-  const [password, setPassword] = useState(TEST_PREFILL.password);
-  const [confirmPassword, setConfirmPassword] = useState(TEST_PREFILL.confirmPassword);
+  const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [hidePassword, setHidePassword] = useState(true);
   const [hideConfirm, setHideConfirm] = useState(true);
-  const [agreeTerms, setAgreeTerms] = useState(true);
+  const [agreeTerms, setAgreeTerms] = useState(false);
   const [agreeOffers, setAgreeOffers] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -158,19 +150,10 @@ export function SignUpScreen({ navigation }: Props) {
         phone: phoneDigits,
       });
     } catch (err: unknown) {
-      let message = 'Não foi possível enviar o código. Tente novamente.';
-      if (err && typeof err === 'object' && 'message' in err) {
-        const msg = String((err as { message: unknown }).message);
-        if (msg.includes('Edge Function') && msg.includes('non-2xx')) {
-          message =
-            'Serviço de envio de código temporariamente indisponível. Verifique se a Edge Function foi implantada no Supabase.';
-        } else if (msg === 'Network request failed') {
-          message =
-            'Falha de rede. Verifique sua internet e se o arquivo .env tem EXPO_PUBLIC_SUPABASE_URL e EXPO_PUBLIC_SUPABASE_ANON_KEY. Reinicie o app após alterar o .env.';
-        } else {
-          message = msg;
-        }
-      }
+      const message = getUserErrorMessage(
+        err,
+        'Não foi possível enviar o código. Tente novamente.'
+      );
       setError(message);
       showAlert('Atenção', message);
     } finally {

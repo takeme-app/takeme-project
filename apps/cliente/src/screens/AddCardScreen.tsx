@@ -16,6 +16,7 @@ import type { RootStackParamList } from '../navigation/types';
 import { CardField, useStripe } from '@stripe/stripe-react-native';
 import { supabase } from '../lib/supabase';
 import { useAppAlert } from '../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../utils/errorMessage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AddCard'>;
 
@@ -41,7 +42,7 @@ export function AddCardScreen({ navigation, route }: Props) {
         },
       });
       if (pmError) {
-        showAlert('Erro', pmError.message ?? 'Falha ao processar o cartão.');
+        showAlert('Erro', getUserErrorMessage(pmError, 'Falha ao processar o cartão.'));
         return;
       }
       if (!paymentMethod?.id) {
@@ -52,7 +53,7 @@ export function AddCardScreen({ navigation, route }: Props) {
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       const token = session?.access_token;
       if (!token) {
-        showAlert('Erro', sessionError?.message ?? 'Sessão expirada. Faça login novamente.');
+        showAlert('Erro', getUserErrorMessage(sessionError, 'Sessão expirada. Faça login novamente.'));
         return;
       }
       const url = `${process.env.EXPO_PUBLIC_SUPABASE_URL ?? ''}/functions/v1/save-payment-method`;
@@ -73,17 +74,16 @@ export function AddCardScreen({ navigation, route }: Props) {
           }),
         });
       } catch (e) {
-        const err = e as Error;
-        showAlert('Erro', err?.message?.includes('Network') ? 'Sem conexão. Verifique a internet.' : (err?.message ?? 'Falha ao enviar. Tente de novo.'));
+        showAlert('Erro', getUserErrorMessage(e, 'Falha ao enviar. Tente de novo.'));
         return;
       }
       const data = await res.json().catch(() => ({})) as { error?: string; ok?: boolean };
       if (!res.ok) {
-        showAlert('Erro', data?.error ?? `Erro do servidor (${res.status}).`);
+        showAlert('Erro', getUserErrorMessage({ message: data?.error }, `Erro do servidor (${res.status}). Tente novamente.`));
         return;
       }
       if (data?.error) {
-        showAlert('Erro', data.error);
+        showAlert('Erro', getUserErrorMessage({ message: data.error }, 'Não foi possível salvar o cartão.'));
         return;
       }
       navigation.navigate('CardRegisteredSuccess');

@@ -2,6 +2,7 @@ import { makeRedirectUri } from 'expo-auth-session';
 import * as QueryParams from 'expo-auth-session/build/QueryParams';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from './supabase';
+import { getUserErrorMessage } from '../utils/errorMessage';
 
 /**
  * Completa a sessão do Supabase a partir da URL de redirect do OAuth.
@@ -41,7 +42,7 @@ export async function signInWithOAuthProvider(
       },
     });
 
-    if (error) return { success: false, error: error.message };
+    if (error) return { success: false, error: getUserErrorMessage(error, 'Não foi possível concluir o login.') };
     if (!data?.url) return { success: false, error: 'URL de login não retornada.' };
 
     const res = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
@@ -55,7 +56,7 @@ export async function signInWithOAuthProvider(
     }
     return { success: false, error: 'Não foi possível concluir o login.' };
   } catch (e) {
-    const message = e instanceof Error ? e.message : 'Erro ao entrar com o provedor.';
+    const message = getUserErrorMessage(e, 'Erro ao entrar com o provedor.');
     return { success: false, error: message };
   }
 }

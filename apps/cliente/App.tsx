@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Linking, View } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import {
@@ -13,6 +13,10 @@ import Mapbox from '@rnmapbox/maps';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { createSessionFromUrl } from './src/lib/oauth';
 import { AppAlertProvider } from './src/contexts/AppAlertContext';
+import { CurrentLocationProvider } from './src/contexts/CurrentLocationContext';
+import { supabase } from './src/lib/supabase';
+
+const SPLASH_MIN_MS = 500;
 
 SplashScreen.preventAutoHideAsync();
 
@@ -43,25 +47,46 @@ export default function App() {
     Inter_700Bold,
   });
 
-  const onLayoutRootView = useCallback(async () => {
-    if (fontsLoaded || fontError) {
-      await SplashScreen.hideAsync();
-    }
-  }, [fontsLoaded, fontError]);
+  const [ready, setReady] = useState(false);
+  const [initialRoute, setInitialRoute] = useState<'Welcome' | 'Main'>('Welcome');
+  const startTimeRef = useRef<number>(Date.now());
 
   useAuthDeepLink();
 
-  if (!fontsLoaded && !fontError) {
+  // Splash nativa fica visível até: fontes + sessão + tempo mínimo; aí esconde e abre Welcome ou Main
+  useEffect(() => {
+    if (!fontsLoaded && !fontError) return;
+
+    let mounted = true;
+
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      const elapsed = Date.now() - startTimeRef.current;
+      const wait = Math.max(0, SPLASH_MIN_MS - elapsed);
+      await new Promise((r) => setTimeout(r, wait));
+
+      if (!mounted) return;
+      setInitialRoute(session?.user ? 'Main' : 'Welcome');
+      await SplashScreen.hideAsync();
+      setReady(true);
+    })();
+
+    return () => { mounted = false; };
+  }, [fontsLoaded, fontError]);
+
+  if (!ready) {
     return null;
   }
 
   return (
-    <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
+    <View style={{ flex: 1 }}>
       <StripeProvider publishableKey={stripePublishableKey}>
         <SafeAreaProvider>
-          <AppAlertProvider>
-            <RootNavigator />
-          </AppAlertProvider>
+          <CurrentLocationProvider>
+            <AppAlertProvider>
+              <RootNavigator initialRouteName={initialRoute} />
+            </AppAlertProvider>
+          </CurrentLocationProvider>
         </SafeAreaProvider>
       </StripeProvider>
     </View>

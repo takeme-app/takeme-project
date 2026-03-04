@@ -16,6 +16,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { getUserErrorMessage } from '../utils/errorMessage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
 
@@ -71,12 +72,10 @@ export function LoginScreen({ navigation }: Props) {
       });
     } catch (e: unknown) {
       const isNetworkError =
-        e instanceof TypeError && (e.message === 'Network request failed' || e.message?.includes('Network request failed'));
+        e instanceof TypeError && (e.message === 'Network request failed' || (e as Error).message?.includes('Network request failed'));
       const msg = isNetworkError
         ? 'Sem conexão com a internet ou servidor temporariamente indisponível. Verifique sua rede e tente novamente.'
-        : e && typeof e === 'object' && 'message' in e
-          ? String((e as { message: string }).message)
-          : 'Não foi possível entrar. Verifique e-mail/senha ou telefone/senha.';
+        : getUserErrorMessage(e, 'Não foi possível entrar. Verifique e-mail/senha ou telefone/senha.');
       showAlert(isNetworkError ? 'Erro de conexão' : 'Erro no login', msg);
     } finally {
       setLoading(false);

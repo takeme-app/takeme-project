@@ -10,11 +10,13 @@ import {
 } from 'react-native';
 import { Text } from '../components/Text';
 import { StatusBar } from 'expo-status-bar';
+import { CommonActions } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { setLastRecoveryEmail } from '../lib/lastRecoveryEmail';
 import { useAppAlert } from '../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../utils/errorMessage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPassword'>;
 
@@ -44,13 +46,19 @@ export function ForgotPasswordScreen({ navigation }: Props) {
         redirectTo,
       });
       if (error) throw error;
+      await supabase.auth.signOut();
       setLastRecoveryEmail(trimmed);
-      navigation.navigate('ForgotPasswordEmailSent', { email: trimmed });
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 1,
+          routes: [
+            { name: 'Welcome' },
+            { name: 'ForgotPasswordEmailSent', params: { email: trimmed } },
+          ],
+        })
+      );
     } catch (e: unknown) {
-      const message =
-        e && typeof e === 'object' && 'message' in e
-          ? String((e as { message: string }).message)
-          : 'Não foi possível enviar o e-mail. Tente novamente.';
+      const message = getUserErrorMessage(e, 'Não foi possível enviar o e-mail. Tente novamente.');
       showAlert('Erro ao enviar e-mail', message);
     } finally {
       setLoading(false);

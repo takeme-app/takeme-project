@@ -15,6 +15,8 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList, TripDriverParam, PaymentConfirmedBookingParam } from '../../navigation/types';
 import { getRoutePolyline, type RoutePoint } from '../../lib/route';
 import { supabase } from '../../lib/supabase';
+import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
+import { PaymentMethodSection, type PaymentMethodType } from '../../components/PaymentMethodSection';
 
 type Props = NativeStackScreenProps<TripStackParamList, 'Checkout'>;
 
@@ -45,18 +47,10 @@ const DEFAULT_REGION = {
   longitudeDelta: 0.02,
 };
 
-type PaymentMethodType = 'pix' | 'debito' | 'credito' | 'dinheiro';
-
-const PAYMENT_OPTIONS: { type: PaymentMethodType; label: string; icon: keyof typeof MaterialIcons.glyphMap }[] = [
-  { type: 'pix', label: 'Pix', icon: 'qr-code-2' },
-  { type: 'debito', label: 'Débito', icon: 'credit-card' },
-  { type: 'credito', label: 'Crédito', icon: 'credit-card' },
-  { type: 'dinheiro', label: 'Dinheiro', icon: 'payments' },
-];
-
 export function CheckoutScreen({ navigation, route }: Props) {
+  const { currentPlace } = useCurrentLocation();
   const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
-  const [selectedPaymentType, setSelectedPaymentType] = useState<PaymentMethodType | null>('credito');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('credito');
 
   const driver = route.params?.driver ?? DEFAULT_DRIVER;
   const origin = route.params?.origin;
@@ -106,6 +100,15 @@ export function CheckoutScreen({ navigation, route }: Props) {
     return () => { cancelled = true; };
   }, [origin?.latitude, origin?.longitude, destination?.latitude, destination?.longitude]);
 
+  const refreshCheckout = useCallback(() => {
+    // Quando houver API de status de pagamento ou preço dinâmico para viagem, buscar aqui e atualizar estado.
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(refreshCheckout, 5000);
+    return () => clearInterval(interval);
+  }, [refreshCheckout]);
+
   const mapRegion = useMemo(() => {
     if (origin && destination) {
       const latMin = Math.min(origin.latitude, destination.latitude);
@@ -128,8 +131,16 @@ export function CheckoutScreen({ navigation, route }: Props) {
         longitudeDelta: 0.02,
       };
     }
+    if (currentPlace) {
+      return {
+        latitude: currentPlace.latitude,
+        longitude: currentPlace.longitude,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      };
+    }
     return DEFAULT_REGION;
-  }, [origin, destination]);
+  }, [origin, destination, currentPlace]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -196,6 +207,9 @@ export function CheckoutScreen({ navigation, route }: Props) {
           <Text style={styles.meta}>
             {tripDateLabel ? `${tripDateLabel} · ` : ''}Saída {driver.departure} · Chegada {driver.arrival}
           </Text>
+          <Text style={styles.dynamicPriceNote}>
+            O valor final pode variar conforme o horário de solicitação e da partida.
+          </Text>
           <View style={styles.metaRow}>
             <MaterialIcons name="directions-car" size={18} color={COLORS.neutral700} />
             <Text style={styles.metaText}>Argo Sedan • Placa RIO 2877</Text>
@@ -232,51 +246,26 @@ export function CheckoutScreen({ navigation, route }: Props) {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Método de pagamento</Text>
-          <View style={styles.paymentButtonsRow}>
-            {PAYMENT_OPTIONS.map((opt) => (
-              <TouchableOpacity
-                key={opt.type}
-                style={[styles.paymentMethodButton, selectedPaymentType === opt.type && styles.paymentMethodButtonSelected]}
-                onPress={() => setSelectedPaymentType(opt.type)}
-                activeOpacity={0.7}
-              >
-                <MaterialIcons
-                  name={opt.icon}
-                  size={24}
-                  color={selectedPaymentType === opt.type ? '#FFFFFF' : COLORS.black}
-                />
-                <Text style={[styles.paymentMethodLabel, selectedPaymentType === opt.type && styles.paymentMethodLabelSelected]}>
-                  {opt.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
-        <TouchableOpacity
-          style={[styles.confirmButton, (!origin || !destination) && styles.primaryButtonDisabled]}
-          onPress={() => {
-            if (!origin || !destination) return;
-            const summary: PaymentConfirmedBookingParam = {
-              booking_id: 'pending',
-              origin_address: origin.address,
-              destination_address: destination.address,
-              departure: driver.departure,
-              arrival: driver.arrival,
-              amount_cents: amountCents,
-              driver_name: driver.name,
-            };
-            navigation.replace('PaymentConfirmed', { booking: summary, immediateTrip: route.params?.immediateTrip });
-          }}
-          disabled={!origin || !destination}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.confirmButtonText}>Confirmar pagamento</Text>
-        </TouchableOpacity>
-        <View style={styles.policy}>
-          <Text style={styles.policyText}>Cancelamento até 12h antes: reembolso integral</Text>
-          <Text style={styles.policyText}>Reagendamento permitido até 2h antes</Text>
+          <PaymentMethodSection
+            amountCents={amountCents}
+            selectedMethod={selectedPaymentMethod}
+            onSelectMethod={setSelectedPaymentMethod}
+            confirmLabel="Confirmar pagamento"
+            cancellationPolicyVariant="trip"
+            onConfirmPayment={({ method }) => {
+              if (!origin || !destination) return;
+              const summary: PaymentConfirmedBookingParam = {
+                booking_id: 'pending',
+                origin_address: origin.address,
+                destination_address: destination.address,
+                departure: driver.departure,
+                arrival: driver.arrival,
+                amount_cents: amountCents,
+                driver_name: driver.name,
+              };
+              navigation.replace('PaymentConfirmed', { booking: summary, immediateTrip: route.params?.immediateTrip });
+            }}
+          />
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -325,37 +314,8 @@ const styles = StyleSheet.create({
   meta: { fontSize: 13, color: COLORS.neutral700, marginBottom: 4 },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
   metaText: { fontSize: 13, color: COLORS.neutral700 },
+  dynamicPriceNote: { fontSize: 12, color: COLORS.neutral700, fontStyle: 'italic', marginTop: 6 },
   passengerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
   passengerText: { flex: 1, fontSize: 14, color: COLORS.black },
   bagsNote: { fontSize: 13, color: COLORS.neutral700, marginTop: 4 },
-  paymentButtonsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  paymentMethodButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: COLORS.neutral400,
-    backgroundColor: '#FFFFFF',
-  },
-  paymentMethodButtonSelected: {
-    borderColor: COLORS.black,
-    backgroundColor: COLORS.black,
-  },
-  paymentMethodLabel: { fontSize: 14, fontWeight: '600', color: COLORS.black },
-  paymentMethodLabelSelected: { color: '#FFFFFF' },
-  confirmButton: {
-    backgroundColor: COLORS.black,
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 16,
-  },
-  confirmButtonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
-  primaryButtonDisabled: { opacity: 0.5 },
-  policy: { gap: 4 },
-  policyText: { fontSize: 13, color: COLORS.neutral700 },
 });

@@ -34,7 +34,7 @@ const SHEET_SLIDE_DISTANCE = 400;
 const TIME_SHEET_SLIDE = 450;
 
 export function HomeScreen({ navigation }: HomeScreenProps) {
-  const { navigateToTripStack } = useRootNavigation();
+  const { navigateToTripStack, navigateToShipmentStack, navigateToDependentShipmentStack, navigateToExcursionStack } = useRootNavigation();
   const [whenSheetVisible, setWhenSheetVisible] = useState(false);
   const [whenOption, setWhenOption] = useState<'now' | 'later' | null>(null);
   const [recentDestinations, setRecentDestinations] = useState<RecentDestination[]>([]);
@@ -214,7 +214,10 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
                   key={service.id}
                   style={styles.serviceCard}
                   activeOpacity={0.8}
-                  onPress={() => service.id === 'viagens' && navigateToTripStack('SearchTrip', { immediateTrip: false })}
+                  onPress={() => {
+                  if (service.id === 'viagens') navigateToTripStack('SearchTrip', { immediateTrip: false });
+                  if (service.id === 'envios') navigateToShipmentStack('SelectShipmentAddress');
+                }}
                 >
                   <View style={styles.serviceIconWrap}>
                     <Image source={service.image} style={styles.serviceImage} resizeMode="contain" />
@@ -229,6 +232,10 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
                   key={service.id}
                   style={styles.serviceCard}
                   activeOpacity={0.8}
+                  onPress={() => {
+                    if (service.id === 'dependentes') navigateToDependentShipmentStack('DependentShipmentForm');
+                    if (service.id === 'excursões') navigateToExcursionStack('ExcursionRequestForm');
+                  }}
                 >
                   <View style={styles.serviceIconWrap}>
                     <Image source={service.image} style={styles.serviceImage} resizeMode="contain" />

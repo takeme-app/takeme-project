@@ -1,11 +1,30 @@
 import { createContext, useContext, useCallback } from 'react';
 import { CommonActions } from '@react-navigation/native';
 import type { NavigationContainerRef } from '@react-navigation/native';
-import type { RootStackParamList } from './types';
+import type { RootStackParamList, ShipmentStackParamList, DependentShipmentStackParamList, ExcursionStackParamList } from './types';
+
+type ShipmentScreenName = keyof ShipmentStackParamList;
+type DependentShipmentScreenName = keyof DependentShipmentStackParamList;
+type ExcursionScreenName = keyof ExcursionStackParamList;
 
 type RootNavigationContextValue = {
   /** Navega para o TripStack (stack irmão de Main). Usar na Home e em qualquer tela dentro de Main. */
   navigateToTripStack: (screen: 'SearchTrip' | 'PlanRide' | 'PlanTrip', params?: object) => void;
+  /** Navega para o ShipmentStack (fluxo Envios na guia Serviços). */
+  navigateToShipmentStack: <K extends ShipmentScreenName>(
+    screen: K,
+    params?: ShipmentStackParamList[K]
+  ) => void;
+  /** Navega para o DependentShipmentStack (fluxo Envio de dependentes). */
+  navigateToDependentShipmentStack: <K extends DependentShipmentScreenName>(
+    screen: K,
+    params?: DependentShipmentStackParamList[K]
+  ) => void;
+  /** Navega para o ExcursionStack (fluxo Excursões). */
+  navigateToExcursionStack: <K extends ExcursionScreenName>(
+    screen: K,
+    params?: ExcursionStackParamList[K]
+  ) => void;
 };
 
 const RootNavigationContext = createContext<RootNavigationContextValue | null>(null);
@@ -26,7 +45,7 @@ export function RootNavigationProvider({
   children: React.ReactNode;
 }) {
   const navigateToTripStack = useCallback(
-    (screen: 'SearchTrip' | 'PlanRide', params?: object) => {
+    (screen: 'SearchTrip' | 'PlanRide' | 'PlanTrip', params?: object) => {
       const nav = navigationRef.current;
       if (nav) {
         nav.dispatch(
@@ -43,8 +62,62 @@ export function RootNavigationProvider({
     [navigationRef]
   );
 
+  const navigateToShipmentStack = useCallback(
+    <K extends ShipmentScreenName>(screen: K, params?: ShipmentStackParamList[K]) => {
+      const nav = navigationRef.current;
+      if (nav) {
+        nav.dispatch(
+          CommonActions.navigate({
+            name: 'ShipmentStack',
+            params: {
+              screen,
+              params: params ?? undefined,
+            },
+          })
+        );
+      }
+    },
+    [navigationRef]
+  );
+
+  const navigateToDependentShipmentStack = useCallback(
+    <K extends DependentShipmentScreenName>(screen: K, params?: DependentShipmentStackParamList[K]) => {
+      const nav = navigationRef.current;
+      if (nav) {
+        nav.dispatch(
+          CommonActions.navigate({
+            name: 'DependentShipmentStack',
+            params: {
+              screen,
+              params: params ?? undefined,
+            },
+          })
+        );
+      }
+    },
+    [navigationRef]
+  );
+
+  const navigateToExcursionStack = useCallback(
+    <K extends ExcursionScreenName>(screen: K, params?: ExcursionStackParamList[K]) => {
+      const nav = navigationRef.current;
+      if (nav) {
+        nav.dispatch(
+          CommonActions.navigate({
+            name: 'ExcursionStack',
+            params: {
+              screen,
+              params: params ?? undefined,
+            },
+          })
+        );
+      }
+    },
+    [navigationRef]
+  );
+
   return (
-    <RootNavigationContext.Provider value={{ navigateToTripStack }}>
+    <RootNavigationContext.Provider value={{ navigateToTripStack, navigateToShipmentStack, navigateToDependentShipmentStack, navigateToExcursionStack }}>
       {children}
     </RootNavigationContext.Provider>
   );
