@@ -9,8 +9,10 @@ import type { TripStackParamList } from '../../navigation/types';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
 import { getCurrentPlace } from '../../lib/location';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
 import { addRecentDestination } from '../../lib/recentDestinations';
 import { supabase } from '../../lib/supabase';
+import { getUserErrorMessage } from '../../utils/errorMessage';
 import { getDateCarouselOptions, ALL_TIME_SLOTS, getAvailableTimeSlots, toISODate } from '../../lib/dateTimeSlots';
 import type { ScheduledTripItem } from './SearchTripScreen';
 
@@ -68,6 +70,7 @@ const COLORS = {
 
 export function PlanRideScreen({ navigation, route }: Props) {
   const { showAlert } = useAppAlert();
+  const { currentPlace, refreshLocation } = useCurrentLocation();
   const [origin, setOrigin] = useState<Place>(() => {
     const o = route.params?.origin;
     if (o && o.latitude != null && o.longitude != null) return { address: o.address, latitude: o.latitude, longitude: o.longitude };
@@ -110,6 +113,19 @@ export function PlanRideScreen({ navigation, route }: Props) {
   const [locationLoading, setLocationLoading] = useState(false);
   const editOverlayOpacity = useRef(new Animated.Value(0)).current;
   const editSheetTranslateY = useRef(new Animated.Value(EDIT_SHEET_SLIDE)).current;
+
+  // Quando não há origin nos params, usar localização pré-carregada do contexto (ou buscar) como origem padrão
+  useEffect(() => {
+    const o = route.params?.origin;
+    if (o && o.latitude != null && o.longitude != null) return;
+    if (currentPlace) {
+      setOrigin({ address: currentPlace.address, latitude: currentPlace.latitude, longitude: currentPlace.longitude });
+    } else {
+      getCurrentPlace().then((place) => {
+        if (place) setOrigin({ address: place.address, latitude: place.latitude, longitude: place.longitude });
+      });
+    }
+  }, [route.params?.origin, currentPlace?.latitude, currentPlace?.longitude, currentPlace?.address]);
 
   useEffect(() => {
     setEditOrigin(origin.address);
@@ -178,7 +194,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
         .order('departure_at');
       if (cancelled) return;
       if (tripsErr) {
-        setTripsError(tripsErr.message);
+        setTripsError(getUserErrorMessage(tripsErr, 'Não foi possível carregar as viagens.'));
         setAllScheduledTrips([]);
         setTripsLoading(false);
         return;
@@ -241,7 +257,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
   const useMyLocationForOrigin = async () => {
     setLocationLoading(true);
     try {
-      const place = await getCurrentPlace();
+      const place = await refreshLocation();
       if (place) {
         setOrigin({ address: place.address, latitude: place.latitude, longitude: place.longitude });
         setEditOrigin(place.address);

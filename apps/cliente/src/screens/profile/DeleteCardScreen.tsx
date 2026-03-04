@@ -8,6 +8,7 @@ import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../../utils/errorMessage';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'DeleteCard'>;
 
@@ -29,7 +30,7 @@ export function DeleteCardScreen({ navigation, route }: Props) {
     const { error } = await supabase.from('payment_methods').delete().eq('id', paymentMethodId);
     setLoading(false);
     if (error) {
-      showAlert('Erro', error.message);
+      showAlert('Erro', getUserErrorMessage(error, 'Não foi possível excluir o cartão.'));
       return;
     }
     navigation.goBack();

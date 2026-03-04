@@ -4,8 +4,8 @@ import { Text } from './Text';
 /** Variantes para lista principal Atividades (seções Confirmadas / Planejadas) */
 export type ActivitySectionBadge = 'confirmada' | 'planejada';
 
-/** Variantes para status de viagem (Histórico e Detalhes) */
-export type TripStatusBadge = 'concluida' | 'cancelada' | 'em_andamento' | 'em_analise';
+/** Variantes para status de viagem (Histórico e Detalhes) e envio */
+export type TripStatusBadge = 'concluida' | 'cancelada' | 'em_andamento' | 'em_analise' | 'aguardando_motorista';
 
 export type StatusBadgeVariant = ActivitySectionBadge | TripStatusBadge;
 
@@ -19,6 +19,7 @@ const VARIANT_STYLES: Record<
   cancelada: { backgroundColor: '#e11d48', color: '#FFFFFF' },
   em_andamento: { backgroundColor: '#fef3c7', color: '#0d0d0d' },
   em_analise: { backgroundColor: '#e5e5e5', color: '#0d0d0d' },
+  aguardando_motorista: { backgroundColor: '#e5e5e5', color: '#0d0d0d' },
 };
 
 const VARIANT_LABELS: Record<StatusBadgeVariant, string> = {
@@ -28,6 +29,7 @@ const VARIANT_LABELS: Record<StatusBadgeVariant, string> = {
   cancelada: 'Cancelada',
   em_andamento: 'Em andamento',
   em_analise: 'Em análise',
+  aguardando_motorista: 'Aguardando aceite do motorista',
 };
 
 type Props = {
@@ -54,6 +56,18 @@ export function bookingStatusToBadge(status: string | undefined): TripStatusBadg
   if (s === 'paid' || s === 'completed' || s === 'concluido') return 'concluida';
   if (s === 'cancelled' || s === 'canceled' || s === 'cancelada') return 'cancelada';
   if (s === 'in_progress' || s === 'em_andamento') return 'em_andamento';
+  return 'em_analise';
+}
+
+/** Mapeia status do backend para variante do badge (shipments.status). Inclui awaiting_driver para quando o app motorista existir. */
+export function shipmentStatusToBadge(status: string | undefined): TripStatusBadge {
+  if (!status) return 'em_analise';
+  const s = status.toLowerCase();
+  if (s === 'delivered') return 'concluida';
+  if (s === 'cancelled' || s === 'canceled') return 'cancelada';
+  if (s === 'awaiting_driver') return 'aguardando_motorista';
+  if (s === 'in_progress' || s === 'confirmed') return 'em_andamento';
+  if (s === 'pending_review') return 'em_analise';
   return 'em_analise';
 }
 

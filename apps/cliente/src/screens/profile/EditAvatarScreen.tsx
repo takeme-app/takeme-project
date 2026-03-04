@@ -16,6 +16,7 @@ import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../../utils/errorMessage';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'EditAvatar'>;
 
@@ -101,7 +102,7 @@ export function EditAvatarScreen({ navigation }: Props) {
           uploadError.message?.toLowerCase().includes('not found');
         const msg = isBucketMissing
           ? 'O bucket de fotos ainda não foi criado. No Supabase Dashboard vá em Storage > New bucket, crie um bucket com id "avatars" e marque como público.'
-          : uploadError.message;
+          : getUserErrorMessage(uploadError, 'Não foi possível enviar a foto.');
         showAlert('Erro ao enviar foto', msg);
         setLoading(false);
         return;
@@ -113,14 +114,14 @@ export function EditAvatarScreen({ navigation }: Props) {
         .eq('id', user.id);
 
       if (updateError) {
-        showAlert('Erro', updateError.message);
+        showAlert('Erro', getUserErrorMessage(updateError, 'Não foi possível atualizar a foto de perfil.'));
         setLoading(false);
         return;
       }
       setProfile({ avatar_url: path });
       navigation.goBack();
     } catch (e) {
-      showAlert('Erro', e instanceof Error ? e.message : 'Não foi possível enviar a foto.');
+      showAlert('Erro', getUserErrorMessage(e, 'Não foi possível enviar a foto.'));
     }
     setLoading(false);
   };

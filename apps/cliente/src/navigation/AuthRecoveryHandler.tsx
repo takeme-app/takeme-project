@@ -43,6 +43,28 @@ function isResetPasswordDeepLink(url: string): boolean {
   return url.includes(RESET_PASSWORD_PATH) || url.includes('reset-password');
 }
 
+function waitForNavigatorReady(
+  navigationRef: React.RefObject<NavigationContainerRef<RootStackParamList> | null>,
+  maxMs: number = 3000
+): Promise<void> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const check = () => {
+      const nav = navigationRef.current;
+      if (nav && typeof (nav as any).isReady === 'function' && (nav as any).isReady()) {
+        resolve();
+        return;
+      }
+      if (Date.now() - start >= maxMs) {
+        resolve();
+        return;
+      }
+      setTimeout(check, 50);
+    };
+    check();
+  });
+}
+
 async function handleRecoveryUrl(
   url: string,
   navigationRef: React.RefObject<NavigationContainerRef<RootStackParamList> | null>
@@ -59,19 +81,16 @@ async function handleRecoveryUrl(
     }
   }
 
+  await waitForNavigatorReady(navigationRef);
   const nav = navigationRef.current;
   if (!nav) return hasTokens;
 
-  const goToResetPassword = () => {
-    navigationRef.current?.dispatch(
-      CommonActions.reset({
-        index: 0,
-        routes: [{ name: 'ResetPassword' }],
-      })
-    );
-  };
-
-  setTimeout(goToResetPassword, 300);
+  nav.dispatch(
+    CommonActions.reset({
+      index: 0,
+      routes: [{ name: 'ResetPassword' }],
+    })
+  );
   return true;
 }
 
@@ -79,16 +98,29 @@ type Props = {
   navigationRef: React.RefObject<NavigationContainerRef<RootStackParamList> | null>;
 };
 
+const SAME_LINK_DEBOUNCE_MS = 2000;
+
 export function AuthRecoveryHandler({ navigationRef }: Props) {
-  const handled = useRef(false);
+  const lastHandledUrl = useRef<string | null>(null);
+  const lastHandledTime = useRef<number>(0);
 
   useEffect(() => {
     const run = async (url: string | null) => {
-      if (!url || handled.current) return;
+      if (!url) return;
       const isRecovery = url.includes('access_token') || isResetPasswordDeepLink(url);
       if (!isRecovery) return;
+      const now = Date.now();
+      if (
+        lastHandledUrl.current === url &&
+        now - lastHandledTime.current < SAME_LINK_DEBOUNCE_MS
+      ) {
+        return;
+      }
       const didHandle = await handleRecoveryUrl(url, navigationRef);
-      if (didHandle) handled.current = true;
+      if (didHandle) {
+        lastHandledUrl.current = url;
+        lastHandledTime.current = now;
+      }
     };
 
     if (Platform.OS === 'web') {

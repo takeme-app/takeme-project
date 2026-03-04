@@ -18,6 +18,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../../utils/errorMessage';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'AddDependent'>;
 
@@ -64,7 +65,7 @@ export function AddDependentScreen({ navigation }: Props) {
       if (which === 'dependent') setDocumentFile(file);
       else setRepresentativeFile(file);
     } catch (e) {
-      showAlert('Erro', e instanceof Error ? e.message : 'Não foi possível abrir o seletor de arquivos.');
+      showAlert('Erro', getUserErrorMessage(e, 'Não foi possível abrir o seletor de arquivos.'));
     }
   };
 
@@ -106,7 +107,7 @@ export function AddDependentScreen({ navigation }: Props) {
 
     if (insertError) {
       setSaving(false);
-      showAlert('Erro', insertError.message);
+      showAlert('Erro', getUserErrorMessage(insertError, 'Não foi possível cadastrar o dependente.'));
       return;
     }
 

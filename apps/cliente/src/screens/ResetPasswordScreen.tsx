@@ -15,6 +15,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAppAlert } from '../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../utils/errorMessage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ResetPassword'>;
 
@@ -48,10 +49,10 @@ export function ResetPasswordScreen({ navigation }: Props) {
       if (error) throw error;
       navigation.navigate('ResetPasswordSuccess');
     } catch (e: unknown) {
-      const message =
-        e && typeof e === 'object' && 'message' in e
-          ? String((e as { message: string }).message)
-          : 'Não foi possível atualizar a senha. Abra o link do e-mail novamente e tente de novo.';
+      const message = getUserErrorMessage(
+        e,
+        'Não foi possível atualizar a senha. Abra o link do e-mail novamente e tente de novo.'
+      );
       showAlert('Erro', message);
     } finally {
       setLoading(false);
@@ -186,7 +187,7 @@ const styles = StyleSheet.create({
   },
   passwordRow: {
     position: 'relative',
-    marginBottom: 0,
+    marginBottom: 16,
   },
   inputPassword: {
     paddingRight: 48,
@@ -213,7 +214,7 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: 24,
   },
   submitButtonDisabled: {
     opacity: 0.7,

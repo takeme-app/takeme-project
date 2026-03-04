@@ -13,7 +13,7 @@ import { SupportSheet } from '../components/SupportSheet';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ActivitiesList'>;
 
-export type ActivityCategory = 'todas' | 'viagens' | 'envios' | 'dependente';
+export type ActivityCategory = 'todas' | 'viagens' | 'envios' | 'dependente' | 'excursao';
 
 export type ActivityItem = {
   id: string;
@@ -110,13 +110,33 @@ export function ActivitiesScreen({ navigation }: Props) {
       setLoading(false);
       return;
     }
-    const { data: bookings } = await supabase
-      .from('bookings')
-      .select('id, origin_address, destination_address, amount_cents, status, created_at')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(50);
-    const items: ActivityItem[] = (bookings ?? []).map((b) => {
+    const [bookingsRes, shipmentsRes, dependentShipmentsRes, excursionsRes] = await Promise.all([
+      supabase
+        .from('bookings')
+        .select('id, origin_address, destination_address, amount_cents, status, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50),
+      supabase
+        .from('shipments')
+        .select('id, origin_address, destination_address, amount_cents, status, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50),
+      supabase
+        .from('dependent_shipments')
+        .select('id, origin_address, destination_address, full_name, amount_cents, status, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50),
+      supabase
+        .from('excursion_requests')
+        .select('id, destination, excursion_date, status, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50),
+    ]);
+    const bookingItems: ActivityItem[] = (bookingsRes.data ?? []).map((b) => {
       const s = (b as { status?: string }).status?.toLowerCase() ?? '';
       const sectionBadge: ActivitySectionBadge =
         s === 'paid' || s === 'in_progress' || s === 'confirmed' ? 'confirmada' : 'planejada';
@@ -127,15 +147,83 @@ export function ActivitiesScreen({ navigation }: Props) {
         type: 'viagem',
         title: dest,
         originAddress: origin,
-        dateTime: formatBookingDate(b.created_at),
-        priceFormatted: b.amount_cents != null ? `R$ ${(b.amount_cents / 100).toFixed(2)}` : 'R$ —',
+        dateTime: formatBookingDate((b as { created_at: string }).created_at),
+        priceFormatted: (b as { amount_cents?: number }).amount_cents != null ? `R$ ${((b as { amount_cents: number }).amount_cents / 100).toFixed(2)}` : 'R$ —',
         categoryLabel: 'Viagem',
         sectionBadge,
         bookingStatus: (b as { status?: string }).status,
         created_at: (b as { created_at: string }).created_at,
       };
     });
-    setActivities(items);
+    const shipmentItems: ActivityItem[] = (shipmentsRes.data ?? []).map((s) => {
+      const status = (s as { status?: string }).status?.toLowerCase() ?? '';
+      const sectionBadge: ActivitySectionBadge =
+        status === 'confirmed' || status === 'in_progress' || status === 'delivered' ? 'confirmada' : 'planejada';
+      const dest = (s as { destination_address?: string }).destination_address ?? 'Envio';
+      const origin = (s as { origin_address?: string }).origin_address;
+      return {
+        id: (s as { id: string }).id,
+        type: 'envio',
+        title: dest,
+        originAddress: origin,
+        dateTime: formatBookingDate((s as { created_at: string }).created_at),
+        priceFormatted: (s as { amount_cents?: number }).amount_cents != null ? `R$ ${((s as { amount_cents: number }).amount_cents / 100).toFixed(2)}` : 'R$ —',
+        categoryLabel: 'Envio',
+        sectionBadge,
+        created_at: (s as { created_at: string }).created_at,
+      };
+    });
+    const dependentItems: ActivityItem[] = (dependentShipmentsRes.data ?? []).map((d) => {
+      const status = (d as { status?: string }).status?.toLowerCase() ?? '';
+      const sectionBadge: ActivitySectionBadge =
+        status === 'confirmed' || status === 'in_progress' || status === 'delivered' ? 'confirmada' : 'planejada';
+      const dest = (d as { destination_address?: string }).destination_address ?? 'Envio dependente';
+      const fullName = (d as { full_name?: string }).full_name;
+      const title = fullName ? `Envio para ${fullName}` : dest;
+      const origin = (d as { origin_address?: string }).origin_address;
+      return {
+        id: (d as { id: string }).id,
+        type: 'dependente',
+        title,
+        originAddress: origin,
+        dateTime: formatBookingDate((d as { created_at: string }).created_at),
+        priceFormatted: (d as { amount_cents?: number }).amount_cents != null ? `R$ ${((d as { amount_cents: number }).amount_cents / 100).toFixed(2)}` : 'R$ —',
+        categoryLabel: 'Envio dependente',
+        sectionBadge,
+        created_at: (d as { created_at: string }).created_at,
+      };
+    });
+    const excursionItems: ActivityItem[] = (excursionsRes.data ?? []).map((e) => {
+      const status = (e as { status?: string }).status?.toLowerCase() ?? '';
+      const sectionBadge: ActivitySectionBadge =
+        status === 'contacted' || status === 'quoted' ? 'confirmada' : 'planejada';
+      const dest = (e as { destination?: string }).destination ?? 'Excursão';
+      const excursionDate = (e as { excursion_date?: string }).excursion_date;
+      const createdAt = (e as { created_at: string }).created_at;
+      const dateTime = excursionDate
+        ? (() => {
+            const d = new Date(excursionDate + 'T00:00:00');
+            const day = d.getDate();
+            const months = 'Jan Fev Mar Abr Mai Jun Jul Ago Set Out Nov Dez'.split(' ');
+            const month = months[d.getMonth()];
+            return `${day} ${month}`;
+          })()
+        : formatBookingDate(createdAt);
+      return {
+        id: (e as { id: string }).id,
+        type: 'excursao',
+        title: dest ? `Excursão para ${dest}` : 'Excursão',
+        dateTime,
+        priceFormatted: 'R$ —',
+        categoryLabel: 'Excursão',
+        sectionBadge,
+        created_at: createdAt,
+      };
+    });
+    const combined = [...bookingItems, ...shipmentItems, ...dependentItems, ...excursionItems].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    setActivities(combined);
     setLoading(false);
   }, []);
 
@@ -152,7 +240,9 @@ export function ActivitiesScreen({ navigation }: Props) {
       ? activities
       : filterCategory === 'viagens'
         ? activities.filter((a) => a.type === 'viagem')
-        : activities.filter((a) => a.type === filterCategory);
+        : filterCategory === 'envios'
+          ? activities.filter((a) => a.type === 'envio')
+          : activities.filter((a) => a.type === filterCategory);
     if (filterDateStart) {
       const start = filterDateStart.getTime();
       list = list.filter((a) => new Date(a.created_at).getTime() >= start);
@@ -177,7 +267,14 @@ export function ActivitiesScreen({ navigation }: Props) {
 
   const openFilter = () => setFilterModalVisible(true);
 
-  const displayId = (id: string) => id.length >= 6 ? `VG${id.slice(-6).toUpperCase()}` : id;
+  const displayId = (item: ActivityItem) =>
+    item.type === 'envio'
+      ? (item.id.length >= 6 ? `EN${item.id.slice(-6).toUpperCase()}` : item.id)
+      : item.type === 'dependente'
+        ? (item.id.length >= 6 ? `DP${item.id.slice(-6).toUpperCase()}` : item.id)
+        : item.type === 'excursao'
+          ? (item.id.length >= 6 ? `EX${item.id.slice(-6).toUpperCase()}` : item.id)
+          : (item.id.length >= 6 ? `VG${item.id.slice(-6).toUpperCase()}` : item.id);
 
   const renderActivityCard = (item: ActivityItem) => {
     const iconName =
@@ -196,7 +293,13 @@ export function ActivitiesScreen({ navigation }: Props) {
       <TouchableOpacity
         key={item.id}
         style={styles.activityRow}
-        onPress={() => { if (item.type === 'viagem') navigation.navigate('TripDetail', { bookingId: item.id }); }}
+        onPress={() => {
+          if (item.type === 'viagem') navigation.navigate('TripDetail', { bookingId: item.id });
+          if (item.type === 'envio') navigation.navigate('ShipmentDetail', { shipmentId: item.id });
+          if (item.type === 'dependente') {
+            // Detalhe do envio de dependente pode ser implementado depois
+          }
+        }}
         activeOpacity={0.7}
       >
         <View style={styles.activityIconWrap}>
@@ -204,7 +307,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         </View>
         <View style={styles.activityContent}>
           <View style={styles.activityCardHeader}>
-            <Text style={styles.activityId}>{displayId(item.id)}</Text>
+            <Text style={styles.activityId}>{displayId(item)}</Text>
             <StatusBadge variant={item.sectionBadge} />
           </View>
           <Text style={styles.activityTitle} numberOfLines={1}>{routeLabel}</Text>
@@ -329,6 +432,7 @@ function FilterModal({
     { key: 'viagens', label: 'Viagens' },
     { key: 'envios', label: 'Envios' },
     { key: 'dependente', label: 'Dependente' },
+    { key: 'excursao', label: 'Excursões' },
   ];
   return (
     <View style={styles.modalOverlay}>

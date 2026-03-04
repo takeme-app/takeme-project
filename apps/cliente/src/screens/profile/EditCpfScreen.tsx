@@ -17,6 +17,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { formatCpf, onlyDigits } from '../../utils/formatCpf';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../../utils/errorMessage';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'EditCpf'>;
 
@@ -61,7 +62,7 @@ export function EditCpfScreen({ navigation }: Props) {
       .eq('id', user.id);
     setLoading(false);
     if (error) {
-      showAlert('Erro', error.message);
+      showAlert('Erro', getUserErrorMessage(error, 'Não foi possível atualizar o CPF.'));
       return;
     }
     navigation.goBack();

@@ -59,13 +59,13 @@ Deno.serve(async (req) => {
     const { email, code, password, fullName, phone } = body;
     if (!email || !code || typeof email !== "string" || typeof code !== "string") {
       return new Response(
-        JSON.stringify({ error: "email e code são obrigatórios" }),
+        JSON.stringify({ error: "E-mail e código são obrigatórios" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
     if (!password || typeof password !== "string" || password.length < 6) {
       return new Response(
-        JSON.stringify({ error: "password é obrigatório (mín. 6 caracteres)" }),
+        JSON.stringify({ error: "Senha é obrigatória (mínimo 6 caracteres)" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -127,7 +127,7 @@ Deno.serve(async (req) => {
     });
 
     if (createError) {
-      const msg = createError.message ?? "";
+      const msg = (createError.message ?? "").toLowerCase();
       if (msg.includes("already") || msg.includes("already registered") || msg.includes("already exists")) {
         await sendWelcomeEmail(email, fullName);
         return new Response(
@@ -135,8 +135,14 @@ Deno.serve(async (req) => {
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
+      const userError =
+        msg.includes("already") || msg.includes("registered")
+          ? "Este e-mail já está cadastrado. Faça login ou use outro e-mail."
+          : msg.includes("password") || msg.includes("senha")
+            ? "Senha inválida. Use no mínimo 6 caracteres."
+            : "Erro ao criar conta. Tente novamente.";
       return new Response(
-        JSON.stringify({ error: createError.message ?? "Erro ao criar conta" }),
+        JSON.stringify({ error: userError }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }

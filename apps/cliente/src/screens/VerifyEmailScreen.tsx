@@ -21,6 +21,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+import { getUserErrorMessage } from '../utils/errorMessage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'VerifyEmail'>;
 
@@ -103,10 +104,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
 
       navigation.navigate('AddPaymentPrompt');
     } catch (err: unknown) {
-      const message =
-        err && typeof err === 'object' && 'message' in err
-          ? String((err as { message: unknown }).message)
-          : 'Código inválido ou expirado. Tente novamente.';
+      const message = getUserErrorMessage(err, 'Código inválido ou expirado. Tente novamente.');
       setError(message);
       showAlert('Erro', message);
     } finally {
@@ -127,10 +125,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
       setFocusedIndex(0);
       inputRefs.current[0]?.focus();
     } catch (err: unknown) {
-      const message =
-        err && typeof err === 'object' && 'message' in err
-          ? String((err as { message: unknown }).message)
-          : 'Não foi possível reenviar o código.';
+      const message = getUserErrorMessage(err, 'Não foi possível reenviar o código.');
       setError(message);
       showAlert('Erro', message);
     } finally {

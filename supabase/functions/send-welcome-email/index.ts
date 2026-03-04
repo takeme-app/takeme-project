@@ -14,7 +14,7 @@ Deno.serve(async (req) => {
     const { email, fullName } = (await req.json()) as { email?: string; fullName?: string };
     if (!email || typeof email !== "string") {
       return new Response(
-        JSON.stringify({ error: "email é obrigatório" }),
+        JSON.stringify({ error: "E-mail é obrigatório" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }

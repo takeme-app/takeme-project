@@ -17,6 +17,7 @@ import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../../utils/errorMessage';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'DeleteAccountStep2'>;
 
@@ -46,11 +47,11 @@ export function DeleteAccountStep2Screen({ navigation }: Props) {
     });
     setLoading(false);
     if (error) {
-      showAlert('Erro', error.message ?? 'Não foi possível excluir a conta.');
+      showAlert('Erro', getUserErrorMessage(error, 'Não foi possível excluir a conta.'));
       return;
     }
     if (data?.error) {
-      showAlert('Erro', data.error);
+      showAlert('Erro', getUserErrorMessage({ message: data.error }, 'Não foi possível excluir a conta.'));
       return;
     }
     await supabase.auth.signOut();

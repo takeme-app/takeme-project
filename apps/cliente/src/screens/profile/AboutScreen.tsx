@@ -21,7 +21,7 @@ const CARDS = [
     id: 'privacy',
     title: 'Política de privacidade',
     description: 'Entenda como tratamos e protegemos seus dados.',
-    icon: 'shield-outline' as const,
+    icon: 'security' as const,
     screen: 'PrivacyPolicy' as const,
   },
   {

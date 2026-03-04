@@ -16,7 +16,7 @@ Monorepo do Take Me — app tipo Uber com 5 ambientes: Cliente, Motorista, Prepa
 
 ## Pré-requisitos
 
-- Node.js >= 18
+- Node.js >= 18 (recomendado **Node 20.x** para Expo 54)
 - npm (ou pnpm)
 - [Expo Go](https://expo.dev/go) no celular (para testar os apps mobile)
 
@@ -70,6 +70,46 @@ npm run admin
 ```
 
 Ou entre na pasta do app e rode `npm run start` (ou `npx expo start`).
+
+## Build Android (APK/AAB)
+
+### EAS Build (nuvem)
+
+Sempre rode o EAS a partir da **pasta do app**:
+
+```bash
+cd apps/cliente
+eas build --platform android --profile preview
+```
+
+(Use `production` para AAB na Play Store.) Garanta que o branch/commit que o EAS usa tenha o `apps/cliente/android/settings.gradle` correto (bloco `pluginManagement {` como primeira linha). Após alterações em `android/`, faça commit e push antes de disparar o build.
+
+### Build local (APK no PC)
+
+Requisitos: **Java (JDK)** e **Android SDK** (por exemplo via [Android Studio](https://developer.android.com/studio)).
+
+1. Defina `JAVA_HOME` (ex.: `C:\Program Files\Android\Android Studio\jbr` no Windows).
+2. Crie `apps/cliente/android/local.properties` com o caminho do SDK, por exemplo:
+   `sdk.dir=C\:\\Users\\SEU_USUARIO\\AppData\\Local\\Android\\Sdk`
+3. Na pasta do app cliente:
+
+   ```bash
+   cd apps/cliente
+   npx expo run:android --variant release
+   ```
+
+   Ou pelo Gradle:
+
+   ```bash
+   cd apps/cliente/android
+   ./gradlew assembleRelease
+   ```
+
+   O APK fica em `apps/cliente/android/app/build/outputs/apk/release/app-release.apk`.
+
+### Prebuild
+
+Se rodar `expo prebuild --clean`, a pasta `android/` será regenerada. O template do Expo pode gerar um `settings.gradle` que quebra no Gradle 8.14 (linha antes de `pluginManagement`). Nesse caso, edite `apps/cliente/android/settings.gradle` e mova a linha `def projectRoot = settings.settingsDir.parentFile` para **dentro** do bloco `pluginManagement { }` (como primeira linha do bloco).
 
 ## MCP
 

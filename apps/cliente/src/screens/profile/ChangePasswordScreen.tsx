@@ -17,6 +17,7 @@ import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../../utils/errorMessage';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'ChangePassword'>;
 
@@ -83,10 +84,7 @@ export function ChangePasswordScreen({ navigation }: Props) {
         onClose: () => navigation.goBack(),
       });
     } catch (e: unknown) {
-      const message =
-        e && typeof e === 'object' && 'message' in e
-          ? String((e as { message: string }).message)
-          : 'Não foi possível alterar a senha. Tente novamente.';
+      const message = getUserErrorMessage(e, 'Não foi possível alterar a senha. Tente novamente.');
       showAlert('Erro', message);
     } finally {
       setLoading(false);

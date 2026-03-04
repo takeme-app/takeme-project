@@ -16,6 +16,7 @@ import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../../utils/errorMessage';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'EditEmail'>;
 
@@ -50,7 +51,7 @@ export function EditEmailScreen({ navigation }: Props) {
     const { error } = await supabase.auth.updateUser({ email: trimmed });
     setLoading(false);
     if (error) {
-      showAlert('Erro', error.message);
+      showAlert('Erro', getUserErrorMessage(error, 'Não foi possível atualizar o e-mail.'));
       return;
     }
     navigation.goBack();

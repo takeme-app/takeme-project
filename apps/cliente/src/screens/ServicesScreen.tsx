@@ -24,7 +24,7 @@ const SERVICES = [
 type ServicesScreenProps = BottomTabScreenProps<MainTabParamList, 'Services'>;
 
 export function ServicesScreen({ navigation }: ServicesScreenProps) {
-  const { navigateToTripStack } = useRootNavigation();
+  const { navigateToTripStack, navigateToShipmentStack, navigateToDependentShipmentStack, navigateToExcursionStack } = useRootNavigation();
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -47,10 +47,10 @@ export function ServicesScreen({ navigation }: ServicesScreenProps) {
                   key={service.id}
                   style={styles.serviceCard}
                   activeOpacity={0.8}
-                  onPress={() =>
-                    service.id === 'viagens' &&
-                    navigateToTripStack('SearchTrip', { immediateTrip: false })
-                  }
+                  onPress={() => {
+                    if (service.id === 'viagens') navigateToTripStack('SearchTrip', { immediateTrip: false });
+                    if (service.id === 'envios') navigateToShipmentStack('SelectShipmentAddress');
+                  }}
                 >
                   <View style={styles.serviceIconWrap}>
                     <Image source={service.image} style={styles.serviceImage} resizeMode="contain" />
@@ -65,6 +65,10 @@ export function ServicesScreen({ navigation }: ServicesScreenProps) {
                   key={service.id}
                   style={styles.serviceCard}
                   activeOpacity={0.8}
+                  onPress={() => {
+                    if (service.id === 'dependentes') navigateToDependentShipmentStack('DependentShipmentForm');
+                    if (service.id === 'excursões') navigateToExcursionStack('ExcursionRequestForm');
+                  }}
                 >
                   <View style={styles.serviceIconWrap}>
                     <Image source={service.image} style={styles.serviceImage} resizeMode="contain" />

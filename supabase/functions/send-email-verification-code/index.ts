@@ -22,7 +22,7 @@ Deno.serve(async (req) => {
     if (!email || typeof email !== "string") {
       console.error("[send-email-verification-code] email ausente ou inválido", { body });
       return new Response(
-        JSON.stringify({ error: "email é obrigatório" }),
+        JSON.stringify({ error: "E-mail é obrigatório" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }

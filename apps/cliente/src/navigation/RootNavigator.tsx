@@ -20,11 +20,18 @@ import { TermsOfUseScreen } from '../screens/TermsOfUseScreen';
 import { PrivacyPolicyScreen } from '../screens/PrivacyPolicyScreen';
 import { MainTabs } from './MainTabs';
 import { TripStack } from './TripStack';
+import { ShipmentStack } from './ShipmentStack';
+import { DependentShipmentStack } from './DependentShipmentStack';
+import { ExcursionStack } from './ExcursionStack';
 import type { RootStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-export function RootNavigator() {
+type RootNavigatorProps = {
+  initialRouteName: 'Welcome' | 'Main';
+};
+
+export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
   const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
 
   return (
@@ -32,13 +39,22 @@ export function RootNavigator() {
       <AuthRecoveryHandler navigationRef={navigationRef} />
       <RootNavigationProvider navigationRef={navigationRef}>
       <Stack.Navigator
+        initialRouteName={initialRouteName}
         screenOptions={{
           headerShown: false,
           animation: 'slide_from_right',
         }}
       >
-        <Stack.Screen name="Splash" component={SplashScreen} />
-        <Stack.Screen name="Welcome" component={WelcomeScreen} />
+        <Stack.Screen
+          name="Splash"
+          component={SplashScreen}
+          options={{ animation: 'fade' }}
+        />
+        <Stack.Screen
+          name="Welcome"
+          component={WelcomeScreen}
+          options={{ animation: 'fade' }}
+        />
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="SignUp" component={SignUpScreen} />
         <Stack.Screen name="VerifyEmail" component={VerifyEmailScreen} />
@@ -49,8 +65,15 @@ export function RootNavigator() {
           name="CardRegisteredSuccess"
           component={CardRegisteredSuccessScreen}
         />
-        <Stack.Screen name="Main" component={MainTabs} />
+        <Stack.Screen
+          name="Main"
+          component={MainTabs}
+          options={{ animation: 'fade' }}
+        />
         <Stack.Screen name="TripStack" component={TripStack} />
+        <Stack.Screen name="ShipmentStack" component={ShipmentStack} />
+        <Stack.Screen name="DependentShipmentStack" component={DependentShipmentStack} />
+        <Stack.Screen name="ExcursionStack" component={ExcursionStack} />
         <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
         <Stack.Screen
           name="ForgotPasswordEmailSent"

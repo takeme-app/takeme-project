@@ -12,6 +12,7 @@ import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { getLastRecoveryEmail } from '../lib/lastRecoveryEmail';
 import { useAppAlert } from '../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../utils/errorMessage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPasswordEmailSent'>;
 
@@ -46,10 +47,7 @@ export function ForgotPasswordEmailSentScreen({ navigation, route }: Props) {
       if (error) throw error;
       setCountdown(RESEND_COOLDOWN_SEC);
     } catch (e: unknown) {
-      const message =
-        e && typeof e === 'object' && 'message' in e
-          ? String((e as { message: string }).message)
-          : 'Não foi possível reenviar o e-mail. Tente novamente.';
+      const message = getUserErrorMessage(e, 'Não foi possível reenviar o e-mail. Tente novamente.');
       showAlert('Erro', message);
     } finally {
       setResendLoading(false);

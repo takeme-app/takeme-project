@@ -48,7 +48,7 @@ Deno.serve(async (req) => {
     if (deleteError) {
       console.error("delete-account error:", deleteError);
       return new Response(
-        JSON.stringify({ error: deleteError.message ?? "Erro ao excluir conta" }),
+        JSON.stringify({ error: "Não foi possível excluir a conta. Tente novamente." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
