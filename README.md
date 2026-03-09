@@ -5,6 +5,10 @@ Monorepo do Take Me — app tipo Uber com 5 ambientes: Cliente, Motorista, Prepa
 - **Repositório:** [github.com/FraktalSoftwares/take_me](https://github.com/FraktalSoftwares/take_me)
 - **Supabase (projeto):** [Dashboard](https://supabase.com/dashboard/project/xdxzxyzdgwpucwuaxvik) — ID do projeto: `xdxzxyzdgwpucwuaxvik`
 
+## Para novos desenvolvedores
+
+Se você está entrando no projeto, leia o [relatório de situação atual](docs/ESTADO_DO_PROJETO.md) para visão geral, stack, configuração local e estado do Supabase.
+
 ## Estrutura
 
 - **apps/cliente** — Ambiente Cliente (Expo, mobile)

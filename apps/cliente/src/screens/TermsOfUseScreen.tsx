@@ -6,7 +6,7 @@ import type { ProfileStackParamList } from '../navigation/ProfileStackTypes';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'TermsOfUse'>;
 
-const TERMS = `TERMOS DE USO — TAKE-ME
+export const TERMS = `TERMOS DE USO — TAKE-ME
 
 Versão: 1
 Data de vigência: [01/01/2026]

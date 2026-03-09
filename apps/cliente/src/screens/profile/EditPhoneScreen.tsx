@@ -38,6 +38,7 @@ function formatPhone(value: string): string {
 export function EditPhoneScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
   const [phone, setPhone] = useState('');
+  const [currentPhoneDigits, setCurrentPhoneDigits] = useState('');
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
 
@@ -49,13 +50,23 @@ export function EditPhoneScreen({ navigation }: Props) {
         return;
       }
       const { data } = await supabase.from('profiles').select('phone').eq('id', user.id).single();
-      setPhone(formatPhone((data?.phone ?? '').trim()));
+      const raw = (data?.phone ?? '').trim().replace(/\D/g, '') || '';
+      setCurrentPhoneDigits(raw);
+      setPhone(formatPhone(raw));
       setInitialLoading(false);
     })();
   }, []);
 
   const handleUpdate = async () => {
     const phoneDigits = phone.replace(/\D/g, '').trim() || null;
+    if (!phoneDigits) {
+      showAlert('Erro', 'Informe um telefone válido.');
+      return;
+    }
+    if (phoneDigits === currentPhoneDigits) {
+      showAlert('Atenção', 'O telefone informado é o mesmo da sua conta. Não é necessário atualizar.');
+      return;
+    }
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -68,11 +79,12 @@ export function EditPhoneScreen({ navigation }: Props) {
       .eq('id', user.id);
     setLoading(false);
     if (error) {
-      const isDuplicate = error.code === '23505' || String(error.message).toLowerCase().includes('unique');
-      showAlert(
-        'Erro',
-        isDuplicate ? 'Este telefone já está em uso em outra conta. Use outro número.' : getUserErrorMessage(error, 'Não foi possível atualizar o telefone.')
-      );
+      const isDuplicate = error.code === '23505' || /unique|already exists|duplicate|já.*uso/i.test(String(error.message ?? ''));
+      if (isDuplicate) {
+        showAlert('Atenção', 'Este telefone já está cadastrado em outra conta. Use outro número.');
+      } else {
+        showAlert('Erro', getUserErrorMessage(error, 'Não foi possível atualizar o telefone.'));
+      }
       return;
     }
     navigation.goBack();

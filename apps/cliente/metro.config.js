@@ -1,5 +1,6 @@
 const { getDefaultConfig } = require('expo/metro-config');
 const path = require('path');
+const fs = require('fs');
 
 const projectRoot = __dirname;
 const monorepoRoot = path.resolve(projectRoot, '../..');
@@ -13,5 +14,27 @@ config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),
   path.resolve(monorepoRoot, 'node_modules'),
 ];
+
+// Corrige resolução de ./picker no @react-native-community/datetimepicker (só existe picker.android.js / picker.ios.js)
+const originalResolveRequest = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  const origin = context.originModulePath || '';
+  const normalizedOrigin = origin.replace(/\\/g, '/');
+  if (
+    normalizedOrigin.includes('@react-native-community/datetimepicker') &&
+    (moduleName === './picker' || moduleName.endsWith('/picker'))
+  ) {
+    const ext = platform === 'ios' ? '.ios.js' : '.android.js';
+    const dir = path.dirname(origin);
+    const candidate = path.join(dir, 'picker' + ext);
+    if (fs.existsSync(candidate)) {
+      return { type: 'sourceFile', filePath: candidate };
+    }
+  }
+  if (originalResolveRequest) {
+    return originalResolveRequest(context, moduleName, platform);
+  }
+  return context.resolveRequest(context, moduleName, platform);
+};
 
 module.exports = config;

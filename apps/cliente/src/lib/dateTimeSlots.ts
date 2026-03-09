@@ -80,4 +80,20 @@ export function getAvailableTimeSlots(
   return allSlots.filter((s) => s.startMinutes > currentMinutes);
 }
 
+/**
+ * Retorna um label curto para exibição (ex.: "Hoje", "Amanhã", "Seg, 15 Out").
+ */
+export function formatDateDisplayLabel(isoDate: string): string {
+  const d = new Date(isoDate + 'T12:00:00');
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dNorm = new Date(d);
+  dNorm.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  if (dNorm.getTime() === today.getTime()) return 'Hoje';
+  if (dNorm.getTime() === tomorrow.getTime()) return 'Amanhã';
+  return `${WEEKDAY_SHORT[d.getDay()]}, ${String(d.getDate()).padStart(2, '0')} ${MONTH_SHORT[d.getMonth()]}`;
+}
+
 export { isSameDay, toISODate };

@@ -94,10 +94,43 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
     setError(null);
     setLoading(true);
     try {
-      const { error: fnError } = await supabase.functions.invoke('verify-email-code', {
+      const { data: fnData, error: fnError } = await supabase.functions.invoke('verify-email-code', {
         body: { email, code, password, fullName, phone },
       });
-      if (fnError) throw fnError;
+
+      if (fnError) {
+        const err = fnError as unknown as {
+          message?: string;
+          context?: { json?: () => Promise<unknown>; body?: unknown };
+        };
+        let bodyError: string | null = null;
+        if (err?.context && typeof (err.context as { json?: () => Promise<unknown> }).json === 'function') {
+          try {
+            const body = await (err.context as { json: () => Promise<Record<string, unknown>> }).json();
+            if (body && typeof body === 'object' && body !== null && 'error' in body) {
+              bodyError = String((body as { error: unknown }).error);
+            }
+          } catch (_) {
+            /* ignorar falha ao parsear */
+          }
+        }
+        if (!bodyError && err?.context?.body && typeof err.context.body === 'object' && err.context.body !== null && 'error' in (err.context.body as object)) {
+          bodyError = String((err.context.body as { error: unknown }).error);
+        }
+        const message = bodyError ?? getUserErrorMessage(fnError, 'Código inválido ou expirado. Tente novamente.');
+        setError(message);
+        showAlert('Código incorreto', message);
+        setLoading(false);
+        return;
+      }
+
+      if (fnData?.error) {
+        const message = String(fnData.error);
+        setError(message);
+        showAlert('Código incorreto', message);
+        setLoading(false);
+        return;
+      }
 
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
       if (signInError) throw signInError;
@@ -106,7 +139,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
     } catch (err: unknown) {
       const message = getUserErrorMessage(err, 'Código inválido ou expirado. Tente novamente.');
       setError(message);
-      showAlert('Erro', message);
+      showAlert('Código incorreto', message);
     } finally {
       setLoading(false);
     }

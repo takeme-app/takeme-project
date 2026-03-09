@@ -10,7 +10,7 @@ type Props = NativeStackScreenProps<ProfileStackParamList, 'DependentSuccess'>;
 
 /** Detecta se esta tela está dentro do DependentShipmentStack (fluxo Envio de dependentes). */
 function isInDependentShipmentStack(navigation: Props['navigation']): boolean {
-  const state = navigation.getParent()?.getState() as { routeNames?: string[] } | undefined;
+  const state = navigation.getState() as { routeNames?: string[] } | undefined;
   return state?.routeNames?.includes('DependentShipmentForm') ?? false;
 }
 
@@ -39,7 +39,7 @@ export function DependentSuccessScreen({ navigation }: Props) {
 
   const goToProfileStart = () => {
     if (inDependentShipmentFlow) {
-      navigation.getParent()?.dispatch(CommonActions.popToTop());
+      navigation.dispatch(CommonActions.popToTop());
       return;
     }
     navigation.dispatch(

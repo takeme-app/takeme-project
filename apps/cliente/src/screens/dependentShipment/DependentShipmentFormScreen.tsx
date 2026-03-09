@@ -112,7 +112,9 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
         <TouchableOpacity style={styles.navbarButton} onPress={() => navigation.getParent()?.goBack()} activeOpacity={0.7}>
           <MaterialIcons name="arrow-back" size={24} color={COLORS.black} />
         </TouchableOpacity>
-        <Text style={styles.navbarTitle} numberOfLines={1}>Envio de dependentes</Text>
+        <View style={styles.navbarTitleWrap} pointerEvents="box-none">
+          <Text style={styles.navbarTitle} numberOfLines={1}>Envio de dependentes</Text>
+        </View>
       </View>
       <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
@@ -124,9 +126,9 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
           <Text style={styles.sectionTitle}>Confirme os detalhes do envio para seu dependente</Text>
 
           <Text style={styles.label}>Nome completo</Text>
-          <View style={styles.nameRow}>
+          <View style={styles.nameInputWrap}>
             <TextInput
-              style={[styles.input, styles.nameInput]}
+              style={styles.nameInput}
               value={fullName}
               onChangeText={setFullName}
               placeholder="Nome do dependente"
@@ -163,26 +165,34 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
             keyboardType="phone-pad"
           />
 
-          <Text style={styles.label}>Bagagens</Text>
-          <View style={styles.stepperRow}>
-            <TouchableOpacity
-              style={[styles.stepperBtn, bagsCount <= 0 && styles.stepperBtnDisabled]}
-              onPress={() => setBagsCount((c) => Math.max(0, c - 1))}
-              disabled={bagsCount <= 0}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons name="remove" size={24} color={bagsCount <= 0 ? COLORS.neutral700 : COLORS.black} />
-            </TouchableOpacity>
-            <Text style={styles.stepperValue}>{bagsCount} {bagsCount === 1 ? 'mala' : 'malas'}</Text>
-            <TouchableOpacity
-              style={styles.stepperBtn}
-              onPress={() => setBagsCount((c) => c + 1)}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons name="add" size={24} color={COLORS.black} />
-            </TouchableOpacity>
+          <View style={styles.separator}>
+            <View style={styles.separatorLine} />
           </View>
-          <Text style={styles.stepperHint}>Inclua quantas malas o dependente levará</Text>
+          <Text style={styles.bagagensLabel}>Bagagens</Text>
+          <View style={styles.stepperWrap}>
+            <View style={styles.stepperRow}>
+              <TouchableOpacity
+                style={[styles.stepperBtn, bagsCount <= 0 && styles.stepperBtnDisabled]}
+                onPress={() => setBagsCount((c) => Math.max(0, c - 1))}
+                disabled={bagsCount <= 0}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="remove" size={24} color={bagsCount <= 0 ? COLORS.neutral700 : COLORS.black} />
+              </TouchableOpacity>
+              <Text style={styles.stepperValue}>{bagsCount} {bagsCount === 1 ? 'mala' : 'malas'}</Text>
+              <TouchableOpacity
+                style={styles.stepperBtn}
+                onPress={() => setBagsCount((c) => c + 1)}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="add" size={24} color={COLORS.black} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.stepperHint}>Inclua quantas malas o dependente levará</Text>
+          </View>
+          <View style={styles.separator}>
+            <View style={styles.separatorLine} />
+          </View>
 
           <View style={styles.optionalRow}>
             <Text style={styles.label}>Instruções para o entregador</Text>
@@ -215,6 +225,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
   },
+  navbarTitleWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   navbarButton: {
     width: 48,
     height: 48,
@@ -223,16 +240,36 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  navbarTitle: { flex: 1, fontSize: 14, fontWeight: '700', color: COLORS.black, textAlign: 'center' },
+  navbarTitle: { fontSize: 14, fontWeight: '700', color: COLORS.black },
   keyboard: { flex: 1 },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 24, paddingTop: 8, paddingBottom: 48 },
-  sectionTitle: { fontSize: 16, fontWeight: '600', color: COLORS.black, marginBottom: 20 },
+  scrollContent: { paddingHorizontal: 24, paddingTop: 40, paddingBottom: 48 },
+  separator: { paddingVertical: 40, marginHorizontal: -24 },
+  separatorLine: { height: 1, backgroundColor: '#E2E2E2', width: '100%' },
+  sectionTitle: { fontSize: 24, fontWeight: '600', color: COLORS.black, marginBottom: 20 },
   label: { fontSize: 15, fontWeight: '500', color: COLORS.black, marginBottom: 8 },
+  bagagensLabel: { fontSize: 24, fontWeight: '600', color: COLORS.black, textAlign: 'center', marginBottom: 48 },
   optionalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   optional: { fontSize: 13, color: COLORS.neutral700 },
-  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
-  nameInput: { flex: 1 },
+  nameInputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.neutral300,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  nameInput: {
+    flex: 1,
+    paddingVertical: 0,
+    paddingLeft: 0,
+    paddingRight: 12,
+    marginBottom: 0,
+    fontSize: 16,
+    color: COLORS.black,
+    backgroundColor: 'transparent',
+  },
   input: {
     backgroundColor: COLORS.neutral300,
     borderRadius: 12,
@@ -243,8 +280,14 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   textArea: { minHeight: 80, textAlignVertical: 'top' },
-  linkButton: { paddingVertical: 8 },
-  linkText: { fontSize: 15, color: COLORS.black, fontWeight: '600', textDecorationLine: 'underline' },
+  linkButton: { paddingVertical: 4, paddingLeft: 8 },
+  linkText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#0D0D0D',
+    lineHeight: 18,
+    textDecorationLine: 'underline',
+  },
   dependentsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
   chip: {
     paddingVertical: 8,
@@ -255,18 +298,30 @@ const styles = StyleSheet.create({
   chipSelected: { backgroundColor: COLORS.black },
   chipText: { fontSize: 14, color: COLORS.black },
   chipTextSelected: { color: '#FFF' },
-  stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 4 },
+  stepperWrap: { marginBottom: 20 },
+  stepperRow: {
+    flexDirection: 'row',
+    width: 358,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
   stepperBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: COLORS.neutral300,
     alignItems: 'center',
     justifyContent: 'center',
   },
   stepperBtnDisabled: { opacity: 0.5 },
-  stepperValue: { fontSize: 16, fontWeight: '600', color: COLORS.black, minWidth: 80, textAlign: 'center' },
-  stepperHint: { fontSize: 13, color: COLORS.neutral700, marginBottom: 20 },
+  stepperValue: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#0D0D0D',
+    textAlign: 'center',
+  },
+  stepperHint: { fontSize: 13, color: COLORS.neutral700, textAlign: 'center' },
   primaryButton: {
     backgroundColor: COLORS.black,
     paddingVertical: 16,

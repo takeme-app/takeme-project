@@ -2,14 +2,17 @@ apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
-def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
+// Raiz do app JS (package.json, index.ts). rootDir aqui é android/ (onde está settings.gradle)
+def projectRootFile = rootDir.getAbsoluteFile().getParentFile()
+def projectRoot = projectRootFile.getAbsolutePath()
 
 /**
  * This is the configuration block to customize your React Native Android app.
  * By default you don't need to apply any configuration, just uncomment the lines you need.
  */
 react {
-    entryFile = file(["node", "-e", "require('expo/scripts/resolveAppEntry')", projectRoot, "android", "absolute"].execute(null, rootDir).text.trim())
+    // Entry fixo para monorepo (resolveAppEntry pode retornar vazio no Windows)
+    entryFile = file("${projectRoot}/index.ts")
     reactNativeDir = new File(["node", "--print", "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
     hermesCommand = new File(["node", "--print", "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim()).getParentFile().getAbsolutePath() + "/sdks/hermesc/%OS-BIN%/hermesc"
     codegenDir = new File(["node", "--print", "require.resolve('@react-native/codegen/package.json', { paths: [require.resolve('react-native/package.json')] })"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
@@ -21,8 +24,8 @@ react {
     bundleCommand = "export:embed"
 
     /* Folders */
-     //   The root of your project, i.e. where "package.json" lives. Default is '../..'
-    // root = file("../../")
+    // Raiz do app (package.json) para o bundle rodar com Metro no diretório correto (monorepo)
+    root = projectRootFile
     //   The folder where the react-native NPM package is. Default is ../../node_modules/react-native
     // reactNativeDir = file("../../node_modules/react-native")
     //   The folder where the react-native Codegen package is. Default is ../../node_modules/@react-native/codegen
@@ -96,12 +99,15 @@ packagingOptions {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace 'com.takeme.cliente'
+    // versionCode/versionName vindos do script de release (-PversionCode, -PversionName) ou padrão
+    def versionCodeProp = findProperty('versionCode')?.toString()?.toInteger() ?: 1
+    def versionNameProp = findProperty('versionName') ?: "1.0.0"
     defaultConfig {
         applicationId 'com.takeme.cliente'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0.0"
+        versionCode versionCodeProp
+        versionName versionNameProp
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -133,6 +139,14 @@ packagingOptions {
         jniLibs {
             def enableLegacyPackaging = findProperty('expo.useLegacyPackaging') ?: 'false'
             useLegacyPackaging enableLegacyPackaging.toBoolean()
+        }
+    }
+    // Nome do APK release: take-me-cliente-{versionName}.apk (script build-release-apk.js)
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            if (variant.buildType.name == 'release') {
+                output.outputFileName = "take-me-cliente-${variant.versionName}.apk"
+            }
         }
     }
     androidResources {

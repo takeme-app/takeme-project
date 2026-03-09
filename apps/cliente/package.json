@@ -1,13 +1,15 @@
 {
   "name": "cliente",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "main": "index.ts",
   "scripts": {
     "prestart": "node -e \"const fs=require('fs'),path=require('path');const r=path.resolve(__dirname,'../../.env');const d=path.resolve(__dirname,'.env');if(fs.existsSync(r))fs.copyFileSync(r,d);\"",
     "start": "expo start --port 8085",
+    "start:8081": "expo start --port 8081",
     "android": "node scripts/run-android.js",
     "android:run": "node scripts/run-android-dev.js",
+    "android:reverse": "node scripts/adb-reverse.js",
     "android:release": "node scripts/build-release-apk.js",
     "ios": "expo run:ios",
     "web": "expo start --web",
@@ -16,6 +18,7 @@
   "dependencies": {
     "@expo-google-fonts/inter": "^0.4.2",
     "@react-native-async-storage/async-storage": "^2.1.2",
+    "@react-native-community/datetimepicker": "8.4.4",
     "@react-navigation/bottom-tabs": "^7.14.0",
     "@react-navigation/native": "^7.0.0",
     "@react-navigation/native-stack": "^7.0.0",
