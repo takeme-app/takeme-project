@@ -10,6 +10,7 @@ const SUPABASE_PT: Array<{ pattern: RegExp | string; message: string }> = [
   [/unable to validate email|invalid email/i, 'E-mail inválido. Verifique e tente novamente.'],
   [/token has expired|expired/i, 'Link ou código expirado. Solicite um novo.'],
   [/network request failed|failed to fetch|network error/i, 'Sem conexão. Verifique a internet e tente novamente.'],
+  [/rate limit|rate_limit|too many requests|429|email.*hour|password reset.*period/i, 'Aguarde alguns minutos para solicitar um novo e-mail de recuperação.'],
   [/session.*expired|refresh token/i, 'Sessão expirada. Faça login novamente.'],
   [/duplicate key|unique constraint|23505/i, 'Este dado já está em uso. Use outro valor.'],
   [/foreign key|violates foreign key/i, 'Não foi possível concluir. Verifique os dados.'],

@@ -71,7 +71,7 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
   const [recreationTeam, setRecreationTeam] = useState(false);
   const [childrenTeam, setChildrenTeam] = useState(false);
   const [specialNeedsTeam, setSpecialNeedsTeam] = useState(false);
-  const [recreationItems, setRecreationItems] = useState<RecreationItem[]>([]);
+  const [recreationItems, setRecreationItems] = useState<RecreationItem[]>([{ itemType: '', quantity: '' }]);
   const [dropdownIndex, setDropdownIndex] = useState<number | null>(null);
   const [observations, setObservations] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -115,19 +115,20 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
       showAlert('Erro', 'Sessão expirada.');
       return;
     }
+    const recreationItemsPayload = recreationItems
+      .filter((r) => r.itemType.trim())
+      .map((r) => ({ itemType: r.itemType.trim(), quantity: (r.quantity || '').trim() }));
     const payload = {
       user_id: user.id,
       destination: dest,
       excursion_date: toISODate(excursionDate),
       people_count: peopleCount,
       fleet_type: fleetType,
-      first_aid_team: firstAidTeam,
-      recreation_team: recreationTeam,
-      children_team: childrenTeam,
-      special_needs_team: specialNeedsTeam,
-      recreation_items: recreationItems
-        .filter((r) => r.itemType.trim())
-        .map((r) => ({ itemType: r.itemType.trim(), quantity: r.quantity.trim() || '' })),
+      first_aid_team: Boolean(firstAidTeam),
+      recreation_team: Boolean(recreationTeam),
+      children_team: Boolean(childrenTeam),
+      special_needs_team: Boolean(specialNeedsTeam),
+      recreation_items: recreationItemsPayload,
       observations: observations.trim() || null,
       status: 'pending',
     };
@@ -138,7 +139,8 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
       .single();
     setSubmitting(false);
     if (error) {
-      showAlert('Erro', 'Não foi possível enviar a solicitação. Tente novamente.');
+      const message = error.message || 'Não foi possível enviar a solicitação. Tente novamente.';
+      showAlert('Erro', message);
       return;
     }
     navigation.replace('ExcursionSuccess', { requestId: row?.id });
@@ -168,6 +170,7 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
           <MaterialIcons name="arrow-back" size={24} color={COLORS.black} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Excursões</Text>
+        <View style={styles.headerSpacer} />
       </View>
       <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
@@ -198,22 +201,29 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
             <MaterialIcons name="keyboard-arrow-down" size={24} color={COLORS.black} />
           </TouchableOpacity>
 
-          <Text style={styles.label}>Número de pessoas</Text>
-          <View style={styles.stepperRow}>
-            <TouchableOpacity
-              style={[styles.stepperBtn, peopleCount <= 1 && styles.stepperBtnDisabled]}
-              onPress={() => setPeopleCount((c) => Math.max(1, c - 1))}
-              disabled={peopleCount <= 1}
-            >
-              <MaterialIcons name="remove" size={24} color={peopleCount <= 1 ? COLORS.neutral700 : COLORS.black} />
-            </TouchableOpacity>
-            <Text style={styles.stepperValue}>{peopleCount} {peopleCount === 1 ? 'pessoa' : 'pessoas'}</Text>
-            <TouchableOpacity style={styles.stepperBtn} onPress={() => setPeopleCount((c) => c + 1)}>
-              <MaterialIcons name="add" size={24} color={COLORS.black} />
-            </TouchableOpacity>
+          <View style={styles.separator}>
+            <View style={styles.separatorLine} />
           </View>
-          <Text style={styles.stepperHint}>Adicione quem vai viajar com você</Text>
+          <View style={styles.stepperWrap}>
+            <View style={styles.stepperRow}>
+              <TouchableOpacity
+                style={[styles.stepperBtn, peopleCount <= 1 && styles.stepperBtnDisabled]}
+                onPress={() => setPeopleCount((c) => Math.max(1, c - 1))}
+                disabled={peopleCount <= 1}
+              >
+                <MaterialIcons name="remove" size={24} color={peopleCount <= 1 ? COLORS.neutral700 : COLORS.black} />
+              </TouchableOpacity>
+              <Text style={styles.stepperValue}>{peopleCount} {peopleCount === 1 ? 'pessoa' : 'pessoas'}</Text>
+              <TouchableOpacity style={styles.stepperBtn} onPress={() => setPeopleCount((c) => c + 1)}>
+                <MaterialIcons name="add" size={24} color={COLORS.black} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.stepperHint}>Adicione quem vai viajar com você</Text>
+          </View>
 
+          <View style={styles.separator}>
+            <View style={styles.separatorLine} />
+          </View>
           <Text style={styles.label}>Selecione o tipo de frota</Text>
           <View style={styles.fleetGrid}>
             {FLEET_OPTIONS.map((opt) => (
@@ -247,9 +257,18 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
             <Text style={styles.checkLabel}>Equipe para pessoas com necessidades especiais</Text>
           </TouchableOpacity>
 
+          <View style={styles.separator}>
+            <View style={styles.separatorLine} />
+          </View>
           <Text style={styles.sectionLabel}>Itens de Recreação</Text>
           {recreationItems.map((item, index) => (
-            <View key={index} style={styles.recreationRow}>
+            <View key={index} style={styles.recreationCard}>
+              <View style={styles.recreationCardHeader}>
+                <Text style={styles.recreationCardTitle}>Objeto de recreação (opcional)</Text>
+                <TouchableOpacity onPress={() => removeRecreationItem(index)} hitSlop={8} style={styles.recreationCardRemove}>
+                  <MaterialIcons name="close" size={22} color={COLORS.neutral700} />
+                </TouchableOpacity>
+              </View>
               <TouchableOpacity
                 style={styles.dropdownTouch}
                 onPress={() => setDropdownIndex(dropdownIndex === index ? null : index)}
@@ -259,17 +278,15 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
                 </Text>
                 <MaterialIcons name="keyboard-arrow-down" size={20} color={COLORS.black} />
               </TouchableOpacity>
+              <Text style={styles.quantityLabel}>Quantidade (opcional)</Text>
               <TextInput
                 style={[styles.input, styles.quantityInput]}
                 value={item.quantity}
                 onChangeText={(v) => updateRecreationItem(index, 'quantity', v)}
-                placeholder="Qtd"
+                placeholder="Insira a quantidade"
                 placeholderTextColor={COLORS.neutral700}
                 keyboardType="number-pad"
               />
-              <TouchableOpacity onPress={() => removeRecreationItem(index)} hitSlop={8}>
-                <MaterialIcons name="close" size={24} color={COLORS.neutral700} />
-              </TouchableOpacity>
             </View>
           ))}
           <TouchableOpacity style={styles.addRecreationBtn} onPress={addRecreationItem}>
@@ -277,6 +294,9 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
             <Text style={styles.addRecreationText}>Adicionar novo objeto</Text>
           </TouchableOpacity>
 
+          <View style={styles.separator}>
+            <View style={styles.separatorLine} />
+          </View>
           <View style={styles.optionalRow}>
             <Text style={styles.label}>Detalhes adicionais</Text>
             <Text style={styles.optional}>(Opcional)</Text>
@@ -289,7 +309,6 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
             placeholder="Inclua detalhes adicionais sobre a excursão."
             placeholderTextColor={COLORS.neutral700}
             multiline
-            numberOfLines={3}
           />
 
           <TouchableOpacity
@@ -347,11 +366,12 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8 },
   backBtn: { width: 48, height: 48, borderRadius: 24, backgroundColor: COLORS.neutral300, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: COLORS.black },
+  headerTitle: { flex: 1, fontSize: 18, fontWeight: '700', color: COLORS.black, textAlign: 'center' },
+  headerSpacer: { width: 48 },
   keyboard: { flex: 1 },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingBottom: 48 },
-  title: { fontSize: 20, fontWeight: '700', color: COLORS.black, marginBottom: 8 },
+  title: { fontSize: 20, fontWeight: '700', color: COLORS.black, marginTop: 40, marginBottom: 8 },
   subtitle: { fontSize: 14, color: COLORS.neutral700, marginBottom: 24 },
   label: { fontSize: 15, fontWeight: '500', color: COLORS.black, marginBottom: 8 },
   labelSecondary: { fontSize: 14, color: COLORS.neutral700, marginBottom: 8 },
@@ -366,7 +386,7 @@ const styles = StyleSheet.create({
     color: COLORS.black,
     marginBottom: 20,
   },
-  textArea: { minHeight: 80, textAlignVertical: 'top' },
+  textArea: { height: 156, textAlignVertical: 'top', paddingTop: 14 },
   dateTouch: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -379,11 +399,27 @@ const styles = StyleSheet.create({
   },
   dateText: { fontSize: 16, color: COLORS.black },
   datePlaceholder: { color: COLORS.neutral700 },
-  stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 4 },
-  stepperBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: COLORS.neutral300, alignItems: 'center', justifyContent: 'center' },
+  separator: { paddingVertical: 40, marginHorizontal: -24 },
+  separatorLine: { height: 1, backgroundColor: '#E2E2E2', width: '100%' },
+  stepperWrap: { marginBottom: 20 },
+  stepperRow: {
+    flexDirection: 'row',
+    width: 358,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  stepperBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: COLORS.neutral300,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   stepperBtnDisabled: { opacity: 0.5 },
-  stepperValue: { fontSize: 16, fontWeight: '600', color: COLORS.black, minWidth: 100, textAlign: 'center' },
-  stepperHint: { fontSize: 13, color: COLORS.neutral700, marginBottom: 20 },
+  stepperValue: { fontSize: 32, fontWeight: '700', color: COLORS.black, textAlign: 'center' },
+  stepperHint: { fontSize: 13, color: COLORS.neutral700, textAlign: 'center' },
   fleetGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 24 },
   fleetCard: {
     width: '47%',
@@ -400,20 +436,29 @@ const styles = StyleSheet.create({
   sectionLabel: { fontSize: 15, fontWeight: '600', color: COLORS.black, marginBottom: 12 },
   checkRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   checkLabel: { fontSize: 15, color: COLORS.black, marginLeft: 12 },
-  recreationRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+  recreationCard: {
+    backgroundColor: COLORS.neutral300,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  recreationCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  recreationCardTitle: { fontSize: 14, fontWeight: '500', color: COLORS.black },
+  recreationCardRemove: { padding: 4 },
   dropdownTouch: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: COLORS.neutral300,
+    backgroundColor: COLORS.background,
     borderRadius: 12,
-    paddingVertical: 12,
+    paddingVertical: 14,
     paddingHorizontal: 16,
+    marginBottom: 12,
   },
-  dropdownText: { fontSize: 15, color: COLORS.black },
+  dropdownText: { fontSize: 16, color: COLORS.black },
   placeholder: { color: COLORS.neutral700 },
-  quantityInput: { width: 60, marginBottom: 0 },
+  quantityLabel: { fontSize: 14, fontWeight: '500', color: COLORS.black, marginBottom: 8 },
+  quantityInput: { marginBottom: 0, backgroundColor: COLORS.background },
   addRecreationBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 24 },
   addRecreationText: { fontSize: 15, fontWeight: '600', color: COLORS.black },
   submitBtn: {

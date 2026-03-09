@@ -151,9 +151,9 @@ export function SearchTripScreen({ navigation, route }: Props) {
   const [planWhenModalVisible, setPlanWhenModalVisible] = useState(false);
   const [tripCallout, setTripCallout] = useState<ScheduledTripItem | null>(null);
 
-  /** Lista filtrada por origem/destino; Take Me primeiro na ordem. */
+  /** Lista filtrada por origem/destino; Take Me primeiro na ordem. Só exibe viagens quando há rota definida. */
   const scheduledTrips = useMemo(() => {
-    if (!origin?.latitude || !destination?.latitude) return [...allScheduledTrips].sort((a, b) => (a.badge === 'Take Me' ? 0 : 1) - (b.badge === 'Take Me' ? 0 : 1));
+    if (!origin?.latitude || !destination?.latitude) return [];
     const oLat = origin.latitude;
     const oLng = origin.longitude;
     const dLat = destination.latitude;

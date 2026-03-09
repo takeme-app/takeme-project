@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { View, TouchableOpacity, StyleSheet, ScrollView, Modal, Pressable, Animated, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
@@ -13,7 +14,7 @@ import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
 import { addRecentDestination } from '../../lib/recentDestinations';
 import { supabase } from '../../lib/supabase';
 import { getUserErrorMessage } from '../../utils/errorMessage';
-import { getDateCarouselOptions, ALL_TIME_SLOTS, getAvailableTimeSlots, toISODate } from '../../lib/dateTimeSlots';
+import { ALL_TIME_SLOTS, getAvailableTimeSlots, toISODate, formatDateDisplayLabel } from '../../lib/dateTimeSlots';
 import type { ScheduledTripItem } from './SearchTripScreen';
 
 function getInitials(name: string): string {
@@ -99,6 +100,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
   const [timeSheetVisible, setTimeSheetVisible] = useState(false);
   const [selectedDay, setSelectedDay] = useState<string>(() => toISODate(new Date()));
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const timeSheetOverlayOpacity = useRef(new Animated.Value(0)).current;
   const timeSheetTranslateY = useRef(new Animated.Value(TIME_SHEET_SLIDE)).current;
 
@@ -515,26 +517,39 @@ export function PlanRideScreen({ navigation, route }: Props) {
           <Animated.View style={[styles.timeSheetContent, { transform: [{ translateY: timeSheetTranslateY }] }]} pointerEvents="box-none">
             <View style={styles.timeSheetHandle} />
             <Text style={styles.timeSheetTitle}>Escolha a hora</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.timeDayScroll}>
-              {getDateCarouselOptions().map((day) => (
-                <TouchableOpacity
-                  key={day.id}
-                  style={[styles.timeDayTab, selectedDay === day.id && styles.timeDayTabSelected]}
-                  onPress={() => {
-                    setSelectedDay(day.id);
-                    setSelectedSlot(null);
+            <TouchableOpacity
+              style={styles.dateInput}
+              onPress={() => setShowDatePicker(true)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.dateInputText}>{formatDateDisplayLabel(selectedDay)}</Text>
+              <MaterialIcons name="event" size={22} color={COLORS.neutral700} />
+            </TouchableOpacity>
+            {showDatePicker && (
+              <>
+                <DateTimePicker
+                  value={new Date(selectedDay + 'T12:00:00')}
+                  mode="date"
+                  display={Platform.OS === 'android' ? 'default' : 'spinner'}
+                  minimumDate={new Date()}
+                  onChange={(_, date) => {
+                    if (date) {
+                      setSelectedDay(toISODate(date));
+                      setSelectedSlot(null);
+                    }
+                    if (Platform.OS === 'android') {
+                      setShowDatePicker(false);
+                    }
                   }}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.timeDayTabLabelTop, selectedDay === day.id && styles.timeDayTabTextSelected]}>
-                    {day.dayLabel}
-                  </Text>
-                  <Text style={[styles.timeDayTabLabelBottom, selectedDay === day.id && styles.timeDayTabTextSelected]}>
-                    {day.dateLabel}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+                  locale="pt-BR"
+                />
+                {Platform.OS === 'ios' && (
+                  <TouchableOpacity style={styles.datePickerDoneButton} onPress={() => setShowDatePicker(false)} activeOpacity={0.8}>
+                    <Text style={styles.datePickerDoneText}>Concluído</Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
             <ScrollView style={styles.timeSlotsScroll} contentContainerStyle={styles.timeSlotsContent}>
               {getAvailableTimeSlots(selectedDay, ALL_TIME_SLOTS).map((slot) => (
                 <TouchableOpacity
@@ -750,6 +765,27 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 20,
   },
+  dateInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: COLORS.neutral400,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 16,
+  },
+  dateInputText: { fontSize: 16, color: COLORS.black, fontWeight: '500' },
+  datePickerDoneButton: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: COLORS.black,
+    borderRadius: 10,
+  },
+  datePickerDoneText: { fontSize: 15, fontWeight: '600', color: '#fff' },
   timeDayScroll: { marginBottom: 24, maxHeight: 64 },
   timeDayTab: {
     paddingHorizontal: 14,

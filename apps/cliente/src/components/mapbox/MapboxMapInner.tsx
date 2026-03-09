@@ -39,7 +39,7 @@ const MapboxMapInner = forwardRef<MapboxMapRef, MapboxMapInnerProps>(function Ma
   useImperativeHandle(ref, () => ({ animateToRegion }), [animateToRegion]);
 
   return (
-    <MapView style={style ?? { flex: 1 }} scrollEnabled={scrollEnabled}>
+    <MapView style={style ?? { flex: 1 }} scrollEnabled={scrollEnabled} scaleBarEnabled={false}>
       <Camera
         ref={cameraRef}
         defaultSettings={{

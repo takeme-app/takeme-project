@@ -1,11 +1,35 @@
-import { View, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { useState } from 'react';
+import { View, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useAppAlert } from '../../contexts/AppAlertContext';
+import { supabase } from '../../lib/supabase';
+import { getUserErrorMessage } from '../../utils/errorMessage';
+
+/** Em respostas não-2xx o body vem em error.context (Response); retorna objeto parseado ou null. */
+async function parseErrorBody(error: unknown): Promise<Record<string, unknown> | null> {
+  const ctx = error != null && typeof error === 'object' && 'context' in error
+    ? (error as { context?: Response }).context
+    : undefined;
+  if (!ctx || typeof (ctx as Response).json !== 'function') return null;
+  try {
+    const body = await (ctx as Response).json();
+    return body != null && typeof body === 'object' ? (body as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeGetUserErrorMessage(error: unknown, fallback: string): string {
+  try {
+    return getUserErrorMessage(error, fallback);
+  } catch {
+    return fallback;
+  }
+}
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'About'>;
 
@@ -55,16 +79,57 @@ const CARDS = [
 ];
 
 export function AboutScreen({ navigation }: Props) {
-  const { showAlert } = useAppAlert();
-  const handleCardPress = (item: (typeof CARDS)[number]) => {
+  const [exportLoading, setExportLoading] = useState(false);
+
+  const handleCardPress = async (item: (typeof CARDS)[number]) => {
     if ('screen' in item && item.screen) {
       navigation.navigate(item.screen);
-    } else if (item.action === 'requestDataExport') {
-      showAlert(
-        'Solicitar cópia dos dados',
-        'Sua solicitação será processada e você receberá um e-mail com o link para download dos seus dados.'
-      );
-      // TODO: chamar Edge Function request-data-export quando implementada
+      return;
+    }
+    if (item.action === 'requestDataExport') {
+      setExportLoading(true);
+      // Alert nativo garante que o usuário sempre veja o feedback (modal do contexto às vezes não aparece)
+      const showFeedback = (title: string, message: string) => {
+        Alert.alert(title, message);
+      };
+      const fallbackMsg = 'Não foi possível solicitar a cópia. Tente novamente.';
+      try {
+        const { error: refreshError } = await supabase.auth.refreshSession();
+        if (refreshError) {
+          showFeedback('Erro', 'Sessão expirada. Faça login novamente.');
+          return;
+        }
+        const { data, error } = await supabase.functions.invoke('request-data-export');
+        // Em respostas não-2xx o Supabase coloca data = null; o body vem em error.context (Response)
+        let body: Record<string, unknown> | null = data != null && typeof data === 'object' ? (data as Record<string, unknown>) : null;
+        if (body == null && error) body = await parseErrorBody(error).catch(() => null);
+        if (body?.error === 'rate_limited' && typeof body.message === 'string') {
+          showFeedback('Solicitar cópia dos dados', body.message);
+          return;
+        }
+        if (error) {
+          // Preferir mensagem do body (retornada pela Edge Function) em vez da genérica do cliente
+          const serverMsg =
+            (typeof body?.message === 'string' && body.message) ||
+            (typeof body?.error === 'string' && body.error) ||
+            safeGetUserErrorMessage(error, fallbackMsg);
+          showFeedback('Erro', serverMsg);
+          return;
+        }
+        if (body?.error && typeof body.error === 'string') {
+          showFeedback('Erro', body.error);
+          return;
+        }
+        showFeedback(
+          'Solicitar cópia dos dados',
+          'Enviaremos por e-mail em breve. Verifique sua caixa de entrada (e spam).'
+        );
+      } catch (e) {
+        const msg = safeGetUserErrorMessage(e, fallbackMsg);
+        showFeedback('Erro', msg);
+      } finally {
+        setExportLoading(false);
+      }
     }
   };
 
@@ -82,23 +147,32 @@ export function AboutScreen({ navigation }: Props) {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {CARDS.map((item) => (
-          <TouchableOpacity
-            key={item.id}
-            style={styles.card}
-            onPress={() => handleCardPress(item)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.cardIconWrap}>
-              <MaterialIcons name={item.icon} size={24} color={COLORS.black} />
-            </View>
-            <View style={styles.cardText}>
-              <Text style={styles.cardTitle}>{item.title}</Text>
-              <Text style={styles.cardDescription}>{item.description}</Text>
-            </View>
-            <MaterialIcons name="chevron-right" size={24} color={COLORS.neutral700} />
-          </TouchableOpacity>
-        ))}
+        {CARDS.map((item) => {
+          const isExportCard = 'action' in item && item.action === 'requestDataExport';
+          const isLoading = isExportCard && exportLoading;
+          return (
+            <TouchableOpacity
+              key={item.id}
+              style={styles.card}
+              onPress={() => handleCardPress(item)}
+              activeOpacity={0.7}
+              disabled={isLoading}
+            >
+              <View style={styles.cardIconWrap}>
+                <MaterialIcons name={item.icon} size={24} color={COLORS.black} />
+              </View>
+              <View style={styles.cardText}>
+                <Text style={styles.cardTitle}>{item.title}</Text>
+                <Text style={styles.cardDescription}>{item.description}</Text>
+              </View>
+              {isLoading ? (
+                <ActivityIndicator size="small" color={COLORS.neutral700} />
+              ) : (
+                <MaterialIcons name="chevron-right" size={24} color={COLORS.neutral700} />
+              )}
+            </TouchableOpacity>
+          );
+        })}
       </ScrollView>
     </SafeAreaView>
   );

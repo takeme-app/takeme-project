@@ -28,8 +28,9 @@ if (fs.existsSync(lockPath)) {
   }
 }
 
-// Só gera o APK (sem iniciar Metro nem instalar no device)
+// Só gera o APK debug (sem iniciar Metro nem instalar no device). Porta 8085 = mesma do npm start.
 const androidDir = path.join(appDir, 'android');
+const buildEnv = { ...process.env, REACT_NATIVE_PACKAGER_PORT: process.env.REACT_NATIVE_PACKAGER_PORT || '8085' };
 const result = spawnSync(
   path.join(androidDir, 'gradlew.bat'),
   ['app:assembleDebug', '-x', 'lint', '-x', 'test'],
@@ -37,12 +38,13 @@ const result = spawnSync(
     stdio: 'inherit',
     shell: true,
     cwd: androidDir,
-    env: process.env,
+    env: buildEnv,
   }
 );
 
 if (result.status === 0) {
-  console.log('\nAPK gerado: android\\app\\build\\outputs\\apk\\debug\\app-debug.apk');
-  console.log('Instale manualmente no celular (copie o arquivo ou use adb install).');
+  const apkPath = path.join(androidDir, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk');
+  console.log('\nAPK gerado:', apkPath);
+  console.log('Instalar no device USB: adb install -r "' + apkPath + '"');
 }
 process.exit(result.status ?? 1);

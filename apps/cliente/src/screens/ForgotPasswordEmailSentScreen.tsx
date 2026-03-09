@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -10,7 +10,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { getLastRecoveryEmail } from '../lib/lastRecoveryEmail';
+import { getLastRecoveryEmail, setLastRecoveryEmail, loadLastRecoveryEmail } from '../lib/lastRecoveryEmail';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
 
@@ -19,10 +19,25 @@ type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPasswordEmailSent
 const RESEND_COOLDOWN_SEC = 60;
 
 export function ForgotPasswordEmailSentScreen({ navigation, route }: Props) {
-  const email = (route.params?.email ?? getLastRecoveryEmail()).trim();
   const { showAlert } = useAppAlert();
+  const [email, setEmail] = useState(() => (route.params?.email ?? getLastRecoveryEmail()).trim());
   const [countdown, setCountdown] = useState(RESEND_COOLDOWN_SEC);
   const [resendLoading, setResendLoading] = useState(false);
+
+  // Persistir params ao montar e carregar e-mail do storage se estiver vazio
+  useEffect(() => {
+    const fromParams = route.params?.email?.trim();
+    if (fromParams) {
+      setLastRecoveryEmail(fromParams);
+      setEmail(fromParams);
+      return;
+    }
+    if (!email) {
+      loadLastRecoveryEmail().then((stored) => {
+        if (stored) setEmail(stored);
+      });
+    }
+  }, [route.params?.email]);
 
   useEffect(() => {
     if (countdown <= 0) return;
@@ -32,27 +47,35 @@ export function ForgotPasswordEmailSentScreen({ navigation, route }: Props) {
 
   const canResend = countdown <= 0 && !resendLoading;
 
-  const handleResend = async () => {
-    if (!email.trim() || !isSupabaseConfigured) {
-      if (!email.trim()) showAlert('Atenção', 'E-mail não disponível para reenvio.');
+  const handleResend = useCallback(async () => {
+    if (!canResend) return;
+    const emailToUse = email.trim() || getLastRecoveryEmail().trim();
+    if (!emailToUse) {
+      showAlert('Atenção', 'E-mail não disponível para reenvio.');
+      return;
+    }
+    if (!isSupabaseConfigured) {
+      showAlert('Configuração', 'Serviço de recuperação não configurado.');
       return;
     }
     setResendLoading(true);
     try {
       const scheme = process.env.EXPO_PUBLIC_APP_SCHEME ?? 'take-me-cliente';
       const redirectTo = `${scheme}://reset-password`;
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      const { error } = await supabase.auth.resetPasswordForEmail(emailToUse, {
         redirectTo,
       });
       if (error) throw error;
+      setLastRecoveryEmail(emailToUse);
       setCountdown(RESEND_COOLDOWN_SEC);
+      showAlert('E-mail reenviado', 'Um novo link de recuperação foi enviado para seu e-mail.');
     } catch (e: unknown) {
       const message = getUserErrorMessage(e, 'Não foi possível reenviar o e-mail. Tente novamente.');
       showAlert('Erro', message);
     } finally {
       setResendLoading(false);
     }
-  };
+  }, [canResend, email, showAlert]);
 
   return (
     <View style={styles.container}>
@@ -79,7 +102,6 @@ export function ForgotPasswordEmailSentScreen({ navigation, route }: Props) {
         <TouchableOpacity
           style={[styles.resendButton, !canResend && styles.resendButtonDisabled]}
           onPress={handleResend}
-          disabled={!canResend}
           activeOpacity={0.8}
         >
           {resendLoading ? (

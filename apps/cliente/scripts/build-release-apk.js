@@ -58,12 +58,18 @@ if (!skipBump) {
 console.log(`Versão: ${newVersion} (versionCode ${versionCode})${skipBump ? ' (sem bump)' : ''}\n`);
 
 console.log('Building release APK...\n');
+// Força o Metro/Expo a usar apps/cliente como raiz no monorepo (evita "Unable to resolve module ./index.ts from C:\dev\take_me")
+const buildEnv = {
+  ...process.env,
+  EXPO_PROJECT_ROOT: appDir,
+  EXPO_NO_METRO_WORKSPACE_ROOT: '1',
+};
 const result = spawnSync(
   gradlew,
   ['app:assembleRelease', '-x', 'lint', '-x', 'test', `-PversionName=${newVersion}`, `-PversionCode=${versionCode}`],
   {
     cwd: androidDir,
-    env: process.env,
+    env: buildEnv,
     stdio: 'inherit',
     shell: true,
   }

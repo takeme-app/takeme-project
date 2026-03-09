@@ -30,15 +30,30 @@ const COLORS = {
 export function EditEmailScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
   const [email, setEmail] = useState('');
+  const [currentEmail, setCurrentEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      setEmail(user?.email ?? '');
+      const userEmail = user?.email ?? '';
+      setEmail(userEmail);
+      setCurrentEmail(userEmail);
       setInitialLoading(false);
     })();
+  }, []);
+
+  // Atualiza o e-mail exibido quando a sessão muda (ex.: confirmação pelo link abre o app)
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const userEmail = session?.user?.email ?? '';
+      if (userEmail) {
+        setEmail(userEmail);
+        setCurrentEmail(userEmail);
+      }
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
   const handleUpdate = async () => {
@@ -47,11 +62,27 @@ export function EditEmailScreen({ navigation }: Props) {
       showAlert('Erro', 'Informe um e-mail válido.');
       return;
     }
+    if (trimmed.toLowerCase() === currentEmail.toLowerCase()) {
+      showAlert('Atenção', 'O e-mail informado é o mesmo da sua conta. Não é necessário atualizar.');
+      return;
+    }
     setLoading(true);
-    const { error } = await supabase.auth.updateUser({ email: trimmed });
+    const scheme = process.env.EXPO_PUBLIC_APP_SCHEME ?? 'take-me-cliente';
+    const emailRedirectTo = `${scheme}://auth/confirm`;
+    const { error } = await supabase.auth.updateUser(
+      { email: trimmed },
+      { emailRedirectTo }
+    );
     setLoading(false);
     if (error) {
-      showAlert('Erro', getUserErrorMessage(error, 'Não foi possível atualizar o e-mail.'));
+      const msg = getUserErrorMessage(error, 'Não foi possível atualizar o e-mail.');
+      const isEmailAlreadyUsed =
+        /already exists|already registered|user already registered|duplicate|23505|unique/i.test(String(error?.message ?? ''));
+      if (isEmailAlreadyUsed) {
+        showAlert('Atenção', 'Este e-mail já está cadastrado. Use outro e-mail.');
+      } else {
+        showAlert('Erro', msg);
+      }
       return;
     }
     navigation.goBack();

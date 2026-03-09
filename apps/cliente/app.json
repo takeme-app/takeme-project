@@ -71,7 +71,8 @@
           "merchantIdentifier": "merchant.com.takeme.cliente"
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "@react-native-community/datetimepicker"
     ],
     "runtimeVersion": "1.0.0",
     "updates": {

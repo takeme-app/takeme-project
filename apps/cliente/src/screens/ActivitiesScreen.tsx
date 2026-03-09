@@ -26,6 +26,8 @@ export type ActivityItem = {
   sectionBadge: ActivitySectionBadge;
   bookingStatus?: string;
   created_at: string;
+  /** Label do badge para excursões (Em análise, Agendado, Concluída, etc.) */
+  excursionStatusLabel?: string;
 };
 
 const COLORS = {
@@ -131,7 +133,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         .limit(50),
       supabase
         .from('excursion_requests')
-        .select('id, destination, excursion_date, status, created_at')
+        .select('id, destination, excursion_date, status, total_amount_cents, created_at')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
         .limit(50),
@@ -195,11 +197,19 @@ export function ActivitiesScreen({ navigation }: Props) {
     });
     const excursionItems: ActivityItem[] = (excursionsRes.data ?? []).map((e) => {
       const status = (e as { status?: string }).status?.toLowerCase() ?? '';
-      const sectionBadge: ActivitySectionBadge =
-        status === 'contacted' || status === 'quoted' ? 'confirmada' : 'planejada';
+      const isConfirmed = ['quoted', 'contacted', 'approved', 'scheduled', 'in_progress', 'completed'].includes(status);
+      const sectionBadge: ActivitySectionBadge = isConfirmed ? 'confirmada' : 'planejada';
+      const excursionStatusLabel =
+        status === 'completed' ? 'Concluída'
+        : status === 'cancelled' ? 'Cancelada'
+        : status === 'in_progress' ? 'Em andamento'
+        : ['scheduled', 'approved'].includes(status) ? 'Agendado'
+        : ['quoted', 'in_analysis', 'pending', 'contacted'].includes(status) ? 'Em análise'
+        : 'Planejada';
       const dest = (e as { destination?: string }).destination ?? 'Excursão';
       const excursionDate = (e as { excursion_date?: string }).excursion_date;
       const createdAt = (e as { created_at: string }).created_at;
+      const totalCents = (e as { total_amount_cents?: number | null }).total_amount_cents;
       const dateTime = excursionDate
         ? (() => {
             const d = new Date(excursionDate + 'T00:00:00');
@@ -209,14 +219,18 @@ export function ActivitiesScreen({ navigation }: Props) {
             return `${day} ${month}`;
           })()
         : formatBookingDate(createdAt);
+      const priceFormatted = totalCents != null && totalCents > 0
+        ? `R$ ${(totalCents / 100).toFixed(2).replace('.', ',')}`
+        : 'R$ —';
       return {
         id: (e as { id: string }).id,
         type: 'excursao',
         title: dest ? `Excursão para ${dest}` : 'Excursão',
         dateTime,
-        priceFormatted: 'R$ —',
+        priceFormatted,
         categoryLabel: 'Excursão',
         sectionBadge,
+        excursionStatusLabel,
         created_at: createdAt,
       };
     });
@@ -296,9 +310,8 @@ export function ActivitiesScreen({ navigation }: Props) {
         onPress={() => {
           if (item.type === 'viagem') navigation.navigate('TripDetail', { bookingId: item.id });
           if (item.type === 'envio') navigation.navigate('ShipmentDetail', { shipmentId: item.id });
-          if (item.type === 'dependente') {
-            // Detalhe do envio de dependente pode ser implementado depois
-          }
+          if (item.type === 'excursao') navigation.navigate('ExcursionDetail', { excursionRequestId: item.id });
+          if (item.type === 'dependente') navigation.navigate('DependentShipmentDetail', { dependentShipmentId: item.id });
         }}
         activeOpacity={0.7}
       >
@@ -308,7 +321,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         <View style={styles.activityContent}>
           <View style={styles.activityCardHeader}>
             <Text style={styles.activityId}>{displayId(item)}</Text>
-            <StatusBadge variant={item.sectionBadge} />
+            <StatusBadge variant={item.sectionBadge} label={item.type === 'excursao' ? item.excursionStatusLabel : undefined} />
           </View>
           <Text style={styles.activityTitle} numberOfLines={1}>{routeLabel}</Text>
           <Text style={styles.activityDateTime}>{item.dateTime}</Text>

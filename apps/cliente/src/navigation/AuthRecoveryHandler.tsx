@@ -70,7 +70,7 @@ async function handleRecoveryUrl(
   navigationRef: React.RefObject<NavigationContainerRef<RootStackParamList> | null>
 ): Promise<boolean> {
   const { access_token, refresh_token, type } = parseAuthParamsFromUrl(url);
-  const hasTokens = type === 'recovery' && access_token;
+  const hasTokens = Boolean(access_token);
 
   if (hasTokens) {
     try {
@@ -79,6 +79,11 @@ async function handleRecoveryUrl(
     } catch {
       return false;
     }
+  }
+
+  // Só redireciona para troca de senha quando o link for de recovery; confirmação de e-mail só atualiza a sessão
+  if (type !== 'recovery') {
+    return hasTokens;
   }
 
   await waitForNavigatorReady(navigationRef);

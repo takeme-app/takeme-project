@@ -7,6 +7,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useAppAlert } from '../contexts/AppAlertContext';
@@ -49,19 +51,59 @@ export function LoginScreen({ navigation }: Props) {
       const isEmail = input.includes('@');
 
       if (isEmail) {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: input,
-          password,
-        });
-        if (error) throw error;
+        let authData: { session?: unknown } | null = null;
+        let authError: unknown = null;
+        try {
+          const result = await supabase.auth.signInWithPassword({
+            email: input,
+            password,
+          });
+          authData = result?.data ?? null;
+          authError = result?.error ?? null;
+        } catch (e) {
+          authError = e;
+        }
+        const hasSession = authData?.session != null;
+        if (authError || !hasSession) {
+          Keyboard.dismiss();
+          setLoading(false);
+          showAlert('Erro no login', 'E-mail ou senha incorretos. Tente novamente.');
+          return;
+        }
       } else {
         const phoneDigits = input.replace(/\D/g, '');
         const { data, error: fnError } = await supabase.functions.invoke('login-with-phone', {
           body: { phone: phoneDigits, password },
         });
-        if (fnError) throw fnError;
+        if (fnError) {
+          const err = fnError as unknown as {
+            context?: { json?: () => Promise<unknown>; body?: unknown };
+          };
+          let bodyError: string | null = null;
+          if (err?.context && typeof (err.context as { json?: () => Promise<unknown> }).json === 'function') {
+            try {
+              const body = await (err.context as { json: () => Promise<Record<string, unknown>> }).json();
+              if (body && typeof body === 'object' && body !== null && 'error' in body) {
+                bodyError = String((body as { error: unknown }).error);
+              }
+            } catch (_) {}
+          }
+          if (!bodyError && err?.context?.body && typeof err.context.body === 'object' && err.context.body !== null && 'error' in (err.context.body as object)) {
+            bodyError = String((err.context.body as { error: unknown }).error);
+          }
+          const msg = bodyError ?? getUserErrorMessage(fnError, 'Telefone ou senha incorretos. Tente novamente.');
+          Keyboard.dismiss();
+          setLoading(false);
+          showAlert('Erro no login', msg);
+          return;
+        }
         const errMsg = data?.error;
-        if (errMsg) throw new Error(errMsg);
+        if (errMsg) {
+          Keyboard.dismiss();
+          setLoading(false);
+          showAlert('Erro no login', String(errMsg));
+          return;
+        }
         if (!data?.session) throw new Error('Resposta inválida.');
         await supabase.auth.setSession(data.session);
       }
@@ -76,6 +118,7 @@ export function LoginScreen({ navigation }: Props) {
       const msg = isNetworkError
         ? 'Sem conexão com a internet ou servidor temporariamente indisponível. Verifique sua rede e tente novamente.'
         : getUserErrorMessage(e, 'Não foi possível entrar. Verifique e-mail/senha ou telefone/senha.');
+      Keyboard.dismiss();
       showAlert(isNetworkError ? 'Erro de conexão' : 'Erro no login', msg);
     } finally {
       setLoading(false);
@@ -90,21 +133,23 @@ export function LoginScreen({ navigation }: Props) {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <StatusBar style="dark" />
-      <TouchableOpacity
-        style={styles.backButton}
-        onPress={() => navigation.goBack()}
-        activeOpacity={0.7}
-        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <Text style={styles.backArrow}>←</Text>
-      </TouchableOpacity>
+        <View style={styles.containerInner}>
+          <StatusBar style="dark" />
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Text style={styles.backArrow}>←</Text>
+          </TouchableOpacity>
 
-      <Text style={styles.title}>Digite seu número de telefone ou email</Text>
+          <Text style={styles.title}>Digite seu número de telefone ou email</Text>
 
       <TextInput
         style={styles.input}
@@ -181,7 +226,10 @@ export function LoginScreen({ navigation }: Props) {
         <Ionicons name="logo-apple" size={22} color="#000000" style={styles.socialIconImage} />
         <Text style={styles.socialButtonText}>Continuar com Apple</Text>
       </TouchableOpacity>
-    </KeyboardAvoidingView>
+        </View>
+
+      </KeyboardAvoidingView>
+    </TouchableWithoutFeedback>
   );
 }
 
@@ -189,6 +237,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FFFFFF',
+  },
+  containerInner: {
+    flex: 1,
     paddingHorizontal: 24,
     paddingTop: 60,
   },

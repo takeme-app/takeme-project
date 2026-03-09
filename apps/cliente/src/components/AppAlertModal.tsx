@@ -24,7 +24,13 @@ export function AppAlertModal({
   buttonLabel = 'OK',
 }: AppAlertModalProps) {
   return (
-    <Modal visible={visible} transparent animationType="fade">
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      presentationStyle="overFullScreen"
+    >
       <View style={styles.overlay}>
         <View style={styles.box}>
           <Text style={styles.title}>{title}</Text>

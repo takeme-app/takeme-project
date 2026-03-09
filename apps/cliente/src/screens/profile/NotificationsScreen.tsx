@@ -15,6 +15,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
+import { ConfigureNotificationsContent } from './ConfigureNotificationsContent';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'Notifications'>;
 
@@ -99,14 +100,7 @@ export function NotificationsScreen({ navigation }: Props) {
         </TouchableOpacity>
       </View>
       {activeTab === 'config' ? (
-        <TouchableOpacity
-          style={styles.configHint}
-          onPress={() => navigation.navigate('ConfigureNotifications')}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.configHintText}>Abrir configurações de notificações</Text>
-          <MaterialIcons name="chevron-right" size={24} color={COLORS.neutral700} />
-        </TouchableOpacity>
+        <ConfigureNotificationsContent />
       ) : loading ? (
         <ActivityIndicator size="large" color={COLORS.black} style={styles.loader} />
       ) : notifications.length === 0 ? (
@@ -169,17 +163,6 @@ const styles = StyleSheet.create({
   loader: { marginTop: 24 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 48 },
   emptyText: { fontSize: 15, color: COLORS.neutral700, marginTop: 12 },
-  configHint: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: COLORS.neutral300,
-    marginHorizontal: 24,
-    paddingVertical: 16,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-  },
-  configHintText: { fontSize: 15, color: COLORS.black, fontWeight: '500' },
   notifRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 16 },
   unreadDot: {
     width: 8,
