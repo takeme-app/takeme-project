@@ -75,6 +75,17 @@ npm run admin
 
 Ou entre na pasta do app e rode `npm run start` (ou `npx expo start`).
 
+## Deploy Admin (Vercel)
+
+O admin é exportado com `expo export --platform web` e o build é configurado pelo `vercel.json` na raiz (Root Directory = `apps/admin`, install na raiz do repo, output = `dist`).
+
+**Variáveis de ambiente na Vercel:** em Project Settings → Environment Variables, defina (para o build inliner do Expo):
+
+- `EXPO_PUBLIC_SUPABASE_URL` — URL do projeto Supabase
+- `EXPO_PUBLIC_SUPABASE_ANON_KEY` — anon key do Supabase
+
+Sem essas variáveis no deploy, o app pode abrir em tela branca ou falhar ao carregar a sessão.
+
 ## Build Android (APK/AAB)
 
 ### EAS Build (nuvem)
