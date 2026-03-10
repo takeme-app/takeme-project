@@ -110,7 +110,7 @@ export function LoginScreen({ onForgotPassword, onLoginSuccess }: Props) {
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <StatusBar style="light" />
+        {Platform.OS !== 'web' && <StatusBar style="light" />}
         <View style={styles.card}>
           <Image source={logoSource} style={styles.logo} resizeMode="contain" />
           <Text style={styles.title}>Digite seu número de telefone ou email</Text>

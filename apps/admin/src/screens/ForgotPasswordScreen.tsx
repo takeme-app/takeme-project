@@ -55,7 +55,7 @@ export function ForgotPasswordScreen({ onBack, onEmailSent }: Props) {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <StatusBar style="light" />
+      {Platform.OS !== 'web' && <StatusBar style="light" />}
       <View style={styles.card}>
         <TouchableOpacity style={styles.backButton} onPress={onBack} disabled={loading}>
           <Text style={styles.backArrow}>←</Text>
