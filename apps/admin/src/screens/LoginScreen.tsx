@@ -18,6 +18,8 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 const logoSource = require('../../assets/logo.png');
 
+const isWeb = Platform.OS === 'web';
+
 type Props = {
   onForgotPassword: () => void;
   onLoginSuccess: () => void;
@@ -104,20 +106,29 @@ export function LoginScreen({ onForgotPassword, onLoginSuccess }: Props) {
     }
   };
 
+  const Wrapper = isWeb ? View : TouchableWithoutFeedback;
+  const wrapperProps = isWeb
+    ? { style: styles.containerOuter }
+    : { onPress: Keyboard.dismiss, accessible: false };
+
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+    <Wrapper {...wrapperProps}>
       <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        {Platform.OS !== 'web' && <StatusBar style="light" />}
+        {!isWeb && <StatusBar style="light" />}
         <View style={styles.card}>
-          <Image source={logoSource} style={styles.logo} resizeMode="contain" />
+          {isWeb ? (
+            <View style={[styles.logo, styles.logoPlaceholder]} />
+          ) : (
+            <Image source={logoSource} style={styles.logo} resizeMode="contain" />
+          )}
           <Text style={styles.title}>Digite seu número de telefone ou email</Text>
 
           <Text style={styles.label}>Telefone ou email</Text>
           <TextInput
-            style={[styles.input, emailError ? styles.inputError : null]}
+            style={StyleSheet.flatten([styles.input, emailError ? styles.inputError : null])}
             placeholder="Telefone ou email"
             placeholderTextColor="#9CA3AF"
             value={phoneOrEmail}
@@ -134,11 +145,11 @@ export function LoginScreen({ onForgotPassword, onLoginSuccess }: Props) {
           <Text style={styles.label}>Senha de acesso</Text>
           <View style={styles.passwordRow}>
             <TextInput
-              style={[
+              style={StyleSheet.flatten([
                 styles.input,
                 styles.inputPassword,
                 passwordError ? styles.inputError : null,
-              ]}
+              ])}
               placeholder="Senha de acesso"
               placeholderTextColor="#9CA3AF"
               value={password}
@@ -154,11 +165,15 @@ export function LoginScreen({ onForgotPassword, onLoginSuccess }: Props) {
               onPress={() => setHidePassword((v) => !v)}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
-              <MaterialIcons
-                name={hidePassword ? 'visibility' : 'visibility-off'}
-                size={22}
-                color="#6B7280"
-              />
+              {isWeb ? (
+                <Text style={styles.eyeLabel}>{hidePassword ? 'Ver' : 'Ocultar'}</Text>
+              ) : (
+                <MaterialIcons
+                  name={hidePassword ? 'visibility' : 'visibility-off'}
+                  size={22}
+                  color="#6B7280"
+                />
+              )}
             </TouchableOpacity>
           </View>
           {passwordError ? <Text style={styles.errorText}>{passwordError}</Text> : null}
@@ -168,7 +183,7 @@ export function LoginScreen({ onForgotPassword, onLoginSuccess }: Props) {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.continueButton, loading && styles.continueButtonDisabled]}
+            style={StyleSheet.flatten([styles.continueButton, loading && styles.continueButtonDisabled])}
             activeOpacity={0.8}
             onPress={handleLogin}
             disabled={loading}
@@ -181,11 +196,14 @@ export function LoginScreen({ onForgotPassword, onLoginSuccess }: Props) {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
-    </TouchableWithoutFeedback>
+    </Wrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  containerOuter: {
+    flex: 1,
+  },
   container: {
     flex: 1,
     backgroundColor: '#1F1F1F',
@@ -205,6 +223,9 @@ const styles = StyleSheet.create({
     height: 64,
     marginBottom: 24,
     alignSelf: 'center',
+  },
+  logoPlaceholder: {
+    backgroundColor: '#F3F4F6',
   },
   title: {
     fontSize: 18,
@@ -246,6 +267,11 @@ const styles = StyleSheet.create({
     bottom: 0,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  eyeLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+    fontWeight: '500',
   },
   errorText: {
     fontSize: 12,
