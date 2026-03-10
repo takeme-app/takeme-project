@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { supabase } from './src/lib/supabase';
 import { LoginScreen } from './src/screens/LoginScreen';
@@ -37,7 +37,7 @@ function AppContent() {
   if (!initialized) {
     return (
       <View style={styles.loadingContainer}>
-        <StatusBar style="light" />
+        {Platform.OS !== 'web' && <StatusBar style="light" />}
         <Text style={styles.loadingText}>Carregando…</Text>
       </View>
     );
@@ -55,7 +55,7 @@ function AppContent() {
   if (screen === 'home') {
     return (
       <View style={styles.container}>
-        <StatusBar style="dark" />
+        {Platform.OS !== 'web' && <StatusBar style="dark" />}
         <Text style={styles.welcomeText}>Bem-vindo ao Admin</Text>
       </View>
     );
