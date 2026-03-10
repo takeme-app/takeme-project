@@ -1,5 +1,6 @@
 {
-  "buildCommand": "cd apps/admin && npx expo export --platform web",
-  "outputDirectory": "apps/admin/dist",
+  "installCommand": "cd ../.. && npm install",
+  "buildCommand": "npx expo export --platform web",
+  "outputDirectory": "dist",
   "framework": null
 }
