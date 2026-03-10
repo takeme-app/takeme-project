@@ -5,6 +5,7 @@
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "build:admin": "cd apps/admin && npx expo export --platform web",
     "lint": "npm run lint --workspaces --if-present",
     "sync-env": "node -e \"const fs=require('fs'),path=require('path');const r=path.join(__dirname,'.env');['cliente','motorista','admin','preparador-encomendas','preparador-excursoes'].forEach(a=>{const d=path.join(__dirname,'apps',a,'.env');try{fs.copyFileSync(r,d);console.log('apps/'+a);}catch(e){}})\"",
     "cliente": "npm run start --workspace=cliente",
@@ -13,7 +14,8 @@
     "preparador-excursoes": "npm run start --workspace=preparador-excursoes",
     "admin": "npm run start --workspace=admin",
     "deploy:verify-email-code": "npx supabase functions deploy verify-email-code --no-verify-jwt",
-    "create-avatars-bucket":"node scripts/create-avatars-bucket.js","db:push":"supabase db push","deploy:functions": "npx supabase functions deploy send-email-verification-code --no-verify-jwt && npx supabase functions deploy verify-email-code --no-verify-jwt && npx supabase functions deploy send-welcome-email --no-verify-jwt",
+    "create-avatars-bucket":"node scripts/create-avatars-bucket.js","db:push":"supabase db push","deploy:delete-account": "npx supabase functions deploy delete-account --no-verify-jwt",
+    "deploy:functions": "npx supabase functions deploy send-email-verification-code --no-verify-jwt && npx supabase functions deploy verify-email-code --no-verify-jwt && npx supabase functions deploy send-welcome-email --no-verify-jwt && npx supabase functions deploy delete-account --no-verify-jwt",
     "resize-map-markers": "node scripts/resize-map-markers.js"
   },
   "engines": {

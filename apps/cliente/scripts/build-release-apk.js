@@ -76,8 +76,16 @@ const result = spawnSync(
 );
 
 if (result.status === 0) {
+  const outputDir = path.join(androidDir, 'app', 'build', 'outputs', 'apk', 'release');
+  const defaultApk = path.join(outputDir, 'app-release.apk');
   const apkName = `take-me-cliente-${newVersion}.apk`;
-  const apkPath = path.join(androidDir, 'app', 'build', 'outputs', 'apk', 'release', apkName);
+  const apkPath = path.join(outputDir, apkName);
+
+  if (fs.existsSync(defaultApk)) {
+    if (fs.existsSync(apkPath)) fs.unlinkSync(apkPath);
+    fs.renameSync(defaultApk, apkPath);
+  }
+
   console.log('\nAPK gerado:', apkPath);
   console.log('Envie esse arquivo ao cliente.');
 }

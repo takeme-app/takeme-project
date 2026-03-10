@@ -25,6 +25,8 @@ type RootNavigationContextValue = {
     screen: K,
     params?: ExcursionStackParamList[K]
   ) => void;
+  /** Reseta toda a navegação para a Splash (usado após exclusão de conta / logout forçado). */
+  resetToSplash: () => void;
 };
 
 const RootNavigationContext = createContext<RootNavigationContextValue | null>(null);
@@ -116,8 +118,17 @@ export function RootNavigationProvider({
     [navigationRef]
   );
 
+  const resetToSplash = useCallback(() => {
+    const nav = navigationRef.current;
+    if (nav) {
+      nav.dispatch(
+        CommonActions.reset({ index: 0, routes: [{ name: 'Splash' }] })
+      );
+    }
+  }, [navigationRef]);
+
   return (
-    <RootNavigationContext.Provider value={{ navigateToTripStack, navigateToShipmentStack, navigateToDependentShipmentStack, navigateToExcursionStack }}>
+    <RootNavigationContext.Provider value={{ navigateToTripStack, navigateToShipmentStack, navigateToDependentShipmentStack, navigateToExcursionStack, resetToSplash }}>
       {children}
     </RootNavigationContext.Provider>
   );

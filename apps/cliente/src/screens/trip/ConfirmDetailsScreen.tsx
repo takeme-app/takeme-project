@@ -14,6 +14,8 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList, TripPassengerParam } from '../../navigation/types';
+import { formatCpf, onlyDigits, validateCpf } from '../../utils/formatCpf';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<TripStackParamList, 'ConfirmDetails'>;
 
@@ -25,16 +27,8 @@ const COLORS = {
   neutral700: '#767676',
 };
 
-/** Formata valor digitado como CPF: 000.000.000-00 (apenas números, máx. 11) */
-function formatCpf(value: string): string {
-  const digits = value.replace(/\D/g, '').slice(0, 11);
-  if (digits.length <= 3) return digits;
-  if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
-  if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
-  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
-}
-
 export function ConfirmDetailsScreen({ navigation, route }: Props) {
+  const { showAlert } = useAppAlert();
   const driver = route.params?.driver;
   const origin = route.params?.origin;
   const destination = route.params?.destination;
@@ -145,6 +139,14 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
         <TouchableOpacity
           style={styles.confirmButton}
           onPress={() => {
+            for (let i = 0; i < passengers; i++) {
+              const cpfRaw = passengerData[i]?.cpf ?? '';
+              const cpfDigits = onlyDigits(cpfRaw);
+              if (cpfDigits && !validateCpf(cpfDigits)) {
+                showAlert('CPF inválido', `O CPF do passageiro ${i + 1} não é válido. Verifique e tente novamente.`);
+                return;
+              }
+            }
             const passengerList: TripPassengerParam[] = Array.from({ length: passengers }, (_, i) => ({
               name: passengerData[i]?.name ?? '',
               cpf: passengerData[i]?.cpf ?? '',

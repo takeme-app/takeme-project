@@ -15,7 +15,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
-import { formatCpf, onlyDigits } from '../../utils/formatCpf';
+import { formatCpf, onlyDigits, validateCpf } from '../../utils/formatCpf';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
 
@@ -50,6 +50,10 @@ export function EditCpfScreen({ navigation }: Props) {
 
   const handleUpdate = async () => {
     const digits = onlyDigits(cpf);
+    if (digits && !validateCpf(digits)) {
+      showAlert('CPF inválido', 'O CPF informado não é válido. Verifique e tente novamente.');
+      return;
+    }
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {

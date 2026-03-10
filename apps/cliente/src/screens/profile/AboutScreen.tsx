@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { View, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 import { supabase } from '../../lib/supabase';
 import { getUserErrorMessage } from '../../utils/errorMessage';
 
@@ -79,6 +80,7 @@ const CARDS = [
 ];
 
 export function AboutScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [exportLoading, setExportLoading] = useState(false);
 
   const handleCardPress = async (item: (typeof CARDS)[number]) => {
@@ -88,10 +90,7 @@ export function AboutScreen({ navigation }: Props) {
     }
     if (item.action === 'requestDataExport') {
       setExportLoading(true);
-      // Alert nativo garante que o usuário sempre veja o feedback (modal do contexto às vezes não aparece)
-      const showFeedback = (title: string, message: string) => {
-        Alert.alert(title, message);
-      };
+      const showFeedback = (title: string, message: string) => showAlert(title, message);
       const fallbackMsg = 'Não foi possível solicitar a cópia. Tente novamente.';
       try {
         const { error: refreshError } = await supabase.auth.refreshSession();

@@ -15,6 +15,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { CardField, useStripe } from '@stripe/stripe-react-native';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
 
 export type PaymentMethodType = 'credito' | 'debito' | 'pix' | 'dinheiro';
 
@@ -75,8 +76,27 @@ export function PaymentMethodSection({
 
   const amountFormatted = `R$ ${(amountCents / 100).toFixed(2).replace('.', ',')}`;
 
+  const handleCpfChange = useCallback((text: string) => setCpfCnpj(formatCpf(text)), []);
+
   const handleConfirmCard = useCallback(async () => {
     if (selectedMethod !== 'credito' && selectedMethod !== 'debito') return;
+    if (!cardName.trim()) {
+      showAlert('Atenção', 'Preencha o nome do cartão.');
+      return;
+    }
+    if (!cardComplete) {
+      showAlert('Atenção', 'Preencha os dados do cartão (número, validade e CVV).');
+      return;
+    }
+    const cpfDigits = onlyDigits(cpfCnpj);
+    if (!cpfDigits) {
+      showAlert('Atenção', 'Preencha o CPF.');
+      return;
+    }
+    if (!validateCpf(cpfDigits)) {
+      showAlert('CPF inválido', 'O CPF informado não é válido. Verifique e tente novamente.');
+      return;
+    }
     setConfirming(true);
     try {
       const { paymentMethod, error } = await createPaymentMethod({
@@ -97,7 +117,7 @@ export function PaymentMethodSection({
     } finally {
       setConfirming(false);
     }
-  }, [selectedMethod, cardName, createPaymentMethod, onConfirmPayment, showAlert]);
+  }, [selectedMethod, cardName, cardComplete, cpfCnpj, createPaymentMethod, onConfirmPayment, showAlert]);
 
   const handleConfirmPix = useCallback(() => {
     onConfirmPayment({ method: 'pix' });
@@ -174,16 +194,17 @@ export function PaymentMethodSection({
                 postalCodeEnabled={false}
                 onCardChange={(d) => setCardComplete(d.complete)}
                 style={styles.cardField}
-                cardStyle={{ backgroundColor: COLORS.neutral300, textColor: COLORS.black }}
+                cardStyle={CARD_STYLE}
               />
-              <Text style={styles.formLabelSmall}>CPF/CNPJ</Text>
+              <Text style={styles.formLabelSmall}>CPF</Text>
               <TextInput
                 style={styles.input}
                 placeholder="000.000.000-00"
                 placeholderTextColor={COLORS.neutral700}
                 value={cpfCnpj}
-                onChangeText={setCpfCnpj}
+                onChangeText={handleCpfChange}
                 keyboardType="number-pad"
+                maxLength={14}
               />
               <TouchableOpacity
                 style={[styles.confirmButton, (!cardComplete || loading || confirming) && styles.confirmButtonDisabled]}
@@ -220,16 +241,17 @@ export function PaymentMethodSection({
                 postalCodeEnabled={false}
                 onCardChange={(d) => setCardComplete(d.complete)}
                 style={styles.cardField}
-                cardStyle={{ backgroundColor: COLORS.neutral300, textColor: COLORS.black }}
+                cardStyle={CARD_STYLE}
               />
-              <Text style={styles.formLabelSmall}>CPF/CNPJ</Text>
+              <Text style={styles.formLabelSmall}>CPF</Text>
               <TextInput
                 style={styles.input}
                 placeholder="000.000.000-00"
                 placeholderTextColor={COLORS.neutral700}
                 value={cpfCnpj}
-                onChangeText={setCpfCnpj}
+                onChangeText={handleCpfChange}
                 keyboardType="number-pad"
+                maxLength={14}
               />
               <TouchableOpacity
                 style={[styles.confirmButton, (!cardComplete || loading || confirming) && styles.confirmButtonDisabled]}
@@ -309,6 +331,16 @@ const COLORS = {
   neutral300: '#f1f1f1',
   neutral400: '#e2e2e2',
   neutral700: '#767676',
+};
+
+const CARD_STYLE = {
+  backgroundColor: COLORS.neutral300,
+  textColor: COLORS.black,
+  placeholderColor: COLORS.neutral700,
+  borderColor: COLORS.neutral400,
+  borderWidth: 1,
+  borderRadius: 12,
+  fontSize: 16,
 };
 
 const styles = StyleSheet.create({

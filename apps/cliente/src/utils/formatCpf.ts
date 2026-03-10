@@ -18,3 +18,24 @@ export function displayCpf(raw: string | null | undefined): string {
   const d = onlyDigits(raw);
   return d.length === 11 ? formatCpf(d) : raw.trim();
 }
+
+/** Valida CPF usando o algoritmo oficial de dígitos verificadores. */
+export function validateCpf(value: string): boolean {
+  const d = onlyDigits(value);
+  if (d.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(d)) return false;
+
+  let sum = 0;
+  for (let i = 0; i < 9; i++) sum += parseInt(d[i], 10) * (10 - i);
+  let rem = (sum * 10) % 11;
+  if (rem === 10) rem = 0;
+  if (rem !== parseInt(d[9], 10)) return false;
+
+  sum = 0;
+  for (let i = 0; i < 10; i++) sum += parseInt(d[i], 10) * (11 - i);
+  rem = (sum * 10) % 11;
+  if (rem === 10) rem = 0;
+  if (rem !== parseInt(d[10], 10)) return false;
+
+  return true;
+}

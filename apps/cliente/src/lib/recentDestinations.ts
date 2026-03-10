@@ -2,7 +2,17 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 
 const STORAGE_KEY = '@takeme/recent_destinations';
+const MERGE_KEY = `${STORAGE_KEY}_merged`;
 const MAX_ITEMS = 10;
+
+/** Remove o histórico de endereços do dispositivo (ex.: após exclusão de conta). */
+export async function clearRecentDestinationsStorage(): Promise<void> {
+  try {
+    await AsyncStorage.multiRemove([STORAGE_KEY, MERGE_KEY]);
+  } catch {
+    // ignore
+  }
+}
 
 export type RecentDestination = {
   address: string;
@@ -68,6 +78,9 @@ export async function getRecentDestinations(): Promise<RecentDestination[]> {
       const deduped = deduplicateByAddress(data as RecentDestination[]).slice(0, MAX_ITEMS);
       return deduped;
     }
+    // Usuário logado e sem histórico no Supabase (ex.: conta nova ou re-cadastro): não usar AsyncStorage do dispositivo (evita mostrar dados de outra conta).
+    await AsyncStorage.multiRemove([STORAGE_KEY, MERGE_KEY]);
+    return [];
   }
 
   const result = await readAsync();
@@ -115,13 +128,12 @@ export async function addRecentDestination(item: RecentDestination): Promise<voi
 
 /** Merge único: envia itens do AsyncStorage para o Supabase quando o usuário está logado (ex.: após login em novo dispositivo). */
 async function mergeAsyncStorageToSupabaseOnce(userId: string): Promise<void> {
-  const mergeKey = `${STORAGE_KEY}_merged`;
   try {
-    const alreadyMerged = await AsyncStorage.getItem(mergeKey);
+    const alreadyMerged = await AsyncStorage.getItem(MERGE_KEY);
     if (alreadyMerged === '1') return;
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      await AsyncStorage.setItem(mergeKey, '1');
+      await AsyncStorage.setItem(MERGE_KEY, '1');
       return;
     }
     const parsed = JSON.parse(raw) as RecentDestination[];
@@ -133,7 +145,7 @@ async function mergeAsyncStorageToSupabaseOnce(userId: string): Promise<void> {
         await supabase.from('recent_destinations').insert({ user_id: userId, ...row });
       }
     }
-    await AsyncStorage.setItem(mergeKey, '1');
+    await AsyncStorage.setItem(MERGE_KEY, '1');
   } catch {
     // ignore
   }

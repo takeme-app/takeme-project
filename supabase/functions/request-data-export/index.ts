@@ -128,6 +128,25 @@ function buildPdfLines(payload: ExportPayload): string[] {
   return lines;
 }
 
+/** Remove ou substitui caracteres que o Helvetica (WinAnsi) não suporta para evitar erro no drawText. */
+function toPdfSafeText(s: string): string {
+  const map: Record<string, string> = {
+    "á": "a", "à": "a", "ã": "a", "â": "a", "ä": "a",
+    "é": "e", "è": "e", "ê": "e", "ë": "e",
+    "í": "i", "ì": "i", "î": "i", "ï": "i",
+    "ó": "o", "ò": "o", "õ": "o", "ô": "o", "ö": "o",
+    "ú": "u", "ù": "u", "û": "u", "ü": "u",
+    "ç": "c", "ñ": "n",
+    "Á": "A", "À": "A", "Ã": "A", "Â": "A",
+    "É": "E", "È": "E", "Ê": "E",
+    "Í": "I", "Ì": "I", "Î": "I",
+    "Ó": "O", "Ò": "O", "Õ": "O", "Ô": "O",
+    "Ú": "U", "Ù": "U", "Û": "U",
+    "Ç": "C", "Ñ": "N",
+  };
+  return Array.from(s, (c) => map[c] ?? (c.codePointAt(0)! < 128 ? c : "?")).join("");
+}
+
 async function createPdf(payload: ExportPayload): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
@@ -149,7 +168,8 @@ async function createPdf(payload: ExportPayload): Promise<Uint8Array> {
     }
     const trimmed = line.trim();
     if (trimmed.length > 0) {
-      const chunks = trimmed.length > 90 ? trimmed.match(/.{1,90}(\s|$)/g) ?? [trimmed] : [trimmed];
+      const safeLine = toPdfSafeText(trimmed);
+      const chunks = safeLine.length > 90 ? safeLine.match(/.{1,90}(\s|$)/g) ?? [safeLine] : [safeLine];
       for (const chunk of chunks) {
         if (y < margin) {
           page = doc.addPage([pageWidth, pageHeight]);
@@ -191,24 +211,37 @@ Deno.serve(async (req) => {
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    const anonClient = createClient(supabaseUrl, anonKey);
-    const { data: claimsData, error: claimsError } = await anonClient.auth.getClaims(token);
-    if (claimsError || !claimsData?.claims?.sub) {
+    let user: { id: string; email?: string | null; phone?: string | null };
+    try {
+      const anonClient = createClient(supabaseUrl, anonKey);
+      const { data: claimsData, error: claimsError } = await anonClient.auth.getClaims(token);
+      if (claimsError || !claimsData?.claims?.sub) {
+        console.error("[request-data-export] getClaims failed:", claimsError?.message ?? "no sub");
+        return new Response(
+          JSON.stringify({ error: "Sessão inválida ou expirada" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      const userId = claimsData.claims.sub as string;
+      const admin = createClient(supabaseUrl, serviceRoleKey);
+      const { data: { user: authUser }, error: userError } = await admin.auth.admin.getUserById(userId);
+      if (userError || !authUser) {
+        console.error("[request-data-export] getUserById failed:", userError?.message);
+        return new Response(
+          JSON.stringify({ error: "Sessão inválida ou expirada" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      user = authUser;
+    } catch (authErr) {
+      console.error("[request-data-export] auth step:", authErr);
       return new Response(
-        JSON.stringify({ error: "Sessão inválida ou expirada" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ error: "Erro ao validar sessão. Tente novamente." }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-    const userId = claimsData.claims.sub as string;
+
     const admin = createClient(supabaseUrl, serviceRoleKey);
-    const { data: { user: authUser }, error: userError } = await admin.auth.admin.getUserById(userId);
-    if (userError || !authUser) {
-      return new Response(
-        JSON.stringify({ error: "Sessão inválida ou expirada" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-    const user = authUser;
     const userClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: `Bearer ${token}` } },
     });
@@ -281,7 +314,16 @@ Deno.serve(async (req) => {
     };
 
     const jsonString = JSON.stringify(payload, null, 2);
-    const pdfBytes = await createPdf(payload);
+    let pdfBytes: Uint8Array;
+    try {
+      pdfBytes = await createPdf(payload);
+    } catch (pdfErr) {
+      console.error("[request-data-export] createPdf:", pdfErr);
+      return new Response(
+        JSON.stringify({ error: "Erro ao gerar relatório. Tente novamente." }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     const resendKey = Deno.env.get("RESEND_API_KEY");
     const fromEmail = Deno.env.get("RESEND_FROM_EMAIL") ?? "Take Me <onboarding@resend.dev>";
@@ -335,9 +377,11 @@ Deno.serve(async (req) => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {
-    console.error("[request-data-export]", err);
+    const msg = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    console.error("[request-data-export]", msg, stack);
     return new Response(
-      JSON.stringify({ error: "Erro interno" }),
+      JSON.stringify({ error: "Erro interno. Tente novamente mais tarde." }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

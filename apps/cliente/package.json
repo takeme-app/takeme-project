@@ -1,12 +1,12 @@
 {
   "name": "cliente",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "main": "index.ts",
   "scripts": {
     "prestart": "node -e \"const fs=require('fs'),path=require('path');const r=path.resolve(__dirname,'../../.env');const d=path.resolve(__dirname,'.env');if(fs.existsSync(r))fs.copyFileSync(r,d);\"",
-    "start": "expo start --port 8085",
-    "start:8081": "expo start --port 8081",
+    "start": "expo start --port 8081",
+    "start:8085": "expo start --port 8085",
     "android": "node scripts/run-android.js",
     "android:run": "node scripts/run-android-dev.js",
     "android:reverse": "node scripts/adb-reverse.js",
@@ -27,6 +27,7 @@
     "@take-me/shared": "*",
     "expo": "^54.0.33",
     "expo-auth-session": "~7.0.10",
+    "expo-dev-client": "~6.0.20",
     "expo-document-picker": "~14.0.3",
     "expo-font": "~14.0.11",
     "expo-image-picker": "~17.0.10",
