@@ -1,23 +1,30 @@
 import { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, Text, View } from 'react-native';
+import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { supabase } from './src/lib/supabase';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { ForgotPasswordScreen } from './src/screens/ForgotPasswordScreen';
 
 type Screen = 'login' | 'forgot' | 'home';
 
-export default function App() {
+function AppContent() {
   const [screen, setScreen] = useState<Screen>('login');
   const [session, setSession] = useState<unknown>(null);
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      setSession(s);
-      setScreen(s ? 'home' : 'login');
-      setInitialized(true);
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data: { session: s } }) => {
+        setSession(s);
+        setScreen(s ? 'home' : 'login');
+        setInitialized(true);
+      })
+      .catch(() => {
+        setInitialized(true);
+        setScreen('login');
+      });
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, s) => {
@@ -59,6 +66,14 @@ export default function App() {
       onForgotPassword={() => setScreen('forgot')}
       onLoginSuccess={() => setScreen('home')}
     />
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
   );
 }
 
