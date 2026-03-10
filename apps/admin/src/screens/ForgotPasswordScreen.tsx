@@ -71,7 +71,7 @@ export function ForgotPasswordScreen({ onBack, onEmailSent }: Props) {
         ) : (
           <>
             <TextInput
-              style={[styles.input, error ? styles.inputError : null]}
+              style={StyleSheet.flatten([styles.input, error ? styles.inputError : null])}
               placeholder="E-mail"
               placeholderTextColor="#9CA3AF"
               value={email}
@@ -86,7 +86,7 @@ export function ForgotPasswordScreen({ onBack, onEmailSent }: Props) {
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
             <TouchableOpacity
-              style={[styles.submitButton, loading && styles.submitButtonDisabled]}
+              style={StyleSheet.flatten([styles.submitButton, loading && styles.submitButtonDisabled])}
               activeOpacity={0.8}
               onPress={handleSubmit}
               disabled={loading}
