@@ -1,20 +1,87 @@
+import { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, Text, View } from 'react-native';
+import { supabase } from './src/lib/supabase';
+import { LoginScreen } from './src/screens/LoginScreen';
+import { ForgotPasswordScreen } from './src/screens/ForgotPasswordScreen';
+
+type Screen = 'login' | 'forgot' | 'home';
 
 export default function App() {
+  const [screen, setScreen] = useState<Screen>('login');
+  const [session, setSession] = useState<unknown>(null);
+  const [initialized, setInitialized] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
+      setScreen(s ? 'home' : 'login');
+      setInitialized(true);
+    });
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+      setScreen(s ? 'home' : 'login');
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (!initialized) {
+    return (
+      <View style={styles.loadingContainer}>
+        <StatusBar style="light" />
+        <Text style={styles.loadingText}>Carregando…</Text>
+      </View>
+    );
+  }
+
+  if (screen === 'forgot') {
+    return (
+      <ForgotPasswordScreen
+        onBack={() => setScreen('login')}
+        onEmailSent={() => setScreen('login')}
+      />
+    );
+  }
+
+  if (screen === 'home') {
+    return (
+      <View style={styles.container}>
+        <StatusBar style="dark" />
+        <Text style={styles.welcomeText}>Bem-vindo ao Admin</Text>
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.container}>
-      <Text>Take Me - Admin (Desktop Web)</Text>
-      <StatusBar style="auto" />
-    </View>
+    <LoginScreen
+      onForgotPassword={() => setScreen('forgot')}
+      onLoginSuccess={() => setScreen('home')}
+    />
   );
 }
 
 const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: '#1F1F1F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    color: '#9CA3AF',
+    fontSize: 16,
+  },
   container: {
     flex: 1,
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  welcomeText: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#000',
   },
 });
