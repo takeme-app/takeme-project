@@ -5,6 +5,7 @@
   "main": "index.ts",
   "scripts": {
     "start": "expo start --web",
+    "build": "expo export --platform web",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",

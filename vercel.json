@@ -1,0 +1,5 @@
+{
+  "buildCommand": "cd apps/admin && npx expo export --platform web",
+  "outputDirectory": "apps/admin/dist",
+  "framework": null
+}
