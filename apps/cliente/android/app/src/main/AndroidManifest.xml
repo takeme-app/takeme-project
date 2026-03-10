@@ -30,6 +30,7 @@
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="take-me-cliente"/>
+        <data android:scheme="exp+take-me-cliente"/>
       </intent-filter>
     </activity>
   </application>

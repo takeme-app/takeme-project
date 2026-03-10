@@ -28,9 +28,9 @@ if (fs.existsSync(lockPath)) {
   }
 }
 
-// Só gera o APK debug (sem iniciar Metro nem instalar no device). Porta 8085 = mesma do npm start.
+// Só gera o APK debug (sem iniciar Metro nem instalar no device). Porta 8081 = mesma do npm start.
 const androidDir = path.join(appDir, 'android');
-const buildEnv = { ...process.env, REACT_NATIVE_PACKAGER_PORT: process.env.REACT_NATIVE_PACKAGER_PORT || '8085' };
+const buildEnv = { ...process.env, REACT_NATIVE_PACKAGER_PORT: process.env.REACT_NATIVE_PACKAGER_PORT || '8081' };
 const result = spawnSync(
   path.join(androidDir, 'gradlew.bat'),
   ['app:assembleDebug', '-x', 'lint', '-x', 'test'],

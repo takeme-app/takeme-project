@@ -11,13 +11,14 @@ import {
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { CommonActions } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
+import { clearRecentDestinationsStorage } from '../../lib/recentDestinations';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
+import { useRootNavigation } from '../../navigation/RootNavigationContext';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'DeleteAccountStep2'>;
 
@@ -33,8 +34,35 @@ const CONFIRM_TEXT = 'EXCLUIR';
 
 export function DeleteAccountStep2Screen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
+  const { resetToSplash } = useRootNavigation();
   const [confirm, setConfirm] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const doSignOutAndRedirect = () => {
+    clearRecentDestinationsStorage().catch(() => {});
+    supabase.auth.signOut().catch(() => {});
+    resetToSplash();
+  };
+
+  const redirectToLoginWithConfirmation = () => {
+    showAlert('Conta excluída', 'Sua conta foi excluída com sucesso.', {
+      onClose: doSignOutAndRedirect,
+    });
+  };
+
+  const checkUserGoneAndRedirect = async (): Promise<boolean> => {
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser();
+      if (error || !user) {
+        redirectToLoginWithConfirmation();
+        return true;
+      }
+    } catch {
+      redirectToLoginWithConfirmation();
+      return true;
+    }
+    return false;
+  };
 
   const handleDelete = async () => {
     if (confirm.trim() !== CONFIRM_TEXT) {
@@ -42,22 +70,34 @@ export function DeleteAccountStep2Screen({ navigation }: Props) {
       return;
     }
     setLoading(true);
-    const { data, error } = await supabase.functions.invoke('delete-account', {
-      body: { confirm: CONFIRM_TEXT },
-    });
-    setLoading(false);
-    if (error) {
-      showAlert('Erro', getUserErrorMessage(error, 'Não foi possível excluir a conta.'));
-      return;
-    }
-    if (data?.error) {
-      showAlert('Erro', getUserErrorMessage({ message: data.error }, 'Não foi possível excluir a conta.'));
-      return;
-    }
-    await supabase.auth.signOut();
-    const root = navigation.getParent()?.getParent()?.getParent();
-    if (root) {
-      root.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Splash' }] }));
+    try {
+      const { data, error } = await supabase.functions.invoke('delete-account', {
+        body: { confirm: CONFIRM_TEXT },
+      });
+      if (error) {
+        const gone = await checkUserGoneAndRedirect();
+        if (!gone) showAlert('Erro', getUserErrorMessage(error, 'Não foi possível excluir a conta. Tente novamente.'));
+        return;
+      }
+      if (data?.error) {
+        const gone = await checkUserGoneAndRedirect();
+        if (!gone) {
+          const backendMsg = typeof data.error === 'string' ? data.error : '';
+          showAlert('Erro', getUserErrorMessage({ message: data.error }, backendMsg || 'Não foi possível excluir a conta. Tente novamente.'));
+        }
+        return;
+      }
+      if (!data?.ok) {
+        const gone = await checkUserGoneAndRedirect();
+        if (!gone) showAlert('Erro', 'Não foi possível excluir a conta. Tente novamente.');
+        return;
+      }
+      redirectToLoginWithConfirmation();
+    } catch (e) {
+      const gone = await checkUserGoneAndRedirect();
+      if (!gone) showAlert('Erro', getUserErrorMessage(e, 'A requisição demorou ou falhou. Tente novamente.'));
+    } finally {
+      setLoading(false);
     }
   };
 

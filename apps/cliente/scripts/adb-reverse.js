@@ -29,7 +29,7 @@ if (!adb) {
 
 const ports = process.env.REACT_NATIVE_PACKAGER_PORT
   ? [process.env.REACT_NATIVE_PACKAGER_PORT]
-  : ['8085', '8081'];
+  : ['8081'];
 
 let ok = true;
 for (const port of ports) {
@@ -42,6 +42,6 @@ for (const port of ports) {
 
 if (ok) {
   console.log('Portas no device redirecionadas para o PC:', ports.join(', '));
-  console.log('Inicie o Metro (npm start ou npm run start:8081) e abra o app no celular.');
+  console.log('Inicie o Metro (npm start) e abra o app no celular.');
 }
 process.exit(ok ? 0 : 1);

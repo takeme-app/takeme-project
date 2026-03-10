@@ -17,3 +17,11 @@ verify_jwt = false
 
 [functions.ensure-stripe-customer]
 verify_jwt = false
+
+# Cópia dos dados (LGPD): gateway não valida ES256; a função valida com getClaims() + getUserById.
+[functions.request-data-export]
+verify_jwt = false
+
+# Exclusão de conta: cliente envia JWT; a função valida sessão e remove storage + Stripe + auth user.
+[functions.delete-account]
+verify_jwt = false

@@ -86,6 +86,23 @@ O admin é exportado com `expo export --platform web` e o build é configurado p
 
 Sem essas variáveis no deploy, o app pode abrir em tela branca ou falhar ao carregar a sessão.
 
+## Exclusão de conta (app cliente)
+
+No app cliente, o usuário pode excluir a própria conta pelo **Perfil → Excluir conta**. O fluxo é em duas etapas:
+
+1. **Step 1:** confirmação de intenção (“Tem certeza?”) com opções “Manter conta” e “Continuar para exclusão”.
+2. **Step 2:** o usuário digita **EXCLUIR** em um campo e toca em “Excluir minha conta”. O app chama a Edge Function `delete-account` com `body: { confirm: "EXCLUIR" }`.
+
+A Edge Function `delete-account` (Supabase):
+
+- Valida o token e exige `confirm === "EXCLUIR"`.
+- Lê `stripe_customer_id` do perfil (antes de qualquer exclusão).
+- **Storage:** remove todos os objetos do usuário nos buckets `avatars`, `dependent-documents`, `shipment-photos` e `excursion-passenger-docs` (prefixo `{user_id}/`).
+- **Stripe:** se existir `stripe_customer_id`, chama a API Stripe para deletar o customer (requer `STRIPE_SECRET_KEY` nas variáveis da função).
+- **Auth:** chama `admin.auth.admin.deleteUser(user.id)`. O banco remove em cascade: `profiles`, `dependents`, `bookings`, `user_preferences`, `notifications`, `notification_preferences`, `recent_destinations`, `shipments`, `dependent_shipments`, `payment_methods`, `data_export_requests`, `excursion_requests`, etc.
+
+Em sucesso (resposta `{ ok: true }`), o app faz signOut e redireciona para a tela Splash. Em erro, exibe mensagem amigável e o usuário permanece na Step 2.
+
 ## Build Android (APK/AAB)
 
 ### EAS Build (nuvem)

@@ -17,10 +17,21 @@ import { CardField, useStripe } from '@stripe/stripe-react-native';
 import { supabase } from '../lib/supabase';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AddCard'>;
 
 type CardType = 'credit' | 'debit';
+
+const CARD_STYLE = {
+  backgroundColor: '#F9FAFB',
+  textColor: '#111827',
+  placeholderColor: '#9CA3AF',
+  borderColor: '#E5E7EB',
+  borderWidth: 1,
+  borderRadius: 12,
+  fontSize: 16,
+};
 
 export function AddCardScreen({ navigation, route }: Props) {
   const { createPaymentMethod } = useStripe();
@@ -32,7 +43,26 @@ export function AddCardScreen({ navigation, route }: Props) {
   const [cpfCnpj, setCpfCnpj] = useState('');
   const [saving, setSaving] = useState(false);
 
+  const handleCpfChange = (text: string) => setCpfCnpj(formatCpf(text));
+
   const handleRegister = async () => {
+    if (!cardName.trim()) {
+      showAlert('Atenção', 'Preencha o nome do cartão.');
+      return;
+    }
+    if (!cardComplete) {
+      showAlert('Atenção', 'Preencha os dados do cartão (número, validade e CVV).');
+      return;
+    }
+    const cpfDigits = onlyDigits(cpfCnpj);
+    if (!cpfDigits) {
+      showAlert('Atenção', 'Preencha o CPF.');
+      return;
+    }
+    if (!validateCpf(cpfDigits)) {
+      showAlert('CPF inválido', 'O CPF informado não é válido. Verifique e tente novamente.');
+      return;
+    }
     setSaving(true);
     try {
       const { paymentMethod, error: pmError } = await createPaymentMethod({
@@ -178,16 +208,17 @@ export function AddCardScreen({ navigation, route }: Props) {
               postalCodeEnabled={false}
               onCardChange={(details) => setCardComplete(details.complete)}
               style={styles.cardField}
-              cardStyle={{ backgroundColor: '#F9FAFB', textColor: '#111827' }}
+              cardStyle={CARD_STYLE}
             />
-            <Text style={styles.inputLabelSmall}>CPF/CNPJ</Text>
+            <Text style={styles.inputLabelSmall}>CPF</Text>
             <TextInput
               style={styles.input}
               placeholder="000.000.000-00"
               placeholderTextColor="#9CA3AF"
               value={cpfCnpj}
-              onChangeText={setCpfCnpj}
+              onChangeText={handleCpfChange}
               keyboardType="number-pad"
+              maxLength={14}
             />
 
             <TouchableOpacity

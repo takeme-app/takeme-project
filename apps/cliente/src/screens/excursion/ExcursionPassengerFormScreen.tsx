@@ -17,7 +17,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { supabase } from '../../lib/supabase';
-import { formatCpf, onlyDigits } from '../../utils/formatCpf';
+import { formatCpf, onlyDigits, validateCpf } from '../../utils/formatCpf';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ExcursionPassengerForm'>;
 
@@ -86,6 +86,11 @@ export function ExcursionPassengerFormScreen({ navigation, route }: Props) {
     const name = fullName.trim();
     if (!name) {
       showAlert('Atenção', 'Informe o nome do passageiro.');
+      return;
+    }
+    const cpfDigits = onlyDigits(cpf);
+    if (cpfDigits && !validateCpf(cpfDigits)) {
+      showAlert('CPF inválido', 'O CPF informado não é válido. Verifique e tente novamente.');
       return;
     }
     if (!excursionRequestId) return;
