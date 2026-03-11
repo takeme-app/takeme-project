@@ -1,6 +1,7 @@
 import React, { useRef, useImperativeHandle, forwardRef, useCallback } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, TouchableOpacity } from 'react-native';
 import { Text } from '../Text';
+import { MaterialIcons } from '@expo/vector-icons';
 import { MapView, Camera } from '@rnmapbox/maps';
 import type { MapRegion } from './mapboxUtils';
 import { toMapboxCoord, regionToZoomLevel } from './mapboxUtils';
@@ -9,22 +10,26 @@ const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
 
 export type MapboxMapRef = {
   animateToRegion: (region: MapRegion, duration?: number) => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  resetCamera: () => void;
 };
 
 type MapboxMapProps = {
   style?: object;
   initialRegion: MapRegion;
   scrollEnabled?: boolean;
+  showControls?: boolean;
   children?: React.ReactNode;
 };
 
 /**
  * Mapa Mapbox com API compatível com initialRegion/animateToRegion (react-native-maps).
- * Ref expõe animateToRegion(region, duration?).
+ * Ref expõe animateToRegion(region, duration?), zoomIn(), zoomOut(), resetCamera().
  * Se EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN não estiver definido (ex.: no EAS), mostra fallback em vez de crashar.
  */
 export const MapboxMap = forwardRef<MapboxMapRef, MapboxMapProps>(function MapboxMap(
-  { style, initialRegion, scrollEnabled = true, children },
+  { style, initialRegion, scrollEnabled = true, showControls = false, children },
   ref
 ) {
   if (!MAPBOX_TOKEN.trim()) {
@@ -39,33 +44,74 @@ export const MapboxMap = forwardRef<MapboxMapRef, MapboxMapProps>(function Mapbo
   }
 
   const cameraRef = useRef<Camera>(null);
+  const currentZoom = useRef(regionToZoomLevel(initialRegion));
   const center = toMapboxCoord({
     latitude: initialRegion.latitude,
     longitude: initialRegion.longitude,
   });
-  const zoomLevel = regionToZoomLevel(initialRegion);
+  const defaultZoom = regionToZoomLevel(initialRegion);
 
   const animateToRegion = useCallback((region: MapRegion, duration = 400) => {
+    const z = regionToZoomLevel(region);
+    currentZoom.current = z;
     cameraRef.current?.setCamera({
       centerCoordinate: [region.longitude, region.latitude],
-      zoomLevel: regionToZoomLevel(region),
+      zoomLevel: z,
       animationDuration: duration,
     });
   }, []);
 
-  useImperativeHandle(ref, () => ({ animateToRegion }), [animateToRegion]);
+  const zoomIn = useCallback(() => {
+    const next = Math.min(20, currentZoom.current + 1);
+    currentZoom.current = next;
+    cameraRef.current?.setCamera({ zoomLevel: next, animationDuration: 300 });
+  }, []);
+
+  const zoomOut = useCallback(() => {
+    const next = Math.max(3, currentZoom.current - 1);
+    currentZoom.current = next;
+    cameraRef.current?.setCamera({ zoomLevel: next, animationDuration: 300 });
+  }, []);
+
+  const resetCamera = useCallback(() => {
+    currentZoom.current = defaultZoom;
+    cameraRef.current?.setCamera({
+      centerCoordinate: center,
+      zoomLevel: defaultZoom,
+      animationDuration: 400,
+    });
+  }, [center, defaultZoom]);
+
+  useImperativeHandle(ref, () => ({ animateToRegion, zoomIn, zoomOut, resetCamera }), [animateToRegion, zoomIn, zoomOut, resetCamera]);
 
   return (
-    <MapView style={style ?? { flex: 1 }} scrollEnabled={scrollEnabled} scaleBarEnabled={false}>
-      <Camera
-        ref={cameraRef}
-        defaultSettings={{
-          centerCoordinate: center,
-          zoomLevel,
-        }}
-      />
-      {children}
-    </MapView>
+    <View style={[{ flex: 1 }, style]}>
+      <MapView style={StyleSheet.absoluteFill} scrollEnabled={scrollEnabled} scaleBarEnabled={false}>
+        <Camera
+          ref={cameraRef}
+          defaultSettings={{
+            centerCoordinate: center,
+            zoomLevel: defaultZoom,
+          }}
+        />
+        {children}
+      </MapView>
+
+      {showControls && (
+        <View style={styles.controls} pointerEvents="box-none">
+          <TouchableOpacity style={styles.controlBtn} onPress={zoomIn} activeOpacity={0.7}>
+            <MaterialIcons name="add" size={22} color="#0d0d0d" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.controlBtn} onPress={zoomOut} activeOpacity={0.7}>
+            <MaterialIcons name="remove" size={22} color="#0d0d0d" />
+          </TouchableOpacity>
+          <View style={styles.controlSpacer} />
+          <TouchableOpacity style={styles.controlBtn} onPress={resetCamera} activeOpacity={0.7}>
+            <MaterialIcons name="my-location" size={20} color="#0d0d0d" />
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
   );
 });
 
@@ -87,5 +133,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#6b7280',
     textAlign: 'center',
+  },
+  controls: {
+    position: 'absolute',
+    right: 10,
+    top: 10,
+    gap: 6,
+  },
+  controlBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+  },
+  controlSpacer: {
+    height: 4,
   },
 });

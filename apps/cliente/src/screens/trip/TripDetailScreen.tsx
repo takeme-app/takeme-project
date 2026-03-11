@@ -11,14 +11,17 @@ import {
   TextInput,
 } from 'react-native';
 import { Text } from '../../components/Text';
+import { AnimatedBottomSheet } from '../../components/AnimatedBottomSheet';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SupportSheet } from '../../components/SupportSheet';
 import { MapboxMap, MapboxMarker, MapboxPolyline } from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
-import { getRoutePolyline, type RoutePoint } from '../../lib/route';
+import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib/route';
+import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
 import { getAvailableTimeSlots, ALL_TIME_SLOTS, toISODate } from '../../lib/dateTimeSlots';
 import { StatusBadge, bookingStatusToBadge } from '../../components/StatusBadge';
 
@@ -73,9 +76,12 @@ export function TripDetailScreen({ navigation, route }: Props) {
   const [detail, setDetail] = useState<BookingDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
+  const [routeDuration, setRouteDuration] = useState<string | null>(null);
   const [showCancelTripModal, setShowCancelTripModal] = useState(false);
   const [showRescheduleSheet, setShowRescheduleSheet] = useState(false);
   const [selectedRescheduleSlot, setSelectedRescheduleSlot] = useState<string | null>(null);
+  const [supportSheetVisible, setSupportSheetVisible] = useState(false);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     if (!bookingId) {
@@ -141,32 +147,31 @@ export function TripDetailScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (!detail) return;
     let cancelled = false;
-    getRoutePolyline(
+    getRouteWithDuration(
       { latitude: detail.origin_lat, longitude: detail.origin_lng },
       { latitude: detail.destination_lat, longitude: detail.destination_lng }
-    ).then((coords) => {
-      if (!cancelled && coords?.length) setRouteCoords(coords);
+    ).then((result) => {
+      if (!cancelled && result) {
+        setRouteCoords(result.coordinates);
+        if (result.durationSeconds > 0) setRouteDuration(formatDuration(result.durationSeconds));
+      }
     });
     return () => { cancelled = true; };
   }, [detail?.origin_lat, detail?.origin_lng, detail?.destination_lat, detail?.destination_lng]);
 
   const mapRegion = useMemo(() => {
     if (!detail) return null;
-    const latMin = Math.min(detail.origin_lat, detail.destination_lat);
-    const latMax = Math.max(detail.origin_lat, detail.destination_lat);
-    const lngMin = Math.min(detail.origin_lng, detail.destination_lng);
-    const lngMax = Math.max(detail.origin_lng, detail.destination_lng);
-    const padding = 0.01;
     return {
-      latitude: (latMin + latMax) / 2,
-      longitude: (lngMin + lngMax) / 2,
-      latitudeDelta: Math.max(0.05, latMax - latMin + padding * 2),
-      longitudeDelta: Math.max(0.05, lngMax - lngMin + padding * 2),
+      latitude: detail.origin_lat,
+      longitude: detail.origin_lng,
+      latitudeDelta: 0.01,
+      longitudeDelta: 0.01,
     };
   }, [detail]);
 
   const isInProgress = detail?.status && !['paid', 'cancelled'].includes(detail.status);
   const isCompleted = detail?.status === 'paid';
+  const driverOnWay = detail?.status && ['confirmed', 'in_progress'].includes(detail.status);
 
   if (loading) {
     return (
@@ -224,22 +229,18 @@ export function TripDetailScreen({ navigation, route }: Props) {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {mapRegion && (
           <View style={styles.mapWrap}>
-            <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled={false}>
-              <MapboxMarker
-                id="origin"
-                coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }}
-                anchor={{ x: 0.5, y: 1 }}
-                pinColor="#0d0d0d"
-              />
-              <MapboxMarker
-                id="destination"
-                coordinate={{ latitude: detail.destination_lat, longitude: detail.destination_lng }}
-                anchor={{ x: 0.5, y: 1 }}
-                pinColor="#dc2626"
-              />
+            <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled={false} showControls>
               {routeCoords && routeCoords.length > 0 && (
                 <MapboxPolyline coordinates={routeCoords} strokeColor={COLORS.black} strokeWidth={4} />
               )}
+              {driverOnWay ? (
+                <MapboxMarker id="origin" coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                  <DriverEtaMarkerIcon eta={routeDuration ?? undefined} />
+                </MapboxMarker>
+              ) : (
+                <MapboxMarker id="origin" coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }} anchor={{ x: 0.5, y: 0.5 }} icon={require('../../../assets/icons/icon-partida.png')} iconSize={17} />
+              )}
+              <MapboxMarker id="destination" coordinate={{ latitude: detail.destination_lat, longitude: detail.destination_lng }} anchor={{ x: 0.5, y: 0.5 }} icon={require('../../../assets/icons/icon-destino.png')} iconSize={14} />
             </MapboxMap>
             <TouchableOpacity style={styles.trackButton} activeOpacity={0.8}>
               <MaterialIcons name="explore" size={20} color={COLORS.neutral700} />
@@ -369,46 +370,67 @@ export function TripDetailScreen({ navigation, route }: Props) {
         </View>
       </Modal>
 
-      <Modal visible={showRescheduleSheet} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.rescheduleSheet}>
-            <TouchableOpacity style={styles.sheetClose} onPress={() => setShowRescheduleSheet(false)} hitSlop={12}>
-              <MaterialIcons name="close" size={24} color={COLORS.black} />
-            </TouchableOpacity>
-            <Text style={styles.rescheduleTitle}>Tem certeza que deseja reagendar esta viagem?</Text>
-            <Text style={styles.rescheduleSubtitle}>Escolha um novo horário de saída para esta viagem.</Text>
-            <Text style={styles.rescheduleWarning}>O reagendamento só é permitido no mesmo dia da data original.</Text>
-            <Text style={styles.sectionHeading}>Novo horário de saída</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rescheduleSlotsContent}>
-              {detail && getAvailableTimeSlots(toISODate(new Date(detail.created_at)), ALL_TIME_SLOTS).map((slot) => {
-                const timeLabel = slot.label.split(' - ')[0];
-                const isSelected = selectedRescheduleSlot === slot.label;
-                return (
-                  <TouchableOpacity
-                    key={slot.label}
-                    style={[styles.rescheduleSlotChip, isSelected && styles.rescheduleSlotChipSelected]}
-                    onPress={() => setSelectedRescheduleSlot(slot.label)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.rescheduleSlotText, isSelected && styles.rescheduleSlotTextSelected]}>{timeLabel}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-            <TouchableOpacity style={styles.confirmModalPrimary} activeOpacity={0.8} onPress={() => { setShowRescheduleSheet(false); setSelectedRescheduleSlot(null); /* TODO: confirm reschedule */ }}>
-              <Text style={styles.confirmModalPrimaryText}>Confirmar reagendamento</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.confirmModalSecondary} activeOpacity={0.8} onPress={() => { setShowRescheduleSheet(false); setSelectedRescheduleSlot(null); }}>
-              <Text style={styles.confirmModalSecondaryText}>Cancelar</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <AnimatedBottomSheet visible={showRescheduleSheet} onClose={() => { setShowRescheduleSheet(false); setSelectedRescheduleSlot(null); }}>
+        <Text style={styles.rescheduleTitle}>Tem certeza que deseja reagendar esta viagem?</Text>
+        <Text style={styles.rescheduleSubtitle}>Escolha um novo horário de saída para esta viagem.</Text>
+        <Text style={styles.rescheduleWarning}>O reagendamento só é permitido no mesmo dia da data original.</Text>
+        <Text style={styles.sectionHeading}>Novo horário de saída</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rescheduleSlotsContent}>
+          {detail && getAvailableTimeSlots(toISODate(new Date(detail.created_at)), ALL_TIME_SLOTS).map((slot) => {
+            const timeLabel = slot.label.split(' - ')[0];
+            const isSelected = selectedRescheduleSlot === slot.label;
+            return (
+              <TouchableOpacity
+                key={slot.label}
+                style={[styles.rescheduleSlotChip, isSelected && styles.rescheduleSlotChipSelected]}
+                onPress={() => setSelectedRescheduleSlot(slot.label)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.rescheduleSlotText, isSelected && styles.rescheduleSlotTextSelected]}>{timeLabel}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+        <TouchableOpacity style={styles.confirmModalPrimary} activeOpacity={0.8} onPress={() => { setShowRescheduleSheet(false); setSelectedRescheduleSlot(null); /* TODO: confirm reschedule */ }}>
+          <Text style={styles.confirmModalPrimaryText}>Confirmar reagendamento</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.confirmModalSecondary} activeOpacity={0.8} onPress={() => { setShowRescheduleSheet(false); setSelectedRescheduleSlot(null); }}>
+          <Text style={styles.confirmModalSecondaryText}>Cancelar</Text>
+        </TouchableOpacity>
+      </AnimatedBottomSheet>
+
+      <TouchableOpacity style={[styles.fab, { bottom: Math.max(24, insets.bottom + 16) }]} onPress={() => setSupportSheetVisible(true)} activeOpacity={0.8}>
+        <Image source={require('../../../assets/icons/icon-chat.png')} style={styles.fabIcon} />
+      </TouchableOpacity>
+
+      <SupportSheet
+        visible={supportSheetVisible}
+        onClose={() => setSupportSheetVisible(false)}
+        showDriverChat={detail?.status != null && !['completed', 'cancelled'].includes(detail.status)}
+        onOpenDriverChat={() => navigation.navigate('Chat', { contactName: 'Motorista' })}
+        onOpenSupportChat={() => navigation.navigate('Chat', { contactName: 'Suporte Take Me' })}
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  fab: {
+    position: 'absolute',
+    right: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FBBF24',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  fabIcon: { width: 28, height: 28 },
   container: { flex: 1, backgroundColor: COLORS.background },
   header: {
     flexDirection: 'row',

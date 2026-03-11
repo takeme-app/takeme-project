@@ -45,7 +45,9 @@ O **Take Me** é uma plataforma de mobilidade e serviços que conecta passageiro
    - Copie `.env.example` para `.env` na raiz (e/ou em cada app, se quiser valores por app).
    - Preencha com os valores do seu projeto:
      - **Supabase:** [Settings API deste projeto](https://supabase.com/dashboard/project/xdxzxyzdgwpucwuaxvik/settings/api) → URL e anon key.
-     - **Google Maps:** [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → API key (para Android/iOS).
+     - **Mapbox:** [Mapbox Access Tokens](https://account.mapbox.com/access-tokens/) → token público.
+     - **Stripe:** [Stripe Dashboard → API Keys](https://dashboard.stripe.com/apikeys) → chave pública (publishable key).
+     - **Google Maps:** [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → API key (opcional).
 
    Não coloque `SUPABASE_SERVICE_ROLE_KEY` em nenhum app; use apenas em Edge Functions ou backends privados.
 
@@ -123,21 +125,33 @@ Requisitos: **Java (JDK)** e **Android SDK** (por exemplo via [Android Studio](h
 1. Defina `JAVA_HOME` (ex.: `C:\Program Files\Android\Android Studio\jbr` no Windows).
 2. Crie `apps/cliente/android/local.properties` com o caminho do SDK, por exemplo:
    `sdk.dir=C\:\\Users\\SEU_USUARIO\\AppData\\Local\\Android\\Sdk`
-3. Na pasta do app cliente:
+3. Na pasta do app cliente, use o **script automatizado** (recomendado):
 
    ```bash
    cd apps/cliente
-   npx expo run:android --variant release
+   npm run android:release
    ```
 
-   Ou pelo Gradle:
+   O script faz bump automático da versão (patch), builda via Gradle e renomeia o APK para `take-me-cliente-{versão}.apk`. Para **manter a versão atual** sem bump:
+
+   ```bash
+   # PowerShell
+   $env:SKIP_VERSION_BUMP="1"; npm run android:release
+
+   # Bash
+   SKIP_VERSION_BUMP=1 npm run android:release
+   ```
+
+   O APK fica em `apps/cliente/android/app/build/outputs/apk/release/take-me-cliente-{versão}.apk`.
+
+   **Alternativa manual** (Gradle direto):
 
    ```bash
    cd apps/cliente/android
    ./gradlew assembleRelease
    ```
 
-   O APK fica em `apps/cliente/android/app/build/outputs/apk/release/app-release.apk`.
+   Nesse caso o APK fica como `app-release.apk` no mesmo diretório.
 
 ### Prebuild
 

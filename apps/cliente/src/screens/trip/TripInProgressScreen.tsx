@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   Platform,
-  Modal,
   TextInput,
 } from 'react-native';
 import { Text } from '../../components/Text';
@@ -17,6 +16,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList } from '../../navigation/types';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { CodeConfirmModal } from '../../components/CodeConfirmModal';
+import { AnimatedBottomSheet } from '../../components/AnimatedBottomSheet';
 
 type Props = NativeStackScreenProps<TripStackParamList, 'TripInProgress'>;
 
@@ -248,111 +248,87 @@ export function TripInProgressScreen({ navigation }: Props) {
       </View>
 
       {/* Sheet: Detalhes da coleta */}
-      <Modal visible={showColetaSheet} transparent animationType="slide">
-        <View style={styles.sheetOverlay}>
-          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setShowColetaSheet(false)} activeOpacity={1} />
-          <View style={styles.detailSheet}>
-            <TouchableOpacity style={styles.sheetClose} onPress={() => setShowColetaSheet(false)} hitSlop={12}>
-              <MaterialIcons name="close" size={24} color={COLORS.black} />
-            </TouchableOpacity>
-            <View style={styles.detailSheetHeader}>
-              <Text style={styles.detailSheetTitle}>Detalhes da coleta</Text>
-              <TouchableOpacity><MaterialIcons name="phone" size={24} color={COLORS.black} /></TouchableOpacity>
+      <AnimatedBottomSheet visible={showColetaSheet} onClose={() => setShowColetaSheet(false)}>
+        <View style={styles.detailSheetHeader}>
+          <Text style={styles.detailSheetTitle}>Detalhes da coleta</Text>
+          <TouchableOpacity><MaterialIcons name="phone" size={24} color={COLORS.black} /></TouchableOpacity>
+        </View>
+        {currentStep && (
+          <>
+            <View style={styles.detailUserRow}>
+              <View style={styles.detailAvatar} />
+              <View style={styles.detailUserInfo}>
+                <Text style={styles.detailUserName}>{currentStep.name}</Text>
+                <Text style={styles.detailRating}>★ 4.8</Text>
+                <Text style={styles.detailBag}>Mala pequena</Text>
+              </View>
             </View>
-            {currentStep && (
+            <Text style={styles.detailLabel}>Endereço da coleta</Text>
+            <Text style={styles.detailAddress}>{currentStep.address}</Text>
+            {currentStep.observations && (
               <>
-                <View style={styles.detailUserRow}>
-                  <View style={styles.detailAvatar} />
-                  <View style={styles.detailUserInfo}>
-                    <Text style={styles.detailUserName}>{currentStep.name}</Text>
-                    <Text style={styles.detailRating}>★ 4.8</Text>
-                    <Text style={styles.detailBag}>Mala pequena</Text>
-                  </View>
-                </View>
-                <Text style={styles.detailLabel}>Endereço da coleta</Text>
-                <Text style={styles.detailAddress}>{currentStep.address}</Text>
-                {currentStep.observations && (
-                  <>
-                    <Text style={styles.detailLabel}>Observações</Text>
-                    <Text style={styles.detailObservations}>{currentStep.observations}</Text>
-                  </>
-                )}
-                <TouchableOpacity style={styles.detailPrimaryButton} onPress={handleStartColeta} activeOpacity={0.8}>
-                  <Text style={styles.detailPrimaryButtonText}>Iniciar coleta</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.detailSecondaryButton} onPress={handleCancelColeta} activeOpacity={0.8}>
-                  <Text style={styles.detailSecondaryButtonText}>Cancelar coleta</Text>
-                </TouchableOpacity>
+                <Text style={styles.detailLabel}>Observações</Text>
+                <Text style={styles.detailObservations}>{currentStep.observations}</Text>
               </>
             )}
-          </View>
-        </View>
-      </Modal>
+            <TouchableOpacity style={styles.detailPrimaryButton} onPress={handleStartColeta} activeOpacity={0.8}>
+              <Text style={styles.detailPrimaryButtonText}>Iniciar coleta</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.detailSecondaryButton} onPress={handleCancelColeta} activeOpacity={0.8}>
+              <Text style={styles.detailSecondaryButtonText}>Cancelar coleta</Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </AnimatedBottomSheet>
 
       {/* Sheet: Entrega para [nome] */}
-      <Modal visible={showEntregaSheet} transparent animationType="slide">
-        <View style={styles.sheetOverlay}>
-          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setShowEntregaSheet(false)} activeOpacity={1} />
-          <View style={styles.detailSheet}>
-            <TouchableOpacity style={styles.sheetClose} onPress={() => setShowEntregaSheet(false)} hitSlop={12}>
-              <MaterialIcons name="close" size={24} color={COLORS.black} />
-            </TouchableOpacity>
-            <Text style={styles.detailSheetTitle}>Entrega para {currentStep?.name}</Text>
-            {currentStep && (
+      <AnimatedBottomSheet visible={showEntregaSheet} onClose={() => setShowEntregaSheet(false)}>
+        <Text style={styles.detailSheetTitle}>Entrega para {currentStep?.name}</Text>
+        {currentStep && (
+          <>
+            <View style={styles.entregaTypeRow}>
+              <MaterialIcons name="inventory-2" size={24} color={COLORS.neutral700} />
+              <Text style={styles.entregaTypeText}>Pacote</Text>
+            </View>
+            <Text style={styles.detailLabel}>Local de entrega</Text>
+            <Text style={styles.detailAddress}>{currentStep.address}</Text>
+            {currentStep.observations && (
               <>
-                <View style={styles.entregaTypeRow}>
-                  <MaterialIcons name="inventory-2" size={24} color={COLORS.neutral700} />
-                  <Text style={styles.entregaTypeText}>Pacote</Text>
-                </View>
-                <Text style={styles.detailLabel}>Local de entrega</Text>
-                <Text style={styles.detailAddress}>{currentStep.address}</Text>
-                {currentStep.observations && (
-                  <>
-                    <Text style={styles.detailLabel}>Observações</Text>
-                    <Text style={styles.detailObservations}>{currentStep.observations}</Text>
-                  </>
-                )}
-                <TouchableOpacity style={styles.detailPrimaryButton} onPress={handleConfirmEntrega} activeOpacity={0.8}>
-                  <Text style={styles.detailPrimaryButtonText}>Confirmar entrega</Text>
-                </TouchableOpacity>
+                <Text style={styles.detailLabel}>Observações</Text>
+                <Text style={styles.detailObservations}>{currentStep.observations}</Text>
               </>
             )}
-          </View>
-        </View>
-      </Modal>
+            <TouchableOpacity style={styles.detailPrimaryButton} onPress={handleConfirmEntrega} activeOpacity={0.8}>
+              <Text style={styles.detailPrimaryButtonText}>Confirmar entrega</Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </AnimatedBottomSheet>
 
       {/* Sheet: Finalizar viagem */}
-      <Modal visible={showFinalizarSheet} transparent animationType="slide">
-        <View style={styles.sheetOverlay}>
-          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setShowFinalizarSheet(false)} activeOpacity={1} />
-          <View style={styles.detailSheet}>
-            <TouchableOpacity style={styles.sheetClose} onPress={() => setShowFinalizarSheet(false)} hitSlop={12}>
-              <MaterialIcons name="close" size={24} color={COLORS.black} />
-            </TouchableOpacity>
-            <Text style={styles.detailSheetTitle}>Finalizar viagem</Text>
-            <View style={styles.finalizarRow}>
-              <Text style={styles.finalizarLabel}>Tempo total</Text>
-              <Text style={styles.finalizarValue}>45 min</Text>
-            </View>
-            <View style={styles.finalizarRow}>
-              <Text style={styles.finalizarLabel}>Distância</Text>
-              <Text style={styles.finalizarValue}>12 km</Text>
-            </View>
-            <View style={styles.statusConcluidoWrap}>
-              <MaterialIcons name="check-circle" size={24} color={COLORS.green} />
-              <Text style={styles.statusConcluidoText}>Concluído</Text>
-            </View>
-            <Text style={styles.detailLabel}>Anexar despesas (opcional)</Text>
-            <TouchableOpacity style={styles.uploadExpenseBox} activeOpacity={0.8}>
-              <MaterialIcons name="cloud-upload" size={32} color={COLORS.neutral700} />
-              <Text style={styles.uploadExpenseText}>Envie o comprovante</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.detailPrimaryButton} onPress={handleFinalizarViagem} activeOpacity={0.8}>
-              <Text style={styles.detailPrimaryButtonText}>Enviar e finalizar viagem</Text>
-            </TouchableOpacity>
-          </View>
+      <AnimatedBottomSheet visible={showFinalizarSheet} onClose={() => setShowFinalizarSheet(false)}>
+        <Text style={styles.detailSheetTitle}>Finalizar viagem</Text>
+        <View style={styles.finalizarRow}>
+          <Text style={styles.finalizarLabel}>Tempo total</Text>
+          <Text style={styles.finalizarValue}>45 min</Text>
         </View>
-      </Modal>
+        <View style={styles.finalizarRow}>
+          <Text style={styles.finalizarLabel}>Distância</Text>
+          <Text style={styles.finalizarValue}>12 km</Text>
+        </View>
+        <View style={styles.statusConcluidoWrap}>
+          <MaterialIcons name="check-circle" size={24} color={COLORS.green} />
+          <Text style={styles.statusConcluidoText}>Concluído</Text>
+        </View>
+        <Text style={styles.detailLabel}>Anexar despesas (opcional)</Text>
+        <TouchableOpacity style={styles.uploadExpenseBox} activeOpacity={0.8}>
+          <MaterialIcons name="cloud-upload" size={32} color={COLORS.neutral700} />
+          <Text style={styles.uploadExpenseText}>Envie o comprovante</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.detailPrimaryButton} onPress={handleFinalizarViagem} activeOpacity={0.8}>
+          <Text style={styles.detailPrimaryButtonText}>Enviar e finalizar viagem</Text>
+        </TouchableOpacity>
+      </AnimatedBottomSheet>
 
       <ConfirmModal
         visible={showCancelColetaModal}

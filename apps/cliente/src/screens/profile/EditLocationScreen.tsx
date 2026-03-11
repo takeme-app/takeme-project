@@ -6,10 +6,10 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Modal,
   FlatList,
 } from 'react-native';
 import { Text } from '../../components/Text';
+import { AnimatedBottomSheet } from '../../components/AnimatedBottomSheet';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -183,72 +183,60 @@ export function EditLocationScreen({ navigation }: Props) {
         </View>
       </KeyboardAvoidingView>
 
-      <Modal visible={stateModalVisible} transparent animationType="slide">
-        <TouchableOpacity
-          style={styles.modalBackdrop}
-          activeOpacity={1}
-          onPress={() => setStateModalVisible(false)}
-        />
-        <View style={styles.modalBox}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Estado (UF)</Text>
-            <TouchableOpacity onPress={() => setStateModalVisible(false)} hitSlop={12}>
-              <Text style={styles.modalClose}>Fechar</Text>
+      <AnimatedBottomSheet visible={stateModalVisible} onClose={() => setStateModalVisible(false)}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Estado (UF)</Text>
+          <TouchableOpacity onPress={() => setStateModalVisible(false)} hitSlop={12}>
+            <Text style={styles.modalClose}>Fechar</Text>
+          </TouchableOpacity>
+        </View>
+        <FlatList
+          data={BRAZIL_STATES}
+          keyExtractor={(item) => item.sigla}
+          style={styles.modalList}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              style={styles.modalItem}
+              onPress={() => handleSelectState(item.sigla, item.nome)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.modalItemText}>{item.nome} - {item.sigla}</Text>
+              {stateUf === item.sigla && <Text style={styles.modalItemCheck}>✓</Text>}
             </TouchableOpacity>
+          )}
+        />
+      </AnimatedBottomSheet>
+
+      <AnimatedBottomSheet visible={cityModalVisible} onClose={() => setCityModalVisible(false)}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Cidade</Text>
+          <TouchableOpacity onPress={() => setCityModalVisible(false)} hitSlop={12}>
+            <Text style={styles.modalClose}>Fechar</Text>
+          </TouchableOpacity>
+        </View>
+        {citiesLoading ? (
+          <View style={styles.modalLoading}>
+            <ActivityIndicator size="large" color={COLORS.black} />
+            <Text style={styles.modalLoadingText}>Carregando cidades...</Text>
           </View>
+        ) : (
           <FlatList
-            data={BRAZIL_STATES}
-            keyExtractor={(item) => item.sigla}
+            data={cities}
+            keyExtractor={(item) => String(item.id)}
+            style={styles.modalList}
             renderItem={({ item }) => (
               <TouchableOpacity
                 style={styles.modalItem}
-                onPress={() => handleSelectState(item.sigla, item.nome)}
+                onPress={() => handleSelectCity(item.nome)}
                 activeOpacity={0.7}
               >
-                <Text style={styles.modalItemText}>{item.nome} - {item.sigla}</Text>
-                {stateUf === item.sigla && <Text style={styles.modalItemCheck}>✓</Text>}
+                <Text style={styles.modalItemText}>{item.nome}</Text>
+                {city === item.nome && <Text style={styles.modalItemCheck}>✓</Text>}
               </TouchableOpacity>
             )}
           />
-        </View>
-      </Modal>
-
-      <Modal visible={cityModalVisible} transparent animationType="slide">
-        <TouchableOpacity
-          style={styles.modalBackdrop}
-          activeOpacity={1}
-          onPress={() => setCityModalVisible(false)}
-        />
-        <View style={styles.modalBox}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Cidade</Text>
-            <TouchableOpacity onPress={() => setCityModalVisible(false)} hitSlop={12}>
-              <Text style={styles.modalClose}>Fechar</Text>
-            </TouchableOpacity>
-          </View>
-          {citiesLoading ? (
-            <View style={styles.modalLoading}>
-              <ActivityIndicator size="large" color={COLORS.black} />
-              <Text style={styles.modalLoadingText}>Carregando cidades...</Text>
-            </View>
-          ) : (
-            <FlatList
-              data={cities}
-              keyExtractor={(item) => String(item.id)}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.modalItem}
-                  onPress={() => handleSelectCity(item.nome)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.modalItemText}>{item.nome}</Text>
-                  {city === item.nome && <Text style={styles.modalItemCheck}>✓</Text>}
-                </TouchableOpacity>
-              )}
-            />
-          )}
-        </View>
-      </Modal>
+        )}
+      </AnimatedBottomSheet>
     </SafeAreaView>
   );
 }
@@ -292,15 +280,8 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.7 },
   buttonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  modalBox: {
-    backgroundColor: COLORS.background,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    maxHeight: '70%',
+  modalList: {
+    maxHeight: 350,
   },
   modalHeader: {
     flexDirection: 'row',
