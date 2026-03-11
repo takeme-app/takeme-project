@@ -59,6 +59,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
   const [destinationAddress, setDestinationAddress] = useState('');
   const [destinationLat, setDestinationLat] = useState(DEFAULT_DEST_COORDS.latitude);
   const [destinationLng, setDestinationLng] = useState(DEFAULT_DEST_COORDS.longitude);
+  const [destinationConfirmed, setDestinationConfirmed] = useState(false);
   const [whenOption, setWhenOption] = useState<'now' | 'later'>('now');
   const [whenLabel, setWhenLabel] = useState('Agora');
   const [whenSheetVisible, setWhenSheetVisible] = useState(false);
@@ -163,6 +164,10 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
       showAlert('Atenção', 'Informe o destino da viagem.');
       return;
     }
+    if (!destinationConfirmed) {
+      showAlert('Atenção', 'Selecione o destino a partir das sugestões para garantir a localização correta.');
+      return;
+    }
     const origin: ShipmentPlaceParam = {
       address: originAddress,
       latitude: originLat,
@@ -187,6 +192,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
     });
   }, [
     destinationAddress,
+    destinationConfirmed,
     destinationLat,
     destinationLng,
     originAddress,
@@ -245,11 +251,15 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
         <Text style={styles.label}>Destino</Text>
         <AddressAutocomplete
           value={destinationAddress}
-          onChangeText={setDestinationAddress}
+          onChangeText={(text) => {
+            setDestinationAddress(text);
+            setDestinationConfirmed(false);
+          }}
           onSelectPlace={(place) => {
             setDestinationAddress(place.address);
             setDestinationLat(place.latitude);
             setDestinationLng(place.longitude);
+            setDestinationConfirmed(true);
           }}
           placeholder="Ex: Rodoviária, hotel..."
           style={styles.autocomplete}

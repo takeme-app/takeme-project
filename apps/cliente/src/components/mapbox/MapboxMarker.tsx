@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, TouchableOpacity } from 'react-native';
+import { View, TouchableOpacity, Image, type ImageSourcePropType } from 'react-native';
 import { PointAnnotation, MarkerView } from '@rnmapbox/maps';
 import type { LatLng } from './mapboxUtils';
 
@@ -11,11 +11,14 @@ type MapboxMarkerProps = {
   anchor?: Anchor;
   title?: string;
   description?: string;
-  /** Cor do pin padrão quando não há children (ex.: '#0d0d0d', '#dc2626'). */
+  /** Cor do pin padrão quando não há children nem icon. */
   pinColor?: string;
-  /** Conteúdo customizado (ex.: MyLocationMarkerIcon, DriverMarkerIcon). Mesmas marcações do iOS. */
+  /** Ícone estático via MarkerView (tamanho fixo em pixels, sem distorção). */
+  icon?: ImageSourcePropType;
+  /** Tamanho do ícone em dp (default 20). */
+  iconSize?: number;
+  /** Conteúdo customizado (ex.: DriverEtaMarkerIcon). Usa MarkerView. */
   children?: React.ReactNode;
-  /** Ao tocar no marcador (MarkerView com children). Para PointAnnotation use onSelected do mapa. */
   onPress?: () => void;
 };
 
@@ -33,8 +36,9 @@ const defaultPin = (pinColor: string) => (
 );
 
 /**
- * Marcador no Mapbox. Com children usa MarkerView (views nativas, igual iOS).
- * Sem children usa PointAnnotation (pin simples).
+ * Marcador no Mapbox.
+ * - Com `icon` ou `children` usa MarkerView (tamanho fixo em pixels).
+ * - Sem nenhum usa PointAnnotation com pin padrão.
  */
 export function MapboxMarker({
   id,
@@ -43,19 +47,35 @@ export function MapboxMarker({
   title,
   description,
   pinColor = '#0d0d0d',
+  icon,
+  iconSize = 20,
   children,
   onPress,
 }: MapboxMarkerProps) {
   const coord: [number, number] = [coordinate.longitude, coordinate.latitude];
 
-  if (children) {
-    const content = onPress ? (
-      <TouchableOpacity onPress={onPress} activeOpacity={0.8} style={{ alignItems: 'center', justifyContent: 'center' }}>
-        {children}
-      </TouchableOpacity>
-    ) : (
-      children
-    );
+  if (children || icon) {
+    let content: React.ReactNode;
+    if (children) {
+      content = children;
+    } else {
+      content = (
+        <Image
+          source={icon!}
+          style={{ width: iconSize, height: iconSize }}
+          resizeMode="contain"
+        />
+      );
+    }
+
+    if (onPress) {
+      content = (
+        <TouchableOpacity onPress={onPress} activeOpacity={0.8} style={{ alignItems: 'center', justifyContent: 'center' }}>
+          {content}
+        </TouchableOpacity>
+      );
+    }
+
     return (
       <MarkerView key={id} coordinate={coord} anchor={anchor} allowOverlap>
         {content}

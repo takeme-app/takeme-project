@@ -12,7 +12,8 @@ import {
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SupportSheet } from '../../components/SupportSheet';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
@@ -151,6 +152,8 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
   const [showDriverSheet, setShowDriverSheet] = useState(false);
   const [showPreparerSheet, setShowPreparerSheet] = useState(false);
   const [showVehicleSheet, setShowVehicleSheet] = useState(false);
+  const [supportSheetVisible, setSupportSheetVisible] = useState(false);
+  const insets = useSafeAreaInsets();
   const [driverProfile, setDriverProfile] = useState<ProfileRow | null>(null);
   const [preparerProfile, setPreparerProfile] = useState<ProfileRow | null>(null);
 
@@ -408,6 +411,18 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
         vehicle={vehicle}
         driverName={driverProfile?.full_name ?? null}
       />
+
+      <TouchableOpacity style={[styles.fab, { bottom: Math.max(24, insets.bottom + 16) }]} onPress={() => setSupportSheetVisible(true)} activeOpacity={0.8}>
+        <Image source={require('../../../assets/icons/icon-chat.png')} style={styles.fabIcon} />
+      </TouchableOpacity>
+
+      <SupportSheet
+        visible={supportSheetVisible}
+        onClose={() => setSupportSheetVisible(false)}
+        showDriverChat={detail?.status != null && !['completed', 'cancelled'].includes(detail.status)}
+        onOpenDriverChat={() => navigation.navigate('Chat', { contactName: 'Motorista' })}
+        onOpenSupportChat={() => navigation.navigate('Chat', { contactName: 'Suporte Take Me' })}
+      />
     </SafeAreaView>
   );
 }
@@ -612,6 +627,22 @@ function VehicleSheet({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
+  fab: {
+    position: 'absolute',
+    right: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FBBF24',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  fabIcon: { width: 28, height: 28 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

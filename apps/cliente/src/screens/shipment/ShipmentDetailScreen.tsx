@@ -14,6 +14,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Animated,
+  Image,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -23,8 +24,10 @@ import { MapboxMap, MapboxMarker, MapboxPolyline } from '../../components/mapbox
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
-import { getRoutePolyline, type RoutePoint } from '../../lib/route';
+import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib/route';
+import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
 import { StatusBadge, shipmentStatusToBadge } from '../../components/StatusBadge';
+import { SupportSheet } from '../../components/SupportSheet';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ShipmentDetail'>;
 
@@ -96,8 +99,10 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
   const [ratingRow, setRatingRow] = useState<ShipmentRatingRow>(null);
   const [loading, setLoading] = useState(true);
   const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
+  const [routeDuration, setRouteDuration] = useState<string | null>(null);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [supportSheetVisible, setSupportSheetVisible] = useState(false);
   const [showTipSheet, setShowTipSheet] = useState(false);
   const [showRatingSheet, setShowRatingSheet] = useState(false);
   const [tipInputValue, setTipInputValue] = useState('');
@@ -163,31 +168,30 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (!detail?.origin_lat || !detail?.origin_lng || !detail?.destination_lat || !detail?.destination_lng) return;
     let cancelled = false;
-    getRoutePolyline(
+    getRouteWithDuration(
       { latitude: detail.origin_lat, longitude: detail.origin_lng },
       { latitude: detail.destination_lat, longitude: detail.destination_lng }
-    ).then((coords) => {
-      if (!cancelled && coords?.length) setRouteCoords(coords);
+    ).then((result) => {
+      if (!cancelled && result) {
+        setRouteCoords(result.coordinates);
+        if (result.durationSeconds > 0) setRouteDuration(formatDuration(result.durationSeconds));
+      }
     });
     return () => { cancelled = true; };
   }, [detail?.origin_lat, detail?.origin_lng, detail?.destination_lat, detail?.destination_lng]);
 
   const mapRegion = useMemo(() => {
     if (!detail?.origin_lat || !detail?.origin_lng || !detail?.destination_lat || !detail?.destination_lng) return null;
-    const latMin = Math.min(detail.origin_lat, detail.destination_lat);
-    const latMax = Math.max(detail.origin_lat, detail.destination_lat);
-    const lngMin = Math.min(detail.origin_lng, detail.destination_lng);
-    const lngMax = Math.max(detail.origin_lng, detail.destination_lng);
-    const padding = 0.01;
     return {
-      latitude: (latMin + latMax) / 2,
-      longitude: (lngMin + lngMax) / 2,
-      latitudeDelta: Math.max(0.05, latMax - latMin + padding * 2),
-      longitudeDelta: Math.max(0.05, lngMax - lngMin + padding * 2),
+      latitude: detail.origin_lat,
+      longitude: detail.origin_lng,
+      latitudeDelta: 0.01,
+      longitudeDelta: 0.01,
     };
   }, [detail]);
 
   const canCancel = detail?.status && ['pending_review', 'awaiting_driver', 'confirmed', 'in_progress'].includes(detail.status);
+  const driverOnWay = detail?.status && ['confirmed', 'in_progress'].includes(detail.status);
 
   useEffect(() => {
     if (!showTipSheet) return;
@@ -376,22 +380,18 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         {mapRegion && detail.origin_lat != null && detail.origin_lng != null && detail.destination_lat != null && detail.destination_lng != null && (
           <View style={styles.mapSection}>
             <View style={styles.mapContainer}>
-              <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled={false}>
-                <MapboxMarker
-                  id="origin"
-                  coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }}
-                  anchor={{ x: 0.5, y: 1 }}
-                  pinColor="#0d0d0d"
-                />
-                <MapboxMarker
-                  id="destination"
-                  coordinate={{ latitude: detail.destination_lat, longitude: detail.destination_lng }}
-                  anchor={{ x: 0.5, y: 1 }}
-                  pinColor="#2563eb"
-                />
+              <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled={false} showControls>
                 {routeCoords && routeCoords.length > 0 && (
                   <MapboxPolyline coordinates={routeCoords} strokeColor={COLORS.black} strokeWidth={4} />
                 )}
+                {driverOnWay ? (
+                  <MapboxMarker id="origin" coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                    <DriverEtaMarkerIcon eta={routeDuration ?? undefined} />
+                  </MapboxMarker>
+                ) : (
+                  <MapboxMarker id="origin" coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }} anchor={{ x: 0.5, y: 0.5 }} icon={require('../../../assets/icons/icon-partida.png')} iconSize={17} />
+                )}
+                <MapboxMarker id="destination" coordinate={{ latitude: detail.destination_lat, longitude: detail.destination_lng }} anchor={{ x: 0.5, y: 0.5 }} icon={require('../../../assets/icons/icon-destino.png')} iconSize={14} />
               </MapboxMap>
             </View>
             <TouchableOpacity style={styles.trackButton} activeOpacity={0.8}>
@@ -532,9 +532,6 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
                   <Text style={styles.infoText}>{detail.instructions}</Text>
                 </View>
               </View>
-              <TouchableOpacity style={styles.chatIconButton} activeOpacity={0.8}>
-                <MaterialIcons name="chat-bubble-outline" size={24} color={COLORS.accent} />
-              </TouchableOpacity>
             </View>
           </View>
         ) : null}
@@ -545,6 +542,18 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         )}
       </ScrollView>
+
+      <TouchableOpacity style={[styles.fab, { bottom: Math.max(24, insets.bottom + 16) }]} onPress={() => setSupportSheetVisible(true)} activeOpacity={0.8}>
+        <Image source={require('../../../assets/icons/icon-chat.png')} style={styles.fabIcon} />
+      </TouchableOpacity>
+
+      <SupportSheet
+        visible={supportSheetVisible}
+        onClose={() => setSupportSheetVisible(false)}
+        showDriverChat={canCancel}
+        onOpenDriverChat={() => navigation.navigate('Chat', { contactName: 'Motorista' })}
+        onOpenSupportChat={() => navigation.navigate('Chat', { contactName: 'Suporte Take Me' })}
+      />
 
       <Modal visible={showCancelModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
@@ -829,7 +838,22 @@ const styles = StyleSheet.create({
   instrucoesContent: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, flex: 1, minWidth: 0 },
   instrucoesTextWrap: { flex: 1, minWidth: 0 },
   instrucoesIcon: { marginTop: 2 },
-  chatIconButton: { padding: 8, marginLeft: 4 },
+  fab: {
+    position: 'absolute',
+    right: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FBBF24',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  fabIcon: { width: 28, height: 28 },
   cancelButton: {
     marginHorizontal: 24,
     marginTop: 28,

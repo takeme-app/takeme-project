@@ -1,7 +1,8 @@
 import React from 'react';
-import { View, TouchableOpacity, StyleSheet, Modal, Linking } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, Linking } from 'react-native';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
+import { AnimatedBottomSheet } from './AnimatedBottomSheet';
 
 const COLORS = {
   background: '#FFFFFF',
@@ -14,93 +15,98 @@ const COLORS = {
 type Props = {
   visible: boolean;
   onClose: () => void;
-  onOpenChat?: () => void;
+  onOpenSupportChat?: () => void;
+  onOpenDriverChat?: () => void;
+  showDriverChat?: boolean;
 };
 
 const SUPPORT_PHONE = 'tel:+5511999999999';
 const SUPPORT_WHATSAPP = 'https://wa.me/5511999999999';
 
-export function SupportSheet({ visible, onClose, onOpenChat }: Props) {
+export function SupportSheet({ visible, onClose, onOpenSupportChat, onOpenDriverChat, showDriverChat }: Props) {
   const handleCall = () => {
-    Linking.openURL(SUPPORT_PHONE);
     onClose();
+    Linking.openURL(SUPPORT_PHONE);
   };
 
   const handleWhatsApp = () => {
-    Linking.openURL(SUPPORT_WHATSAPP);
     onClose();
+    Linking.openURL(SUPPORT_WHATSAPP);
   };
 
-  const handleChat = () => {
+  const handleSupportChat = () => {
     onClose();
-    onOpenChat?.();
+    onOpenSupportChat?.();
+  };
+
+  const handleDriverChat = () => {
+    onClose();
+    onOpenDriverChat?.();
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide">
-      <View style={styles.overlay}>
-        <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onClose} activeOpacity={1} />
-        <View style={styles.sheet}>
-          <TouchableOpacity style={styles.closeButton} onPress={onClose} hitSlop={12}>
-            <MaterialIcons name="close" size={24} color={COLORS.black} />
-          </TouchableOpacity>
+    <AnimatedBottomSheet visible={visible} onClose={onClose}>
+      <View style={styles.headerRow}>
+        <View style={styles.headerTextWrap}>
           <Text style={styles.title}>Como podemos ajudar?</Text>
-          <Text style={styles.subtitle}>Escolha uma das opções abaixo para entrar em contato</Text>
-
-          <TouchableOpacity style={styles.optionCard} onPress={handleCall} activeOpacity={0.8}>
-            <View style={styles.optionIconCircle}>
-              <MaterialIcons name="phone" size={24} color={COLORS.black} />
-            </View>
-            <Text style={styles.optionLabel}>Ligar para o suporte Take Me</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.optionCard} onPress={handleChat} activeOpacity={0.8}>
-            <View style={styles.optionIconCircle}>
-              <MaterialIcons name="headset-mic" size={24} color={COLORS.black} />
-            </View>
-            <Text style={styles.optionLabel}>Chat com o suporte Take Me</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.optionCard} onPress={handleWhatsApp} activeOpacity={0.8}>
-            <View style={styles.optionIconCircle}>
-              <MaterialIcons name="chat" size={24} color={COLORS.black} />
-            </View>
-            <Text style={styles.optionLabel}>WhatsApp do Take Me</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.footerButton} onPress={onClose} activeOpacity={0.8}>
-            <Text style={styles.footerButtonText}>Fechar</Text>
-          </TouchableOpacity>
+          <Text style={styles.subtitle}>Escolha uma das opções abaixo{'\n'}para entrar em contato</Text>
         </View>
+        <TouchableOpacity onPress={onClose} hitSlop={12}>
+          <MaterialIcons name="close" size={24} color={COLORS.black} />
+        </TouchableOpacity>
       </View>
-    </Modal>
+
+      <TouchableOpacity style={styles.optionCard} onPress={handleCall} activeOpacity={0.8}>
+        <View style={styles.optionIconCircle}>
+          <MaterialIcons name="phone" size={22} color={COLORS.black} />
+        </View>
+        <Text style={styles.optionLabel}>Ligar para o suporte Take Me</Text>
+      </TouchableOpacity>
+
+      {showDriverChat && (
+        <TouchableOpacity style={styles.optionCard} onPress={handleDriverChat} activeOpacity={0.8}>
+          <View style={styles.optionIconCircle}>
+            <MaterialIcons name="chat-bubble-outline" size={22} color={COLORS.black} />
+          </View>
+          <Text style={styles.optionLabel}>Chat com o motorista</Text>
+        </TouchableOpacity>
+      )}
+
+      <TouchableOpacity style={styles.optionCard} onPress={handleSupportChat} activeOpacity={0.8}>
+        <View style={styles.optionIconCircle}>
+          <MaterialIcons name="headset-mic" size={22} color={COLORS.black} />
+        </View>
+        <Text style={styles.optionLabel}>Chat com o suporte Take Me</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.optionCard} onPress={handleWhatsApp} activeOpacity={0.8}>
+        <View style={styles.optionIconCircle}>
+          <MaterialIcons name="chat" size={22} color={COLORS.black} />
+        </View>
+        <Text style={styles.optionLabel}>WhatsApp do Take Me</Text>
+      </TouchableOpacity>
+    </AnimatedBottomSheet>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'flex-end',
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 20,
   },
-  sheet: {
-    backgroundColor: COLORS.background,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 24,
-    paddingBottom: 40,
-  },
-  closeButton: { position: 'absolute', top: 16, right: 16, zIndex: 1 },
+  headerTextWrap: { flex: 1, marginRight: 16 },
   title: {
     fontSize: 20,
     fontWeight: '700',
     color: COLORS.black,
-    marginBottom: 8,
+    marginBottom: 4,
   },
   subtitle: {
     fontSize: 14,
     color: COLORS.neutral700,
-    marginBottom: 24,
+    lineHeight: 20,
   },
   optionCard: {
     flexDirection: 'row',
@@ -108,29 +114,21 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.yellowLight,
     borderRadius: 12,
     padding: 16,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   optionIconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: COLORS.yellowCircle,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 16,
+    marginRight: 14,
   },
   optionLabel: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
     color: COLORS.black,
     flex: 1,
   },
-  footerButton: {
-    marginTop: 16,
-    paddingVertical: 16,
-    borderRadius: 12,
-    backgroundColor: COLORS.black,
-    alignItems: 'center',
-  },
-  footerButtonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
 });

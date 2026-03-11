@@ -111,6 +111,7 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
   const [destinationAddress, setDestinationAddress] = useState<string | null>(null);
   const [destinationLat, setDestinationLat] = useState(DEFAULT_DESTINATION_COORDS.latitude);
   const [destinationLng, setDestinationLng] = useState(DEFAULT_DESTINATION_COORDS.longitude);
+  const [destinationConfirmed, setDestinationConfirmed] = useState(false);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editOrigin, setEditOrigin] = useState(originAddress);
   const [editDestination, setEditDestination] = useState('');
@@ -165,6 +166,7 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
   const openEditModal = useCallback(() => {
     setEditOrigin(originAddress);
     setEditDestination(destinationAddress ?? '');
+    setDestinationConfirmed(!!destinationAddress);
     editOverlayOpacity.setValue(0);
     editSheetTranslateY.setValue(EDIT_SHEET_SLIDE);
     requestAnimationFrame(() => {
@@ -215,6 +217,10 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
     setOriginAddress(newOriginAddress);
     const destText = editDestination.trim();
     if (destText) {
+      if (!destinationConfirmed) {
+        showAlert('Atenção', 'Selecione o destino a partir das sugestões para garantir a localização correta.');
+        return;
+      }
       setDestinationAddress(destText);
       const city = destText.includes(', ') ? destText.split(', ').slice(-1)[0] ?? destText : destText;
       addRecentDestination({
@@ -240,9 +246,11 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
     originLng,
     destinationLat,
     destinationLng,
+    destinationConfirmed,
     closeEditModal,
     loadRecentDestinations,
     goToRecipient,
+    showAlert,
   ]);
 
   useEffect(() => {
@@ -595,12 +603,16 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
               <Text style={styles.modalLabel}>Destino</Text>
               <AddressAutocomplete
                 value={editDestination}
-                onChangeText={setEditDestination}
+                onChangeText={(text) => {
+                  setEditDestination(text);
+                  setDestinationConfirmed(false);
+                }}
                 onSelectPlace={(place) => {
                   setDestinationAddress(place.address);
                   setDestinationLat(place.latitude);
                   setDestinationLng(place.longitude);
                   setEditDestination(place.address);
+                  setDestinationConfirmed(true);
                 }}
                 placeholder="Ex: Rua Coronel José Gomes, 150"
                 style={styles.modalAutocomplete}
