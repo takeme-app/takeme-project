@@ -2,19 +2,28 @@
   "name": "take-me",
   "private": true,
   "version": "0.0.0",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "build:admin": "cd apps/admin && npx expo export --platform web",
     "lint": "npm run lint --workspaces --if-present",
-    "sync-env": "node -e \"const fs=require('fs'),path=require('path');const r=path.join(__dirname,'.env');['cliente','motorista','admin','preparador-encomendas','preparador-excursoes'].forEach(a=>{const d=path.join(__dirname,'apps',a,'.env');try{fs.copyFileSync(r,d);console.log('apps/'+a);}catch(e){}})\"",
+    "sync-env": "node -e \"const fs=require('fs'),path=require('path');const r=path.join(__dirname,'.env');['cliente','motorista','medico','admin','preparador-encomendas','preparador-excursoes'].forEach(a=>{const d=path.join(__dirname,'apps',a,'.env');try{fs.copyFileSync(r,d);console.log('apps/'+a);}catch(e){}})\"",
     "cliente": "npm run start --workspace=cliente",
-    "motorista": "npm run start --workspace=motorista",
+    "motorista": "cross-env EXPO_APP_SUBPATH=apps/motorista npm run start --workspace=motorista --",
+    "motorista:ios": "cross-env EXPO_APP_SUBPATH=apps/motorista npm run native:ios --workspace=motorista",
+    "motorista:android": "cross-env EXPO_APP_SUBPATH=apps/motorista npm run native:android --workspace=motorista",
+    "motorista:apk": "npm run build:apk --workspace=motorista",
+    "medico": "npm run start --workspace=medico",
     "preparador-encomendas": "npm run start --workspace=preparador-encomendas",
     "preparador-excursoes": "npm run start --workspace=preparador-excursoes",
     "admin": "npm run start --workspace=admin",
     "deploy:verify-email-code": "npx supabase functions deploy verify-email-code --no-verify-jwt",
-    "create-avatars-bucket":"node scripts/create-avatars-bucket.js","db:push":"supabase db push","deploy:delete-account": "npx supabase functions deploy delete-account --no-verify-jwt",
+    "create-avatars-bucket": "node scripts/create-avatars-bucket.js",
+    "db:push": "supabase db push",
+    "deploy:delete-account": "npx supabase functions deploy delete-account --no-verify-jwt",
     "deploy:functions": "npx supabase functions deploy send-email-verification-code --no-verify-jwt && npx supabase functions deploy verify-email-code --no-verify-jwt && npx supabase functions deploy send-welcome-email --no-verify-jwt && npx supabase functions deploy delete-account --no-verify-jwt",
     "resize-map-markers": "node scripts/resize-map-markers.js"
   },
@@ -22,11 +31,17 @@
     "node": ">=18"
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "sharp": "^0.33.5",
     "supabase": "^2.0.0"
   },
   "overrides": {
     "minimatch": "^10.2.1",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
     "tar": "^7.5.8"
+  },
+  "dependencies": {
+    "react-native": "^0.81.5"
   }
 }

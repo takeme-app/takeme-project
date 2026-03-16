@@ -12,7 +12,7 @@
     "lint": "expo lint"
   },
   "dependencies": {
-    "@expo/vector-icons": "^14.0.4",
+    "@expo/vector-icons": "^15.1.1",
     "@take-me/shared": "*",
     "dotenv": "^16.4.7",
     "expo": "^54.0.33",
