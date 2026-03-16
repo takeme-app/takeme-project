@@ -2,6 +2,8 @@
 
 Este documento descreve como usar branches no monorepo para trabalhar em paralelo: **admin (web)**, **cliente**, **motorista**, **preparador-encomendas** e **preparador-excursoes**, com vários devs.
 
+**Separação dos apps:** Cada app pode ser rodado de forma independente. O **admin** tem seu próprio `metro.config.js` em `apps/admin/` — rode sempre a partir de `apps/admin` (`npm run start`) para não abrir outro app. O motorista/cliente usam o Metro da raiz (ou o config do próprio app, se existir). Veja `apps/admin/README.md` para fluxo só do admin.
+
 ---
 
 ## Branches principais
