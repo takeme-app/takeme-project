@@ -10,7 +10,9 @@ import { SignUpTypeScreen } from '../screens/SignUpTypeScreen';
 import { SignUpScreen } from '../screens/SignUpScreen';
 import { VerifyEmailScreen } from '../screens/VerifyEmailScreen';
 import { CompleteDriverRegistrationScreen } from '../screens/CompleteDriverRegistrationScreen';
+import { FinalizeRegistrationScreen } from '../screens/FinalizeRegistrationScreen';
 import { RegistrationSuccessScreen } from '../screens/RegistrationSuccessScreen';
+import { MotoristaPendingApprovalScreen } from '../screens/MotoristaPendingApprovalScreen';
 import { ForgotPasswordScreen } from '../screens/ForgotPasswordScreen';
 import { ForgotPasswordEmailSentScreen } from '../screens/ForgotPasswordEmailSentScreen';
 import { ResetPasswordScreen } from '../screens/ResetPasswordScreen';
@@ -18,6 +20,10 @@ import { ResetPasswordSuccessScreen } from '../screens/ResetPasswordSuccessScree
 import { TermsOfUseScreen } from '../screens/TermsOfUseScreen';
 import { PrivacyPolicyScreen } from '../screens/PrivacyPolicyScreen';
 import { MainTabs } from './MainTabs';
+import { PendingRequestsScreen } from '../screens/PendingRequestsScreen';
+import { TripHistoryScreen } from '../screens/TripHistoryScreen';
+import { TripDetailScreen } from '../screens/TripDetailScreen';
+import { ActiveTripScreen } from '../screens/ActiveTripScreen';
 import type { RootStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -47,8 +53,18 @@ export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
           <Stack.Screen name="SignUp" component={SignUpScreen} />
           <Stack.Screen name="VerifyEmail" component={VerifyEmailScreen} />
           <Stack.Screen name="CompleteDriverRegistration" component={CompleteDriverRegistrationScreen} />
+          <Stack.Screen name="FinalizeRegistration" component={FinalizeRegistrationScreen} />
           <Stack.Screen name="RegistrationSuccess" component={RegistrationSuccessScreen} />
+          <Stack.Screen
+            name="MotoristaPendingApproval"
+            component={MotoristaPendingApprovalScreen}
+            options={{ animation: 'fade' }}
+          />
           <Stack.Screen name="Main" component={MainTabs} options={{ animation: 'fade' }} />
+          <Stack.Screen name="PendingRequests" component={PendingRequestsScreen} options={{ animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="TripHistory" component={TripHistoryScreen} options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="TripDetail" component={TripDetailScreen} options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="ActiveTrip" component={ActiveTripScreen} options={{ animation: 'fade', gestureEnabled: false }} />
           <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
           <Stack.Screen name="ForgotPasswordEmailSent" component={ForgotPasswordEmailSentScreen} />
           <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />

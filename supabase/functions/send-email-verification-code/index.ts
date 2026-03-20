@@ -66,6 +66,12 @@ Deno.serve(async (req) => {
       }
     }
 
+    /** Um código ativo por e-mail (evita várias linhas e confusão com char/text antigo). */
+    const { error: delErr } = await supabase.from("email_verification_codes").delete().eq("email", emailNorm);
+    if (delErr) {
+      console.error("[send-email-verification-code] delete códigos anteriores:", delErr);
+    }
+
     const code = generateCode();
 
     const { error: insertError } = await supabase.from("email_verification_codes").insert({

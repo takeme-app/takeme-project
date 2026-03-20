@@ -2,7 +2,7 @@
   "expo": {
     "name": "Take Me - Motorista",
     "slug": "take-me-motorista",
-    "owner": "fraktal-softwares",
+    "owner": "viniciusbsilva",
     "scheme": "take-me-motorista",
     "version": "1.0.0",
     "icon": "./assets/logo.png",
@@ -25,13 +25,20 @@
       },
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
       "bundler": "metro"
     },
+    "extra": {
+      "eas": {
+        "projectId": "6cd990d2-9b66-4dd6-88d7-54eb5dffa103"
+      }
+    },
     "plugins": [
+      "@rnmapbox/maps",
       [
         "expo-splash-screen",
         {

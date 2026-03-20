@@ -15,7 +15,9 @@ export function RegistrationSuccessScreen({ navigation }: Props) {
     <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom + 24 }]}>
       <StatusBar style="dark" />
       <View style={styles.iconWrap}>
-        <MaterialIcons name="check-circle" size={80} color="#000000" />
+        <View style={styles.successIconCircle} accessibilityRole="image" accessibilityLabel="Sucesso">
+          <MaterialIcons name="check" size={44} color="#FFFFFF" />
+        </View>
       </View>
       <Text style={styles.title}>Cadastro enviado com sucesso!</Text>
       <Text style={styles.message}>
@@ -30,7 +32,15 @@ export function RegistrationSuccessScreen({ navigation }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF', paddingHorizontal: 24, justifyContent: 'center', alignItems: 'center' },
-  iconWrap: { marginBottom: 24 },
+  iconWrap: { marginBottom: 28 },
+  successIconCircle: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: '#000000',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   title: { fontSize: 22, fontWeight: '700', color: '#111827', textAlign: 'center', marginBottom: 16 },
   message: { fontSize: 15, color: '#6B7280', textAlign: 'center', lineHeight: 22, marginBottom: 32, maxWidth: 320 },
   button: { backgroundColor: '#000000', paddingVertical: 16, paddingHorizontal: 48, borderRadius: 12, alignSelf: 'stretch', alignItems: 'center' },

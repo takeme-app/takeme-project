@@ -1,0 +1,360 @@
+import { useState, useCallback } from 'react';
+import {
+  View,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+} from 'react-native';
+import { Text } from '../components/Text';
+import { useFocusEffect } from '@react-navigation/native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import { MaterialIcons } from '@expo/vector-icons';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../navigation/types';
+import { supabase } from '../lib/supabase';
+import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
+
+type Props = NativeStackScreenProps<RootStackParamList, 'TripHistory'>;
+
+const GOLD = '#C9A227';
+
+// ─── Types ─────────────────────────────────────────────────────────────────────
+
+type Booking = {
+  id: string;
+  passenger_count: number | null;
+  bags_count: number | null;
+  status: string;
+};
+
+type Trip = {
+  id: string;
+  origin_address: string;
+  destination_address: string;
+  departure_at: string;
+  status: 'completed' | 'cancelled';
+  bookings: Booking[];
+};
+
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+const PT_MONTHS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+function formatDateTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    const day = d.getDate();
+    const mon = PT_MONTHS[d.getMonth()];
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${day} ${mon} • ${hh}:${mm}`;
+  } catch {
+    return '—';
+  }
+}
+
+function shortAddr(addr: string): string {
+  return addr.split(',')[0]?.trim() ?? addr;
+}
+
+function isPackageTrip(bookings: Booking[]): boolean {
+  const pax = bookings.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
+  const bags = bookings.reduce((s, b) => s + (b.bags_count ?? 0), 0);
+  return bags > 0 && pax === 0;
+}
+
+function subtitleForTrip(bookings: Booking[]): string {
+  const pax = bookings.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
+  const bags = bookings.reduce((s, b) => s + (b.bags_count ?? 0), 0);
+  const parts: string[] = [];
+  if (pax > 0) parts.push(`${pax} passageiro${pax !== 1 ? 's' : ''}`);
+  if (bags > 0) parts.push(`${bags} pacote${bags !== 1 ? 's' : ''}`);
+  return parts.length > 0 ? parts.join(' • ') : '—';
+}
+
+// ─── Trip Row ──────────────────────────────────────────────────────────────────
+
+function TripRow({ trip, onPress }: { trip: Trip; onPress: () => void }) {
+  const isPackage = isPackageTrip(trip.bookings);
+  const isCompleted = trip.status === 'completed';
+
+  return (
+    <TouchableOpacity style={styles.tripRow} onPress={onPress} activeOpacity={0.75}>
+      {/* Icon */}
+      <View style={styles.tripIcon}>
+        <MaterialIcons
+          name={isPackage ? 'inventory-2' : 'directions-car'}
+          size={28}
+          color="#9CA3AF"
+        />
+      </View>
+
+      {/* Content */}
+      <View style={styles.tripContent}>
+        <Text style={styles.tripDestination} numberOfLines={1}>
+          {shortAddr(trip.destination_address)}
+        </Text>
+        <Text style={styles.tripMeta} numberOfLines={1}>
+          {formatDateTime(trip.departure_at)}
+          {'  '}
+          <Text style={styles.tripMetaSub}>{subtitleForTrip(trip.bookings)}</Text>
+        </Text>
+      </View>
+
+      {/* Badge */}
+      <View style={isCompleted ? styles.badgeCompleted : styles.badgeCancelled}>
+        <Text style={isCompleted ? styles.badgeCompletedText : styles.badgeCancelledText}>
+          {isCompleted ? 'Concluída' : 'Cancelada'}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+// ─── Section ───────────────────────────────────────────────────────────────────
+
+function Section({
+  title,
+  titleColor,
+  trips,
+  emptyLabel,
+  onPressTrip,
+}: {
+  title: string;
+  titleColor: string;
+  trips: Trip[];
+  emptyLabel: string;
+  onPressTrip: (id: string) => void;
+}) {
+  return (
+    <View style={styles.section}>
+      <Text style={[styles.sectionTitle, { color: titleColor }]}>{title}</Text>
+      {trips.length === 0 ? (
+        <Text style={styles.emptyText}>{emptyLabel}</Text>
+      ) : (
+        trips.map((t, i) => (
+          <View key={t.id}>
+            <TripRow trip={t} onPress={() => onPressTrip(t.id)} />
+            {i < trips.length - 1 && <View style={styles.separator} />}
+          </View>
+        ))
+      )}
+    </View>
+  );
+}
+
+// ─── Screen ────────────────────────────────────────────────────────────────────
+
+export function TripHistoryScreen({ navigation }: Props) {
+  const [loading, setLoading] = useState(true);
+  const [completed, setCompleted] = useState<Trip[]>([]);
+  const [cancelled, setCancelled] = useState<Trip[]>([]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user?.id) {
+      setLoading(false);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('scheduled_trips')
+      .select(
+        'id, origin_address, destination_address, departure_at, status, bookings(id, passenger_count, bags_count, status)'
+      )
+      .eq('driver_id', user.id)
+      .in('status', ['completed', 'cancelled'])
+      .order('departure_at', { ascending: false });
+
+    if (!error && data) {
+      const rows = data as Trip[];
+      setCompleted(rows.filter((r) => r.status === 'completed'));
+      setCancelled(rows.filter((r) => r.status === 'cancelled'));
+    }
+
+    setLoading(false);
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
+  const goToDetail = (tripId: string) => navigation.navigate('TripDetail', { tripId });
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <StatusBar style="dark" />
+
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.closeBtn}
+          onPress={() => navigation.goBack()}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <MaterialIcons name="close" size={24} color="#111827" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Histórico de viagens</Text>
+        {/* spacer to keep title centred */}
+        <View style={styles.closeBtnSpacer} />
+      </View>
+
+      {loading ? (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color="#111827" />
+        </View>
+      ) : (
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          showsVerticalScrollIndicator={false}
+        >
+          <Section
+            title="Viagens concluídas"
+            titleColor={GOLD}
+            trips={completed}
+            emptyLabel="Nenhuma viagem aqui."
+            onPressTrip={goToDetail}
+          />
+
+          <View style={styles.sectionDivider} />
+
+          <Section
+            title="Viagens canceladas"
+            titleColor="#6B7280"
+            trips={cancelled}
+            emptyLabel="Nenhuma viagem aqui."
+            onPressTrip={goToDetail}
+          />
+        </ScrollView>
+      )}
+    </SafeAreaView>
+  );
+}
+
+// ─── Styles ────────────────────────────────────────────────────────────────────
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+
+  // Header
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: SCREEN_TOP_EXTRA_PADDING,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  closeBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  closeBtnSpacer: { width: 36 },
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111827',
+  },
+
+  // Scroll
+  scroll: {
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    paddingBottom: 40,
+  },
+
+  // Section
+  section: { marginBottom: 8 },
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 16,
+    letterSpacing: 0.2,
+  },
+  sectionDivider: {
+    height: 1,
+    backgroundColor: '#F3F4F6',
+    marginVertical: 24,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#9CA3AF',
+    paddingVertical: 8,
+  },
+
+  // Trip row
+  tripRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+  },
+  tripIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tripContent: { flex: 1 },
+  tripDestination: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  tripMeta: {
+    fontSize: 13,
+    color: '#6B7280',
+  },
+  tripMetaSub: {
+    fontSize: 13,
+    color: '#9CA3AF',
+  },
+
+  // Badges
+  badgeCompleted: {
+    backgroundColor: '#D1FAE5',
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  badgeCompletedText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#065F46',
+  },
+  badgeCancelled: {
+    backgroundColor: '#FEE2E2',
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  badgeCancelledText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#B91C1C',
+  },
+
+  // Separator between rows
+  separator: {
+    height: 1,
+    backgroundColor: '#F3F4F6',
+    marginLeft: 60,
+  },
+});

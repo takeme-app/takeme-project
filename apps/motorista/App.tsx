@@ -20,7 +20,10 @@ import {
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { AppAlertProvider } from './src/contexts/AppAlertContext';
+import { RegistrationFormProvider } from './src/contexts/RegistrationFormContext';
+import { DeferredDriverSignupProvider } from './src/contexts/DeferredDriverSignupContext';
 import { supabase } from './src/lib/supabase';
+import { checkMotoristaCanAccessApp } from './src/lib/motoristaAccess';
 
 const SPLASH_MIN_MS = 500;
 const SPLASH_MAX_MS = 10000;
@@ -36,14 +39,24 @@ export default function App() {
   });
 
   const [ready, setReady] = useState(false);
-  const [initialRoute, setInitialRoute] = useState<'Welcome' | 'Main'>('Welcome');
+  const [initialRoute, setInitialRoute] = useState<'Welcome' | 'Main' | 'MotoristaPendingApproval'>('Welcome');
   const [splashTimedOut, setSplashTimedOut] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const startTimeRef = useRef<number>(Date.now());
 
   const runSessionInit = useCallback(async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    return session?.user ? ('Main' as const) : ('Welcome' as const);
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.user) return 'Welcome' as const;
+
+    const gate = await checkMotoristaCanAccessApp(session.user.id);
+    if (gate.kind === 'error' || gate.kind === 'missing_profile') {
+      await supabase.auth.signOut();
+      return 'Welcome' as const;
+    }
+    if (gate.kind === 'pending') return 'MotoristaPendingApproval' as const;
+    return 'Main' as const;
   }, []);
 
   useEffect(() => {
@@ -150,7 +163,11 @@ export default function App() {
     <View style={{ flex: 1 }}>
       <SafeAreaProvider>
         <AppAlertProvider>
-          <RootNavigator initialRouteName={initialRoute} />
+          <DeferredDriverSignupProvider>
+            <RegistrationFormProvider>
+              <RootNavigator initialRouteName={initialRoute} />
+            </RegistrationFormProvider>
+          </DeferredDriverSignupProvider>
         </AppAlertProvider>
       </SafeAreaProvider>
 >>>>>>> 954664b (feat(motorista): cadastro completo do motorista - telas e migration)

@@ -19,9 +19,11 @@ import { useAppAlert } from '../contexts/AppAlertContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { RootStackParamList } from '../navigation/types';
+import type { RootStackParamList, DriverType } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import { parseInvokeData, parseInvokeError } from '../utils/edgeFunctionResponse';
+import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'VerifyEmail'>;
 
@@ -37,8 +39,13 @@ function getOtpBoxSize(): number {
 }
 
 export function VerifyEmailScreen({ navigation, route }: Props) {
-  const { email, password, fullName, phone, driverType } = route.params;
+  const { email, password, fullName: fullNameParam, phone: phoneParam, registrationType } = route.params;
+  const fullName = fullNameParam ?? '';
+  const phone = phoneParam ?? '';
+  const driverType: DriverType | undefined =
+    registrationType === 'take_me' || registrationType === 'parceiro' ? registrationType : undefined;
   const { showAlert } = useAppAlert();
+  const { setDeferred } = useDeferredDriverSignup();
   const [digits, setDigits] = useState<string[]>(['', '', '', '']);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -88,40 +95,57 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
     if (!isComplete) return;
     setLoading(true);
     try {
+      const deferCreate = Boolean(driverType);
       const { data: fnData, error: fnError } = await supabase.functions.invoke('verify-email-code', {
-        body: { email, code, password, fullName, phone },
+        body: {
+          email: email.trim(),
+          code,
+          password,
+          fullName,
+          phone,
+          /** Sempre booleano: motorista não cria conta no Auth nesta etapa. */
+          defer_create: deferCreate,
+        },
       });
 
+      const payload = parseInvokeData(fnData);
+
       if (fnError) {
-        const err = fnError as unknown as { context?: { json?: () => Promise<unknown>; body?: unknown } };
-        let bodyError: string | null = null;
-        if (err?.context && typeof (err.context as { json?: () => Promise<unknown> }).json === 'function') {
-          try {
-            const body = await (err.context as { json: () => Promise<Record<string, unknown>> }).json();
-            if (body && typeof body === 'object' && body !== null && 'error' in body)
-              bodyError = String((body as { error: unknown }).error);
-          } catch (_) {}
-        }
-        if (!bodyError && err?.context?.body && typeof err.context.body === 'object' && err.context.body !== null && 'error' in (err.context.body as object))
-          bodyError = String((err.context.body as { error: unknown }).error);
+        const bodyError = await parseInvokeError(fnError);
         const message = bodyError ?? getUserErrorMessage(fnError, 'Código inválido ou expirado. Tente novamente.');
         showAlert('Código incorreto', message);
         setLoading(false);
         return;
       }
 
-      if (fnData?.error) {
-        showAlert('Código incorreto', String(fnData.error));
+      if (payload?.error != null) {
+        showAlert('Código incorreto', String(payload.error));
         setLoading(false);
         return;
       }
 
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-      if (signInError) throw signInError;
-
-      if (driverType) {
-        navigation.reset({ index: 0, routes: [{ name: 'CompleteDriverRegistration', params: { driverType } }] });
+      if (deferCreate) {
+        const token = payload?.token;
+        if (driverType && typeof token === 'string' && token.length > 0) {
+          setDeferred({
+            verificationToken: token,
+            email: email.trim().toLowerCase(),
+            password,
+            driverType,
+          });
+          navigation.reset({
+            index: 0,
+            routes: [{ name: 'CompleteDriverRegistration', params: { driverType } }],
+          });
+        } else {
+          showAlert(
+            'Cadastro motorista',
+            'O servidor confirmou o código, mas não devolveu o token de continuação. Faça o deploy da função verify-email-code mais recente e defina DRIVER_DEFERRED_SIGNUP_SECRET (ou SUPABASE_JWT_SECRET com 16+ caracteres) no Supabase.\n\nSe você já recebeu e-mail de boas-vindas, esse e-mail pode ter sido cadastrado antes — use outro e-mail ou faça login.'
+          );
+        }
       } else {
+        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+        if (signInError) throw signInError;
         navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
       }
     } catch (err: unknown) {
@@ -134,8 +158,22 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
   const handleResendCode = async () => {
     setResendLoading(true);
     try {
-      const { error: fnError } = await supabase.functions.invoke('send-email-verification-code', { body: { email } });
-      if (fnError) throw fnError;
+      const { data: resendData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
+        body: { email: email.trim() },
+      });
+      const resendPayload = parseInvokeData(resendData);
+      if (resendPayload?.error != null) {
+        showAlert('Erro', String(resendPayload.error));
+        return;
+      }
+      if (fnError) {
+        const bodyError = await parseInvokeError(fnError);
+        showAlert(
+          'Erro',
+          bodyError ?? getUserErrorMessage(fnError, 'Não foi possível reenviar o código.')
+        );
+        return;
+      }
       setDigits(['', '', '', '']);
       setFocusedIndex(0);
       inputRefs.current[0]?.focus();
