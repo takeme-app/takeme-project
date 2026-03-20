@@ -18,6 +18,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { checkMotoristaCanAccessApp, getMotoristaPendingCopy } from '../lib/motoristaAccess';
 import { getUserErrorMessage } from '../utils/errorMessage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
@@ -28,6 +29,43 @@ export function LoginScreen({ navigation }: Props) {
   const [password, setPassword] = useState('');
   const [hidePassword, setHidePassword] = useState(true);
   const [loading, setLoading] = useState(false);
+
+  /** Após senha OK: só entra no Main se worker_profiles.status = approved. */
+  const navigateAccordingToMotoristaStatus = async () => {
+    Keyboard.dismiss();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user?.id) {
+      await supabase.auth.signOut();
+      showAlert('Erro no login', 'Sessão inválida. Tente novamente.');
+      return;
+    }
+    const gate = await checkMotoristaCanAccessApp(user.id);
+    if (gate.kind === 'error') {
+      await supabase.auth.signOut();
+      showAlert('Erro', gate.message);
+      return;
+    }
+    if (gate.kind === 'missing_profile') {
+      await supabase.auth.signOut();
+      showAlert(
+        'Perfil de motorista',
+        'Não encontramos cadastro de motorista para esta conta. Use a conta correta ou conclua o cadastro de motorista.'
+      );
+      return;
+    }
+    if (gate.kind === 'pending') {
+      const c = getMotoristaPendingCopy(gate.status);
+      showAlert(c.title, c.message, {
+        onClose: () => {
+          navigation.reset({ index: 0, routes: [{ name: 'MotoristaPendingApproval' }] });
+        },
+      });
+      return;
+    }
+    navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
+  };
 
   const handleLogin = async () => {
     const input = phoneOrEmail.trim();
@@ -84,10 +122,7 @@ export function LoginScreen({ navigation }: Props) {
         await supabase.auth.setSession(data.session);
       }
 
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'Main' }],
-      });
+      await navigateAccordingToMotoristaStatus();
     } catch (e: unknown) {
       const isNetworkError =
         e instanceof TypeError && (e as Error).message?.includes('Network request failed');

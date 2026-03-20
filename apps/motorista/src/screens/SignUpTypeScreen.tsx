@@ -4,18 +4,18 @@ import { Text } from '../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { RootStackParamList, DriverType } from '../navigation/types';
+import type { RootStackParamList, RegistrationType } from '../navigation/types';
 import { MaterialIcons } from '@expo/vector-icons';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SignUpType'>;
 
 export function SignUpTypeScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
-  const [selected, setSelected] = useState<DriverType | null>(null);
+  const [selected, setSelected] = useState<RegistrationType | null>(null);
 
   const handleNext = () => {
     if (!selected) return;
-    navigation.navigate('SignUp', { driverType: selected });
+    navigation.navigate('SignUp', { registrationType: selected });
   };
 
   return (
@@ -38,7 +38,7 @@ export function SignUpTypeScreen({ navigation }: Props) {
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <View style={styles.iconWrap}>
+            <View style={[styles.iconWrap, styles.iconWrapMotorista]}>
               <MaterialIcons name="directions-car" size={24} color="#6B7280" />
             </View>
             <Text style={styles.sectionTitle}>Motorista</Text>
@@ -74,6 +74,44 @@ export function SignUpTypeScreen({ navigation }: Props) {
           </TouchableOpacity>
         </View>
 
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <View style={[styles.iconWrap, styles.iconWrapPreparador]}>
+              <MaterialIcons name="inventory-2" size={24} color="#92400E" />
+            </View>
+            <Text style={styles.sectionTitle}>Preparador</Text>
+          </View>
+          <Text style={styles.sectionDesc}>Gerencie excursões ou entregas vinculadas à plataforma.</Text>
+
+          <TouchableOpacity
+            style={[styles.optionCard, selected === 'preparador_excursões' && styles.optionCardSelected]}
+            onPress={() => setSelected('preparador_excursões')}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.radio, selected === 'preparador_excursões' && styles.radioSelected]}>
+              {selected === 'preparador_excursões' && <View style={styles.radioInner} />}
+            </View>
+            <View style={styles.optionTextWrap}>
+              <Text style={styles.optionTitle}>Preparador de excursões</Text>
+              <Text style={styles.optionDesc}>Organiza viagens e excursões vinculadas à Take Me.</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.optionCard, selected === 'preparador_encomendas' && styles.optionCardSelected]}
+            onPress={() => setSelected('preparador_encomendas')}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.radio, selected === 'preparador_encomendas' && styles.radioSelected]}>
+              {selected === 'preparador_encomendas' && <View style={styles.radioInner} />}
+            </View>
+            <View style={styles.optionTextWrap}>
+              <Text style={styles.optionTitle}>Preparador de encomendas</Text>
+              <Text style={styles.optionDesc}>Gerencia coletas e entregas realizadas por motoristas.</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+
         <TouchableOpacity
           style={[styles.nextButton, !selected && styles.nextButtonDisabled]}
           onPress={handleNext}
@@ -97,7 +135,9 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 15, color: '#6B7280', marginBottom: 24 },
   section: { marginBottom: 24 },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  iconWrap: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  iconWrap: { width: 40, height: 40, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  iconWrapMotorista: { backgroundColor: '#F3F4F6' },
+  iconWrapPreparador: { backgroundColor: '#FEF3C7' },
   sectionTitle: { fontSize: 18, fontWeight: '600', color: '#111827' },
   sectionDesc: { fontSize: 14, color: '#6B7280', marginBottom: 16 },
   optionCard: {

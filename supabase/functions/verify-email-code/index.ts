@@ -1,6 +1,52 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
+// --- Token HMAC (motorista defer_create); tudo neste arquivo para colar no painel Supabase ---
+const _encoder = new TextEncoder();
+
+function _base64UrlEncode(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
+  const b64 = btoa(bin);
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function _hmacSha256Hex(secret: string, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    _encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, _encoder.encode(message));
+  const arr = new Uint8Array(sig);
+  return [...arr].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+type _DeferredDriverPayload = { email: string; exp: number };
+
+async function signDeferredDriverToken(email: string, secret: string, ttlSeconds: number): Promise<string> {
+  const norm = email.trim().toLowerCase();
+  const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const payload: _DeferredDriverPayload = { email: norm, exp };
+  const payloadJson = JSON.stringify(payload);
+  const payloadB64 = _base64UrlEncode(_encoder.encode(payloadJson));
+  const sig = await _hmacSha256Hex(secret, payloadB64);
+  return `${payloadB64}.${sig}`;
+}
+
+function getDeferredDriverSecret(): string {
+  const a = Deno.env.get("DRIVER_DEFERRED_SIGNUP_SECRET");
+  if (a && a.trim().length >= 16) return a.trim();
+  const b = Deno.env.get("SUPABASE_JWT_SECRET");
+  if (b && b.trim().length >= 16) return b.trim();
+  const c = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (c && c.trim().length >= 32) return c.trim().slice(0, 64);
+  throw new Error("Defina DRIVER_DEFERRED_SIGNUP_SECRET ou SUPABASE_JWT_SECRET (mín. 16 caracteres)");
+}
+// --- fim token ---
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -55,15 +101,20 @@ Deno.serve(async (req) => {
       password?: string;
       fullName?: string;
       phone?: string;
+      defer_create?: boolean | string | number;
     };
-    const { email, code, password, fullName, phone } = body;
+    const { email, code, password, fullName, phone, defer_create } = body;
+    /** Aceita boolean ou string (alguns clientes serializam diferente). Motorista: só valida e-mail, sem criar auth. */
+    const wantsDeferredDriverSignup =
+      defer_create === true || defer_create === "true" || defer_create === 1;
+
     if (!email || !code || typeof email !== "string" || typeof code !== "string") {
       return new Response(
         JSON.stringify({ error: "E-mail e código são obrigatórios" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-    if (!password || typeof password !== "string" || password.length < 6) {
+    if (!wantsDeferredDriverSignup && (!password || typeof password !== "string" || password.length < 6)) {
       return new Response(
         JSON.stringify({ error: "Senha é obrigatória (mínimo 6 caracteres)" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -82,25 +133,84 @@ Deno.serve(async (req) => {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const admin = createClient(supabaseUrl, serviceRoleKey);
 
+    const emailNorm = email.trim().toLowerCase();
+    const nowIso = new Date().toISOString();
+
     const { data: row, error: selectError } = await admin
       .from("email_verification_codes")
-      .select("id")
-      .eq("email", email.trim().toLowerCase())
+      .select("id, code")
+      .eq("email", emailNorm)
       .eq("code", codeTrim)
-      .gt("expires_at", new Date().toISOString())
+      .gt("expires_at", nowIso)
+      .order("created_at", { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
 
-    if (selectError || !row) {
+    if (selectError) {
+      console.error("[verify-email-code] select codes", selectError);
       return new Response(
         JSON.stringify({ error: "Código inválido ou expirado" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    await admin.from("email_verification_codes").delete().eq("id", row.id);
+    /** Fallback se o banco ainda tiver char(4) com padding (linhas antigas): comparar dígitos. */
+    let rowId = row?.id as string | undefined;
+    if (!rowId) {
+      const { data: candidates, error: listErr } = await admin
+        .from("email_verification_codes")
+        .select("id, code")
+        .eq("email", emailNorm)
+        .gt("expires_at", nowIso)
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (listErr) {
+        console.error("[verify-email-code] list codes fallback", listErr);
+      } else {
+        const match = (candidates ?? []).find(
+          (c: { id: string; code: string }) =>
+            String(c.code ?? "")
+              .replace(/\D/g, "")
+              .slice(0, 4) === codeTrim
+        );
+        rowId = match?.id;
+      }
+    }
+
+    if (!rowId) {
+      return new Response(
+        JSON.stringify({ error: "Código inválido ou expirado" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    await admin.from("email_verification_codes").delete().eq("id", rowId);
 
     const phoneDigits = typeof phone === "string" ? phone.replace(/\D/g, "").trim() || null : null;
+
+    console.log("[verify-email-code] deferred driver signup:", wantsDeferredDriverSignup);
+
+    /** Motorista: não cria usuário em Auth aqui — só prova de e-mail (token HMAC para create-motorista-account). */
+    if (wantsDeferredDriverSignup) {
+      try {
+        const secret = getDeferredDriverSecret();
+        const signed = await signDeferredDriverToken(email, secret, 7 * 24 * 3600);
+        return new Response(
+          JSON.stringify({ ok: true, token: signed }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      } catch (e) {
+        console.error("[verify-email-code] deferred token", e);
+        return new Response(
+          JSON.stringify({
+            error:
+              "Configuração do servidor incompleta (segredo do token). Defina DRIVER_DEFERRED_SIGNUP_SECRET ou SUPABASE_JWT_SECRET.",
+          }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
     if (phoneDigits) {
       const { data: existing } = await admin
         .from("profiles")
@@ -129,10 +239,12 @@ Deno.serve(async (req) => {
     if (createError) {
       const msg = (createError.message ?? "").toLowerCase();
       if (msg.includes("already") || msg.includes("already registered") || msg.includes("already exists")) {
-        await sendWelcomeEmail(email, fullName);
+        /** Conta já existia — não enviar boas-vindas nem devolver 200 (evita app achar que há token motorista). */
         return new Response(
-          JSON.stringify({ ok: true, already_exists: true }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          JSON.stringify({
+            error: "Este e-mail já está cadastrado. Faça login ou use outro e-mail.",
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
       const userError =

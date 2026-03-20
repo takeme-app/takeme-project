@@ -14,10 +14,12 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { RootStackParamList } from '../navigation/types';
+import type { RootStackParamList, DriverType } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import { parseInvokeError } from '../utils/edgeFunctionResponse';
+import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SignUp'>;
 
@@ -29,10 +31,18 @@ function formatPhone(value: string): string {
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
 }
 
+function isDriverRegistration(
+  t: string | undefined
+): t is DriverType {
+  return t === 'take_me' || t === 'parceiro';
+}
+
 export function SignUpScreen({ navigation, route }: Props) {
-  const driverType = route.params?.driverType;
+  const registrationType = route.params?.registrationType;
+  const driverFirst = isDriverRegistration(registrationType);
   const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
+  const { setDeferred } = useDeferredDriverSignup();
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
@@ -49,11 +59,6 @@ export function SignUpScreen({ navigation, route }: Props) {
   const handlePhoneChange = (text: string) => setPhone(formatPhone(text));
 
   const handleContinue = async () => {
-    const phoneDigits = phone.replace(/\D/g, '');
-    if (!fullName.trim()) {
-      showAlert('Atenção', 'Preencha seu nome.');
-      return;
-    }
     if (!email.trim()) {
       showAlert('Atenção', 'Preencha o e-mail.');
       return;
@@ -66,6 +71,30 @@ export function SignUpScreen({ navigation, route }: Props) {
       showAlert('Atenção', 'As senhas não coincidem.');
       return;
     }
+    if (!isSupabaseConfigured) {
+      showAlert('Erro', 'Supabase não configurado. Verifique o .env.');
+      return;
+    }
+
+    if (driverFirst) {
+      if (!isDriverRegistration(registrationType)) return;
+      setDeferred({
+        email: email.trim(),
+        password,
+        driverType: registrationType,
+      });
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'CompleteDriverRegistration', params: { driverType: registrationType } }],
+      });
+      return;
+    }
+
+    const phoneDigits = phone.replace(/\D/g, '');
+    if (!fullName.trim()) {
+      showAlert('Atenção', 'Preencha seu nome.');
+      return;
+    }
     if (!agreeTerms) {
       showAlert('Atenção', 'Aceite os Termos de Uso e a Política de Privacidade.');
       return;
@@ -74,17 +103,12 @@ export function SignUpScreen({ navigation, route }: Props) {
       showAlert('Atenção', 'Preencha o telefone com DDD e número.');
       return;
     }
-    if (!isSupabaseConfigured) {
-      showAlert('Erro', 'Supabase não configurado. Verifique o .env.');
-      return;
-    }
 
     setLoading(true);
     try {
-      const { data: fnData, error: fnError } = await supabase.functions.invoke(
-        'send-email-verification-code',
-        { body: { email: email.trim(), phone: phoneDigits } }
-      );
+      const { data: fnData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
+        body: { email: email.trim(), phone: phoneDigits },
+      });
       const apiErrorMsg =
         fnData && typeof fnData === 'object' && fnData !== null && 'error' in fnData
           ? String((fnData as { error: unknown }).error)
@@ -95,17 +119,7 @@ export function SignUpScreen({ navigation, route }: Props) {
         return;
       }
       if (fnError) {
-        const err = fnError as unknown as { context?: { json?: () => Promise<unknown>; body?: unknown } };
-        let bodyError: string | null = null;
-        if (err?.context && typeof (err.context as { json?: () => Promise<unknown> }).json === 'function') {
-          try {
-            const body = await (err.context as { json: () => Promise<Record<string, unknown>> }).json();
-            if (body && typeof body === 'object' && body !== null && 'error' in body)
-              bodyError = String((body as { error: unknown }).error);
-          } catch (_) {}
-        }
-        if (!bodyError && err?.context?.body && typeof err.context.body === 'object' && err.context.body !== null && 'error' in (err.context.body as object))
-          bodyError = String((err.context.body as { error: unknown }).error);
+        const bodyError = await parseInvokeError(fnError);
         if (bodyError) {
           showAlert('Atenção', bodyError);
           setLoading(false);
@@ -119,7 +133,7 @@ export function SignUpScreen({ navigation, route }: Props) {
         password,
         fullName: fullName.trim(),
         phone: phoneDigits,
-        ...(driverType && { driverType }),
+        ...(registrationType && { registrationType }),
       });
     } catch (err: unknown) {
       showAlert('Atenção', getUserErrorMessage(err, 'Não foi possível enviar o código. Tente novamente.'));
@@ -144,42 +158,95 @@ export function SignUpScreen({ navigation, route }: Props) {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.title}>Preencha seus dados para começar</Text>
+        <Text style={styles.titleHint}>
+          {driverFirst
+            ? 'Depois você confirmará o e-mail e completará seu cadastro de motorista (documentos e rotas). Os termos são aceitos nessa etapa.'
+            : 'E-mail e senha serão confirmados após você completar o cadastro na próxima tela.'}
+        </Text>
 
-        <TextInput style={styles.input} placeholder="Nome e sobrenome" placeholderTextColor="#9CA3AF" value={fullName} onChangeText={setFullName} autoCapitalize="words" />
-        <TextInput style={styles.input} placeholder="(00) 00000-0000" placeholderTextColor="#9CA3AF" value={phone} onChangeText={handlePhoneChange} keyboardType="phone-pad" />
-        <TextInput style={styles.input} placeholder="Email" placeholderTextColor="#9CA3AF" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" />
+        {!driverFirst ? (
+          <>
+            <TextInput
+              style={styles.input}
+              placeholder="Nome e sobrenome"
+              placeholderTextColor="#9CA3AF"
+              value={fullName}
+              onChangeText={setFullName}
+              autoCapitalize="words"
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="(00) 00000-0000"
+              placeholderTextColor="#9CA3AF"
+              value={phone}
+              onChangeText={handlePhoneChange}
+              keyboardType="phone-pad"
+            />
+          </>
+        ) : null}
+
+        <TextInput
+          style={styles.input}
+          placeholder="Email"
+          placeholderTextColor="#9CA3AF"
+          value={email}
+          onChangeText={setEmail}
+          autoCapitalize="none"
+          keyboardType="email-address"
+        />
         <View style={styles.passwordRow}>
-          <TextInput style={[styles.input, styles.inputPassword]} placeholder="Senha (mín. 8 caracteres)" placeholderTextColor="#9CA3AF" value={password} onChangeText={setPassword} secureTextEntry={hidePassword} />
+          <TextInput
+            style={[styles.input, styles.inputPassword]}
+            placeholder="Senha (mín. 8 caracteres)"
+            placeholderTextColor="#9CA3AF"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry={hidePassword}
+          />
           <TouchableOpacity style={styles.eyeButton} onPress={() => setHidePassword((v) => !v)}>
             <MaterialIcons name={hidePassword ? 'visibility' : 'visibility-off'} size={22} color="#6B7280" style={styles.eyeIconCenter} />
           </TouchableOpacity>
         </View>
         <View style={styles.passwordRow}>
-          <TextInput style={[styles.input, styles.inputPassword]} placeholder="Confirme a senha" placeholderTextColor="#9CA3AF" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry={hideConfirm} />
+          <TextInput
+            style={[styles.input, styles.inputPassword]}
+            placeholder="Confirme a senha"
+            placeholderTextColor="#9CA3AF"
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+            secureTextEntry={hideConfirm}
+          />
           <TouchableOpacity style={styles.eyeButton} onPress={() => setHideConfirm((v) => !v)}>
             <MaterialIcons name={hideConfirm ? 'visibility' : 'visibility-off'} size={22} color="#6B7280" style={styles.eyeIconCenter} />
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={[styles.continueButton, loading && styles.continueButtonDisabled]} activeOpacity={0.8} onPress={handleContinue} disabled={loading}>
+        <TouchableOpacity
+          style={[styles.continueButton, loading && styles.continueButtonDisabled]}
+          activeOpacity={0.8}
+          onPress={handleContinue}
+          disabled={loading}
+        >
           {loading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.continueButtonText}>Continuar</Text>}
         </TouchableOpacity>
 
-        <View style={styles.checkboxRow}>
-          <TouchableOpacity onPress={() => setAgreeTerms((v) => !v)} activeOpacity={0.7} style={styles.checkboxTouch}>
-            <View style={[styles.checkbox, agreeTerms && styles.checkboxChecked]}>{agreeTerms && <Text style={styles.checkmark}>✓</Text>}</View>
-          </TouchableOpacity>
-          <View style={styles.checkboxLabelWrap}>
-            <Text style={styles.checkboxLabelInline}>Concordo com os </Text>
-            <TouchableOpacity onPress={openTerms} activeOpacity={0.7} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
-              <Text style={styles.link}>Termos de Uso</Text>
+        {!driverFirst ? (
+          <View style={styles.checkboxRow}>
+            <TouchableOpacity onPress={() => setAgreeTerms((v) => !v)} activeOpacity={0.7} style={styles.checkboxTouch}>
+              <View style={[styles.checkbox, agreeTerms && styles.checkboxChecked]}>{agreeTerms && <Text style={styles.checkmark}>✓</Text>}</View>
             </TouchableOpacity>
-            <Text style={styles.checkboxLabelInline}> e a </Text>
-            <TouchableOpacity onPress={openPrivacy} activeOpacity={0.7} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
-              <Text style={styles.link}>Política de Privacidade.</Text>
-            </TouchableOpacity>
+            <View style={styles.checkboxLabelWrap}>
+              <Text style={styles.checkboxLabelInline}>Concordo com os </Text>
+              <TouchableOpacity onPress={openTerms} activeOpacity={0.7} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
+                <Text style={styles.link}>Termos de Uso</Text>
+              </TouchableOpacity>
+              <Text style={styles.checkboxLabelInline}> e a </Text>
+              <TouchableOpacity onPress={openPrivacy} activeOpacity={0.7} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
+                <Text style={styles.link}>Política de Privacidade.</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
+        ) : null}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -192,7 +259,8 @@ const styles = StyleSheet.create({
   backArrow: { fontSize: 22, color: '#000000', fontWeight: '600' },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24 },
-  title: { fontSize: 24, fontWeight: '700', color: '#000000', marginTop: 32, marginBottom: 32, lineHeight: 28, textAlign: 'center' },
+  title: { fontSize: 24, fontWeight: '700', color: '#000000', marginTop: 32, marginBottom: 8, lineHeight: 28, textAlign: 'center' },
+  titleHint: { fontSize: 13, color: '#6B7280', marginBottom: 24, textAlign: 'center', paddingHorizontal: 8 },
   input: {
     backgroundColor: '#F9FAFB',
     borderWidth: 1,

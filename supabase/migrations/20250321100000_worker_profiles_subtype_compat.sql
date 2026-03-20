@@ -1,0 +1,5 @@
+-- Obsoleto: antes esta migration removia worker_profiles_subtype_check para aceitar take_me/parceiro no INSERT.
+-- O CHECK de produção é: subtype IN (takeme, partner, shipments, excursions).
+-- A edge create-motorista-account mapeia take_me → takeme e parceiro → partner; não dropar o CHECK aqui.
+--
+-- Reparo se o CHECK sumiu: ver migration 20250324100000_worker_profiles_restore_subtype_check_if_missing.sql.

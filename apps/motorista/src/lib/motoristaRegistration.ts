@@ -1,0 +1,214 @@
+import { supabase } from './supabase';
+import type { DriverType } from '../navigation/types';
+
+/** CHECK de subtype em produção: takeme | partner | shipments | excursions */
+export function mapDriverTypeToSubtypeDb(driverType: DriverType): 'takeme' | 'partner' {
+  return driverType === 'take_me' ? 'takeme' : 'partner';
+}
+
+export type MotoristaRouteInput = {
+  origin_address: string;
+  destination_address: string;
+  price_per_person_cents: number;
+};
+
+export type MotoristaVehicleInput = {
+  year: number;
+  model: string;
+  plate: string;
+  passenger_capacity: number;
+};
+
+export type RegisterMotoristaWithAuthInput = {
+  email: string;
+  password: string;
+  driverType: DriverType;
+  fullName: string;
+  phoneDigits: string | null;
+  cpfDigits: string;
+  age: number | null;
+  city: string | null;
+  preferenceArea: string | null;
+  bankCode: string | null;
+  agencyNumber: string | null;
+  accountNumber: string | null;
+  pixKey: string | null;
+  ownsVehicle: boolean;
+  vehicle: MotoristaVehicleInput | null;
+  routes: MotoristaRouteInput[];
+};
+
+function formatAuthErr(e: { message?: string } | null): string {
+  return (e?.message && String(e.message).trim()) || 'Erro de autenticação.';
+}
+
+/**
+ * Cria usuário (signUp), perfil e dados de motorista só com cliente Supabase + RLS.
+ * worker_profiles.status = inactive até o admin alterar (ex. approved).
+ */
+export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuthInput): Promise<{ userId: string }> {
+  const {
+    email,
+    password,
+    driverType,
+    fullName,
+    phoneDigits,
+    cpfDigits,
+    age,
+    city,
+    preferenceArea,
+    bankCode,
+    agencyNumber,
+    accountNumber,
+    pixKey,
+    ownsVehicle,
+    vehicle,
+    routes,
+  } = input;
+
+  const emailNorm = email.trim().toLowerCase();
+  const subtypeDb = mapDriverTypeToSubtypeDb(driverType);
+  const nowIso = new Date().toISOString();
+
+  const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
+    email: emailNorm,
+    password,
+    options: {
+      data: {
+        full_name: fullName.trim() || undefined,
+        phone: phoneDigits || undefined,
+      },
+    },
+  });
+
+  if (signUpErr) {
+    const m = formatAuthErr(signUpErr).toLowerCase();
+    if (m.includes('already') || m.includes('registered') || m.includes('exists')) {
+      throw new Error('Este e-mail já está cadastrado. Faça login ou use outro e-mail.');
+    }
+    throw new Error(formatAuthErr(signUpErr));
+  }
+
+  let userId = signUpData.user?.id;
+  let session = signUpData.session;
+
+  if (!userId) {
+    throw new Error('Cadastro não retornou usuário. Tente novamente.');
+  }
+
+  if (!session) {
+    const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
+      email: emailNorm,
+      password,
+    });
+    if (signInErr) {
+      throw new Error(
+        `${formatAuthErr(signInErr)}\n\n` +
+          'Se o projeto exige confirmação de e-mail no Auth, desative-a para este fluxo ou confirme o e-mail antes de concluir o cadastro.'
+      );
+    }
+    session = signInData.session;
+    userId = signInData.user?.id ?? userId;
+  }
+
+  if (!session?.user?.id) {
+    throw new Error(
+      'Sessão não disponível após criar a conta. Confirme o e-mail ou, em Authentication → Sign in, desative "Confirm email" para cadastro direto.'
+    );
+  }
+
+  userId = session.user.id;
+
+  const { data: profRow, error: profSelErr } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (profSelErr || !profRow) {
+    throw new Error(
+      'Perfil base (profiles) não encontrado após criar a conta. Verifique o trigger on_auth_user_created em auth.users no Supabase.'
+    );
+  }
+
+  const { error: profileErr } = await supabase
+    .from('profiles')
+    .update({
+      full_name: fullName.trim() || null,
+      phone: phoneDigits || null,
+      cpf: cpfDigits,
+      city: city?.trim() || null,
+      updated_at: nowIso,
+    })
+    .eq('id', userId);
+
+  if (profileErr) {
+    throw new Error(
+      [profileErr.message, profileErr.details, profileErr.hint].filter(Boolean).join(' — ') ||
+        'Falha ao atualizar perfil (profiles).'
+    );
+  }
+
+  const ageForDb =
+    age !== null && age !== undefined && Number.isFinite(age) ? Math.round(age) : null;
+
+  const { error: workerErr } = await supabase.from('worker_profiles').insert({
+    id: userId,
+    role: 'driver',
+    subtype: subtypeDb,
+    status: 'inactive',
+    cpf: cpfDigits,
+    age: ageForDb,
+    city: city?.trim() || null,
+    experience_years: null,
+    bank_code: bankCode?.trim() || null,
+    bank_agency: agencyNumber?.trim() || null,
+    bank_account: accountNumber?.trim() || null,
+    pix_key: pixKey?.trim() || null,
+    has_own_vehicle: ownsVehicle,
+    preference_area: preferenceArea?.trim() || null,
+    created_at: nowIso,
+    updated_at: nowIso,
+  });
+
+  if (workerErr) {
+    throw new Error(
+      [workerErr.message, workerErr.details, workerErr.hint].filter(Boolean).join(' — ') ||
+        'Falha ao criar perfil de motorista (worker_profiles). Rode a migration worker_profiles_insert_own.'
+    );
+  }
+
+  if (ownsVehicle && vehicle) {
+    const { error: vehErr } = await supabase.from('vehicles').insert({
+      worker_id: userId,
+      year: vehicle.year,
+      model: vehicle.model.trim(),
+      plate: vehicle.plate.trim().toUpperCase().slice(0, 12),
+      passenger_capacity: vehicle.passenger_capacity,
+      status: 'pending',
+      is_active: true,
+    });
+    if (vehErr) {
+      throw new Error(
+        [vehErr.message, vehErr.details, vehErr.hint].filter(Boolean).join(' — ') || 'Falha ao salvar veículo.'
+      );
+    }
+  }
+
+  for (const r of routes) {
+    const { error: routeErr } = await supabase.from('worker_routes').insert({
+      worker_id: userId,
+      origin_address: r.origin_address.trim(),
+      destination_address: r.destination_address.trim(),
+      price_per_person_cents: Math.round(r.price_per_person_cents),
+      is_active: true,
+    });
+    if (routeErr) {
+      throw new Error(
+        [routeErr.message, routeErr.details, routeErr.hint].filter(Boolean).join(' — ') || 'Falha ao salvar rotas.'
+      );
+    }
+  }
+
+  return { userId };
+}
