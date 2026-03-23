@@ -9,6 +9,10 @@ Monorepo do Take Me — app tipo Uber com 5 ambientes: Cliente, Motorista, Prepa
 
 O **Take Me** é uma plataforma de mobilidade e serviços que conecta passageiros, motoristas e preparadores: agendamento de viagens (rotas regulares), envio de encomendas, envio de dependentes e solicitação de excursões. O monorepo reúne o app do **cliente** (passageiro), o app do **motorista**, os apps dos **preparadores** (encomendas e excursões) e o **admin** (painel web). Backend e autenticação ficam no **Supabase**. Se você está entrando no projeto, leia o [relatório de situação atual](docs/ESTADO_DO_PROJETO.md) para visão geral, stack, configuração local e estado do Supabase.
 
+## Branches e trabalho em equipe
+
+Vários devs podem trabalhar em paralelo (admin, cliente, motorista, etc.). Veja **[docs/BRANCHES.md](docs/BRANCHES.md)** para estratégia de branches, prefixos por app (`admin/`, `cliente/`, `motorista/`, …) e fluxo de PR para `main`.
+
 ## Estrutura
 
 - **apps/cliente** — Ambiente Cliente (Expo, mobile)
