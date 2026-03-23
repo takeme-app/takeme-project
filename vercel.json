@@ -2,5 +2,9 @@
   "installCommand": "cd ../.. && npm install",
   "buildCommand": "npx expo export --platform web",
   "outputDirectory": "dist",
-  "framework": null
+  "framework": null,
+  "routes": [
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ]
 }
