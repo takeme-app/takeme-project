@@ -248,7 +248,7 @@ export default function PassageirosScreen() {
   // ── Filter modal state (Figma 837-14711) ───────────────────────────
   const [filterOpen, setFilterOpen] = useState(false);
   const [filterDateInicio, setFilterDateInicio] = useState('01 de setembro');
-  const [filterDateFim, setFilterDateFim] = useState('31 de setembro');
+  const [filterDateFim, setFilterDateFim] = useState('30 de setembro');
   const [filterDatasIncluidas, setFilterDatasIncluidas] = useState<'somente_passadas' | 'passadas_e_futuras' | 'somente_futuras'>('passadas_e_futuras');
   const [filterStatus, setFilterStatus] = useState<'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('em_andamento');
   const [filterFaixa, setFilterFaixa] = useState<'10_20' | '21_30' | '30_60'>('10_20');

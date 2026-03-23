@@ -66,7 +66,7 @@ const topOrigens = [
   { label: 'Rio de Janeiro - RJ', pct: 12, count: '80 entregas' },
   { label: 'Porto Alegre - RS', pct: 8, count: '65 entregas' },
   { label: 'Sorocaba - SP', pct: 7, count: '52 entregas' },
-  { label: 'Brasília - DF', pct: 6, count: 'entregas' },
+  { label: 'Brasília - DF', pct: 6, count: '44 entregas' },
   { label: 'Joinville - SC', pct: 5, count: '34 entregas' },
   { label: 'Londrina - PR', pct: 4, count: '33 entregas' },
 ];

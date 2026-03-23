@@ -67,8 +67,8 @@ export default function Layout() {
     return location.pathname.startsWith(tab.path);
   });
 
-  const userName = session?.user?.user_metadata?.full_name || 'Pedro Henrique';
-  const userEmail = session?.user?.email || 'pedro.henriq@gmail.com';
+  const userName = session?.user?.user_metadata?.full_name?.trim() || 'Usuário';
+  const userEmail = session?.user?.email || 'Sem e-mail';
   const avatarLetter = userName.charAt(0).toUpperCase();
 
   const needsMore = visibleCount < navTabsList.length;

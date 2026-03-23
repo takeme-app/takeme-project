@@ -147,9 +147,9 @@ export default function HomeScreen() {
     React.createElement('div', { style: webStyles.modalSectionGap12 },
       React.createElement('h3', { style: webStyles.modalSectionTitle }, 'Categoria'),
       React.createElement('div', { style: webStyles.modalChips }, ...categoriaOptionsInicio.map((opt) =>
-        React.createElement('button', { key: opt.id, type: 'button', style: { ...webStyles.modalChip, ...(filterCategoria.has(opt.id) ? webStyles.modalChipActive : webStyles.modalChipInactive) } as React.CSSProperties, onClick: () => toggleCategoria(opt.id) }, opt.label))),
+        React.createElement('button', { key: opt.id, type: 'button', style: { ...webStyles.modalChip, ...(filterCategoria.has(opt.id) ? webStyles.modalChipActive : webStyles.modalChipInactive) } as React.CSSProperties, onClick: () => toggleCategoria(opt.id) }, opt.label)))),
     React.createElement('div', { style: webStyles.modalButtonWrap },
-      React.createElement('button', { type: 'button', style: webStyles.modalApplyBtn, onClick: () => setFilterModalOpen(false) }, 'Aplicar filtro'))));
+      React.createElement('button', { type: 'button', style: webStyles.modalApplyBtn, onClick: () => setFilterModalOpen(false) }, 'Aplicar filtro')));
 
   const filterModalEl = filterModalOpen
     ? React.createElement('div', { style: webStyles.modalOverlay, onClick: () => setFilterModalOpen(false), role: 'dialog', 'aria-modal': true, 'aria-label': 'Filtro' }, filterModalInicioContent)
