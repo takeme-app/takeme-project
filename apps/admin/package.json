@@ -14,11 +14,14 @@
   "dependencies": {
     "@expo/vector-icons": "^14.0.4",
     "@take-me/shared": "*",
+    "dotenv": "^16.4.7",
     "expo": "^54.0.33",
+    "expo-constants": "~17.0.3",
     "expo-status-bar": "~3.0.9",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "react-native": "0.81.5"
+    "react-native": "0.81.5",
+    "react-router-dom": "^6.30.3"
   },
   "devDependencies": {
     "@babel/core": "^7.25.0",
