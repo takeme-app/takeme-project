@@ -2,13 +2,15 @@
  * MotoristasScreen — Lista de motoristas conforme Figma 825-4375.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
+import { fetchMotoristas } from '../data/queries';
+import type { MotoristaListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -30,24 +32,6 @@ const avatarColors: Record<string, string> = {
   C: '#4A90D9', J: '#7B61FF', E: '#E8725C', M: '#50C878', D: '#F5A623',
 };
 
-// ── Metric cards data ─────────────────────────────────────────────────
-const metrics = [
-  { title: 'Totais de motoristas', value: '5' },
-  { title: 'Motoristas em viagens', value: '2' },
-  { title: 'Motoristas sem viagem', value: '1' },
-  { title: 'Motoristas com viagens agendadas', value: '1' },
-];
-
-// ── Top drivers ranking ───────────────────────────────────────────────
-const topDrivers = [
-  { viagens: 40, nome: 'Raimundo' },
-  { viagens: 35, nome: 'Jose' },
-  { viagens: 32, nome: 'Carlos' },
-  { viagens: 27, nome: 'Matheus' },
-  { viagens: 25, nome: 'Charles' },
-];
-
-// ── Table data ────────────────────────────────────────────────────────
 type MotoristaRow = {
   nome: string;
   origem: string;
@@ -57,16 +41,6 @@ type MotoristaRow = {
   chegada: string;
   status: 'Concluído' | 'Cancelado' | 'Agendado' | 'Em andamento';
 };
-
-const tableRows: MotoristaRow[] = [
-  { nome: 'Carlos Silva', origem: 'São Paulo - SP', destino: 'Campinas - SP', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'Concluído' },
-  { nome: 'João Porto', origem: 'Rio de Janeiro - RJ', destino: 'Niterói - RJ', data: '26/10/2025', embarque: '14:00', chegada: '15:00', status: 'Concluído' },
-  { nome: 'Jorge Silva', origem: 'Brasília - DF', destino: 'Goiânia - GO', data: '24/10/2025', embarque: '07:00', chegada: '10:30', status: 'Cancelado' },
-  { nome: 'Carlos Silva', origem: 'São Paulo - SP', destino: 'Campinas - SP', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'Agendado' },
-  { nome: 'Everton Pereira', origem: 'São Paulo - SP', destino: 'Campinas - SP', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'Em andamento' },
-  { nome: 'Marcio Pontes', origem: 'São Paulo - SP', destino: 'Campinas - SP', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'Em andamento' },
-  { nome: 'Danilo Santos', origem: 'Curitiba - PR', destino: 'Florianópolis - SC', data: '23/10/2025', embarque: '06:00', chegada: '10:00', status: 'Em andamento' },
-];
 
 const tableCols = [
   { label: 'Motoristas', flex: '1 1 16%', minWidth: 150 },
@@ -130,6 +104,40 @@ const s = {
 export default function MotoristasScreen() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+
+  // ── Real data from Supabase ─────────────────────────────────────────
+  const [motoristasData, setMotoristasData] = useState<MotoristaListItem[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchMotoristas().then((items) => { if (!cancelled) { setMotoristasData(items); setDataLoading(false); } });
+    return () => { cancelled = true; };
+  }, []);
+
+  const totalMotoristas = motoristasData.length;
+  const emViagem = motoristasData.filter((m) => m.viagensAtivas > 0).length;
+  const semViagem = motoristasData.filter((m) => m.viagensAtivas === 0).length;
+  const comAgendadas = motoristasData.filter((m) => m.viagensAgendadas > 0).length;
+
+  const metrics = [
+    { title: 'Totais de motoristas', value: String(totalMotoristas) },
+    { title: 'Motoristas em viagens', value: String(emViagem) },
+    { title: 'Motoristas sem viagem', value: String(semViagem) },
+    { title: 'Motoristas com viagens agendadas', value: String(comAgendadas) },
+  ];
+
+  const topDrivers = motoristasData.slice(0, 5).map((m) => ({ viagens: m.totalViagens, nome: m.nome }));
+
+  const tableRows: MotoristaRow[] = motoristasData.map((m) => ({
+    nome: m.nome,
+    origem: '—',
+    destino: '—',
+    data: '—',
+    embarque: '—',
+    chegada: '—',
+    status: m.viagensAtivas > 0 ? 'Em andamento' as const : 'Concluído' as const,
+  }));
 
   // ── Search row ────────────────────────────────────────────────────────
   const searchRow = React.createElement('div', {
@@ -304,6 +312,11 @@ export default function MotoristasScreen() {
       React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } },
         tableHeader,
         ...tableRowEls)));
+
+  if (dataLoading) {
+    return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
+      React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando motoristas...'));
+  }
 
   // ── Render ─────────────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
