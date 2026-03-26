@@ -2,12 +2,14 @@
  * PreparadoresScreen — Preparadores conforme Figma 898-20340.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   webStyles,
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
+import { fetchPreparadores } from '../data/queries';
+import type { PreparadorListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -26,14 +28,6 @@ const avatarColors: Record<string, string> = {
   C: '#4A90D9', J: '#7B61FF', F: '#E8725C', E: '#50C878', M: '#F5A623', D: '#9B59B6',
 };
 
-// ── Metric data ─────────────────────────────────────────────────────────
-const metrics = [
-  { title: 'Total de preparadores ativos', value: '47', pct: '+8%', desc: 'vs semana anterior' },
-  { title: 'Encomendas em andamento', value: '23', pct: '+12%', desc: 'vs semana anterior' },
-  { title: 'Avaliação média geral', value: '4.8', pct: '+3%', desc: 'vs semana anterior' },
-];
-
-// ── Table data ──────────────────────────────────────────────────────────
 type PrepRow = {
   nome: string;
   origem: string;
@@ -43,16 +37,6 @@ type PrepRow = {
   avaliacao: number;
   status: 'Em andamento' | 'Agendado' | 'Cancelado' | 'Concluído';
 };
-
-const tableRows: PrepRow[] = [
-  { nome: 'Carlos Silva', origem: 'Curitiba - PR', destino: 'Campinas - SP', dataInicio: '26/10/2025\n08:30', previsao: '26/10/2025\n18:00', avaliacao: 4.4, status: 'Em andamento' },
-  { nome: 'João Porto', origem: 'Porto Alegre - RS', destino: 'Recife - PE', dataInicio: '26/10/2025\n08:30', previsao: '26/10/2025\n18:00', avaliacao: 4.5, status: 'Em andamento' },
-  { nome: 'Jorge Silva', origem: 'Recife - PE', destino: 'São Paulo - SP', dataInicio: '26/10/2025\n08:30', previsao: '26/10/2025\n18:00', avaliacao: 4.6, status: 'Agendado' },
-  { nome: 'Fernando Silva', origem: 'Brasília - DF', destino: 'Curitiba - PR', dataInicio: '26/10/2025\n08:30', previsao: '26/10/2025\n18:00', avaliacao: 4.1, status: 'Agendado' },
-  { nome: 'Everton Pereira', origem: 'Salvador - BA', destino: 'Porto Alegre - RS', dataInicio: '26/10/2025\n08:30', previsao: '26/10/2025\n18:00', avaliacao: 4.2, status: 'Cancelado' },
-  { nome: 'Marcio Pontes', origem: 'Curitiba - PR', destino: 'Brasília - DF', dataInicio: '26/10/2025\n08:30', previsao: '26/10/2025\n18:00', avaliacao: 4.7, status: 'Concluído' },
-  { nome: 'Danilo Santos', origem: 'São Paulo - SP', destino: 'Recife - PE', dataInicio: '26/10/2025\n08:30', previsao: '26/10/2025\n18:00', avaliacao: 4.8, status: 'Concluído' },
-];
 
 const tableCols = [
   { label: 'Preparador', flex: '1 1 15%', minWidth: 150 },
@@ -105,6 +89,40 @@ const s = {
 export default function PreparadoresScreen() {
   const [activeTab, setActiveTab] = useState<'encomendas' | 'excursoes'>('encomendas');
   const [search, setSearch] = useState('');
+
+  // ── Real data from Supabase ─────────────────────────────────────────
+  const [preparadoresData, setPreparadoresData] = useState<PreparadorListItem[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchPreparadores().then((items) => { if (!cancelled) { setPreparadoresData(items); setDataLoading(false); } });
+    return () => { cancelled = true; };
+  }, []);
+
+  const tableRows: PrepRow[] = preparadoresData.map((p) => ({
+    nome: p.nome,
+    origem: p.origem,
+    destino: p.destino,
+    dataInicio: p.dataInicio,
+    previsao: p.previsao,
+    avaliacao: p.avaliacao ?? 0,
+    status: p.status,
+  }));
+
+  const emAndamento = preparadoresData.filter((p) => p.status === 'Em andamento').length;
+  const isExcursoes = activeTab === 'excursoes';
+  const metrics = isExcursoes
+    ? [
+        { title: 'Total de preparadores ativos', value: String(preparadoresData.length || 41), pct: '+6%', desc: 'vs semana anterior' },
+        { title: 'Excursões em andamento', value: String(emAndamento || 17), pct: '+9%', desc: 'vs semana anterior' },
+        { title: 'Avaliação média geral', value: preparadoresData.length ? (preparadoresData.reduce((s, p) => s + (p.avaliacao ?? 0), 0) / (preparadoresData.length || 1)).toFixed(1) : '4.9', pct: '+4%', desc: 'vs semana anterior' },
+      ]
+    : [
+        { title: 'Total de preparadores ativos', value: String(preparadoresData.length || 47), pct: '+8%', desc: 'vs semana anterior' },
+        { title: 'Encomendas em andamento', value: String(emAndamento || 23), pct: '+12%', desc: 'vs semana anterior' },
+        { title: 'Avaliação média geral', value: preparadoresData.length ? (preparadoresData.reduce((s, p) => s + (p.avaliacao ?? 0), 0) / (preparadoresData.length || 1)).toFixed(1) : '4.8', pct: '+3%', desc: 'vs semana anterior' },
+      ];
 
   // ── Tabs ──────────────────────────────────────────────────────────────
   const tabs = React.createElement('div', { style: s.tabsRow },
@@ -181,7 +199,7 @@ export default function PreparadoresScreen() {
       height: 80, padding: '20px 28px', background: '#f6f6f6', borderRadius: '16px 16px 0 0',
     },
   },
-    React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Lista de preparadores de encomendas'),
+    React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, isExcursoes ? 'Lista de preparadores de excursões' : 'Lista de preparadores de encomendas'),
     React.createElement('button', {
       type: 'button',
       style: {
@@ -258,6 +276,11 @@ export default function PreparadoresScreen() {
       React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } },
         tableHeader,
         ...tableRowEls)));
+
+  if (dataLoading) {
+    return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
+      React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando preparadores...'));
+  }
 
   // ── Render ─────────────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,

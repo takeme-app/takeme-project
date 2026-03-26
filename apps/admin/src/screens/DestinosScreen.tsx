@@ -2,13 +2,15 @@
  * DestinosScreen — Lista de destinos conforme Figma 849-21654.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
+import { fetchDestinos } from '../data/queries';
+import type { DestinoListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -24,29 +26,6 @@ const plusSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 
 const chevronDownSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 
-// ── Metric data ─────────────────────────────────────────────────────────
-const metricsRow1 = [
-  { title: 'Total de Destinos', value: '248', pct: '+12%', pctColor: '#22c55e', desc: 'vs período anterior' },
-  { title: 'Média KM/Viagem', value: '342 km', pct: '+5%', pctColor: '#22c55e', desc: 'vs período anterior' },
-  { title: 'Preço Gasolina', value: 'R$ 5,89', suffix: ' por litro', pct: '', pctColor: '', desc: '' },
-];
-
-const metricsRow2 = [
-  { title: 'Preço KM/h', value: 'R$ 2,45', suffix: ' custo operacional', pct: '', pctColor: '', desc: '' },
-  { title: 'Gasto Aproximado', value: 'R$ 45.890', pct: '-8%', pctColor: '#b53838', desc: 'vs período anterior' },
-];
-
-// ── Bar chart data ──────────────────────────────────────────────────────
-const barData = [
-  { label: 'São Luís', value: 45 },
-  { label: 'Viana', value: 38 },
-  { label: 'Recife', value: 30 },
-  { label: 'João Pessoa', value: 29 },
-  { label: 'Santa Inês', value: 26 },
-];
-const barMax = 50;
-
-// ── Table data ──────────────────────────────────────────────────────────
 type DestinoRow = {
   origem: string;
   destino: string;
@@ -54,16 +33,6 @@ type DestinoRow = {
   dataCriacao: string;
   status: 'Ativo' | 'Inativo';
 };
-
-const tableRows: DestinoRow[] = [
-  { origem: 'São Paulo - SP', destino: 'Campinas - SP', totalAtividades: 420, dataCriacao: '23/10/2025', status: 'Inativo' },
-  { origem: 'Rio de Janeiro - RJ', destino: 'Niterói - RJ', totalAtividades: 420, dataCriacao: '25/10/2025', status: 'Ativo' },
-  { origem: 'Brasília - DF', destino: 'Goiânia - GO', totalAtividades: 420, dataCriacao: '25/10/2025', status: 'Ativo' },
-  { origem: 'São Paulo - SP', destino: 'Campinas - SP', totalAtividades: 420, dataCriacao: '25/10/2025', status: 'Ativo' },
-  { origem: 'São Paulo - SP', destino: 'Goiânia - GO', totalAtividades: 335, dataCriacao: '25/10/2025', status: 'Ativo' },
-  { origem: 'Brasília - DF', destino: 'Goiânia - GO', totalAtividades: 335, dataCriacao: '25/10/2025', status: 'Ativo' },
-  { origem: 'Curitiba - PR', destino: 'Florianópolis - SC', totalAtividades: 335, dataCriacao: '25/10/2025', status: 'Inativo' },
-];
 
 const tableCols = [
   { label: 'Origem', flex: '1 1 16%', minWidth: 130 },
@@ -101,6 +70,31 @@ const s = {
 export default function DestinosScreen() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+
+  // ── Real data from Supabase ─────────────────────────────────────────
+  const [destinosData, setDestinosData] = useState<DestinoListItem[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchDestinos().then((items) => { if (!cancelled) { setDestinosData(items); setDataLoading(false); } });
+    return () => { cancelled = true; };
+  }, []);
+
+  const tableRows: DestinoRow[] = destinosData.map((d) => ({
+    origem: d.origem,
+    destino: d.destino,
+    totalAtividades: d.totalAtividades,
+    dataCriacao: d.primeiraData,
+    status: d.ativo ? 'Ativo' as const : 'Inativo' as const,
+  }));
+
+  const metricsRow1 = [
+    { title: 'Total de Destinos', value: String(destinosData.length), pct: '', pctColor: '', desc: '' },
+  ];
+
+  const barData = destinosData.slice(0, 5).map((d) => ({ label: d.destino.split(' - ')[0] ?? d.destino, value: d.totalAtividades }));
+  const barMax = barData.reduce((m, b) => Math.max(m, b.value), 1);
 
   // ── Search row ────────────────────────────────────────────────────────
   const searchRow = React.createElement('div', {
@@ -161,10 +155,6 @@ export default function DestinosScreen() {
   const metricCardsRow1 = React.createElement('div', {
     style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
   }, ...metricsRow1.map(renderMetric));
-
-  const metricCardsRow2 = React.createElement('div', {
-    style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
-  }, ...metricsRow2.map(renderMetric));
 
   // ── Bar chart helper ──────────────────────────────────────────────────
   const renderBarChart = (title: string, subtitle: string, color: string) =>
@@ -257,12 +247,16 @@ export default function DestinosScreen() {
         tableHeader,
         ...tableRowEls)));
 
+  if (dataLoading) {
+    return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
+      React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando destinos...'));
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Destinos'),
     searchRow,
     metricCardsRow1,
-    metricCardsRow2,
     origensChart,
     destinosChart,
     tableSection);

@@ -16,7 +16,11 @@ import MotoristasScreen from './screens/MotoristasScreen';
 import DestinosScreen from './screens/DestinosScreen';
 import EncomendasScreen from './screens/EncomendasScreen';
 import PreparadoresScreen from './screens/PreparadoresScreen';
+import PromocoesScreen from './screens/PromocoesScreen';
+import PagamentosScreen from './screens/PagamentosScreen';
+import PagamentosGestaoScreen from './screens/PagamentosGestaoScreen';
 import PlaceholderScreen from './screens/PlaceholderScreen';
+import ConfiguracoesScreen from './screens/ConfiguracoesScreen';
 
 export const router = createBrowserRouter([
   {
@@ -43,8 +47,10 @@ export const router = createBrowserRouter([
           { path: '/destinos', element: React.createElement(DestinosScreen) },
           { path: '/encomendas', element: React.createElement(EncomendasScreen) },
           { path: '/preparadores', element: React.createElement(PreparadoresScreen) },
-          { path: '/promocoes', element: React.createElement(PlaceholderScreen, { title: 'Promoções' }) },
-          { path: '/pagamentos', element: React.createElement(PlaceholderScreen, { title: 'Pagamentos' }) },
+          { path: '/promocoes', element: React.createElement(PromocoesScreen) },
+          { path: '/pagamentos', element: React.createElement(PagamentosScreen) },
+          { path: '/pagamentos/gestao', element: React.createElement(PagamentosGestaoScreen) },
+          { path: '/configuracoes', element: React.createElement(ConfiguracoesScreen) },
         ],
       },
     ],

@@ -2,7 +2,7 @@
  * PassageirosScreen — Lista de passageiros conforme Figma.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
@@ -12,6 +12,8 @@ import {
   calendarIconSvg,
   closeIconSvg,
 } from '../styles/webStyles';
+import { fetchPassageiros, fetchPassageiroCounts, type PassageiroCounts } from '../data/queries';
+import type { PassageiroListItem } from '../data/types';
 
 // SVG icons for view/edit actions
 const eyeActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
@@ -26,15 +28,6 @@ const avatarColors: Record<string, string> = {
   C: '#4A90D9', J: '#7B61FF', E: '#E8725C', M: '#50C878', D: '#F5A623',
 };
 
-// Metric data
-const metrics = [
-  { title: 'Totais de passageiros', pct: '+12.5%', pctPositive: true, desc: 'vs semana anterior', value: '2.847' },
-  { title: 'Viagens Concluídas', pct: '+8.2%', pctPositive: true, desc: 'vs semana anterior', value: '1.234' },
-  { title: 'Viagens Agendadas', pct: '-3.1%', pctPositive: false, desc: 'vs semana anterior', value: '456' },
-  { title: 'Viagens Canceladas', pct: '-15.4%', pctPositive: false, desc: 'vs semana anterior', value: '78' },
-];
-
-// Table mock data
 type PassageiroRow = {
   nome: string;
   cidade: string;
@@ -43,16 +36,6 @@ type PassageiroRow = {
   cpf: string;
   status: 'Ativo' | 'Inativo';
 };
-
-const tableRows: PassageiroRow[] = [
-  { nome: 'Carlos Silva', cidade: 'São Paulo', estado: 'São Paulo', dataCriacao: '25/10/2025', cpf: '123.456.789-10', status: 'Ativo' },
-  { nome: 'João Porto', cidade: 'Rio de Janeiro', estado: 'Rio de Janeiro', dataCriacao: '26/10/2025', cpf: '123.456.789-10', status: 'Ativo' },
-  { nome: 'Jorge Silva', cidade: 'Brasília', estado: 'Distrito Federal', dataCriacao: '24/10/2025', cpf: '123.456.789-10', status: 'Inativo' },
-  { nome: 'Carlos Silva', cidade: 'São Paulo', estado: 'São Paulo', dataCriacao: '25/10/2025', cpf: '123.456.789-10', status: 'Ativo' },
-  { nome: 'Everton Pereira', cidade: 'São Paulo', estado: 'São Paulo', dataCriacao: '25/10/2025', cpf: '123.456.789-10', status: 'Ativo' },
-  { nome: 'Marcio Pontes', cidade: 'São Paulo', estado: 'São Paulo', dataCriacao: '25/10/2025', cpf: '123.456.789-10', status: 'Inativo' },
-  { nome: 'Danilo Santos', cidade: 'Curitiba', estado: 'Paraná', dataCriacao: '23/10/2025', cpf: '123.456.789-10', status: 'Ativo' },
-];
 
 const tableCols = [
   { label: 'Passageiros', flex: '1 1 18%', minWidth: 170 },
@@ -214,6 +197,36 @@ const s = {
 
 export default function PassageirosScreen() {
   const navigate = useNavigate();
+
+  // ── Real data from Supabase ─────────────────────────────────────────
+  const [passageirosData, setPassageirosData] = useState<PassageiroListItem[]>([]);
+  const [pCounts, setPCounts] = useState<PassageiroCounts>({ total: 0, ativos: 0, inativos: 0 });
+  const [dataLoading, setDataLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [items, c] = await Promise.all([fetchPassageiros(), fetchPassageiroCounts()]);
+      if (!cancelled) { setPassageirosData(items); setPCounts(c); setDataLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const tableRows: PassageiroRow[] = passageirosData.map((p) => ({
+    nome: p.nome,
+    cidade: p.cidade,
+    estado: p.estado,
+    dataCriacao: p.dataCriacao,
+    cpf: p.cpf,
+    status: p.status,
+  }));
+
+  const metrics = [
+    { title: 'Totais de passageiros', pct: '', pctPositive: true, desc: '', value: String(pCounts.total) },
+    { title: 'Ativos', pct: '', pctPositive: true, desc: '', value: String(pCounts.ativos) },
+    { title: 'Inativos', pct: '', pctPositive: false, desc: '', value: String(pCounts.inativos) },
+  ];
+
   // ── Trocar motorista panel state (Figma 1224-20561) ─────────────────
   const [trocarOpen, setTrocarOpen] = useState(false);
   const [trocarSelected, setTrocarSelected] = useState(0);
@@ -371,8 +384,8 @@ export default function PassageirosScreen() {
         style: { flex: tableCols[6].flex, minWidth: tableCols[6].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
       },
         React.createElement('div', { style: webStyles.viagensActionIcons },
-          React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar', onClick: () => navigate(`/passageiros/${idx}`, { state: { passageiro: row } }) }, eyeActionSvg),
-          React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => navigate(`/passageiros/${idx}/editar-viagem`, { state: { passageiro: row } }) }, pencilActionSvg))));
+          React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar', onClick: () => { const item = passageirosData[idx]; navigate(`/passageiros/${item?.id ?? idx}`, { state: { passageiro: row } }); } }, eyeActionSvg),
+          React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => { const item = passageirosData[idx]; navigate(`/passageiros/${item?.id ?? idx}/editar-viagem`, { state: { passageiro: row } }); } }, pencilActionSvg))));
   };
 
   const tableSectionEl = React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 16, width: '100%' } },
@@ -772,6 +785,11 @@ export default function PassageirosScreen() {
                 style: { width: '100%', height: 48, background: '#e2e2e2', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 16, fontWeight: 500, color: '#b53838', ...font },
               }, 'Cancelar')))))
     : null;
+
+  if (dataLoading) {
+    return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
+      React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando passageiros...'));
+  }
 
   // ── Main render ───────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
