@@ -10,7 +10,6 @@ import { registerMotoristaWithAuth } from '../lib/motoristaRegistration';
 import { onlyDigits } from '../utils/formatCpf';
 import { parseCurrencyBRLToNumber } from '../utils/formatCurrency';
 import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext';
-
 const BUCKET = 'driver-documents';
 
 function formatSupabaseErr(e: { message?: string; details?: string; hint?: string }): string {
@@ -18,10 +17,13 @@ function formatSupabaseErr(e: { message?: string; details?: string; hint?: strin
 }
 
 async function uploadImage(userId: string, uri: string, path: string): Promise<string> {
-  const response = await fetch(uri);
-  const blob = await response.blob();
-  const { data, error } = await supabase.storage.from(BUCKET).upload(path, blob, {
-    contentType: blob.type || 'image/jpeg',
+  const base64 = uri.startsWith('data:') ? uri.split(',')[1] ?? '' : null;
+  if (!base64) throw new Error('Documento inválido. Selecione a imagem novamente.');
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const { data, error } = await supabase.storage.from(BUCKET).upload(path, bytes, {
+    contentType: 'image/jpeg',
     upsert: true,
   });
   if (error) {
@@ -124,6 +126,7 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
           age: ageNum,
           city: formData.city.trim() || null,
           preferenceArea: formData.preferenceArea.trim() || null,
+          experienceYears: formData.experienceYears ? parseInt(formData.experienceYears, 10) : null,
           bankCode: formData.bankCode.trim() || null,
           agencyNumber: formData.agencyNumber.trim() || null,
           accountNumber: formData.accountNumber.trim() || null,
