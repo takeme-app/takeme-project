@@ -2,12 +2,14 @@
  * EncomendasScreen — Lista de encomendas conforme Figma 849-37135.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   webStyles,
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
+import { fetchEncomendas, fetchEncomendaCounts, type EncomendaCounts } from '../data/queries';
+import type { EncomendaListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -21,57 +23,6 @@ const pencilActionSvg = React.createElement('svg', { width: 20, height: 20, view
 const chevronDownSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 
-// ── Metric data ─────────────────────────────────────────────────────────
-const metricsRow1 = [
-  { title: 'Total de Entregas', value: '100', pct: '+12%', pctColor: '#22c55e', desc: 'vs mês anterior' },
-  { title: 'Entregas Concluídas', value: '50', pct: '+8%', pctColor: '#22c55e', desc: 'vs mês anterior' },
-  { title: 'Em Andamento', value: '25', pct: '', pctColor: '', desc: '' },
-];
-const metricsRow2 = [
-  { title: 'Agendadas', value: '24', pct: '', pctColor: '', desc: '' },
-  { title: 'Canceladas', value: '1', pct: '', pctColor: '', desc: '' },
-  { title: 'Média de Entregas/Dia', value: '18,1', suffix: ' até o momento', pct: '', pctColor: '', desc: '' },
-];
-const metricsRow3 = [
-  { title: 'Média de preço - Pequena', value: 'R$ 45,00', suffix: ' Por entrega' },
-  { title: 'Média de preço - Médio', value: 'R$ 85,00', suffix: ' Por entrega' },
-  { title: 'Média de preço - Grande', value: 'R$ 150,00', suffix: ' Por entrega' },
-];
-
-// ── Progress bar data ───────────────────────────────────────────────────
-const tipoEncomenda = [
-  { label: 'Pequena', pct: 55, count: '245 entregas' },
-  { label: 'Média', pct: 40, count: '183 entregas' },
-  { label: 'Grande', pct: 20, count: '108 entregas' },
-];
-
-const topDestinos = [
-  { label: 'São Paulo - SP', pct: 32, count: '240 entregas' },
-  { label: 'Rio de Janeiro - RJ', pct: 25, count: '180 entregas' },
-  { label: 'Campinas - SP', pct: 20, count: '110 entregas' },
-  { label: 'Curitiba - PR', pct: 15, count: '95 entregas' },
-  { label: 'Belo Horizonte - MG', pct: 11, count: '80 entregas' },
-  { label: 'Porto Alegre - RS', pct: 8, count: '65 entregas' },
-  { label: 'Florianópolis - SC', pct: 7, count: '52 entregas' },
-  { label: 'Brasília - DF', pct: 6, count: '44 entregas' },
-  { label: 'Salvador - BA', pct: 5, count: '38 entregas' },
-  { label: 'Goiânia - GO', pct: 4, count: '33 entregas' },
-];
-
-const topOrigens = [
-  { label: 'São Paulo - SP', pct: 36, count: '270 entregas' },
-  { label: 'Campinas - SP', pct: 21, count: '185 entregas' },
-  { label: 'Curitiba - PR', pct: 17, count: '110 entregas' },
-  { label: 'Belo Horizonte - MG', pct: 12, count: '95 entregas' },
-  { label: 'Rio de Janeiro - RJ', pct: 12, count: '80 entregas' },
-  { label: 'Porto Alegre - RS', pct: 8, count: '65 entregas' },
-  { label: 'Sorocaba - SP', pct: 7, count: '52 entregas' },
-  { label: 'Brasília - DF', pct: 6, count: 'entregas' },
-  { label: 'Joinville - SC', pct: 5, count: '34 entregas' },
-  { label: 'Londrina - PR', pct: 4, count: '33 entregas' },
-];
-
-// ── Table data ──────────────────────────────────────────────────────────
 type EncomendaRow = {
   destino: string;
   origem: string;
@@ -81,16 +32,6 @@ type EncomendaRow = {
   chegada: string;
   status: 'Cancelado' | 'Concluído' | 'Agendado' | 'Em andamento';
 };
-
-const tableRows: EncomendaRow[] = [
-  { destino: 'São Paulo - SP', origem: 'Campinas - SP', remetente: 'Carlos Silva', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'Cancelado' },
-  { destino: 'Rio de Janeiro - RJ', origem: 'Niterói - RJ', remetente: 'João Porto', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'Concluído' },
-  { destino: 'Brasília - DF', origem: 'Goiânia - GO', remetente: 'Jorge Silva', data: '25/10/2025', embarque: '08:00', chegada: '03:30', status: 'Agendado' },
-  { destino: 'São Paulo - SP', origem: 'Campinas - SP', remetente: 'Carlos Silva', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'Agendado' },
-  { destino: 'São Paulo - SP', origem: 'Goiânia - GO', remetente: 'Everton Pereira', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'Em andamento' },
-  { destino: 'Brasília - DF', origem: 'Goiânia - GO', remetente: 'Marcos Pontes', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'Em andamento' },
-  { destino: 'Curitiba - PR', origem: 'Florianópolis - SC', remetente: 'Danilo Santos', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'Em andamento' },
-];
 
 const tableCols = [
   { label: 'Destino', flex: '1 1 14%', minWidth: 120 },
@@ -136,6 +77,62 @@ const s = {
 
 export default function EncomendasScreen() {
   const [search, setSearch] = useState('');
+
+  // ── Real data from Supabase ─────────────────────────────────────────
+  const [encomendasData, setEncomendasData] = useState<EncomendaListItem[]>([]);
+  const [eCounts, setECounts] = useState<EncomendaCounts>({ total: 0, concluidas: 0, emAndamento: 0, agendadas: 0, canceladas: 0 });
+  const [dataLoading, setDataLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [items, c] = await Promise.all([fetchEncomendas(), fetchEncomendaCounts()]);
+      if (!cancelled) { setEncomendasData(items); setECounts(c); setDataLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const tableRows: EncomendaRow[] = encomendasData.map((e) => ({
+    destino: e.destino,
+    origem: e.origem,
+    remetente: e.remetente,
+    data: e.data,
+    embarque: '—',
+    chegada: '—',
+    status: e.status,
+  }));
+
+  const metricsRow1 = [
+    { title: 'Total de Entregas', value: String(eCounts.total), pct: '', pctColor: '', desc: '' },
+    { title: 'Entregas Concluídas', value: String(eCounts.concluidas), pct: '', pctColor: '', desc: '' },
+    { title: 'Em Andamento', value: String(eCounts.emAndamento), pct: '', pctColor: '', desc: '' },
+  ];
+  const metricsRow2 = [
+    { title: 'Agendadas', value: String(eCounts.agendadas), pct: '', pctColor: '', desc: '' },
+    { title: 'Canceladas', value: String(eCounts.canceladas), pct: '', pctColor: '', desc: '' },
+  ];
+
+  const destMap = new Map<string, number>();
+  const origMap = new Map<string, number>();
+  for (const e of encomendasData) {
+    destMap.set(e.destino, (destMap.get(e.destino) ?? 0) + 1);
+    origMap.set(e.origem, (origMap.get(e.origem) ?? 0) + 1);
+  }
+  const topDestinos = Array.from(destMap.entries())
+    .sort((a, b) => b[1] - a[1]).slice(0, 10)
+    .map(([label, count]) => ({ label, pct: encomendasData.length ? Math.round((count / encomendasData.length) * 100) : 0, count: `${count} entregas` }));
+  const topOrigens = Array.from(origMap.entries())
+    .sort((a, b) => b[1] - a[1]).slice(0, 10)
+    .map(([label, count]) => ({ label, pct: encomendasData.length ? Math.round((count / encomendasData.length) * 100) : 0, count: `${count} entregas` }));
+
+  const sizeMap = new Map<string, number>();
+  for (const e of encomendasData) { if (e.packageSize) sizeMap.set(e.packageSize, (sizeMap.get(e.packageSize) ?? 0) + 1); }
+  const sizeTotal = Array.from(sizeMap.values()).reduce((a, b) => a + b, 0) || 1;
+  const tipoEncomenda = Array.from(sizeMap.entries()).map(([label, count]) => ({
+    label: label.charAt(0).toUpperCase() + label.slice(1),
+    pct: Math.round((count / sizeTotal) * 100),
+    count: `${count} entregas`,
+  }));
 
   // ── Search row ────────────────────────────────────────────────────────
   const searchRow = React.createElement('div', {
@@ -274,13 +271,17 @@ export default function EncomendasScreen() {
         tableHeader,
         ...tableRowEls)));
 
+  if (dataLoading) {
+    return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
+      React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando encomendas...'));
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Encomendas'),
     searchRow,
     metricRow(metricsRow1),
     metricRow(metricsRow2),
-    metricRow(metricsRow3 as any),
     progressSection,
     tableSection);
 }
