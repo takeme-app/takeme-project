@@ -5,7 +5,7 @@ export type ActivitiesStackParamList = {
   ShipmentDetail: { shipmentId: string };
   ShipmentTip: { shipmentId: string };
   ShipmentRating: { shipmentId: string };
-  Chat: { contactName?: string };
+  Chat: { contactName?: string; conversationId?: string };
   ExcursionDetail: { excursionRequestId: string };
   ExcursionBudget: { excursionRequestId: string };
   ExcursionPassengerList: { excursionRequestId: string };

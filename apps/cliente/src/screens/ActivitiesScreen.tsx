@@ -274,16 +274,18 @@ export function ActivitiesScreen({ navigation }: Props) {
   const openFilter = () => setFilterModalVisible(true);
 
   const renderActivityCard = (item: ActivityItem) => {
+    const navigateToDetail = () => {
+      if (item.type === 'viagem') navigation.navigate('TripDetail', { bookingId: item.id });
+      if (item.type === 'envio') navigation.navigate('ShipmentDetail', { shipmentId: item.id });
+      if (item.type === 'excursao') navigation.navigate('ExcursionDetail', { excursionRequestId: item.id });
+      if (item.type === 'dependente') navigation.navigate('DependentShipmentDetail', { dependentShipmentId: item.id });
+    };
+
     return (
       <TouchableOpacity
         key={item.id}
         style={styles.activityRow}
-        onPress={() => {
-          if (item.type === 'viagem') navigation.navigate('TripDetail', { bookingId: item.id });
-          if (item.type === 'envio') navigation.navigate('ShipmentDetail', { shipmentId: item.id });
-          if (item.type === 'excursao') navigation.navigate('ExcursionDetail', { excursionRequestId: item.id });
-          if (item.type === 'dependente') navigation.navigate('DependentShipmentDetail', { dependentShipmentId: item.id });
-        }}
+        onPress={navigateToDetail}
         activeOpacity={0.7}
       >
         <View style={styles.activityIconWrap}>
@@ -292,7 +294,13 @@ export function ActivitiesScreen({ navigation }: Props) {
         <View style={styles.activityContent}>
           <View style={styles.activityCardHeader}>
             <Text style={styles.activityTitle} numberOfLines={1}>{item.title}</Text>
-            <Text style={styles.activityLink}>Ver detalhes</Text>
+            <TouchableOpacity
+              onPress={(e) => { e.stopPropagation(); setSupportSheetVisible(true); }}
+              hitSlop={10}
+              activeOpacity={0.7}
+            >
+              <Image source={require('../../assets/icons/icon-chat.png')} style={styles.activitySupportIcon} />
+            </TouchableOpacity>
           </View>
           <Text style={styles.activityDateTime}>{item.dateTime}</Text>
           <Text style={styles.activityPrice}>{item.priceFormatted} • {item.categoryLabel}</Text>
@@ -462,6 +470,7 @@ const styles = StyleSheet.create({
   activityDateTime: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
   activityPrice: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
   activityLink: { fontSize: 13, color: COLORS.black, textDecorationLine: 'underline' },
+  activitySupportIcon: { width: 24, height: 24 },
   separator: { height: 1, backgroundColor: COLORS.neutral400, marginLeft: 88 },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   subtitle: { fontSize: 15, color: COLORS.neutral700 },

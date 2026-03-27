@@ -78,10 +78,25 @@ export function TripDetailScreen({ navigation, route }: Props) {
   const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
   const [routeDuration, setRouteDuration] = useState<string | null>(null);
   const [showCancelTripModal, setShowCancelTripModal] = useState(false);
+  const [cancelLoading, setCancelLoading] = useState(false);
   const [showRescheduleSheet, setShowRescheduleSheet] = useState(false);
   const [selectedRescheduleSlot, setSelectedRescheduleSlot] = useState<string | null>(null);
   const [supportSheetVisible, setSupportSheetVisible] = useState(false);
   const insets = useSafeAreaInsets();
+
+  async function handleCancelTrip() {
+    setCancelLoading(true);
+    try {
+      await supabase
+        .from('bookings')
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+        .eq('id', bookingId);
+      setShowCancelTripModal(false);
+      navigation.goBack();
+    } finally {
+      setCancelLoading(false);
+    }
+  }
 
   useEffect(() => {
     if (!bookingId) {
@@ -360,11 +375,15 @@ export function TripDetailScreen({ navigation, route }: Props) {
           <View style={styles.confirmModalBox}>
             <Text style={styles.confirmModalTitle}>Tem certeza que deseja cancelar esta viagem?</Text>
             <Text style={styles.confirmModalSubtitle}>O passageiro será notificado imediatamente.</Text>
-            <TouchableOpacity style={styles.confirmModalPrimary} activeOpacity={0.8} onPress={() => { setShowCancelTripModal(false); /* TODO: call cancel API */ }}>
+            <TouchableOpacity style={styles.confirmModalPrimary} activeOpacity={0.8} onPress={() => setShowCancelTripModal(false)} disabled={cancelLoading}>
               <Text style={styles.confirmModalPrimaryText}>Continuar</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.confirmModalSecondary} activeOpacity={0.8} onPress={() => setShowCancelTripModal(false)}>
-              <Text style={styles.confirmModalSecondaryText}>Voltar</Text>
+            <TouchableOpacity style={styles.confirmModalSecondary} activeOpacity={0.8} onPress={handleCancelTrip} disabled={cancelLoading}>
+              {cancelLoading ? (
+                <ActivityIndicator size="small" color="#dc2626" />
+              ) : (
+                <Text style={styles.confirmModalSecondaryText}>Cancelar viagem</Text>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -614,8 +633,10 @@ const styles = StyleSheet.create({
   confirmModalPrimaryText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
   confirmModalSecondary: {
     marginTop: 12,
-    paddingVertical: 14,
+    paddingVertical: 16,
     alignItems: 'center',
+    backgroundColor: COLORS.neutral300,
+    borderRadius: 12,
   },
   confirmModalSecondaryText: { fontSize: 16, fontWeight: '600', color: '#dc2626' },
   rescheduleSheet: {
