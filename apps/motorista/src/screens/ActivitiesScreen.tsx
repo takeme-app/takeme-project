@@ -8,6 +8,7 @@ import {
   Modal,
   TextInput,
   Platform,
+  Linking,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -39,6 +40,7 @@ type RawTrip = {
   destination_address: string;
   departure_at: string;
   bags_available: number | null;
+  trunk_occupancy_pct: number | null;
   status: string;
   bookings: Booking[];
 };
@@ -53,11 +55,21 @@ type TripRow = {
   confirmedBookings: Booking[];
   passengerCount: number;
   bagsUsed: number;
-  occupationPct: number;
+  trunkPct: number;
   isConfirmed: boolean;
 };
 
 type FilterCategory = 'Todas' | 'Viagens' | 'Envios' | 'Dependentes';
+
+const SUPPORT_PHONE = 'tel:+5583999999999';
+const SUPPORT_WHATSAPP = 'https://wa.me/5583999999999';
+
+function applyDateMask(text: string): string {
+  const digits = text.replace(/\D/g, '').slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
 
 function formatTripCode(id: string): string {
   return 'VG' + id.replace(/-/g, '').slice(0, 6).toUpperCase();
@@ -108,8 +120,7 @@ function buildTripRow(raw: RawTrip): TripRow {
     0,
   );
   const bagsAvailable = raw.bags_available ?? 0;
-  const occupationPct =
-    bagsAvailable > 0 ? Math.round((bagsUsed / bagsAvailable) * 100) : 0;
+  const trunkPct = raw.trunk_occupancy_pct ?? 0;
   const isConfirmed = raw.status === 'active' || confirmedBookings.length > 0;
 
   return {
@@ -122,7 +133,7 @@ function buildTripRow(raw: RawTrip): TripRow {
     confirmedBookings,
     passengerCount,
     bagsUsed,
-    occupationPct,
+    trunkPct,
     isConfirmed,
   };
 }
@@ -130,15 +141,20 @@ function buildTripRow(raw: RawTrip): TripRow {
 function TripCard({
   trip,
   onPress,
+  onTrunkChange,
 }: {
   trip: TripRow;
   onPress: () => void;
+  onTrunkChange?: (newPct: number) => void;
 }) {
   const isConfirmed = trip.isConfirmed;
   const isPlannedNoPassengers =
     !isConfirmed && trip.confirmedBookings.length === 0;
   const hasPassengers = trip.passengerCount > 0;
   const hasPackages = trip.bagsUsed > 0;
+
+  const trunkColor =
+    trip.trunkPct >= 80 ? '#EF4444' : trip.trunkPct >= 50 ? GOLD : '#22C55E';
 
   return (
     <View style={styles.card}>
@@ -201,13 +217,35 @@ function TripCard({
         </View>
       )}
 
-      {/* Occupation bar */}
+      {/* Trunk occupation bar + stepper */}
       <View style={styles.barContainer}>
-        <View style={[styles.barFill, { width: `${trip.occupationPct}%` as any }]} />
+        <View style={[styles.barFill, { width: `${trip.trunkPct}%` as any, backgroundColor: trunkColor }]} />
       </View>
-      <Text style={styles.barLabel}>
-        Ocupação do bagageiro: {trip.occupationPct}%
-      </Text>
+      <View style={styles.trunkRow}>
+        <Text style={styles.barLabel}>
+          Bagageiro: {trip.trunkPct}%
+        </Text>
+        {onTrunkChange && (
+          <View style={styles.trunkStepper}>
+            <TouchableOpacity
+              onPress={() => onTrunkChange(Math.max(0, trip.trunkPct - 10))}
+              hitSlop={8}
+              activeOpacity={0.7}
+              style={styles.stepBtn}
+            >
+              <MaterialIcons name="remove" size={16} color="#374151" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => onTrunkChange(Math.min(100, trip.trunkPct + 10))}
+              hitSlop={8}
+              activeOpacity={0.7}
+              style={styles.stepBtn}
+            >
+              <MaterialIcons name="add" size={16} color="#374151" />
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
 
       {/* Bottom link */}
       <TouchableOpacity onPress={onPress} activeOpacity={0.7} style={styles.linkBtn}>
@@ -230,6 +268,9 @@ export function ActivitiesScreen({ navigation }: Props) {
   const [appliedCategory, setAppliedCategory] = useState<FilterCategory>('Todas');
   const [appliedDateStart, setAppliedDateStart] = useState('');
   const [appliedDateEnd, setAppliedDateEnd] = useState('');
+  const [filterDateStartDisplay, setFilterDateStartDisplay] = useState('');
+  const [filterDateEndDisplay, setFilterDateEndDisplay] = useState('');
+  const [supportModalVisible, setSupportModalVisible] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -246,7 +287,7 @@ export function ActivitiesScreen({ navigation }: Props) {
     const { data } = await supabase
       .from('scheduled_trips')
       .select(
-        'id, origin_address, destination_address, departure_at, bags_available, status, bookings(id, passenger_count, bags_count, status)',
+        'id, origin_address, destination_address, departure_at, bags_available, trunk_occupancy_pct, status, bookings(id, passenger_count, bags_count, status)',
       )
       .eq('driver_id', user.id)
       .in('status', ['active', 'scheduled'])
@@ -286,6 +327,8 @@ export function ActivitiesScreen({ navigation }: Props) {
     setFilterCategory(appliedCategory);
     setFilterDateStart(appliedDateStart);
     setFilterDateEnd(appliedDateEnd);
+    setFilterDateStartDisplay(appliedDateStart ? formatDateDisplay(appliedDateStart) : '');
+    setFilterDateEndDisplay(appliedDateEnd ? formatDateDisplay(appliedDateEnd) : '');
     setFilterVisible(true);
   };
 
@@ -303,6 +346,17 @@ export function ActivitiesScreen({ navigation }: Props) {
   const goTripHistory = () => {
     navigation.navigate('TripHistory');
   };
+
+  const updateTrunk = useCallback(async (tripId: string, pct: number) => {
+    const update = (prev: TripRow[]) =>
+      prev.map((t) => (t.id === tripId ? { ...t, trunkPct: pct } : t));
+    setConfirmedTrips(update);
+    setPlannedTrips(update);
+    await supabase
+      .from('scheduled_trips')
+      .update({ trunk_occupancy_pct: pct } as never)
+      .eq('id', tripId);
+  }, []);
 
   const categories: FilterCategory[] = ['Todas', 'Viagens', 'Envios', 'Dependentes'];
 
@@ -357,6 +411,7 @@ export function ActivitiesScreen({ navigation }: Props) {
                     key={trip.id}
                     trip={trip}
                     onPress={() => goTripDetail(trip.id)}
+                    onTrunkChange={(pct) => updateTrunk(trip.id, pct)}
                   />
                 ))}
               </>
@@ -370,6 +425,7 @@ export function ActivitiesScreen({ navigation }: Props) {
                     key={trip.id}
                     trip={trip}
                     onPress={() => goTripDetail(trip.id)}
+                    onTrunkChange={(pct) => updateTrunk(trip.id, pct)}
                   />
                 ))}
               </>
@@ -377,6 +433,76 @@ export function ActivitiesScreen({ navigation }: Props) {
           </>
         )}
       </ScrollView>
+
+      {/* Support FAB */}
+      <TouchableOpacity
+        style={styles.fab}
+        activeOpacity={0.85}
+        onPress={() => setSupportModalVisible(true)}
+      >
+        <MaterialIcons name="chat" size={26} color="#3D2B00" />
+      </TouchableOpacity>
+
+      {/* Support Modal */}
+      <Modal
+        visible={supportModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSupportModalVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setSupportModalVisible(false)}
+        />
+        <View style={styles.supportModalCard}>
+          <TouchableOpacity
+            style={styles.supportModalClose}
+            onPress={() => setSupportModalVisible(false)}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="close" size={20} color="#6B7280" />
+          </TouchableOpacity>
+
+          <Text style={styles.supportModalTitle}>Como podemos ajudar?</Text>
+          <Text style={styles.supportModalSubtitle}>
+            Escolha uma das opções abaixo{'\n'}para entrar em contato
+          </Text>
+
+          <TouchableOpacity
+            style={styles.supportItem}
+            activeOpacity={0.8}
+            onPress={() => { setSupportModalVisible(false); Linking.openURL(SUPPORT_PHONE); }}
+          >
+            <View style={styles.supportIconWrap}>
+              <MaterialIcons name="phone" size={22} color="#92400E" />
+            </View>
+            <Text style={styles.supportItemText}>Ligar para o suporte Take Me</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.supportItem}
+            activeOpacity={0.8}
+            onPress={() => { setSupportModalVisible(false); }}
+          >
+            <View style={styles.supportIconWrap}>
+              <MaterialIcons name="headset-mic" size={22} color="#92400E" />
+            </View>
+            <Text style={styles.supportItemText}>Chat com o suporte Take Me</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.supportItem}
+            activeOpacity={0.8}
+            onPress={() => { setSupportModalVisible(false); Linking.openURL(SUPPORT_WHATSAPP); }}
+          >
+            <View style={styles.supportIconWrap}>
+              <MaterialIcons name="forum" size={22} color="#92400E" />
+            </View>
+            <Text style={styles.supportItemText}>WhatsApp do Take Me</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
 
       {/* Filter Modal */}
       <Modal
@@ -425,18 +551,16 @@ export function ActivitiesScreen({ navigation }: Props) {
               <Text style={styles.dateInputLabel}>Data inicial</Text>
               <TextInput
                 style={styles.dateInput}
-                value={filterDateStart ? formatDateDisplay(filterDateStart) : ''}
+                value={filterDateStartDisplay}
                 placeholder="dd/mm/aaaa"
                 placeholderTextColor="#9CA3AF"
                 onChangeText={(text) => {
-                  // Accept YYYY-MM-DD from raw or parse dd/mm/yyyy
+                  const masked = applyDateMask(text);
+                  setFilterDateStartDisplay(masked);
                   const digits = text.replace(/\D/g, '');
                   if (digits.length === 8) {
-                    const day = digits.slice(0, 2);
-                    const month = digits.slice(2, 4);
-                    const year = digits.slice(4, 8);
-                    setFilterDateStart(`${year}-${month}-${day}`);
-                  } else if (text === '') {
+                    setFilterDateStart(`${digits.slice(4, 8)}-${digits.slice(2, 4)}-${digits.slice(0, 2)}`);
+                  } else {
                     setFilterDateStart('');
                   }
                 }}
@@ -448,17 +572,16 @@ export function ActivitiesScreen({ navigation }: Props) {
               <Text style={styles.dateInputLabel}>Data final</Text>
               <TextInput
                 style={styles.dateInput}
-                value={filterDateEnd ? formatDateDisplay(filterDateEnd) : ''}
+                value={filterDateEndDisplay}
                 placeholder="dd/mm/aaaa"
                 placeholderTextColor="#9CA3AF"
                 onChangeText={(text) => {
+                  const masked = applyDateMask(text);
+                  setFilterDateEndDisplay(masked);
                   const digits = text.replace(/\D/g, '');
                   if (digits.length === 8) {
-                    const day = digits.slice(0, 2);
-                    const month = digits.slice(2, 4);
-                    const year = digits.slice(4, 8);
-                    setFilterDateEnd(`${year}-${month}-${day}`);
-                  } else if (text === '') {
+                    setFilterDateEnd(`${digits.slice(4, 8)}-${digits.slice(2, 4)}-${digits.slice(0, 2)}`);
+                  } else {
                     setFilterDateEnd('');
                   }
                 }}
@@ -636,7 +759,24 @@ const styles = StyleSheet.create({
   barLabel: {
     fontSize: 12,
     color: '#6B7280',
+  },
+  trunkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: 12,
+  },
+  trunkStepper: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  stepBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   linkBtn: { alignItems: 'center', paddingTop: 4 },
@@ -740,4 +880,81 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFFFFF',
   },
+
+  fab: {
+    position: 'absolute',
+    bottom: 28,
+    right: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#FDE68A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#C9A227',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.45,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+
+  supportModalCard: {
+    position: 'absolute',
+    top: '50%',
+    left: 20,
+    right: 20,
+    transform: [{ translateY: -200 }],
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 28,
+    paddingBottom: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 12,
+  },
+  supportModalClose: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  supportModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 8,
+    marginRight: 32,
+  },
+  supportModalSubtitle: {
+    fontSize: 13,
+    color: '#9CA3AF',
+    lineHeight: 19,
+    marginBottom: 24,
+  },
+  supportItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: '#FFFBEB',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+  },
+  supportIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#FDE68A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  supportItemText: { flex: 1, fontSize: 15, fontWeight: '500', color: '#111827' },
 });

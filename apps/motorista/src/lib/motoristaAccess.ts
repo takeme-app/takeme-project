@@ -1,10 +1,10 @@
 import { supabase } from './supabase';
 
-/** Único status que libera o app motorista (definido com o admin). */
+/** Único status que libera o app (definido com o admin). */
 export const MOTORISTA_ACTIVE_STATUS = 'approved';
 
 export type MotoristaGateResult =
-  | { kind: 'active' }
+  | { kind: 'active'; subtype: string }
   | { kind: 'pending'; status: string }
   | { kind: 'missing_profile' }
   | { kind: 'error'; message: string };
@@ -12,7 +12,7 @@ export type MotoristaGateResult =
 export async function checkMotoristaCanAccessApp(userId: string): Promise<MotoristaGateResult> {
   const { data, error } = await supabase
     .from('worker_profiles')
-    .select('status')
+    .select('status, subtype')
     .eq('id', userId)
     .maybeSingle();
 
@@ -26,7 +26,7 @@ export async function checkMotoristaCanAccessApp(userId: string): Promise<Motori
     return { kind: 'missing_profile' };
   }
   if (data.status === MOTORISTA_ACTIVE_STATUS) {
-    return { kind: 'active' };
+    return { kind: 'active', subtype: data.subtype ?? 'takeme' };
   }
   return { kind: 'pending', status: data.status };
 }
@@ -50,4 +50,11 @@ export function getMotoristaPendingCopy(status: string): { title: string; messag
     message:
       'Seu cadastro está passando por aprovação da equipe administrativa. Você será notificado quando estiver liberado para usar o app.',
   };
+}
+
+/** Mapeia subtype do DB para a rota principal correta. */
+export function subtypeToMainRoute(subtype: string): 'Main' | 'MainExcursoes' | 'MainEncomendas' {
+  if (subtype === 'excursions') return 'MainExcursoes';
+  if (subtype === 'shipments') return 'MainEncomendas';
+  return 'Main';
 }

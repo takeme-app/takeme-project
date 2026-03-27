@@ -59,8 +59,8 @@ export function MainTabsExcursoes() {
         name="ColetasExc"
         component={ColetasExcursoesScreen}
         options={{
-          title: 'Coletas',
-          tabBarIcon: ({ color }) => <MaterialIcons name="inventory-2" size={24} color={color} />,
+          title: 'Excursões',
+          tabBarIcon: ({ color }) => <MaterialIcons name="directions-bus" size={24} color={color} />,
         }}
       />
       <Tab.Screen

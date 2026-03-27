@@ -7,6 +7,7 @@ import { WorkerVehiclesScreen } from '../screens/WorkerVehiclesScreen';
 import { VehicleDetailScreen } from '../screens/VehicleDetailScreen';
 import { VehicleFormScreen } from '../screens/VehicleFormScreen';
 import { AboutScreen } from '../screens/AboutScreen';
+import { NotificationsScreen } from '../screens/NotificationsScreen';
 
 const Stack = createNativeStackNavigator<ProfileStackParamList>();
 
@@ -26,6 +27,7 @@ export function PerfilEncomendasStack() {
       <Stack.Screen name="VehicleDetail" component={VehicleDetailScreen} />
       <Stack.Screen name="VehicleForm" component={VehicleFormScreen} />
       <Stack.Screen name="About" component={AboutScreen} />
+      <Stack.Screen name="Notifications" component={NotificationsScreen} />
     </Stack.Navigator>
   );
 }

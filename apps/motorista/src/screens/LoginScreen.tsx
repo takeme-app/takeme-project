@@ -18,7 +18,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { checkMotoristaCanAccessApp, getMotoristaPendingCopy } from '../lib/motoristaAccess';
+import { checkMotoristaCanAccessApp, getMotoristaPendingCopy, subtypeToMainRoute } from '../lib/motoristaAccess';
 import { getUserErrorMessage } from '../utils/errorMessage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
@@ -64,7 +64,7 @@ export function LoginScreen({ navigation }: Props) {
       });
       return;
     }
-    navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
+    navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(gate.subtype) }] });
   };
 
   const handleLogin = async () => {

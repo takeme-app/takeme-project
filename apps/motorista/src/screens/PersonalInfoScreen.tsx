@@ -208,7 +208,7 @@ export function PersonalInfoScreen({ navigation }: Props) {
           <Text style={styles.closeX}>×</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Informações pessoais</Text>
-        <View style={styles.iconBtn} />
+        <View style={{ width: 40 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>

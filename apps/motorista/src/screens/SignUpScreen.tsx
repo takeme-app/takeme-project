@@ -14,7 +14,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { RootStackParamList, DriverType } from '../navigation/types';
+import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
@@ -31,15 +31,13 @@ function formatPhone(value: string): string {
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
 }
 
-function isDriverRegistration(
-  t: string | undefined
-): t is DriverType {
-  return t === 'take_me' || t === 'parceiro';
+function isDeferredRegistration(t: string | undefined): boolean {
+  return t === 'take_me' || t === 'parceiro' || t === 'preparador_excursões' || t === 'preparador_encomendas';
 }
 
 export function SignUpScreen({ navigation, route }: Props) {
   const registrationType = route.params?.registrationType;
-  const driverFirst = isDriverRegistration(registrationType);
+  const driverFirst = isDeferredRegistration(registrationType);
   const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
   const { setDeferred } = useDeferredDriverSignup();
@@ -77,16 +75,9 @@ export function SignUpScreen({ navigation, route }: Props) {
     }
 
     if (driverFirst) {
-      if (!isDriverRegistration(registrationType)) return;
-      setDeferred({
-        email: email.trim(),
-        password,
-        driverType: registrationType,
-      });
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'CompleteDriverRegistration', params: { driverType: registrationType } }],
-      });
+      if (!registrationType) return;
+      setDeferred({ email: email.trim(), password, driverType: registrationType });
+      navigation.reset({ index: 0, routes: [{ name: 'CompleteDriverRegistration', params: { driverType: registrationType } }] });
       return;
     }
 
@@ -160,7 +151,7 @@ export function SignUpScreen({ navigation, route }: Props) {
         <Text style={styles.title}>Preencha seus dados para começar</Text>
         <Text style={styles.titleHint}>
           {driverFirst
-            ? 'Depois você confirmará o e-mail e completará seu cadastro de motorista (documentos e rotas). Os termos são aceitos nessa etapa.'
+            ? 'Na próxima etapa você completará seu cadastro com documentos e informações adicionais.'
             : 'E-mail e senha serão confirmados após você completar o cadastro na próxima tela.'}
         </Text>
 

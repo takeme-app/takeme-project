@@ -16,7 +16,7 @@ export function PerfilEncomendasScreen({ navigation }: Props) {
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.headerRow}>
           <Text style={styles.headerTitle}>Configurações</Text>
-          <TouchableOpacity style={styles.bellButton} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.bellButton} activeOpacity={0.7} onPress={() => navigation.navigate('Notifications')}>
             <MaterialIcons name="notifications-none" size={22} color="#111827" />
           </TouchableOpacity>
         </View>
