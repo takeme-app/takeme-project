@@ -4,6 +4,8 @@ export type RouteResult = {
   coordinates: RoutePoint[];
   /** Duração estimada em segundos. */
   durationSeconds: number;
+  /** Distância estimada em metros. */
+  distanceMeters: number;
 };
 
 /** Rota de carro entre dois pontos (OSRM público, sem API key). */
@@ -18,7 +20,7 @@ export async function getRouteWithDuration(
     const res = await fetch(url, { headers: { 'User-Agent': 'TakeMe-Motorista/1.0' } });
     if (!res.ok) return null;
     const data = (await res.json()) as {
-      routes?: Array<{ geometry?: { coordinates?: [number, number][] }; duration?: number }>;
+      routes?: Array<{ geometry?: { coordinates?: [number, number][] }; duration?: number; distance?: number }>;
     };
     const route = data.routes?.[0];
     const coords = route?.geometry?.coordinates;
@@ -26,6 +28,7 @@ export async function getRouteWithDuration(
     return {
       coordinates: coords.map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
       durationSeconds: route?.duration ?? 0,
+      distanceMeters: route?.distance ?? 0,
     };
   } catch {
     return null;
@@ -41,7 +44,7 @@ export async function getMultiPointRoute(points: RoutePoint[]): Promise<RouteRes
     const res = await fetch(url, { headers: { 'User-Agent': 'TakeMe-Motorista/1.0' } });
     if (!res.ok) return null;
     const data = (await res.json()) as {
-      routes?: Array<{ geometry?: { coordinates?: [number, number][] }; duration?: number }>;
+      routes?: Array<{ geometry?: { coordinates?: [number, number][] }; duration?: number; distance?: number }>;
     };
     const route = data.routes?.[0];
     const coords = route?.geometry?.coordinates;
@@ -49,6 +52,7 @@ export async function getMultiPointRoute(points: RoutePoint[]): Promise<RouteRes
     return {
       coordinates: coords.map(([lng, lat]) => ({ latitude: lat, longitude: lng })),
       durationSeconds: route?.duration ?? 0,
+      distanceMeters: route?.distance ?? 0,
     };
   } catch {
     return null;

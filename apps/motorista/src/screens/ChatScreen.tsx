@@ -227,7 +227,7 @@ export function ChatScreen({ navigation, route }: Props) {
             </TouchableOpacity>
             <TextInput
               style={styles.input}
-              placeholder="Pesquisar"
+              placeholder="Digite uma mensagem"
               placeholderTextColor={COLORS.neutral700}
               value={inputText}
               onChangeText={setInputText}

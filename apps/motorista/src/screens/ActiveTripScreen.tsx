@@ -130,6 +130,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // Routes
   const [driverRouteCoords, setDriverRouteCoords] = useState<LatLng[]>([]);
   const [stopsRouteCoords, setStopsRouteCoords] = useState<LatLng[]>([]);
+  const [stopsRouteDistanceMeters, setStopsRouteDistanceMeters] = useState<number | null>(null);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
 
   // Driver position
@@ -268,6 +269,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       }
 
       setStops(builtStops);
+      setStopsRouteDistanceMeters(null);
 
       // Fetch stops route (full path through all stops)
       if (t?.origin_lat && t?.origin_lng) {
@@ -281,7 +283,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
         if (waypoints.length >= 2) {
           const result = await getMultiPointRoute(waypoints);
-          if (result) setStopsRouteCoords(result.coordinates);
+          if (result) {
+            setStopsRouteCoords(result.coordinates);
+            setStopsRouteDistanceMeters(result.distanceMeters);
+          }
         }
       }
     } finally {
@@ -728,19 +733,25 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           <View style={styles.centeredModal}>
             <Text style={styles.centeredModalTitle}>Confirmar entrega</Text>
             <Text style={styles.centeredModalSubtitle}>
-              Insira o código informado pelo cliente para confirmar a entrega.
+              {currentStop?.sourceType === 'shipment'
+                ? 'Insira o código informado pelo cliente para confirmar a entrega.'
+                : 'Confirme a entrega para continuar.'}
             </Text>
-            <Text style={styles.fieldLabel}>Código de entrega</Text>
-            <TextInput
-              style={styles.codeInput}
-              value={confirmCode}
-              onChangeText={(v) => { setConfirmCode(v.replace(/\D/g, '').slice(0, 4)); setConfirmError(''); }}
-              keyboardType="numeric"
-              maxLength={4}
-              placeholder="0000"
-              placeholderTextColor="#9CA3AF"
-              textAlign="center"
-            />
+            {currentStop?.sourceType === 'shipment' && (
+              <>
+                <Text style={styles.fieldLabel}>Código de entrega</Text>
+                <TextInput
+                  style={styles.codeInput}
+                  value={confirmCode}
+                  onChangeText={(v) => { setConfirmCode(v.replace(/\D/g, '').slice(0, 4)); setConfirmError(''); }}
+                  keyboardType="numeric"
+                  maxLength={4}
+                  placeholder="0000"
+                  placeholderTextColor="#9CA3AF"
+                  textAlign="center"
+                />
+              </>
+            )}
             {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
             <TouchableOpacity style={styles.actionBtn} onPress={handleConfirmStop} activeOpacity={0.85}>
               <Text style={styles.actionBtnText}>Confirmar entrega</Text>
@@ -774,7 +785,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             <View style={styles.finalizeSummaryRow}>
               <Text style={styles.finalizeSummaryLabel}>Distância</Text>
               <Text style={styles.finalizeSummaryValue}>
-                {stopsRouteCoords.length >= 2 ? `~${Math.round(stopsRouteCoords.length * 0.02)} km` : '—'}
+                {stopsRouteDistanceMeters !== null ? `${(stopsRouteDistanceMeters / 1000).toFixed(1)} km` : '—'}
               </Text>
             </View>
             <View style={styles.finalizeDivider} />

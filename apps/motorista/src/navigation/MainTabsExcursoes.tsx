@@ -2,7 +2,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HomeExcursoesScreen } from '../screens/excursoes/HomeExcursoesScreen';
-import { ColetasExcursoesScreen } from '../screens/excursoes/ColetasExcursoesScreen';
+import { ColetasExcursoesStack } from './ColetasExcursoesStack';
 import { ChatExcursoesScreen } from '../screens/excursoes/ChatExcursoesScreen';
 import { PagamentosExcursoesScreen } from '../screens/excursoes/PagamentosExcursoesScreen';
 import { PerfilExcursoesScreen } from '../screens/excursoes/PerfilExcursoesScreen';
@@ -57,7 +57,7 @@ export function MainTabsExcursoes() {
       />
       <Tab.Screen
         name="ColetasExc"
-        component={ColetasExcursoesScreen}
+        component={ColetasExcursoesStack}
         options={{
           title: 'Excursões',
           tabBarIcon: ({ color }) => <MaterialIcons name="directions-bus" size={24} color={color} />,
