@@ -6,6 +6,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Switch,
+  Modal,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -32,6 +33,7 @@ type ActiveTrip = {
   departure_at: string;
   passengerCount: number;
   bagsCount: number;
+  trunkPct: number;
 };
 
 function formatTime(iso: string): string {
@@ -56,6 +58,7 @@ export function HomeScreen({ navigation }: Props) {
   const [toggleLoading, setToggleLoading] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [activeTrip, setActiveTrip] = useState<ActiveTrip | null>(null);
+  const [showEndTripModal, setShowEndTripModal] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -98,7 +101,7 @@ export function HomeScreen({ navigation }: Props) {
     // Active trip
     const { data: tripData } = await supabase
       .from('scheduled_trips')
-      .select('id, origin_address, destination_address, departure_at')
+      .select('id, origin_address, destination_address, departure_at, trunk_occupancy_pct')
       .eq('driver_id', user.id)
       .eq('status', 'active')
       .order('departure_at', { ascending: true })
@@ -106,7 +109,7 @@ export function HomeScreen({ navigation }: Props) {
       .maybeSingle();
 
     if (tripData) {
-      const t = tripData as { id: string; origin_address: string; destination_address: string; departure_at: string };
+      const t = tripData as { id: string; origin_address: string; destination_address: string; departure_at: string; trunk_occupancy_pct: number | null };
       const { data: bkgs } = await supabase
         .from('bookings')
         .select('passenger_count, bags_count')
@@ -114,7 +117,7 @@ export function HomeScreen({ navigation }: Props) {
         .in('status', ['confirmed', 'paid']);
       const passengerCount = ((bkgs ?? []) as { passenger_count?: number }[]).reduce((s, b) => s + (b.passenger_count ?? 0), 0);
       const bagsCount = ((bkgs ?? []) as { bags_count?: number }[]).reduce((s, b) => s + (b.bags_count ?? 0), 0);
-      setActiveTrip({ ...t, passengerCount, bagsCount });
+      setActiveTrip({ ...t, passengerCount, bagsCount, trunkPct: t.trunk_occupancy_pct ?? 0 });
     } else {
       setActiveTrip(null);
     }
@@ -160,8 +163,18 @@ export function HomeScreen({ navigation }: Props) {
     setActiveTrip(null);
   };
 
-  const goRoutes = () => navigation.navigate('Profile', { screen: 'WorkerRoutes' });
-  const goSchedule = () => navigation.navigate('Profile', { screen: 'TripSchedule' });
+  const updateTrunk = async (delta: number) => {
+    if (!activeTrip || !userId) return;
+    const newPct = Math.max(0, Math.min(100, activeTrip.trunkPct + delta));
+    setActiveTrip((prev) => prev ? { ...prev, trunkPct: newPct } : prev);
+    await supabase
+      .from('scheduled_trips')
+      .update({ trunk_occupancy_pct: newPct } as never)
+      .eq('id', activeTrip.id);
+  };
+
+  const goRoutes = () => navigation.navigate('Profile', { screen: 'WorkerRoutes', params: { fromHome: true } });
+  const goSchedule = () => navigation.navigate('Profile', { screen: 'TripSchedule', params: { fromHome: true } });
   const goPending = () => navigation.navigate('PendingRequests');
 
   if (loading) {
@@ -244,6 +257,35 @@ export function HomeScreen({ navigation }: Props) {
               </View>
             </View>
 
+            {/* Bagageiro */}
+            <View style={styles.trunkRow}>
+              <View style={styles.trunkBarWrap}>
+                <View style={styles.trunkBarBg}>
+                  <View
+                    style={[
+                      styles.trunkBarFill,
+                      {
+                        width: `${activeTrip.trunkPct}%` as any,
+                        backgroundColor:
+                          activeTrip.trunkPct >= 80 ? '#EF4444'
+                          : activeTrip.trunkPct >= 50 ? '#C9A227'
+                          : '#22C55E',
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.trunkLabel}>Bagageiro: {activeTrip.trunkPct}%</Text>
+              </View>
+              <View style={styles.trunkStepper}>
+                <TouchableOpacity style={styles.stepBtn} onPress={() => updateTrunk(-10)} activeOpacity={0.7}>
+                  <MaterialIcons name="remove" size={16} color="#374151" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.stepBtn} onPress={() => updateTrunk(10)} activeOpacity={0.7}>
+                  <MaterialIcons name="add" size={16} color="#374151" />
+                </TouchableOpacity>
+              </View>
+            </View>
+
             {/* Mapa da viagem ativa */}
             <View style={styles.mapPlaceholder}>
               <MapboxMap
@@ -273,7 +315,7 @@ export function HomeScreen({ navigation }: Props) {
               <Text style={styles.mapBtnText}>Ver rota no mapa</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.endTripBtn} onPress={endTrip} activeOpacity={0.85}>
+            <TouchableOpacity style={styles.endTripBtn} onPress={() => setShowEndTripModal(true)} activeOpacity={0.85}>
               <Text style={styles.endTripBtnText}>Encerrar viagem</Text>
             </TouchableOpacity>
           </View>
@@ -305,15 +347,52 @@ export function HomeScreen({ navigation }: Props) {
         <View style={styles.availRow}>
           <Text style={styles.availLabel}>Em viagem</Text>
           <Switch
-            value={available}
+            value={activeTrip ? true : available}
             onValueChange={onToggleAvailable}
-            disabled={toggleLoading}
+            disabled={toggleLoading || Boolean(activeTrip)}
             trackColor={{ false: '#E5E7EB', true: '#111827' }}
             thumbColor="#FFFFFF"
           />
         </View>
         <View style={styles.divider} />
       </ScrollView>
+
+      {/* Modal: Encerrar viagem */}
+      <Modal
+        visible={showEndTripModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowEndTripModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowEndTripModal(false)}
+        />
+        <View style={styles.modalCard}>
+          <View style={styles.modalIconWrap}>
+            <MaterialIcons name="flag" size={32} color="#111827" />
+          </View>
+          <Text style={styles.modalTitle}>Encerrar viagem?</Text>
+          <Text style={styles.modalBody}>
+            Ao confirmar, a viagem será marcada como concluída e não poderá ser reaberta.
+          </Text>
+          <TouchableOpacity
+            style={styles.modalBtnConfirm}
+            onPress={() => { setShowEndTripModal(false); endTrip(); }}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.modalBtnConfirmText}>Confirmar conclusão</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.modalBtnCancel}
+            onPress={() => setShowEndTripModal(false)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.modalBtnCancelText}>Cancelar</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -409,4 +488,53 @@ const styles = StyleSheet.create({
   },
   availLabel: { fontSize: 16, fontWeight: '600', color: '#111827' },
   divider: { height: 1, backgroundColor: '#E5E7EB', marginTop: 12 },
+
+  modalOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  modalCard: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 24, paddingTop: 28, paddingBottom: 40,
+    alignItems: 'center',
+  },
+  modalIconWrap: {
+    width: 64, height: 64, borderRadius: 32,
+    backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 10 },
+  modalBody: {
+    fontSize: 14, color: '#6B7280', lineHeight: 21,
+    textAlign: 'center', marginBottom: 28,
+  },
+  modalBtnConfirm: {
+    width: '100%', backgroundColor: '#111827',
+    borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginBottom: 12,
+  },
+  modalBtnConfirmText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
+  modalBtnCancel: {
+    width: '100%', backgroundColor: '#F3F4F6',
+    borderRadius: 14, paddingVertical: 16, alignItems: 'center',
+  },
+  modalBtnCancelText: { fontSize: 16, fontWeight: '600', color: '#374151' },
+
+  trunkRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: 16, gap: 12,
+  },
+  trunkBarWrap: { flex: 1 },
+  trunkBarBg: {
+    height: 6, backgroundColor: '#E5E7EB', borderRadius: 3,
+    marginBottom: 4, overflow: 'hidden',
+  },
+  trunkBarFill: { height: 6, borderRadius: 3 },
+  trunkLabel: { fontSize: 12, color: '#6B7280' },
+  trunkStepper: { flexDirection: 'row', gap: 6 },
+  stepBtn: {
+    width: 30, height: 30, borderRadius: 8,
+    backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
+  },
 });

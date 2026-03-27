@@ -12,9 +12,9 @@ try {
   // Native module not linked.
 }
 
-type Props = { coordinates: LatLng[]; strokeColor?: string; strokeWidth?: number };
+type Props = { id?: string; coordinates: LatLng[]; strokeColor?: string; strokeWidth?: number };
 
-export function MapboxPolyline({ coordinates, strokeColor = '#C9A227', strokeWidth = 4 }: Props) {
+export function MapboxPolyline({ id = 'route', coordinates, strokeColor = '#C9A227', strokeWidth = 4 }: Props) {
   if (!ShapeSource || !LineLayer || !coordinates.length) return null;
   const geojson = {
     type: 'Feature' as const,
@@ -22,8 +22,8 @@ export function MapboxPolyline({ coordinates, strokeColor = '#C9A227', strokeWid
     geometry: { type: 'LineString' as const, coordinates: coordinates.map((c) => [c.longitude, c.latitude]) },
   };
   return (
-    <ShapeSource id="route-line-source" shape={geojson}>
-      <LineLayer id="route-line-layer" style={{ lineColor: strokeColor, lineWidth: strokeWidth }} />
+    <ShapeSource id={`${id}-source`} shape={geojson}>
+      <LineLayer id={`${id}-layer`} style={{ lineColor: strokeColor, lineWidth: strokeWidth }} />
     </ShapeSource>
   );
 }

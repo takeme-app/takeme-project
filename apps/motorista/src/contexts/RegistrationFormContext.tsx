@@ -16,6 +16,7 @@ export type RegistrationFormData = {
   age: string;
   city: string;
   preferenceArea: string;
+  experienceYears: string;
   bankCode: string;
   agencyNumber: string;
   accountNumber: string;
@@ -53,6 +54,7 @@ const defaultFormData: RegistrationFormData = {
   age: '',
   city: '',
   preferenceArea: '',
+  experienceYears: '',
   bankCode: '',
   agencyNumber: '',
   accountNumber: '',

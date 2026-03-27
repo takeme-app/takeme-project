@@ -12,14 +12,14 @@ import { Text } from '../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { RootStackParamList } from '../navigation/types';
+import type { RootStackParamList, RegistrationType } from '../navigation/types';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { useRegistrationForm, newRoute, type RouteFormEntry } from '../contexts/RegistrationFormContext';
 import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext';
 import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
-import { formatBrazilPhone } from '../utils/formatPhone';
+import { formatPhoneBR } from '../utils/formatPhone';
 import { formatCurrencyBRLInput } from '../utils/formatCurrency';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CompleteDriverRegistration'>;
@@ -48,12 +48,22 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
   const [age, setAge] = useState('');
   const [city, setCity] = useState('');
   const [preferenceArea, setPreferenceArea] = useState('');
+  const [experienceYears, setExperienceYears] = useState('');
 
   const [bankCode, setBankCode] = useState('');
   const [agencyNumber, setAgencyNumber] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
   const [pixKey, setPixKey] = useState('');
 
+  const isParceiro = driverType !== 'take_me';
+  const isExcursoes = driverType === 'preparador_excursões';
+
+  const subtitleLabel: Record<RegistrationType, string> = {
+    take_me: 'como motorista TakeMe.',
+    parceiro: 'como motorista parceiro.',
+    preparador_excursões: 'como preparador de excursões.',
+    preparador_encomendas: 'como preparador de encomendas.',
+  };
   const [ownsVehicle, setOwnsVehicle] = useState(true);
   const [vehicleYear, setVehicleYear] = useState('');
   const [vehicleModel, setVehicleModel] = useState('');
@@ -83,8 +93,12 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       mediaTypes: ['images'],
       allowsEditing: false,
       quality: 0.8,
+      base64: true,
     });
-    if (!result.canceled && result.assets[0]) callback(result.assets[0].uri);
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      callback(asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : asset.uri);
+    }
   };
 
   const pickMultipleImages = async () => {
@@ -97,9 +111,10 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       mediaTypes: ['images'],
       allowsMultipleSelection: true,
       quality: 0.8,
+      base64: true,
     });
     if (!result.canceled && result.assets.length)
-      setVehiclePhotosUris((prev) => [...prev, ...result.assets.map((a) => a.uri)]);
+      setVehiclePhotosUris((prev) => [...prev, ...result.assets.map((a) => a.base64 ? `data:image/jpeg;base64,${a.base64}` : a.uri)]);
   };
 
   const updateRoute = (id: string, patch: Partial<RouteFormEntry>) => {
@@ -135,16 +150,25 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       showAlert('Atenção', 'Preencha a cidade.');
       return;
     }
-    if (!preferenceArea.trim()) {
-      showAlert('Atenção', 'Preencha a área de preferência.');
-      return;
+    if (isParceiro) {
+      const expNum = parseInt(onlyDigits(experienceYears), 10);
+      if (!expNum || expNum < 1 || expNum > 60) {
+        showAlert('Atenção', 'Informe os anos de experiência (entre 1 e 60).');
+        return;
+      }
+    } else {
+      if (!preferenceArea.trim()) {
+        showAlert('Atenção', 'Preencha a área de preferência.');
+        return;
+      }
     }
     if (!bankCode.trim() || !agencyNumber.trim() || !accountNumber.trim() || !pixKey.trim()) {
       showAlert('Atenção', 'Preencha todos os dados bancários.');
       return;
     }
 
-    if (ownsVehicle) {
+    const requiresVehicle = !isExcursoes && (isParceiro || ownsVehicle);
+    if (requiresVehicle) {
       if (!vehicleYear.trim() || onlyDigits(vehicleYear).length !== 4) {
         showAlert('Atenção', 'Informe o ano do veículo com 4 dígitos.');
         return;
@@ -168,9 +192,10 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
         showAlert('Atenção', 'Informe um telefone válido com DDD.');
         return;
       }
+      const maxCap = isParceiro ? 50 : 5;
       const cap = parseInt(onlyDigits(passengerCapacity), 10);
-      if (!cap || cap < 1 || cap > 5) {
-        showAlert('Atenção', 'Capacidade de passageiros deve ser entre 1 e 5.');
+      if (!cap || cap < 1 || cap > maxCap) {
+        showAlert('Atenção', `Capacidade de passageiros deve ser entre 1 e ${maxCap}.`);
         return;
       }
       if (!vehicleDocUri) {
@@ -216,16 +241,17 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       cpf: formatCpf(cpfDigits),
       age: onlyDigits(age),
       city: city.trim(),
-      preferenceArea: preferenceArea.trim(),
+      preferenceArea: isParceiro ? '' : preferenceArea.trim(),
+      experienceYears: isParceiro ? onlyDigits(experienceYears) : '',
       bankCode: bankCode.trim(),
       agencyNumber: agencyNumber.trim(),
       accountNumber: accountNumber.trim(),
       pixKey: pixKey.trim(),
-      ownsVehicle,
+      ownsVehicle: requiresVehicle,
       vehicleYear: onlyDigits(vehicleYear),
       vehicleModel: vehicleModel.trim(),
       licensePlate: licensePlate.trim().toUpperCase(),
-      vehiclePhone: formatBrazilPhone(vehiclePhone),
+      vehiclePhone: formatPhoneBR(vehiclePhone),
       passengerCapacity: onlyDigits(passengerCapacity),
       routes: routes.map((r) => ({
         ...r,
@@ -251,7 +277,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <StatusBar style="dark" />
       <View style={[styles.header, { paddingTop: insets.top }]}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('SignUpType')} activeOpacity={0.7}>
           <MaterialIcons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Complete seu cadastro</Text>
@@ -266,7 +292,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       >
         <Text style={styles.pageTitle}>Complete seu cadastro</Text>
         <Text style={styles.pageSubtitle}>
-          Preencha suas informações para que possamos validar seu perfil.
+          Preencha suas informações para que possamos validar seu perfil {subtitleLabel[driverType]}
         </Text>
 
         {sectionTitle('Dados básicos')}
@@ -310,15 +336,29 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
             onChangeText={setCity}
           />
         </FieldBlock>
-        <FieldBlock label="Área de preferência">
-          <TextInput
-            style={styles.input}
-            placeholder="Ex: Bairro"
-            placeholderTextColor="#9CA3AF"
-            value={preferenceArea}
-            onChangeText={setPreferenceArea}
-          />
-        </FieldBlock>
+        {isParceiro ? (
+          <FieldBlock label="Anos de experiência">
+            <TextInput
+              style={styles.input}
+              placeholder="Ex: 5"
+              placeholderTextColor="#9CA3AF"
+              value={experienceYears}
+              onChangeText={(t) => setExperienceYears(onlyDigits(t).slice(0, 2))}
+              keyboardType="number-pad"
+              maxLength={2}
+            />
+          </FieldBlock>
+        ) : (
+          <FieldBlock label="Área de preferência">
+            <TextInput
+              style={styles.input}
+              placeholder="Ex: Bairro"
+              placeholderTextColor="#9CA3AF"
+              value={preferenceArea}
+              onChangeText={setPreferenceArea}
+            />
+          </FieldBlock>
+        )}
 
         {sectionTitle('Dados bancários')}
         <FieldBlock label="Banco">
@@ -359,31 +399,35 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
           />
         </FieldBlock>
 
-        {sectionTitle('Veículo de transporte')}
-        <Text style={styles.questionLabel}>Possui veículo próprio?</Text>
-        <View style={styles.radioRow}>
-          <TouchableOpacity
-            style={[styles.radioOption, ownsVehicle && styles.radioOptionSelected]}
-            onPress={() => setOwnsVehicle(true)}
-            activeOpacity={0.7}
-          >
-            <View style={[styles.radio, ownsVehicle && styles.radioSelected]}>
-              {ownsVehicle ? <View style={styles.radioInner} /> : null}
+        {!isExcursoes ? sectionTitle('Veículo de transporte') : null}
+        {(!isExcursoes && !isParceiro) ? (
+          <>
+            <Text style={styles.questionLabel}>Possui veículo próprio?</Text>
+            <View style={styles.radioRow}>
+              <TouchableOpacity
+                style={[styles.radioOption, ownsVehicle && styles.radioOptionSelected]}
+                onPress={() => setOwnsVehicle(true)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.radio, ownsVehicle && styles.radioSelected]}>
+                  {ownsVehicle ? <View style={styles.radioInner} /> : null}
+                </View>
+                <Text style={styles.radioLabel}>Sim</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.radioOption, !ownsVehicle && styles.radioOptionSelected]}
+                onPress={() => setOwnsVehicle(false)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.radio, !ownsVehicle && styles.radioSelected]}>
+                  {!ownsVehicle ? <View style={styles.radioInner} /> : null}
+                </View>
+                <Text style={styles.radioLabel}>Não</Text>
+              </TouchableOpacity>
             </View>
-            <Text style={styles.radioLabel}>Sim</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.radioOption, !ownsVehicle && styles.radioOptionSelected]}
-            onPress={() => setOwnsVehicle(false)}
-            activeOpacity={0.7}
-          >
-            <View style={[styles.radio, !ownsVehicle && styles.radioSelected]}>
-              {!ownsVehicle ? <View style={styles.radioInner} /> : null}
-            </View>
-            <Text style={styles.radioLabel}>Não</Text>
-          </TouchableOpacity>
-        </View>
-        {ownsVehicle ? (
+          </>
+        ) : null}
+        {(!isExcursoes && (isParceiro || ownsVehicle)) ? (
           <>
             <FieldBlock label="Ano do veículo">
               <TextInput
@@ -422,20 +466,20 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
                 placeholder="Ex: (11) 98765-4321"
                 placeholderTextColor="#9CA3AF"
                 value={vehiclePhone}
-                onChangeText={(t) => setVehiclePhone(formatBrazilPhone(t))}
+                onChangeText={(t) => setVehiclePhone(formatPhoneBR(t))}
                 keyboardType="phone-pad"
                 maxLength={16}
               />
             </FieldBlock>
-            <FieldBlock label="Capacidade de passageiros (máx. 5)">
+            <FieldBlock label={isParceiro ? 'Capacidade de passageiros (máx. 50)' : 'Capacidade de passageiros (máx. 5)'}>
               <TextInput
                 style={styles.input}
-                placeholder="Ex: 4"
+                placeholder={isParceiro ? 'Ex: 15' : 'Ex: 4'}
                 placeholderTextColor="#9CA3AF"
                 value={passengerCapacity}
-                onChangeText={(t) => setPassengerCapacity(onlyDigits(t).slice(0, 1))}
+                onChangeText={(t) => setPassengerCapacity(onlyDigits(t).slice(0, isParceiro ? 2 : 1))}
                 keyboardType="number-pad"
-                maxLength={1}
+                maxLength={isParceiro ? 2 : 1}
               />
             </FieldBlock>
             <TouchableOpacity
@@ -489,7 +533,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         ) : null}
 
-        {ownsVehicle ? (
+        {(!isExcursoes && (isParceiro || ownsVehicle)) ? (
           <>
             <TouchableOpacity style={styles.uploadBox} onPress={() => pickImage(setVehicleDocUri)} activeOpacity={0.8}>
               <MaterialIcons name="cloud-upload" size={40} color="#9CA3AF" />

@@ -173,17 +173,63 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user?.id) throw new Error('Não autenticado.');
+
+      // Buscar endereços e preço da rota (worker_routes não tem lat/lng)
+      const { data: routeData, error: routeErr } = await supabase
+        .from('worker_routes')
+        .select('origin_address, destination_address, price_per_person_cents')
+        .eq('id', routeId)
+        .single();
+      if (routeErr || !routeData) throw new Error('Não foi possível carregar os dados da rota.');
+
+      const r = routeData as {
+        origin_address: string;
+        destination_address: string;
+        price_per_person_cents: number;
+      };
+
+      // dayNum: 0=Dom, 1=Seg … 6=Sáb (mesmo que JS Date.getDay())
       const dayNum = addingDayIdx === 6 ? 0 : addingDayIdx + 1;
+
+      // Calcular departure_at e arrival_at para a próxima ocorrência desse dia da semana
+      const [depH, depM] = newDepart.split(':').map(Number);
+      const [arrH, arrM] = newArrive.split(':').map(Number);
+      const todayDay = new Date().getDay();
+      let daysAhead = (dayNum - todayDay + 7) % 7;
+      if (daysAhead === 0) daysAhead = 7; // sempre futura (próxima semana se hoje for o mesmo dia)
+
+      const baseDate = new Date();
+      baseDate.setDate(baseDate.getDate() + daysAhead);
+      baseDate.setHours(0, 0, 0, 0);
+
+      const departureAt = new Date(baseDate);
+      departureAt.setHours(depH, depM, 0, 0);
+
+      const arrivalAt = new Date(baseDate);
+      arrivalAt.setHours(arrH, arrM, 0, 0);
+      if (arrivalAt <= departureAt) arrivalAt.setDate(arrivalAt.getDate() + 1); // virada de meia-noite
+
       const { error } = await supabase.from('scheduled_trips').insert({
         driver_id: user.id,
         route_id: routeId,
         day_of_week: dayNum,
         departure_time: newDepart,
         arrival_time: newArrive,
+        departure_at: departureAt.toISOString(),
+        arrival_at: arrivalAt.toISOString(),
         capacity: cap,
+        seats_available: cap,
+        bags_available: 0,
         confirmed_count: 0,
         is_active: true,
         status: 'scheduled',
+        origin_address: r.origin_address,
+        destination_address: r.destination_address,
+        price_per_person_cents: r.price_per_person_cents,
+        origin_lat: 0,
+        origin_lng: 0,
+        destination_lat: 0,
+        destination_lng: 0,
       });
       if (error) throw error;
       closeModal();
@@ -219,9 +265,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
           <MaterialIcons name="close" size={22} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Cronograma da rota</Text>
-        <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7}>
-          <MaterialIcons name="tune" size={22} color="#111827" />
-        </TouchableOpacity>
+        <View style={{ width: 40 }} />
       </View>
 
       {loading ? (
@@ -418,19 +462,37 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
             <Text style={styles.fieldLabel}>Horário de saída</Text>
             <TextInput
               style={styles.input}
-              placeholder="Ex: 12:30"
+              placeholder="00:00"
               placeholderTextColor="#9CA3AF"
               value={newDepart}
-              onChangeText={setNewDepart}
+              onChangeText={(v) => {
+                const digits = v.replace(/\D/g, '').slice(0, 4);
+                if (digits.length <= 2) {
+                  setNewDepart(digits);
+                } else {
+                  setNewDepart(digits.slice(0, 2) + ':' + digits.slice(2));
+                }
+              }}
+              keyboardType="numeric"
+              maxLength={5}
             />
 
             <Text style={styles.fieldLabel}>Horário de chegada</Text>
             <TextInput
               style={styles.input}
-              placeholder="Ex: 14:30"
+              placeholder="00:00"
               placeholderTextColor="#9CA3AF"
               value={newArrive}
-              onChangeText={setNewArrive}
+              onChangeText={(v) => {
+                const digits = v.replace(/\D/g, '').slice(0, 4);
+                if (digits.length <= 2) {
+                  setNewArrive(digits);
+                } else {
+                  setNewArrive(digits.slice(0, 2) + ':' + digits.slice(2));
+                }
+              }}
+              keyboardType="numeric"
+              maxLength={5}
             />
 
             <Text style={styles.fieldLabel}>Capacidade</Text>

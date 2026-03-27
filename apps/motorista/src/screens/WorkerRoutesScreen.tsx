@@ -12,6 +12,7 @@ import {
   Platform,
   Animated,
   Pressable,
+  Share,
 } from 'react-native';
 import { useBottomSheetDrag } from '../hooks/useBottomSheetDrag';
 import { Text } from '../components/Text';
@@ -44,7 +45,7 @@ function shortAddress(full: string): string {
   return parts[0]?.trim() ?? full;
 }
 
-export function WorkerRoutesScreen({ navigation }: Props) {
+export function WorkerRoutesScreen({ navigation, route }: Props) {
   const { showAlert } = useAppAlert();
   const [rows, setRows] = useState<RouteRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -84,6 +85,20 @@ export function WorkerRoutesScreen({ navigation }: Props) {
   };
 
   const { dragY, panHandlers, resetDrag } = useBottomSheetDrag(closeModal);
+
+  const handleExportPdf = async () => {
+    const now = new Date().toLocaleDateString('pt-BR');
+    const separator = '─'.repeat(40);
+    const lines = rows.map((r, i) =>
+      `${i + 1}. ${shortAddress(r.origin_address)} → ${shortAddress(r.destination_address)}\n   ${formatCents(r.price_per_person_cents)} por pessoa`
+    ).join('\n\n');
+    const message = `MINHAS ROTAS\nGerado em ${now}\n${separator}\n\n${lines}`;
+    try {
+      await Share.share({ title: 'Minhas Rotas', message });
+    } catch {
+      showAlert('Erro', 'Não foi possível exportar as rotas.');
+    }
+  };
 
   const handleSave = async () => {
     if (useTakeMe) {
@@ -150,11 +165,17 @@ export function WorkerRoutesScreen({ navigation }: Props) {
       <StatusBar style="dark" />
 
       <View style={styles.header}>
-        <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.iconBtn} onPress={() => route.params?.fromHome ? (navigation.getParent() as any)?.navigate('Home') : navigation.goBack()} activeOpacity={0.7}>
           <MaterialIcons name="arrow-back" size={22} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Minhas rotas</Text>
-        <View style={styles.iconBtn} />
+        <TouchableOpacity
+          style={styles.iconBtn}
+          onPress={handleExportPdf}
+          activeOpacity={0.7}
+        >
+          <MaterialIcons name="file-download" size={22} color="#111827" />
+        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -208,7 +229,7 @@ export function WorkerRoutesScreen({ navigation }: Props) {
                 <MaterialIcons name="close" size={20} color="#111827" />
               </TouchableOpacity>
               <Text style={styles.sheetTitle}>Adicionar nova rota</Text>
-              <View style={styles.iconBtn} />
+              <View style={{ width: 40 }} />
             </View>
 
             <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
