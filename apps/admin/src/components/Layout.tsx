@@ -213,7 +213,7 @@ export default function Layout() {
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
               ...([
                 { label: 'Atualizar senha', icon: lockOutlineSvg, action: () => {} },
-                { label: 'Atendimentos', icon: desktopOutlineSvg, action: () => {} },
+                { label: 'Atendimentos', icon: desktopOutlineSvg, action: () => navigate('/atendimentos') },
                 {
                   label: 'Configurações',
                   icon: settingsOutlineSvg,
