@@ -5,7 +5,13 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
+  LogBox,
 } from 'react-native';
+
+// @rnmapbox/maps v10 + React Native New Architecture (Fabric) produces a
+// non-fatal console.error about bare text nodes when the map is rendered.
+// The map renders correctly — this suppresses the LogBox red overlay.
+LogBox.ignoreLogs(['Text strings must be rendered within a <Text> component.']);
 import * as SplashScreen from 'expo-splash-screen';
 import {
   useFonts,

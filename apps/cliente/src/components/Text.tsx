@@ -19,11 +19,15 @@ function getInterFontFamily(style: TextProps['style']): string {
   return 'Inter_400Regular';
 }
 
-export function Text({ style, ...props }: TextProps) {
+function normalizeChildren(children: React.ReactNode): React.ReactNode {
+  if (typeof children === 'string') return children.normalize('NFC');
+  if (Array.isArray(children)) return children.map(normalizeChildren);
+  return children;
+}
+
+export function Text({ style, children, ...props }: TextProps) {
   const fontFamily = getInterFontFamily(style);
-  const combinedStyle = [
-    { fontFamily },
-    style,
-  ];
-  return <RNText style={combinedStyle} {...props} />;
+  const flat = StyleSheet.flatten(Array.isArray(style) ? style : style ? [style] : []);
+  const { fontWeight: _fw, ...restStyle } = flat ?? {};
+  return <RNText style={[restStyle, { fontFamily }]} {...props}>{normalizeChildren(children)}</RNText>;
 }
