@@ -22,6 +22,8 @@ import {
   statusPill,
   type ViagemRow,
 } from '../styles/webStyles';
+import { fetchViagens, fetchViagemCounts, type ViagemCounts } from '../data/queries';
+import type { ViagemListItem } from '../data/types';
 
 // SVG icons for view/edit actions (stroke-based, matching project icons)
 const eyeActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
@@ -38,6 +40,21 @@ const avatarColors: Record<string, string> = {
 
 export default function ViagensScreen() {
   const navigate = useNavigate();
+
+  // ── Real data from Supabase ─────────────────────────────────────────
+  const [viagens, setViagens] = useState<ViagemListItem[]>([]);
+  const [counts, setCounts] = useState<ViagemCounts>({ total: 0, concluidas: 0, agendadas: 0, emAndamento: 0, canceladas: 0 });
+  const [dataLoading, setDataLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [items, c] = await Promise.all([fetchViagens(), fetchViagemCounts()]);
+      if (!cancelled) { setViagens(items); setCounts(c); setDataLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   // Search row filter modal (Figma 763-21823)
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [filterDateInicio, setFilterDateInicio] = useState('');
@@ -83,11 +100,11 @@ export default function ViagensScreen() {
       React.createElement('button', { type: 'button', style: webStyles.filterBtn, onClick: () => setFilterModalOpen(true) }, React.createElement('span', null, filterIconSvg), 'Filtro')));
 
   const viagensMetrics = [
-    { title: 'Viagens totais', value: '60', icon: listBulletedSvg },
-    { title: 'Viagens concluídas', value: '2', icon: checkCircleSvg },
-    { title: 'Viagens agendadas', value: '1', icon: calendarTodaySvg },
-    { title: 'Viagens em andamento', value: '1', icon: nearMeSvg },
-    { title: 'Viagens canceladas', value: '1', icon: cancelSvg },
+    { title: 'Viagens totais', value: String(counts.total), icon: listBulletedSvg },
+    { title: 'Viagens concluídas', value: String(counts.concluidas), icon: checkCircleSvg },
+    { title: 'Viagens agendadas', value: String(counts.agendadas), icon: calendarTodaySvg },
+    { title: 'Viagens em andamento', value: String(counts.emAndamento), icon: nearMeSvg },
+    { title: 'Viagens canceladas', value: String(counts.canceladas), icon: cancelSvg },
   ];
   const viagensMetricCardEl = (m: typeof viagensMetrics[0]) =>
     React.createElement('div', { key: m.title, style: webStyles.viagensMetricCard },
@@ -99,7 +116,11 @@ export default function ViagensScreen() {
     React.createElement('div', { style: { ...webStyles.statCardsRow, marginBottom: 0 } }, ...viagensMetrics.slice(0, 3).map(viagensMetricCardEl)),
     React.createElement('div', { style: webStyles.statCardsRow }, ...viagensMetrics.slice(3, 5).map(viagensMetricCardEl)));
 
-  const donutGradient = 'conic-gradient(#0d8344 0deg 180deg, #016df9 180deg 252deg, #cba04b 252deg 324deg, #d64545 324deg 360deg)';
+  const total = counts.total || 1;
+  const d1 = Math.round((counts.concluidas / total) * 360);
+  const d2 = d1 + Math.round((counts.agendadas / total) * 360);
+  const d3 = d2 + Math.round((counts.emAndamento / total) * 360);
+  const donutGradient = `conic-gradient(#0d8344 0deg ${d1}deg, #016df9 ${d1}deg ${d2}deg, #cba04b ${d2}deg ${d3}deg, #d64545 ${d3}deg 360deg)`;
   const viagensChartCard = React.createElement('div', { style: webStyles.viagensChartCard },
     React.createElement('h3', { style: webStyles.chartCardTitle }, 'Distribuição de viagens por status'),
     React.createElement('p', { style: webStyles.chartCardDesc }, 'Dados consolidados com base no período selecionado'),
@@ -131,16 +152,15 @@ export default function ViagensScreen() {
     { label: 'Visualizar/Editar', flex: '0 0 96px', minWidth: 96 },
   ];
 
-  // Sample data matching Figma
-  const viagensTableRows: ViagemRow[] = [
-    { passageiro: 'Carlos Silva', origem: 'São Paulo - SP', destino: 'Campinas - SP', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'concluído' },
-    { passageiro: 'João Porto', origem: 'Rio de Janeiro - RJ', destino: 'Niterói - RJ', data: '26/10/2025', embarque: '14:00', chegada: '15:00', status: 'concluído' },
-    { passageiro: 'Jorge Silva', origem: 'Brasília - DF', destino: 'Goiânia - GO', data: '24/10/2025', embarque: '07:00', chegada: '10:30', status: 'cancelado' },
-    { passageiro: 'Carlos Silva', origem: 'São Paulo - SP', destino: 'Campinas - SP', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'agendado' },
-    { passageiro: 'Everton Pereira', origem: 'São Paulo - SP', destino: 'Campinas - SP', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'em_andamento' },
-    { passageiro: 'Marcio Pontes', origem: 'São Paulo - SP', destino: 'Campinas - SP', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'em_andamento' },
-    { passageiro: 'Danilo Santos', origem: 'Curitiba - PR', destino: 'Florianópolis - SC', data: '23/10/2025', embarque: '06:00', chegada: '10:00', status: 'em_andamento' },
-  ];
+  const viagensTableRows: ViagemRow[] = viagens.map((v) => ({
+    passageiro: v.passageiro,
+    origem: v.origem,
+    destino: v.destino,
+    data: v.data,
+    embarque: v.embarque,
+    chegada: v.chegada,
+    status: v.status,
+  }));
 
   // Table header
   const viagensTableHeader = React.createElement('div', {
@@ -155,7 +175,10 @@ export default function ViagensScreen() {
       },
     }, c.label)));
 
-  const openTripDetail = (row: ViagemRow) => { navigate('/viagens/detalhe', { state: { trip: row } }); };
+  const openTripDetail = (row: ViagemRow, idx: number) => {
+    const item = viagens[idx];
+    navigate(`/viagens/${item?.bookingId ?? idx}`, { state: { trip: row } });
+  };
 
   // Render avatar with initial letter and colored bg
   const renderAvatar = (name: string) => {
@@ -175,10 +198,10 @@ export default function ViagensScreen() {
     return React.createElement('div', {
       key: idx,
       style: { ...webStyles.viagensTableRow, display: 'flex', cursor: 'pointer' },
-      onClick: () => openTripDetail(row),
+      onClick: () => openTripDetail(row, idx),
       role: 'button',
       tabIndex: 0,
-      onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTripDetail(row); } },
+      onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTripDetail(row, idx); } },
     },
       // Passageiros
       React.createElement('div', { style: { ...webStyles.viagensPassengerCell, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth } },
@@ -213,11 +236,11 @@ export default function ViagensScreen() {
         React.createElement('div', { style: webStyles.viagensActionIcons },
           React.createElement('button', {
             type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar',
-            onClick: (e: React.MouseEvent) => { e.stopPropagation(); openTripDetail(row); },
+            onClick: (e: React.MouseEvent) => { e.stopPropagation(); openTripDetail(row, idx); },
           }, eyeActionSvg),
           React.createElement('button', {
             type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
-            onClick: (e: React.MouseEvent) => { e.stopPropagation(); navigate('/viagens/' + idx + '/editar', { state: { trip: row } }); },
+            onClick: (e: React.MouseEvent) => { e.stopPropagation(); const item = viagens[idx]; navigate('/viagens/' + (item?.bookingId ?? idx) + '/editar', { state: { trip: row } }); },
           }, pencilActionSvg))));
   };
 
@@ -645,6 +668,11 @@ export default function ViagensScreen() {
         toastCheckSvg,
         React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#fff', ...font } }, toastMsg))
     : null;
+
+  if (dataLoading) {
+    return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
+      React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando viagens...'));
+  }
 
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Viagens'),

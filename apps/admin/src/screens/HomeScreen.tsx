@@ -3,7 +3,7 @@
  * Uses React.createElement() calls (NOT JSX).
  * Does NOT include header/navbar (that's in Layout).
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import React from 'react';
 import {
   webStyles,
@@ -15,9 +15,17 @@ import {
   calendarIconSvg,
   closeIconSvg,
 } from '../styles/webStyles';
+import { fetchHomeCounts, type HomeCounts } from '../data/queries';
 
 export default function HomeScreen() {
   const [homeSubTab, setHomeSubTab] = useState<'viagens' | 'encomendas'>('viagens');
+  const [homeCounts, setHomeCounts] = useState<HomeCounts | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchHomeCounts().then((c) => { if (!cancelled) setHomeCounts(c); });
+    return () => { cancelled = true; };
+  }, []);
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [filterDateInicio, setFilterDateInicio] = useState('');
   const [filterDateFim, setFilterDateFim] = useState('');
@@ -66,18 +74,20 @@ export default function HomeScreen() {
       React.createElement('p', { style: webStyles.expenseCardValue }, 'R$ 16.550,00'),
       React.createElement('button', { type: 'button', style: webStyles.expenseCardLink }, 'Ver detalhes em Pagamentos', React.createElement('span', null, arrowForwardSvg))));
 
+  const vc = homeCounts?.viagens;
+  const ec = homeCounts?.encomendas;
   const statCardsData = isEncomendas
     ? [
-        { title: 'Entregas em andamento', value: '15', change: '+6% vs semana anterior', positive: true },
-        { title: 'Agendadas', value: '24', change: '+3% vs semana anterior', positive: true },
-        { title: 'Concluídas', value: '16', change: '+10% vs semana anterior', positive: true },
-        { title: 'Canceladas', value: '15', change: '-9% vs semana anterior', positive: false },
+        { title: 'Entregas em andamento', value: String(ec?.emAndamento ?? '—'), change: '', positive: true },
+        { title: 'Agendadas', value: String(ec?.agendadas ?? '—'), change: '', positive: true },
+        { title: 'Concluídas', value: String(ec?.concluidas ?? '—'), change: '', positive: true },
+        { title: 'Canceladas', value: String(ec?.canceladas ?? '—'), change: '', positive: false },
       ]
     : [
-        { title: 'Viagens em andamento', value: '24', change: '+12% vs semana anterior', positive: true },
-        { title: 'Agendadas', value: '48', change: '+8% vs semana anterior', positive: true },
-        { title: 'Concluídas', value: '24', change: '+18% vs semana anterior', positive: true },
-        { title: 'Canceladas', value: '12', change: '-5% vs semana anterior', positive: false },
+        { title: 'Viagens em andamento', value: String(vc?.emAndamento ?? '—'), change: '', positive: true },
+        { title: 'Agendadas', value: String(vc?.agendadas ?? '—'), change: '', positive: true },
+        { title: 'Concluídas', value: String(vc?.concluidas ?? '—'), change: '', positive: true },
+        { title: 'Canceladas', value: String(vc?.canceladas ?? '—'), change: '', positive: false },
       ];
   const statCards = statCardsData.map((s) =>
     React.createElement('div', { key: s.title, style: webStyles.statCard },

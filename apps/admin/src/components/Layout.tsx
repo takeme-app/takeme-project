@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
 import { Logo } from './Logo';
-import { chevronDownSvg } from './icons';
+import { chevronDownSvg, lockOutlineSvg, desktopOutlineSvg, settingsOutlineSvg, exitToAppSvg } from './icons';
 import { useAuth } from '../contexts/AuthContext';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -35,10 +36,16 @@ function getVisibleCount(width: number): number {
 export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { session } = useAuth();
+  const { session, signOut } = useAuth();
 
   const [visibleCount, setVisibleCount] = useState(() => getVisibleCount(typeof window !== 'undefined' ? window.innerWidth : 1280));
   const [moreOpen, setMoreOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [accountMenuPos, setAccountMenuPos] = useState<{ top: number; left: number } | null>(null);
+
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
+  const accountTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const accountDropdownRef = useRef<HTMLDivElement | null>(null);
 
   const handleResize = useCallback(() => {
     setVisibleCount(getVisibleCount(window.innerWidth));
@@ -49,17 +56,51 @@ export default function Layout() {
     return () => window.removeEventListener('resize', handleResize);
   }, [handleResize]);
 
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    if (!moreOpen) return;
-    const handleClick = () => setMoreOpen(false);
-    document.addEventListener('click', handleClick);
-    return () => document.removeEventListener('click', handleClick);
-  }, [moreOpen]);
+  const updateAccountMenuPosition = useCallback(() => {
+    const el = accountTriggerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const width = 283;
+    let left = rect.right - width;
+    if (left < 8) left = 8;
+    if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
+    setAccountMenuPos({ top: rect.bottom + 8, left });
+  }, []);
 
-  // Close dropdown on navigation
+  useLayoutEffect(() => {
+    if (!accountOpen) {
+      setAccountMenuPos(null);
+      return;
+    }
+    updateAccountMenuPosition();
+    window.addEventListener('scroll', updateAccountMenuPosition, true);
+    window.addEventListener('resize', updateAccountMenuPosition);
+    return () => {
+      window.removeEventListener('scroll', updateAccountMenuPosition, true);
+      window.removeEventListener('resize', updateAccountMenuPosition);
+    };
+  }, [accountOpen, updateAccountMenuPosition]);
+
+  // Fecha ao clicar fora (capture + contains evita conflito com React 19 / mesmo clique de abrir)
+  useEffect(() => {
+    if (!moreOpen && !accountOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (moreOpen && moreMenuRef.current?.contains(t)) return;
+      if (accountOpen) {
+        if (accountTriggerRef.current?.contains(t)) return;
+        if (accountDropdownRef.current?.contains(t)) return;
+      }
+      setMoreOpen(false);
+      setAccountOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown, true);
+    return () => document.removeEventListener('mousedown', onPointerDown, true);
+  }, [moreOpen, accountOpen]);
+
   useEffect(() => {
     setMoreOpen(false);
+    setAccountOpen(false);
   }, [location.pathname]);
 
   const activeNavIndex = navTabsList.findIndex((tab) => {
@@ -89,6 +130,7 @@ export default function Layout() {
   // "Mais" button with dropdown
   const moreButton = needsMore ? React.createElement('div', {
     key: '_more',
+    ref: moreMenuRef,
     style: { position: 'relative' as const, display: 'inline-flex' },
   },
     React.createElement('button', {
@@ -136,8 +178,12 @@ export default function Layout() {
         },
           ...navButtons,
           moreButton)),
-      React.createElement('div', { style: webStyles.userBlock },
-        React.createElement('button', { type: 'button', style: webStyles.userButton, 'aria-label': 'Menu do usuário' },
+      React.createElement('div', { style: { ...webStyles.userBlock, position: 'relative' as const } },
+        React.createElement('button', {
+          ref: accountTriggerRef,
+          type: 'button', style: webStyles.userButton, 'aria-label': 'Menu do usuário', 'aria-expanded': accountOpen,
+          onClick: () => { setAccountOpen((v) => !v); },
+        },
           React.createElement('div', { style: webStyles.avatar },
             React.createElement('span', { style: webStyles.avatarLetter }, avatarLetter)),
           React.createElement('div', { style: webStyles.userDetails },
@@ -145,8 +191,70 @@ export default function Layout() {
             React.createElement('span', { style: webStyles.userEmail }, userEmail)),
           React.createElement('span', { style: webStyles.chevronDown }, chevronDownSvg)))));
 
-  return React.createElement('div', { style: webStyles.homePage },
-    header,
-    React.createElement('main', { style: webStyles.homeContent },
-      React.createElement(Outlet)));
+  const accountDropdownPanel =
+    accountOpen && accountMenuPos && typeof document !== 'undefined'
+      ? createPortal(
+          React.createElement('div', {
+            ref: accountDropdownRef,
+            role: 'menu',
+            style: {
+              position: 'fixed' as const,
+              top: accountMenuPos.top,
+              left: accountMenuPos.left,
+              width: 283,
+              background: '#fff',
+              borderRadius: 12,
+              padding: 24,
+              zIndex: 10001,
+              boxShadow: '6px 6px 12px 0px rgba(0,0,0,0.15)',
+              boxSizing: 'border-box' as const,
+            },
+          },
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
+              ...([
+                { label: 'Atualizar senha', icon: lockOutlineSvg, action: () => {} },
+                { label: 'Atendimentos', icon: desktopOutlineSvg, action: () => navigate('/atendimentos') },
+                {
+                  label: 'Configurações',
+                  icon: settingsOutlineSvg,
+                  action: () => { setAccountOpen(false); navigate('/configuracoes'); },
+                },
+              ] as const).map((item) =>
+                React.createElement('button', {
+                  key: item.label, type: 'button', role: 'menuitem',
+                  onClick: item.action,
+                  style: {
+                    display: 'flex', alignItems: 'center', gap: 8, height: 37,
+                    padding: '8px 16px', background: 'none', border: 'none', cursor: 'pointer',
+                    borderRadius: 8, width: '100%',
+                    fontSize: 14, fontWeight: 400, color: '#0d0d0d', ...font,
+                    lineHeight: 1.5, whiteSpace: 'nowrap' as const,
+                  },
+                  onMouseEnter: (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.background = '#f5f5f5'; },
+                  onMouseLeave: (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.background = 'none'; },
+                }, item.icon, item.label)),
+              React.createElement('button', {
+                key: 'sair', type: 'button', role: 'menuitem',
+                onClick: async () => { setAccountOpen(false); await signOut(); navigate('/login'); },
+                style: {
+                  display: 'flex', alignItems: 'center', gap: 8, height: 37,
+                  padding: '8px 16px', background: 'none', cursor: 'pointer',
+                  borderRadius: '0 0 8px 8px', width: '100%',
+                  borderTop: '0.5px solid #d9d9d9', borderLeft: 'none', borderRight: 'none', borderBottom: 'none',
+                  fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font,
+                  lineHeight: 1.5, whiteSpace: 'nowrap' as const,
+                },
+                onMouseEnter: (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.background = '#f5f5f5'; },
+                onMouseLeave: (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.background = 'none'; },
+              }, exitToAppSvg, 'Sair da conta'))),
+          document.body,
+        )
+      : null;
+
+  return React.createElement(React.Fragment, null,
+    React.createElement('div', { style: webStyles.homePage },
+      header,
+      React.createElement('main', { style: webStyles.homeContent },
+        React.createElement(Outlet))),
+    accountDropdownPanel);
 }
