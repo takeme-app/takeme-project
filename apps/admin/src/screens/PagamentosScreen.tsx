@@ -2,46 +2,27 @@
  * PagamentosScreen — Pagamentos conforme Figma 905-15884.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
+import { fetchPagamentos, fetchPagamentoCounts } from '../data/queries';
+import type { PagamentoListItem, PagamentoCounts } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
-// ── Mock data ───────────────────────────────────────────────────────────
-const metrics = [
-  { title: 'Pagamentos previstos', value: 'R$ 45.230,00', pct: '+12.5%', desc: 'vs período anterior' },
-  { title: 'Pagamentos feitos', value: 'R$ 128.450,00', pct: '+8.2%', desc: 'vs período anterior' },
-  { title: 'Lucro', value: 'R$ 83.220,00', pct: '-3.1%', desc: 'vs período anterior', negative: true },
-];
-
-type PagRow = {
-  preparador: string;
-  origem: string;
-  destino: string;
-  dataFinalizacao: string;
-  status: 'Em andamento' | 'Agendado' | 'Cancelado' | 'Concluído';
-};
-
-const tableRows: PagRow[] = [
-  { preparador: 'João Silva', origem: 'São Paulo - SP', destino: 'Rio de Janeiro - RJ', dataFinalizacao: '24/01/2025\n18:10', status: 'Em andamento' },
-  { preparador: 'Pedro Henrique', origem: 'Belo Horizonte - MG', destino: 'Brasília - DF', dataFinalizacao: '23/01/2025\n09:30', status: 'Agendado' },
-  { preparador: 'Maria Pontes', origem: 'Curitiba - PR', destino: 'Porto Alegre - RS', dataFinalizacao: '22/01/2025\n10:45', status: 'Agendado' },
-  { preparador: 'Julia Campos', origem: 'Salvador - BA', destino: 'Recife - PE', dataFinalizacao: '21/01/2025\n15:16', status: 'Cancelado' },
-  { preparador: 'Carlos Silva', origem: 'Fortaleza - CE', destino: 'Natal - RN', dataFinalizacao: '20/01/2025\n16:24', status: 'Concluído' },
-  { preparador: 'Matheus Pontes', origem: 'Salvador - BA', destino: 'Curitiba - PR', dataFinalizacao: '19/01/2025\n03:40', status: 'Concluído' },
-  { preparador: 'Hugo Silva', origem: 'Brasília - DF', destino: 'Rio de Janeiro - RJ', dataFinalizacao: '18/01/2025\n14:30', status: 'Concluído' },
-];
+function fmtBRL(cents: number): string {
+  return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
 
 const tableCols = [
-  { label: 'Preparador', flex: '1 1 18%', minWidth: 140 },
-  { label: 'Origem', flex: '1 1 18%', minWidth: 140 },
-  { label: 'Destino', flex: '1 1 20%', minWidth: 160 },
-  { label: 'Data e horário\nde finalização', flex: '0 0 130px', minWidth: 130 },
+  { label: 'Profissional', flex: '1 1 20%', minWidth: 150 },
+  { label: 'Tipo', flex: '0 0 120px', minWidth: 120 },
+  { label: 'Valor bruto', flex: '0 0 130px', minWidth: 130 },
+  { label: 'Data', flex: '0 0 110px', minWidth: 110 },
   { label: 'Status', flex: '0 0 130px', minWidth: 130 },
 ];
 
@@ -63,6 +44,29 @@ const s = {
 export default function PagamentosScreen() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const [pagamentos, setPagamentos] = useState<PagamentoListItem[]>([]);
+  const [counts, setCounts] = useState<PagamentoCounts>({ pagamentosPrevistos: 0, pagamentosFeitos: 0, lucro: 0 });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([fetchPagamentos(), fetchPagamentoCounts()]).then(([items, c]) => {
+      if (!cancelled) { setPagamentos(items); setCounts(c); setLoading(false); }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const metrics = [
+    { title: 'Pagamentos previstos', value: fmtBRL(counts.pagamentosPrevistos), pct: '+12.5%', desc: 'vs período anterior' },
+    { title: 'Pagamentos feitos', value: fmtBRL(counts.pagamentosFeitos), pct: '+8.2%', desc: 'vs período anterior' },
+    { title: 'Lucro', value: fmtBRL(counts.lucro), pct: counts.lucro > 0 ? '+' : '', desc: 'vs período anterior', negative: counts.lucro <= 0 },
+  ];
+
+  const filteredRows = pagamentos.filter((r) => {
+    if (!search) return true;
+    const s = search.toLowerCase();
+    return r.workerName.toLowerCase().includes(s) || r.entityType.toLowerCase().includes(s);
+  });
 
   const title = React.createElement('h1', { style: webStyles.homeTitle }, 'Pagamentos');
 
@@ -129,7 +133,7 @@ export default function PagamentosScreen() {
       },
     }, c.label)));
 
-  const tableRowEls = tableRows.map((row, idx) => {
+  const tableRowEls = filteredRows.map((row, idx) => {
     const st = statusStyles[row.status];
     return React.createElement('div', {
       key: idx,
@@ -138,9 +142,9 @@ export default function PagamentosScreen() {
         borderBottom: '1px solid #d9d9d9', background: '#fff',
       },
     },
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth, fontWeight: 500 } }, row.preparador),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth } }, row.origem),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth } }, row.destino),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth, fontWeight: 500 } }, row.workerName),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth } }, row.entityType),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth } }, fmtBRL(row.grossAmountCents)),
       React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth, whiteSpace: 'pre-line' as const, fontSize: 13, lineHeight: 1.4 } }, row.dataFinalizacao),
       React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth } },
         React.createElement('span', {
@@ -160,6 +164,15 @@ export default function PagamentosScreen() {
         tableHeader,
         ...tableRowEls)));
 
+  if (loading) {
+    return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
+      React.createElement('span', { style: { fontSize: 16, color: '#767676', ...font } }, 'Carregando pagamentos...'));
+  }
+
+  const emptyMsg = filteredRows.length === 0
+    ? React.createElement('div', { style: { padding: 40, textAlign: 'center' as const, color: '#767676', ...font } }, 'Nenhum pagamento encontrado.')
+    : null;
+
   return React.createElement(React.Fragment, null,
-    title, searchRow, metricCards, tableSection);
+    title, searchRow, metricCards, emptyMsg || tableSection);
 }

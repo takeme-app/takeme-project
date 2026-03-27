@@ -2,9 +2,11 @@
  * PassageiroDetalheScreen — Detalhes do passageiro (Figma 1415-42889).
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { webStyles, arrowBackSvg, filterIconSvg } from '../styles/webStyles';
+import { fetchPassageiroPaymentMethods } from '../data/queries';
+import type { PaymentMethodRow } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -40,8 +42,8 @@ const editSmallSvg = React.createElement('svg', { width: 16, height: 16, viewBox
 const plusSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M12 5v14M5 12h14', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 
-// ── Payment methods data ─────────────────────────────────────────────────
-const paymentMethods = [
+// ── Fallback payment methods (used when no real data) ────────────────────
+const fallbackPaymentMethods = [
   { name: 'Nubank', type: 'Débito', lastDigits: '9424', icon: mastercardIcon },
   { name: 'BlackVisa', type: 'Crédito', lastDigits: '9414', icon: visaIcon },
   { name: 'PIX', type: '', lastDigits: '', icon: pixIcon },
@@ -185,6 +187,26 @@ export default function PassageiroDetalheScreen() {
   const passageiro = (location.state as { passageiro?: { nome: string; cidade: string; estado: string; dataCriacao: string; cpf: string; status: string } })?.passageiro;
 
   const [activeTab, setActiveTab] = useState<'dados' | 'historico'>('dados');
+
+  // ── Real payment methods from Supabase ──────────────────────────────
+  const [realPayMethods, setRealPayMethods] = useState<PaymentMethodRow[]>([]);
+  useEffect(() => {
+    const pId = (location.state as any)?.passageiro?.id;
+    if (pId) {
+      fetchPassageiroPaymentMethods(pId).then(setRealPayMethods);
+    }
+  }, [location.state]);
+
+  // Use real data if available, fallback to mock
+  const brandIconMap: Record<string, React.ReactElement> = { mastercard: mastercardIcon, visa: visaIcon };
+  const paymentMethods = realPayMethods.length > 0
+    ? realPayMethods.map((pm) => ({
+        name: pm.holder_name || pm.brand || 'Cartão',
+        type: pm.type === 'credit' ? 'Crédito' : 'Débito',
+        lastDigits: pm.last_four || '',
+        icon: brandIconMap[(pm.brand || '').toLowerCase()] || visaIcon,
+      }))
+    : fallbackPaymentMethods;
 
   // ── Add payment method modal state ────────────────────────────────────
   const [payModalOpen, setPayModalOpen] = useState(false);

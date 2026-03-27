@@ -2,9 +2,10 @@
  * AtendimentosScreen — Atendimentos conforme Figma 1044-38472.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
+import { fetchViagemCounts, fetchEncomendaCounts, fetchMotoristas } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -65,13 +66,7 @@ const avatarColors: Record<string, string> = {
   M: '#E8725C', J: '#7B61FF', A: '#F5A623', P: '#4A90D9', C: '#50C878',
 };
 
-// ── Metrics ─────────────────────────────────────────────────────────────
-const metrics = [
-  { title: 'Viagens no momento', value: '47' },
-  { title: 'Motoristas ativos', value: '128' },
-  { title: 'Cancelamentos (hoje)', value: '3' },
-  { title: 'Encomendas no momento', value: '12' },
-];
+// ── Metrics (loaded from Supabase inside component) ─────────────────────
 
 // ── Clock SVG ───────────────────────────────────────────────────────────
 const clockSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
@@ -92,6 +87,30 @@ export default function AtendimentosScreen() {
   const [filtrarStatusSelected, setFiltrarStatusSelected] = useState('Todos');
   const [meuAtendimentoDropdown, setMeuAtendimentoDropdown] = useState(false);
   const [meuAtendimentoLabel, setMeuAtendimentoLabel] = useState('Meu atendimento');
+
+  // ── Real metrics from Supabase ──────────────────────────────────────
+  const [realMetrics, setRealMetrics] = useState({ viagens: 0, motoristas: 0, cancelamentos: 0, encomendas: 0 });
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([fetchViagemCounts(), fetchEncomendaCounts(), fetchMotoristas()]).then(([vc, ec, mots]) => {
+      if (!cancelled) {
+        setRealMetrics({
+          viagens: vc.emAndamento,
+          motoristas: mots.length,
+          cancelamentos: vc.canceladas,
+          encomendas: ec.emAndamento,
+        });
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const metrics = [
+    { title: 'Viagens no momento', value: String(realMetrics.viagens || 0) },
+    { title: 'Motoristas ativos', value: String(realMetrics.motoristas || 0) },
+    { title: 'Cancelamentos (hoje)', value: String(realMetrics.cancelamentos || 0) },
+    { title: 'Encomendas no momento', value: String(realMetrics.encomendas || 0) },
+  ];
 
   // ── Helper: chip ──────────────────────────────────────────────────────
   const chip = (label: string, count: number, active: boolean, onClick: () => void) =>

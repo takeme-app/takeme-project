@@ -1,10 +1,12 @@
 /**
  * Configurações > Perfil (Figma 1435-22732). Conteúdo abaixo do Layout; dados do usuário logado.
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
 import { useAuth } from '../contexts/AuthContext';
+import { fetchAdminUsers } from '../data/queries';
+import type { AdminUserListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -51,6 +53,14 @@ export default function ConfiguracoesScreen() {
   const [nuNome, setNuNome] = useState('');
   const [nuEmail, setNuEmail] = useState('');
   const [nuPermissoes, setNuPermissoes] = useState<Record<string, boolean>>({ 'Início': true, 'Viagens': true });
+  const [adminUsers, setAdminUsers] = useState<AdminUserListItem[]>([]);
+  const [adminLoading, setAdminLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAdminUsers().then((items) => { if (!cancelled) { setAdminUsers(items); setAdminLoading(false); } });
+    return () => { cancelled = true; };
+  }, []);
 
   const nome = session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || '—';
   const email = session?.user?.email || '—';
@@ -148,13 +158,13 @@ export default function ConfiguracoesScreen() {
       readOnlyField('Nível de acesso', nivel)));
 
   // ── Usuários e Permissões ───────────────────────────────────────────────
-  const userRows = [
-    { nome: 'Carlos Silva', email: 'joaosilva@takeme.com', permissao: 'Administrador', data: '10/10/2025', status: 'Ativo' as const },
-    { nome: 'João Porto', email: 'joaosilva@takeme.com', permissao: 'Administrador', data: '10/10/2025', status: 'Ativo' as const },
-    { nome: 'Jorge Silva', email: 'joaosilva@takeme.com', permissao: 'Financeiro', data: '10/10/2025', status: 'Ativo' as const },
-    { nome: 'Carlos Silva', email: 'joaosilva@takeme.com', permissao: 'Atendente', data: '10/10/2025', status: 'Ativo' as const },
-    { nome: 'Danilo Santos', email: 'joaosilva@takeme.com', permissao: 'Atendente', data: '10/10/2025', status: 'Inativo' as const },
-  ];
+  const userRows = adminUsers.map((u) => ({
+    nome: u.nome,
+    email: u.email || '—',
+    permissao: u.nivel,
+    data: u.dataCriacao,
+    status: u.status,
+  }));
   const userCols = [
     { label: 'Usuário', flex: '1 1 20%', minWidth: 160 },
     { label: 'E-mail', flex: '1 1 22%', minWidth: 180 },
