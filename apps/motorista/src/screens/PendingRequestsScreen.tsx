@@ -35,6 +35,10 @@ type RequestItem = {
   userRating: number | null;
   minutesAgo: number;
   extraLabel: string;
+  /** Para bookings: hora da viagem - 30min. Null para outros tipos. */
+  expiresAt: Date | null;
+  /** ID real na tabela (sem prefixo de tipo) */
+  rawId: string;
 };
 
 const BADGE_COLORS: Record<RequestType, { bg: string; text: string }> = {
@@ -116,18 +120,24 @@ export function PendingRequestsScreen({ navigation }: Props) {
       const { data: prof } = await supabase
         .from('profiles').select('full_name, avatar_url, rating').eq('id', row.user_id).maybeSingle();
       const p = prof as { full_name?: string; avatar_url?: string; rating?: number } | null;
+      const depAt = row.scheduled_trips?.departure_at;
+      const expiresAt = depAt
+        ? new Date(new Date(depAt).getTime() - 30 * 60 * 1000)
+        : null;
       all.push({
         id: `booking_${row.id}`,
+        rawId: row.id,
         type: 'passageiro',
         origin: row.origin_address,
         destination: row.destination_address,
-        timeLabel: formatTime(row.scheduled_trips?.departure_at ?? null),
+        timeLabel: formatTime(depAt ?? null),
         priceCents: row.amount_cents,
         userName: p?.full_name ?? 'Passageiro',
         userAvatar: p?.avatar_url ?? null,
         userRating: p?.rating != null ? Number(p.rating) : null,
         minutesAgo: minutesAgo(row.created_at),
         extraLabel: `${row.passenger_count} ${row.passenger_count === 1 ? 'passageiro' : 'passageiros'}`,
+        expiresAt,
       });
     }
 
@@ -148,6 +158,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
       const p = prof as { full_name?: string; avatar_url?: string; rating?: number } | null;
       all.push({
         id: `shipment_${s.id}`,
+        rawId: s.id,
         type: 'encomenda',
         origin: s.origin_address,
         destination: s.destination_address,
@@ -158,6 +169,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
         userRating: p?.rating != null ? Number(p.rating) : null,
         minutesAgo: minutesAgo(s.created_at),
         extraLabel: packageLabel(s.package_size),
+        expiresAt: null,
       });
     }
 
@@ -181,6 +193,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
       })();
       all.push({
         id: `excursion_${e.id}`,
+        rawId: e.id,
         type: 'excursao',
         origin: '—',
         destination: e.destination,
@@ -191,6 +204,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
         userRating: p?.rating != null ? Number(p.rating) : null,
         minutesAgo: minutesAgo(e.created_at),
         extraLabel: `${e.people_count} ${e.people_count === 1 ? 'pessoa' : 'pessoas'}`,
+        expiresAt: null,
       });
     }
 
@@ -204,22 +218,43 @@ export function PendingRequestsScreen({ navigation }: Props) {
   const handleAction = async (item: RequestItem, accept: boolean) => {
     if (!userId) return;
     setActioning(item.id);
+    const now = new Date().toISOString();
     try {
-      const [tablePrefix, rawId] = item.id.split('_') as [string, string];
-      const realId = item.id.replace(`${tablePrefix}_`, '');
+      const tablePrefix = item.id.split('_')[0] as string;
 
       if (tablePrefix === 'booking') {
-        await supabase.from('bookings').update({ status: accept ? 'confirmed' : 'cancelled', updated_at: new Date().toISOString() } as never).eq('id', realId);
+        await supabase
+          .from('bookings')
+          .update({ status: accept ? 'confirmed' : 'cancelled', updated_at: now } as never)
+          .eq('id', item.rawId);
+
+        // Atualizar worker_assignment se existir
+        const { data: wa } = await supabase
+          .from('worker_assignments')
+          .select('id')
+          .eq('worker_id', userId)
+          .eq('entity_type', 'booking')
+          .eq('entity_id', item.rawId)
+          .maybeSingle();
+        if (wa) {
+          const waUpdate = accept
+            ? { status: 'accepted' }
+            : { status: 'rejected', rejected_at: now, rejection_reason: 'Recusado pelo motorista' };
+          await supabase
+            .from('worker_assignments')
+            .update(waUpdate as never)
+            .eq('id', (wa as { id: string }).id);
+        }
       } else if (tablePrefix === 'shipment') {
         await supabase.from('shipments').update({
           status: accept ? 'confirmed' : 'cancelled',
-          ...(accept ? { driver_id: userId, driver_accepted_at: new Date().toISOString() } : {}),
-        } as never).eq('id', realId);
+          ...(accept ? { driver_id: userId, driver_accepted_at: now } : {}),
+        } as never).eq('id', item.rawId);
       } else if (tablePrefix === 'excursion') {
         await supabase.from('excursion_requests').update({
           status: accept ? 'contacted' : 'cancelled',
-          ...(accept ? { driver_id: userId, driver_accepted_at: new Date().toISOString() } : {}),
-        } as never).eq('id', realId);
+          ...(accept ? { driver_id: userId, driver_accepted_at: now } : {}),
+        } as never).eq('id', item.rawId);
       }
       setItems((prev) => prev.filter((i) => i.id !== item.id));
     } finally {
@@ -236,7 +271,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
           <MaterialIcons name="close" size={22} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Solicitações pendentes</Text>
-        <View style={styles.iconBtn} />
+        <View style={{ width: 40 }} />
       </View>
 
       {loading ? (
@@ -253,9 +288,25 @@ export function PendingRequestsScreen({ navigation }: Props) {
             const isActioning = actioning === item.id;
             return (
               <View key={item.id} style={styles.card}>
-                {/* Badge tipo */}
-                <View style={[styles.badge, { backgroundColor: badge.bg }]}>
-                  <Text style={[styles.badgeText, { color: badge.text }]}>{BADGE_LABELS[item.type]}</Text>
+                {/* Badge tipo + urgência */}
+                <View style={styles.badgeRow}>
+                  <View style={[styles.badge, { backgroundColor: badge.bg }]}>
+                    <Text style={[styles.badgeText, { color: badge.text }]}>{BADGE_LABELS[item.type]}</Text>
+                  </View>
+                  {item.expiresAt && (() => {
+                    const minsLeft = Math.floor((item.expiresAt.getTime() - Date.now()) / 60000);
+                    if (minsLeft <= 30) {
+                      return (
+                        <View style={[styles.urgencyBadge, minsLeft <= 10 && styles.urgencyBadgeRed]}>
+                          <MaterialIcons name="timer" size={12} color={minsLeft <= 10 ? '#FFFFFF' : '#92400E'} />
+                          <Text style={[styles.urgencyText, minsLeft <= 10 && styles.urgencyTextRed]}>
+                            {minsLeft <= 0 ? 'Expirando' : `${minsLeft}min`}
+                          </Text>
+                        </View>
+                      );
+                    }
+                    return null;
+                  })()}
                 </View>
 
                 {/* Rota + horário + preço */}
@@ -344,11 +395,22 @@ const styles = StyleSheet.create({
   card: {
     borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 16, padding: 16,
   },
+  badgeRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14,
+  },
   badge: {
     alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 5,
-    borderRadius: 20, marginBottom: 14,
+    borderRadius: 20,
   },
   badgeText: { fontSize: 13, fontWeight: '600' },
+  urgencyBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#FEF3C7', borderRadius: 20,
+    paddingHorizontal: 10, paddingVertical: 4,
+  },
+  urgencyBadgeRed: { backgroundColor: '#EF4444' },
+  urgencyText: { fontSize: 12, fontWeight: '700', color: '#92400E' },
+  urgencyTextRed: { color: '#FFFFFF' },
   routeRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
   routeOrigin: { fontSize: 15, fontWeight: '700', color: '#111827', flex: 1 },
   routeArrow: { marginHorizontal: 6 },

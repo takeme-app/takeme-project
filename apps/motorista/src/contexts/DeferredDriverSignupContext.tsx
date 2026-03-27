@@ -1,17 +1,15 @@
 import React, { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
-import type { DriverType } from '../navigation/types';
+import type { RegistrationType } from '../navigation/types';
 
 /**
- * Mantém e-mail, senha e tipo de motorista até "Enviar cadastro".
- * Token HMAC (pós-OTP) é opcional — legado / futuro.
- * A conta no Auth é criada na FinalizeRegistration (signUp), sem Edge Function.
+ * Mantém e-mail, senha e tipo de cadastro até "Enviar cadastro".
+ * Usado por motoristas e preparadores (todos os 4 tipos).
  */
 type DeferredState = {
-  /** Opcional: só se no futuro voltar OTP ou outro pré-registro. */
   verificationToken: string | null;
   email: string | null;
   password: string | null;
-  driverType: DriverType | null;
+  driverType: RegistrationType | null;
 };
 
 const initial: DeferredState = {
@@ -25,7 +23,7 @@ type ContextValue = DeferredState & {
   setDeferred: (p: {
     email: string;
     password: string;
-    driverType: DriverType;
+    driverType: RegistrationType;
     verificationToken?: string | null;
   }) => void;
   clearDeferred: () => void;
@@ -40,7 +38,7 @@ export function DeferredDriverSignupProvider({ children }: { children: ReactNode
   const setDeferred = useCallback((p: {
     email: string;
     password: string;
-    driverType: DriverType;
+    driverType: RegistrationType;
     verificationToken?: string | null;
   }) => {
     setState({

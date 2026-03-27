@@ -109,7 +109,7 @@ export function WorkerVehiclesScreen({ navigation, route }: Props) {
           <MaterialIcons name="arrow-back" size={22} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Meus veículos</Text>
-        <View style={styles.iconBtn} />
+        <View style={{ width: 40 }} />
       </View>
 
       {loading ? (

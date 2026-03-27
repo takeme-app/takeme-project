@@ -1,9 +1,12 @@
 import { supabase } from './supabase';
-import type { DriverType } from '../navigation/types';
+import type { RegistrationType } from '../navigation/types';
 
-/** CHECK de subtype em produção: takeme | partner | shipments | excursions */
-export function mapDriverTypeToSubtypeDb(driverType: DriverType): 'takeme' | 'partner' {
-  return driverType === 'take_me' ? 'takeme' : 'partner';
+/** Mapeia tipo de cadastro para subtype no banco. */
+export function mapDriverTypeToSubtypeDb(driverType: RegistrationType): 'takeme' | 'partner' | 'excursions' | 'shipments' {
+  if (driverType === 'take_me') return 'takeme';
+  if (driverType === 'parceiro') return 'partner';
+  if (driverType === 'preparador_excursões') return 'excursions';
+  return 'shipments';
 }
 
 export type MotoristaRouteInput = {
@@ -22,13 +25,14 @@ export type MotoristaVehicleInput = {
 export type RegisterMotoristaWithAuthInput = {
   email: string;
   password: string;
-  driverType: DriverType;
+  driverType: RegistrationType;
   fullName: string;
   phoneDigits: string | null;
   cpfDigits: string;
   age: number | null;
   city: string | null;
   preferenceArea: string | null;
+  experienceYears: number | null;
   bankCode: string | null;
   agencyNumber: string | null;
   accountNumber: string | null;
@@ -57,6 +61,7 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
     age,
     city,
     preferenceArea,
+    experienceYears,
     bankCode,
     agencyNumber,
     accountNumber,
@@ -74,9 +79,10 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
     email: emailNorm,
     password,
     options: {
+      // Não passamos phone aqui para evitar unique_violation no trigger handle_new_user.
+      // O telefone é salvo no profiles.update logo abaixo.
       data: {
         full_name: fullName.trim() || undefined,
-        phone: phoneDigits || undefined,
       },
     },
   });
@@ -131,11 +137,11 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
     );
   }
 
+  // phoneDigits é o telefone do veículo — não vai para profiles.phone (telefone pessoal).
   const { error: profileErr } = await supabase
     .from('profiles')
     .update({
       full_name: fullName.trim() || null,
-      phone: phoneDigits || null,
       cpf: cpfDigits,
       city: city?.trim() || null,
       updated_at: nowIso,
@@ -160,7 +166,7 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
     cpf: cpfDigits,
     age: ageForDb,
     city: city?.trim() || null,
-    experience_years: null,
+    experience_years: experienceYears,
     bank_code: bankCode?.trim() || null,
     bank_agency: agencyNumber?.trim() || null,
     bank_account: accountNumber?.trim() || null,

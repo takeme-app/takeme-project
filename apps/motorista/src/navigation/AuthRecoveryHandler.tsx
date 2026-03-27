@@ -108,6 +108,24 @@ export function AuthRecoveryHandler({ navigationRef }: Props) {
   const lastHandledUrl = useRef<string | null>(null);
   const lastHandledTime = useRef<number>(0);
 
+  // Redireciona para Welcome quando o token de refresh é inválido ou a sessão expira
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
+        if (event === 'SIGNED_OUT') {
+          waitForNavigatorReady(navigationRef).then(() => {
+            const nav = navigationRef.current;
+            if (!nav) return;
+            nav.dispatch(
+              CommonActions.reset({ index: 0, routes: [{ name: 'Welcome' }] })
+            );
+          });
+        }
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [navigationRef]);
+
   useEffect(() => {
     const run = async (url: string | null) => {
       if (!url) return;

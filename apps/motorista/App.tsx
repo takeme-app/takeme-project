@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-import { StatusBar } from 'expo-status-bar';
-import { Platform, StyleSheet, Text, View } from 'react-native';
-=======
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   View,
@@ -23,13 +19,12 @@ import { AppAlertProvider } from './src/contexts/AppAlertContext';
 import { RegistrationFormProvider } from './src/contexts/RegistrationFormContext';
 import { DeferredDriverSignupProvider } from './src/contexts/DeferredDriverSignupContext';
 import { supabase } from './src/lib/supabase';
-import { checkMotoristaCanAccessApp } from './src/lib/motoristaAccess';
+import { checkMotoristaCanAccessApp, subtypeToMainRoute } from './src/lib/motoristaAccess';
 
 const SPLASH_MIN_MS = 500;
 const SPLASH_MAX_MS = 10000;
 
 SplashScreen.preventAutoHideAsync();
->>>>>>> 954664b (feat(motorista): cadastro completo do motorista - telas e migration)
 
 export default function App() {
   const [fontsLoaded, fontError] = useFonts({
@@ -39,7 +34,7 @@ export default function App() {
   });
 
   const [ready, setReady] = useState(false);
-  const [initialRoute, setInitialRoute] = useState<'Welcome' | 'Main' | 'MotoristaPendingApproval'>('Welcome');
+  const [initialRoute, setInitialRoute] = useState<'Welcome' | 'Main' | 'MainExcursoes' | 'MainEncomendas' | 'MotoristaPendingApproval'>('Welcome');
   const [splashTimedOut, setSplashTimedOut] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const startTimeRef = useRef<number>(Date.now());
@@ -56,7 +51,7 @@ export default function App() {
       return 'Welcome' as const;
     }
     if (gate.kind === 'pending') return 'MotoristaPendingApproval' as const;
-    return 'Main' as const;
+    return subtypeToMainRoute(gate.subtype) as typeof initialRoute;
   }, []);
 
   useEffect(() => {
@@ -155,11 +150,6 @@ export default function App() {
   }
 
   return (
-<<<<<<< HEAD
-    <View style={styles.container}>
-      <Text>Take Me - Motorista</Text>
-      {Platform.OS !== 'web' && <StatusBar style="auto" />}
-=======
     <View style={{ flex: 1 }}>
       <SafeAreaProvider>
         <AppAlertProvider>
@@ -170,7 +160,6 @@ export default function App() {
           </DeferredDriverSignupProvider>
         </AppAlertProvider>
       </SafeAreaProvider>
->>>>>>> 954664b (feat(motorista): cadastro completo do motorista - telas e migration)
     </View>
   );
 }
