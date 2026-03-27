@@ -3,6 +3,7 @@
  * Uses React.createElement() calls (NOT JSX).
  */
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -82,8 +83,15 @@ const chevronDownSvg = React.createElement('svg', { width: 14, height: 14, viewB
   React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 
 export default function AtendimentosScreen() {
+  const navigate = useNavigate();
   const [meuCatActive, setMeuCatActive] = useState('Todos');
   const [todosStatusActive, setTodosStatusActive] = useState('Todos');
+  const [onlineStatus, setOnlineStatus] = useState<'Online' | 'Ausente' | 'Offline'>('Online');
+  const [statusDropdownOpen, setStatusDropdownOpen] = useState(false);
+  const [filtrarStatusOpen, setFiltrarStatusOpen] = useState(false);
+  const [filtrarStatusSelected, setFiltrarStatusSelected] = useState('Todos');
+  const [meuAtendimentoDropdown, setMeuAtendimentoDropdown] = useState(false);
+  const [meuAtendimentoLabel, setMeuAtendimentoLabel] = useState('Meu atendimento');
 
   // ── Helper: chip ──────────────────────────────────────────────────────
   const chip = (label: string, count: number, active: boolean, onClick: () => void) =>
@@ -158,6 +166,7 @@ export default function AtendimentosScreen() {
         // Atender button
         React.createElement('button', {
           type: 'button',
+          onClick: () => navigate(`/atendimentos/${idx}`, { state: { ticket: t } }),
           style: {
             height: 44, padding: '0 24px', borderRadius: 999, border: '1px solid #0d0d0d',
             background: '#fff', fontSize: 14, fontWeight: 600, color: '#0d0d0d',
@@ -166,20 +175,56 @@ export default function AtendimentosScreen() {
         }, 'Atender')));
   };
 
-  // ── Visão geral + Online ──────────────────────────────────────────────
+  // ── Visão geral + Online status dropdown ────────────────────────────────
+  const statusColors: Record<string, string> = { Online: '#22c55e', Ausente: '#e87a2e', Offline: '#767676' };
+  const currentDot = statusColors[onlineStatus];
+
+  const statusDropdown = statusDropdownOpen ? React.createElement('div', {
+    style: {
+      position: 'absolute' as const, top: 48, right: 0, background: '#fff', borderRadius: 16,
+      boxShadow: '0 8px 30px rgba(0,0,0,0.15)', padding: '12px 0', minWidth: 260, zIndex: 50,
+    },
+  },
+    // Horário automático
+    React.createElement('div', {
+      style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', marginBottom: 4 },
+    },
+      React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
+        React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#767676', strokeWidth: 2 }),
+        React.createElement('path', { d: 'M12 6v6l4 2', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
+      React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, 'Horário automático: 09h00-18h00')),
+    // Options
+    ...(['Online', 'Ausente', 'Offline'] as const).map((opt) =>
+      React.createElement('button', {
+        key: opt, type: 'button',
+        onClick: () => { setOnlineStatus(opt); setStatusDropdownOpen(false); },
+        style: {
+          display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '10px 20px',
+          background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600,
+          color: statusColors[opt], ...font,
+        },
+      },
+        React.createElement('span', { style: { width: 10, height: 10, borderRadius: '50%', background: statusColors[opt] } }),
+        opt))) : null;
+
   const headerRow = React.createElement('div', {
     style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' },
   },
     React.createElement('h1', { style: { fontSize: 24, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Visão geral'),
     React.createElement('div', {
-      style: {
-        display: 'flex', alignItems: 'center', gap: 8, height: 40, padding: '0 16px',
-        border: '1px solid #e2e2e2', borderRadius: 999, cursor: 'pointer',
-      },
+      style: { position: 'relative' as const },
     },
-      React.createElement('span', { style: { width: 10, height: 10, borderRadius: '50%', background: '#22c55e' } }),
-      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#22c55e', ...font } }, 'Online'),
-      chevronDownSvg));
+      React.createElement('div', {
+        onClick: () => setStatusDropdownOpen(!statusDropdownOpen),
+        style: {
+          display: 'flex', alignItems: 'center', gap: 8, height: 40, padding: '0 16px',
+          border: '1px solid #e2e2e2', borderRadius: 999, cursor: 'pointer',
+        },
+      },
+        React.createElement('span', { style: { width: 10, height: 10, borderRadius: '50%', background: currentDot } }),
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: currentDot, ...font } }, onlineStatus),
+        chevronDownSvg),
+      statusDropdown));
 
   // ── Metric cards ──────────────────────────────────────────────────────
   const metricCards = React.createElement('div', {
@@ -205,19 +250,38 @@ export default function AtendimentosScreen() {
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
       React.createElement('button', {
         type: 'button',
+        onClick: () => setFiltrarStatusOpen(true),
         style: {
           height: 40, padding: '0 20px', borderRadius: 999, border: '1px solid #e2e2e2',
           background: '#fff', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
         },
       }, 'Filtrar status'),
-      React.createElement('button', {
-        type: 'button',
-        style: {
-          display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 16px',
-          borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff',
-          fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
+      React.createElement('div', { style: { position: 'relative' as const } },
+        React.createElement('button', {
+          type: 'button',
+          onClick: () => setMeuAtendimentoDropdown(!meuAtendimentoDropdown),
+          style: {
+            display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 16px',
+            borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff',
+            fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
+          },
+        }, meuAtendimentoLabel, chevronDownSvg),
+        meuAtendimentoDropdown ? React.createElement('div', {
+          style: {
+            position: 'absolute' as const, top: 48, right: 0, background: '#fff', borderRadius: 12,
+            boxShadow: '0 8px 30px rgba(0,0,0,0.15)', minWidth: 220, zIndex: 50, overflow: 'hidden',
+          },
         },
-      }, 'Meu atendimento', chevronDownSvg)));
+          ...['Meu atendimento', 'Atendimento geral'].map((opt, i) =>
+            React.createElement('button', {
+              key: opt, type: 'button',
+              onClick: () => { setMeuAtendimentoLabel(opt); setMeuAtendimentoDropdown(false); },
+              style: {
+                display: 'block', width: '100%', padding: '14px 20px', background: 'none', border: 'none',
+                borderBottom: i === 0 ? '1px solid #e2e2e2' : 'none',
+                fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', textAlign: 'left' as const, ...font,
+              },
+            }, opt))) : null)));
 
   const meuCatChips = React.createElement('div', {
     style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const },
@@ -257,11 +321,64 @@ export default function AtendimentosScreen() {
   // ── Separator ─────────────────────────────────────────────────────────
   const sep = React.createElement('div', { style: { height: 1, background: '#e2e2e2', width: '100%' } });
 
+  // ── Filtrar status modal ──────────────────────────────────────────────
+  const filtrarStatusOptions = ['Todos', 'Não atendida', 'Em atendimento', 'Atrasada'];
+  const filtrarStatusModal = filtrarStatusOpen ? React.createElement('div', {
+    style: {
+      position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+    },
+    onClick: () => setFiltrarStatusOpen(false),
+  },
+    React.createElement('div', {
+      style: {
+        background: '#fff', borderRadius: 16, width: '100%', maxWidth: 480, padding: '28px 32px',
+        display: 'flex', flexDirection: 'column' as const, gap: 20,
+        boxShadow: '0 20px 60px rgba(0,0,0,.15)',
+      },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      // Header
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Alterar status'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setFiltrarStatusOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      // Status label + chips
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Status'),
+      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        ...filtrarStatusOptions.map((opt) =>
+          React.createElement('button', {
+            key: opt, type: 'button',
+            onClick: () => setFiltrarStatusSelected(opt),
+            style: {
+              height: 36, padding: '0 16px', borderRadius: 999,
+              border: filtrarStatusSelected === opt ? 'none' : '1px solid #e2e2e2',
+              background: filtrarStatusSelected === opt ? '#0d0d0d' : '#fff',
+              color: filtrarStatusSelected === opt ? '#fff' : '#0d0d0d',
+              fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
+            },
+          }, opt))),
+      // Buttons
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => { setMeuCatActive(filtrarStatusSelected === 'Todos' ? 'Todos' : filtrarStatusSelected); setFiltrarStatusOpen(false); },
+        style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+      }, 'Salvar alterações'),
+      React.createElement('button', {
+        type: 'button', onClick: () => setFiltrarStatusOpen(false),
+        style: { height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+      }, 'Cancelar'))) : null;
+
   return React.createElement(React.Fragment, null,
     headerRow,
     metricCards,
     sep,
     meuSection,
     sep,
-    todosSection);
+    todosSection,
+    filtrarStatusModal);
 }
