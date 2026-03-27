@@ -21,6 +21,8 @@ import PagamentosScreen from './screens/PagamentosScreen';
 import PagamentosGestaoScreen from './screens/PagamentosGestaoScreen';
 import PlaceholderScreen from './screens/PlaceholderScreen';
 import AtendimentosScreen from './screens/AtendimentosScreen';
+import AtendimentoDetalheScreen from './screens/AtendimentoDetalheScreen';
+import ElaborarOrcamentoScreen from './screens/ElaborarOrcamentoScreen';
 import ConfiguracoesScreen from './screens/ConfiguracoesScreen';
 
 export const router = createBrowserRouter([
@@ -52,6 +54,8 @@ export const router = createBrowserRouter([
           { path: '/pagamentos', element: React.createElement(PagamentosScreen) },
           { path: '/pagamentos/gestao', element: React.createElement(PagamentosGestaoScreen) },
           { path: '/atendimentos', element: React.createElement(AtendimentosScreen) },
+          { path: '/atendimentos/:id', element: React.createElement(AtendimentoDetalheScreen) },
+          { path: '/atendimentos/:id/orcamento', element: React.createElement(ElaborarOrcamentoScreen) },
           { path: '/configuracoes', element: React.createElement(ConfiguracoesScreen) },
         ],
       },
