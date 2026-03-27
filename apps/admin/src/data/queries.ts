@@ -1,4 +1,5 @@
-import { supabase } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import Constants from 'expo-constants';
 import type {
   ViagemListItem,
   PassageiroListItem,
@@ -14,6 +15,120 @@ import type {
   PaymentMethodRow,
   AdminUserListItem,
 } from './types';
+
+// ── Edge Function Helper ─────────────────────────────────────────────────
+
+const extra = Constants.expoConfig?.extra as { supabaseUrl?: string; supabaseAnonKey?: string } | undefined;
+const supabaseUrl = extra?.supabaseUrl ?? process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+const supabaseAnonKey = extra?.supabaseAnonKey ?? process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
+
+export async function invokeEdgeFunction<T = any>(
+  name: string,
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+  params?: Record<string, string>,
+  body?: any,
+): Promise<{ data: T | null; error: string | null }> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return { data: null, error: 'Não autenticado' };
+
+    const url = new URL(`${supabaseUrl}/functions/v1/${name}`);
+    if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+
+    const res = await fetch(url.toString(), {
+      method,
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+        'apikey': supabaseAnonKey,
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+
+    const json = await res.json();
+    if (!res.ok) return { data: null, error: json.error || `HTTP ${res.status}` };
+    return { data: json as T, error: null };
+  } catch (err: any) {
+    return { data: null, error: err.message || 'Erro desconhecido' };
+  }
+}
+
+// ── CRUD: Promotions ────────────────────────────────────────────────────
+
+export async function createPromotion(body: {
+  title: string;
+  description?: string;
+  start_at: string;
+  end_at: string;
+  target_audiences: string[];
+  discount_type: 'percentage' | 'fixed';
+  discount_value: number;
+  applies_to: string[];
+}) {
+  return invokeEdgeFunction('manage-promotions', 'POST', undefined, body);
+}
+
+export async function updatePromotion(id: string, updates: Record<string, any>) {
+  return invokeEdgeFunction('manage-promotions', 'PUT', { id }, updates);
+}
+
+export async function deletePromotion(id: string) {
+  return invokeEdgeFunction('manage-promotions', 'DELETE', { id });
+}
+
+// ── CRUD: Pricing Routes ────────────────────────────────────────────────
+
+export async function createPricingRoute(body: {
+  role_type: string;
+  title?: string;
+  origin_address?: string;
+  destination_address: string;
+  pricing_mode: string;
+  price_cents: number;
+  driver_pct?: number;
+  admin_pct?: number;
+  accepted_payment_methods?: string[];
+  surcharges?: Array<{ surcharge_id: string; value_cents?: number }>;
+}) {
+  return invokeEdgeFunction('manage-pricing-routes', 'POST', undefined, body);
+}
+
+export async function updatePricingRoute(id: string, updates: Record<string, any>) {
+  return invokeEdgeFunction('manage-pricing-routes', 'PUT', { id }, updates);
+}
+
+export async function deletePricingRoute(id: string) {
+  return invokeEdgeFunction('manage-pricing-routes', 'DELETE', { id });
+}
+
+// ── CRUD: Excursion Budget ──────────────────────────────────────────────
+
+export async function submitExcursionBudget(excursionId: string, budgetLines: any, finalize = false) {
+  return invokeEdgeFunction('manage-excursion-budget', 'POST', undefined, {
+    excursion_id: excursionId,
+    budget_lines: budgetLines,
+    finalize,
+  });
+}
+
+// ── CRUD: Admin Users (via edge function) ───────────────────────────────
+
+export async function createAdminUser(body: {
+  email: string;
+  password?: string;
+  full_name: string;
+  permissions?: Record<string, boolean>;
+}) {
+  return invokeEdgeFunction('manage-admin-users', 'POST', undefined, body);
+}
+
+export async function updateAdminUser(id: string, updates: { permissions?: Record<string, boolean>; status?: string }) {
+  return invokeEdgeFunction('manage-admin-users', 'PUT', { id }, updates);
+}
+
+export async function deleteAdminUser(id: string) {
+  return invokeEdgeFunction('manage-admin-users', 'DELETE', { id });
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 

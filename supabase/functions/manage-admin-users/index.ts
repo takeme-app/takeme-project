@@ -1,0 +1,210 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "npm:@supabase/supabase-js@2";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+};
+
+function isAdmin(user: { app_metadata?: Record<string, unknown> }): boolean {
+  return user?.app_metadata?.role === "admin";
+}
+
+function jsonRes(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  try {
+    // ── Auth ──────────────────────────────────────────────────────────
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return jsonRes({ error: "Não autorizado" }, 401);
+    }
+    const token = authHeader.replace("Bearer ", "");
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    const userClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+    const { data: { user }, error: userError } = await userClient.auth.getUser(token);
+    if (userError || !user || !isAdmin(user)) {
+      return jsonRes({ error: "Acesso restrito a administradores" }, 403);
+    }
+
+    const admin = createClient(supabaseUrl, serviceRoleKey);
+
+    // ── GET: listar admins ───────────────────────────────────────────
+    if (req.method === "GET") {
+      // Query worker_profiles with role='admin' joined with profiles
+      const { data: admins, error } = await admin
+        .from("worker_profiles")
+        .select("id, role, subtype, status, created_at")
+        .eq("role", "admin");
+
+      if (error) return jsonRes({ error: "Erro ao listar admins", details: error.message }, 500);
+
+      const adminIds = (admins || []).map((a: any) => a.id);
+      if (adminIds.length === 0) return jsonRes([]);
+
+      // Get profiles for names
+      const { data: profiles } = await admin
+        .from("profiles")
+        .select("id, full_name, phone, avatar_url")
+        .in("id", adminIds);
+
+      // Get emails from auth.users
+      const { data: { users: authUsers } } = await admin.auth.admin.listUsers();
+      const emailMap: Record<string, string> = {};
+      (authUsers || []).forEach((u: any) => {
+        if (adminIds.includes(u.id)) emailMap[u.id] = u.email || "";
+      });
+
+      // Get permissions from user_preferences
+      const { data: prefs } = await admin
+        .from("user_preferences")
+        .select("user_id, value")
+        .in("user_id", adminIds)
+        .eq("key", "admin_permissions");
+
+      const profileMap: Record<string, any> = {};
+      (profiles || []).forEach((p: any) => { profileMap[p.id] = p; });
+      const permMap: Record<string, any> = {};
+      (prefs || []).forEach((p: any) => { permMap[p.user_id] = p.value; });
+
+      const result = (admins || []).map((a: any) => ({
+        id: a.id,
+        full_name: profileMap[a.id]?.full_name || "Sem nome",
+        email: emailMap[a.id] || "",
+        phone: profileMap[a.id]?.phone || null,
+        avatar_url: profileMap[a.id]?.avatar_url || null,
+        nivel: a.subtype === "admin" ? "Administrador" : a.subtype,
+        status: a.status,
+        permissions: permMap[a.id] || {},
+        created_at: a.created_at,
+      }));
+
+      return jsonRes(result);
+    }
+
+    // ── POST: criar novo admin ───────────────────────────────────────
+    if (req.method === "POST") {
+      const body = await req.json() as {
+        email: string;
+        password?: string;
+        full_name: string;
+        permissions?: Record<string, boolean>;
+      };
+
+      if (!body.email?.trim() || !body.full_name?.trim()) {
+        return jsonRes({ error: "email e full_name são obrigatórios" }, 400);
+      }
+
+      // Create auth user with admin role
+      const password = body.password || Math.random().toString(36).slice(2) + "Aa1!";
+      const { data: newUser, error: createErr } = await admin.auth.admin.createUser({
+        email: body.email.trim(),
+        password,
+        email_confirm: true,
+        app_metadata: { role: "admin" },
+        user_metadata: { full_name: body.full_name.trim() },
+      });
+
+      if (createErr) {
+        return jsonRes({ error: "Erro ao criar usuário", details: createErr.message }, 400);
+      }
+
+      // The handle_new_user trigger creates profiles row automatically.
+      // Now create worker_profiles row
+      const { error: wpErr } = await admin
+        .from("worker_profiles")
+        .insert({
+          id: newUser.user.id,
+          role: "admin",
+          subtype: "admin",
+          status: "approved",
+          cpf: "",
+        });
+
+      if (wpErr) {
+        console.error("[manage-admin-users] worker_profiles insert:", wpErr);
+      }
+
+      // Save permissions
+      if (body.permissions && Object.keys(body.permissions).length > 0) {
+        await admin.from("user_preferences").upsert({
+          user_id: newUser.user.id,
+          key: "admin_permissions",
+          value: body.permissions,
+        });
+      }
+
+      return jsonRes({ ok: true, user_id: newUser.user.id, temporary_password: password }, 201);
+    }
+
+    // ── PUT: atualizar admin ─────────────────────────────────────────
+    if (req.method === "PUT") {
+      const url = new URL(req.url);
+      const adminId = url.searchParams.get("id");
+      if (!adminId) return jsonRes({ error: "id é obrigatório" }, 400);
+
+      const body = await req.json() as {
+        permissions?: Record<string, boolean>;
+        status?: string;
+      };
+
+      if (body.permissions) {
+        await admin.from("user_preferences").upsert({
+          user_id: adminId,
+          key: "admin_permissions",
+          value: body.permissions,
+        });
+      }
+
+      if (body.status) {
+        await admin
+          .from("worker_profiles")
+          .update({ status: body.status })
+          .eq("id", adminId)
+          .eq("role", "admin");
+      }
+
+      return jsonRes({ ok: true });
+    }
+
+    // ── DELETE: desativar admin ───────────────────────────────────────
+    if (req.method === "DELETE") {
+      const url = new URL(req.url);
+      const adminId = url.searchParams.get("id");
+      if (!adminId) return jsonRes({ error: "id é obrigatório" }, 400);
+
+      // Don't allow deleting yourself
+      if (adminId === user.id) {
+        return jsonRes({ error: "Não é possível desativar seu próprio usuário" }, 400);
+      }
+
+      await admin
+        .from("worker_profiles")
+        .update({ status: "suspended" })
+        .eq("id", adminId)
+        .eq("role", "admin");
+
+      return jsonRes({ ok: true });
+    }
+
+    return jsonRes({ error: "Método não suportado" }, 405);
+  } catch (err) {
+    console.error("[manage-admin-users]", err);
+    return jsonRes({ error: "Erro interno" }, 500);
+  }
+});
