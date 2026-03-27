@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -8,6 +8,9 @@ import {
   Modal,
   ActivityIndicator,
 } from 'react-native';
+
+let Location: any = null;
+try { Location = require('expo-location'); } catch { /* expo-location not available */ }
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -53,6 +56,8 @@ function formatTime(iso: string | null): string {
   } catch { return '—'; }
 }
 
+type Promotion = { id: string; title: string; description: string };
+
 export function HomeEncomendasScreen() {
   const [preparadorName, setPreparadorName] = useState('Preparador');
   const [gpsEnabled, setGpsEnabled] = useState(false);
@@ -63,6 +68,8 @@ export function HomeEncomendasScreen() {
   const [accepted, setAccepted] = useState<string[]>([]);
   const [actioning, setActioning] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [promoModal, setPromoModal] = useState<Promotion | null>(null);
+  const locationSubRef = useRef<any>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -121,10 +128,40 @@ export function HomeEncomendasScreen() {
       });
     }
     setSolicitacoes(list);
+
+    // Busca promoção ativa para preparador_encomendas
+    try {
+      const { data: promoData } = await supabase
+        .from('promotions')
+        .select('id, title, description')
+        .eq('is_active', true)
+        .eq('target_type', 'preparador_encomendas')
+        .maybeSingle();
+      if (promoData) setPromoModal(promoData as Promotion);
+    } catch { /* tabela pode não existir */ }
+
     setLoading(false);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const handleGpsToggle = useCallback(async (val: boolean) => {
+    if (val) {
+      if (Location) {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+        locationSubRef.current = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy?.Balanced ?? 4, distanceInterval: 20 },
+          () => {},
+        );
+      }
+      setGpsEnabled(true);
+    } else {
+      locationSubRef.current?.remove();
+      locationSubRef.current = null;
+      setGpsEnabled(false);
+    }
+  }, []);
 
   const toggleExpand = useCallback((id: string) => {
     setSolicitacoes((prev) => prev.map((s) => (s.id === id ? { ...s, expanded: !s.expanded } : s)));
@@ -169,7 +206,7 @@ export function HomeEncomendasScreen() {
                 <Text style={styles.actionDesc}>{gpsEnabled ? 'Localização ativa' : 'Ativar localização'}</Text>
               </View>
             </View>
-            <Switch value={gpsEnabled} onValueChange={setGpsEnabled} trackColor={{ false: '#E5E7EB', true: '#111827' }} thumbColor="#FFFFFF" />
+            <Switch value={gpsEnabled} onValueChange={handleGpsToggle} trackColor={{ false: '#E5E7EB', true: '#111827' }} thumbColor="#FFFFFF" />
           </View>
           <View style={styles.sep} />
           <View style={styles.actionRow}>
@@ -264,6 +301,25 @@ export function HomeEncomendasScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Modal de promoção */}
+      <Modal visible={!!promoModal} transparent animationType="fade">
+        <View style={styles.promoBackdrop}>
+          <View style={styles.promoCard}>
+            <View style={styles.promoIconWrap}>
+              <Text style={styles.promoEmoji}>🎁</Text>
+            </View>
+            <Text style={styles.promoTitle}>{promoModal?.title ?? 'Bônus de Feriado!'}</Text>
+            <Text style={styles.promoDesc}>{promoModal?.description ?? '+15% de bônus em todas as entregas realizadas no feriado.'}</Text>
+            <TouchableOpacity style={styles.promoBtnPrimary} onPress={() => setPromoModal(null)} activeOpacity={0.85}>
+              <Text style={styles.promoBtnPrimaryText}>Estou ciente</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.promoBtnSecondary} onPress={() => setPromoModal(null)} activeOpacity={0.7}>
+              <Text style={styles.promoBtnSecondaryText}>Agora não</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -315,4 +371,22 @@ const styles = StyleSheet.create({
   modalBtnCancelText: { fontSize: 15, fontWeight: '600', color: '#374151' },
   modalBtnConfirm: { flex: 1, backgroundColor: '#111827', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   modalBtnConfirmText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  // Promoção
+  promoBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  promoCard: {
+    width: '85%', backgroundColor: '#FFFFFF', borderRadius: 24,
+    padding: 28, alignItems: 'center',
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 20, elevation: 14,
+  },
+  promoIconWrap: {
+    width: 80, height: 80, borderRadius: 40, backgroundColor: '#FEF3C7',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 16,
+  },
+  promoEmoji: { fontSize: 40 },
+  promoTitle: { fontSize: 20, fontWeight: '800', color: '#111827', textAlign: 'center', marginBottom: 10 },
+  promoDesc: { fontSize: 14, color: '#6B7280', textAlign: 'center', lineHeight: 22, marginBottom: 24 },
+  promoBtnPrimary: { width: '100%', backgroundColor: '#C9A227', borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginBottom: 10 },
+  promoBtnPrimaryText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  promoBtnSecondary: { paddingVertical: 8 },
+  promoBtnSecondaryText: { fontSize: 14, color: '#9CA3AF' },
 });

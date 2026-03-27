@@ -109,7 +109,7 @@ export function ConversationsScreen({ navigation }: Props) {
           <MaterialIcons name="arrow-back" size={22} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Conversas</Text>
-        <View style={styles.iconBtn} />
+        <View style={{ width: 40 }} />
       </View>
 
       <View style={styles.tabBar}>
@@ -133,7 +133,15 @@ export function ConversationsScreen({ navigation }: Props) {
         <ScrollView showsVerticalScrollIndicator={false}>
           {active.map((item, i) => (
             <View key={item.id}>
-              <TouchableOpacity style={styles.row} activeOpacity={0.75}>
+              <TouchableOpacity
+              style={styles.row}
+              activeOpacity={0.75}
+              onPress={() => navigation.navigate('Chat', {
+                conversationId: item.id,
+                participantName: item.participant_name ?? undefined,
+                participantAvatar: item.participant_avatar ?? undefined,
+              })}
+            >
                 {renderAvatar(item)}
                 <View style={styles.rowContent}>
                   <View style={styles.rowTop}>

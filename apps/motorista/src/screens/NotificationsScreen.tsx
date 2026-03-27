@@ -129,7 +129,7 @@ export function NotificationsScreen({ navigation }: Props) {
           <MaterialIcons name="arrow-back" size={22} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Notificações</Text>
-        <View style={styles.iconBtn} />
+        <View style={{ width: 40 }} />
       </View>
 
       {/* Tabs */}

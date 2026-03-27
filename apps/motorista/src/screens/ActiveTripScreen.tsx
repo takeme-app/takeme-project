@@ -21,11 +21,17 @@ import { MapboxMap, MapboxMarker, MapboxPolyline } from '../components/mapbox';
 import type { LatLng } from '../components/mapbox';
 import { supabase } from '../lib/supabase';
 import { Text } from '../components/Text';
+import { getRouteWithDuration, getMultiPointRoute, formatEta } from '../lib/route';
+
+// expo-location — defensive import (needs native rebuild if just added)
+let Location: any = null;
+try { Location = require('expo-location'); } catch { /* not available yet */ }
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ActiveTrip'>;
 
 const GOLD = '#C9A227';
 const DARK = '#111827';
+const MAP_STYLE = 'mapbox://styles/mapbox/streets-v12';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,6 +49,8 @@ type Stop = {
   lng?: number;
   sourceType: 'booking' | 'shipment';
   sourceId: string;
+  /** Código 4 dígitos que o cliente informará ao motorista (somente shipments) */
+  code: string | null;
 };
 
 type TripRow = {
@@ -73,8 +81,14 @@ type ShipmentRow = {
   notes: string | null;
   origin_address: string;
   destination_address: string;
+  origin_lat: number | null;
+  origin_lng: number | null;
+  destination_lat: number | null;
+  destination_lng: number | null;
   sender_name: string;
   receiver_name: string;
+  pickup_code: string | null;
+  delivery_code: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -113,6 +127,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // State machine
   const [currentStopIndex, setCurrentStopIndex] = useState(0);
 
+  // Routes
+  const [driverRouteCoords, setDriverRouteCoords] = useState<LatLng[]>([]);
+  const [stopsRouteCoords, setStopsRouteCoords] = useState<LatLng[]>([]);
+  const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
+
+  // Driver position
+  const [driverPosition, setDriverPosition] = useState<LatLng | null>(null);
+  const locationSub = useRef<any>(null);
+
   // UI state
   const [detailVisible, setDetailVisible] = useState(false);
   const [confirmPickupVisible, setConfirmPickupVisible] = useState(false);
@@ -138,6 +161,38 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const finalizeSlide = useRef(new Animated.Value(600)).current;
 
   // ---------------------------------------------------------------------------
+  // Location tracking
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    let active = true;
+    async function startLocation() {
+      if (!Location) return;
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+        const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (active) {
+          setDriverPosition({ latitude: current.coords.latitude, longitude: current.coords.longitude });
+        }
+        locationSub.current = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.Balanced, distanceInterval: 20, timeInterval: 10000 },
+          (loc: any) => {
+            if (active) {
+              setDriverPosition({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+            }
+          },
+        );
+      } catch { /* location unavailable */ }
+    }
+    startLocation();
+    return () => {
+      active = false;
+      locationSub.current?.remove?.();
+    };
+  }, []);
+
+  // ---------------------------------------------------------------------------
   // Load data
   // ---------------------------------------------------------------------------
 
@@ -148,9 +203,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         await Promise.all([
           supabase
             .from('scheduled_trips')
-            .select(
-              'id, origin_address, destination_address, departure_at, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, status'
-            )
+            .select('id, origin_address, destination_address, departure_at, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, status')
             .eq('id', tripId)
             .single(),
           supabase
@@ -160,31 +213,31 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             .in('status', ['confirmed', 'paid']),
           supabase
             .from('shipments')
-            .select('id, description, size, notes, origin_address, destination_address, sender_name, receiver_name')
+            .select('id, description, size, notes, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, sender_name, receiver_name, pickup_code, delivery_code')
             .eq('scheduled_trip_id', tripId),
         ]);
 
-      if (tripData) setTrip(tripData as TripRow);
+      const t = tripData as TripRow | null;
+      if (t) setTrip(t);
 
       const builtStops: Stop[] = [];
 
-      // Bookings → one pickup stop each
       for (const b of (bookingsData ?? []) as BookingRow[]) {
         builtStops.push({
           id: `booking-${b.id}`,
           type: 'pickup',
           name: b.profiles?.full_name ?? 'Passageiro',
-          address: (tripData as TripRow | null)?.origin_address ?? '',
+          address: t?.origin_address ?? '',
           rating: b.profiles?.rating ?? undefined,
           bagSize: b.bags_count > 0 ? `${b.bags_count} bag(s)` : undefined,
-          lat: (tripData as TripRow | null)?.origin_lat ?? undefined,
-          lng: (tripData as TripRow | null)?.origin_lng ?? undefined,
+          lat: t?.origin_lat ?? undefined,
+          lng: t?.origin_lng ?? undefined,
           sourceType: 'booking',
           sourceId: b.id,
+          code: null,
         });
       }
 
-      // Shipments → pickup + delivery
       for (const s of (shipmentsData ?? []) as ShipmentRow[]) {
         builtStops.push({
           id: `shipment-pickup-${s.id}`,
@@ -193,10 +246,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           address: s.origin_address,
           notes: s.notes ?? undefined,
           bagSize: s.size ?? undefined,
-          lat: (tripData as TripRow | null)?.origin_lat ?? undefined,
-          lng: (tripData as TripRow | null)?.origin_lng ?? undefined,
+          lat: s.origin_lat ?? t?.origin_lat ?? undefined,
+          lng: s.origin_lng ?? t?.origin_lng ?? undefined,
           sourceType: 'shipment',
           sourceId: s.id,
+          code: s.pickup_code,
         });
         builtStops.push({
           id: `shipment-delivery-${s.id}`,
@@ -205,14 +259,31 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           address: s.destination_address,
           notes: s.notes ?? undefined,
           bagSize: s.size ?? undefined,
-          lat: (tripData as TripRow | null)?.destination_lat ?? undefined,
-          lng: (tripData as TripRow | null)?.destination_lng ?? undefined,
+          lat: s.destination_lat ?? t?.destination_lat ?? undefined,
+          lng: s.destination_lng ?? t?.destination_lng ?? undefined,
           sourceType: 'shipment',
           sourceId: s.id,
+          code: s.delivery_code,
         });
       }
 
       setStops(builtStops);
+
+      // Fetch stops route (full path through all stops)
+      if (t?.origin_lat && t?.origin_lng) {
+        const waypoints: Array<{ latitude: number; longitude: number }> = [];
+        if (t.origin_lat && t.origin_lng) waypoints.push({ latitude: t.origin_lat, longitude: t.origin_lng });
+        for (const s of (shipmentsData ?? []) as ShipmentRow[]) {
+          if (s.origin_lat && s.origin_lng) waypoints.push({ latitude: s.origin_lat, longitude: s.origin_lng });
+          if (s.destination_lat && s.destination_lng) waypoints.push({ latitude: s.destination_lat, longitude: s.destination_lng });
+        }
+        if (t.destination_lat && t.destination_lng) waypoints.push({ latitude: t.destination_lat, longitude: t.destination_lng });
+
+        if (waypoints.length >= 2) {
+          const result = await getMultiPointRoute(waypoints);
+          if (result) setStopsRouteCoords(result.coordinates);
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -222,6 +293,22 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     load();
   }, [load]);
 
+  // Fetch driver-to-current-stop route when driver position or current stop changes
+  useEffect(() => {
+    if (!driverPosition || stops.length === 0) return;
+    const stop = stops[currentStopIndex];
+    if (!stop?.lat || !stop?.lng) return;
+
+    getRouteWithDuration(driverPosition, { latitude: stop.lat, longitude: stop.lng })
+      .then((result) => {
+        if (result) {
+          setDriverRouteCoords(result.coordinates);
+          setEtaSeconds(result.durationSeconds);
+        }
+      })
+      .catch(() => {});
+  }, [driverPosition, currentStopIndex, stops]);
+
   // ---------------------------------------------------------------------------
   // Derived values
   // ---------------------------------------------------------------------------
@@ -230,20 +317,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const totalStops = stops.length;
   const allDone = currentStopIndex >= totalStops && totalStops > 0;
 
-  const mapRegion = {
+  const mapCenter = {
     latitude: trip?.origin_lat ?? -23.5505,
     longitude: trip?.origin_lng ?? -46.6333,
-    latitudeDelta: 0.05,
-    longitudeDelta: 0.05,
+    latitudeDelta: 0.06,
+    longitudeDelta: 0.06,
   };
-
-  const polylineCoords: LatLng[] = [];
-  if (trip?.origin_lat && trip?.origin_lng) {
-    polylineCoords.push({ latitude: trip.origin_lat, longitude: trip.origin_lng });
-  }
-  if (trip?.destination_lat && trip?.destination_lng) {
-    polylineCoords.push({ latitude: trip.destination_lat, longitude: trip.destination_lng });
-  }
 
   // ---------------------------------------------------------------------------
   // Detail sheet animation
@@ -257,7 +336,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
   const closeDetail = () => {
     Animated.timing(detailSlide, { toValue: 600, duration: 250, useNativeDriver: true }).start(() =>
-      setDetailVisible(false)
+      setDetailVisible(false),
     );
   };
 
@@ -269,7 +348,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
   const closeFinalize = () => {
     Animated.timing(finalizeSlide, { toValue: 600, duration: 250, useNativeDriver: true }).start(() =>
-      setFinalizeVisible(false)
+      setFinalizeVisible(false),
     );
   };
 
@@ -277,11 +356,26 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // Actions
   // ---------------------------------------------------------------------------
 
-  const handleConfirmStop = () => {
-    if (confirmCode.trim().length !== 4) {
-      setConfirmError('O código deve ter 4 dígitos.');
-      return;
+  const handleConfirmStop = async () => {
+    if (!currentStop) return;
+
+    if (currentStop.sourceType === 'shipment') {
+      if (confirmCode.trim().length !== 4) {
+        setConfirmError('O código deve ter 4 dígitos.');
+        return;
+      }
+      if (currentStop.code && confirmCode.trim() !== currentStop.code) {
+        setConfirmError('Código incorreto. Verifique com o cliente.');
+        return;
+      }
+      const now = new Date().toISOString();
+      if (currentStop.type === 'pickup') {
+        await supabase.from('shipments').update({ picked_up_at: now } as never).eq('id', currentStop.sourceId);
+      } else {
+        await supabase.from('shipments').update({ delivered_at: now } as never).eq('id', currentStop.sourceId);
+      }
     }
+
     setConfirmError('');
     setConfirmCode('');
     setConfirmPickupVisible(false);
@@ -289,18 +383,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     closeDetail();
     const next = currentStopIndex + 1;
     setCurrentStopIndex(next);
-    if (next >= totalStops) {
-      openFinalize();
-    }
+    if (next >= totalStops) openFinalize();
   };
 
   const handleFinalizeTrip = async () => {
     setFinalizingTrip(true);
     try {
-      await supabase
-        .from('scheduled_trips')
-        .update({ status: 'completed' } as never)
-        .eq('id', tripId);
+      await supabase.from('scheduled_trips').update({ status: 'completed' } as never).eq('id', tripId);
       closeFinalize();
       setCompletedVisible(true);
     } finally {
@@ -311,7 +400,6 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const handleSubmitRating = async () => {
     setSubmittingRating(true);
     try {
-      // Optionally store rating — fire and forget
       if (rating > 0) {
         await supabase.from('trip_ratings' as never).insert({
           trip_id: tripId,
@@ -326,7 +414,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   };
 
   // ---------------------------------------------------------------------------
-  // Loading / empty
+  // Loading
   // ---------------------------------------------------------------------------
 
   if (loading) {
@@ -345,59 +433,92 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     <View style={styles.root}>
       <StatusBar style="dark" />
 
-      {/* Full-screen map */}
-      <MapboxMap style={StyleSheet.absoluteFillObject} initialRegion={mapRegion}>
-        {polylineCoords.length >= 2 && (
-          <MapboxPolyline coordinates={polylineCoords} strokeColor={GOLD} strokeWidth={4} />
+      {/* ── Full-screen Mapbox map ───────────────────────────── */}
+      <MapboxMap
+        style={StyleSheet.absoluteFillObject}
+        initialRegion={mapCenter}
+        styleURL={MAP_STYLE}
+      >
+        {/* Route from driver to current stop (dark) */}
+        {driverRouteCoords.length >= 2 && (
+          <MapboxPolyline id="driver" coordinates={driverRouteCoords} strokeColor={DARK} strokeWidth={3} />
         )}
 
-        {stops.map((stop, idx) => {
-          const lat = stop.lat ?? mapRegion.latitude;
-          const lng = stop.lng ?? mapRegion.longitude;
-          const isCompleted = idx < currentStopIndex;
-          const isCurrent = idx === currentStopIndex;
-          const markerBg = isCompleted ? DARK : GOLD;
+        {/* Full route between stops (gold) */}
+        {stopsRouteCoords.length >= 2 && (
+          <MapboxPolyline id="stops" coordinates={stopsRouteCoords} strokeColor={GOLD} strokeWidth={5} />
+        )}
 
+        {/* Fallback straight line if no OSRM route yet */}
+        {stopsRouteCoords.length < 2 && trip?.origin_lat && trip?.destination_lat && (
+          <MapboxPolyline
+            id="fallback"
+            coordinates={[
+              { latitude: trip.origin_lat, longitude: trip.origin_lng! },
+              { latitude: trip.destination_lat, longitude: trip.destination_lng! },
+            ]}
+            strokeColor={GOLD}
+            strokeWidth={4}
+          />
+        )}
+
+        {/* Stop markers */}
+        {stops.map((stop, idx) => {
+          const lat = stop.lat ?? mapCenter.latitude;
+          const lng = stop.lng ?? mapCenter.longitude;
+          const isCompleted = idx < currentStopIndex;
+          const markerBg = isCompleted ? '#374151' : GOLD;
           return (
             <MapboxMarker
               key={stop.id}
               id={stop.id}
-              coordinate={{ latitude: lat + idx * 0.001, longitude: lng + idx * 0.0005 }}
+              coordinate={{ latitude: lat + idx * 0.0015, longitude: lng + idx * 0.0008 }}
               anchor={{ x: 0.5, y: 0.5 }}
             >
               <View style={[styles.mapMarker, { backgroundColor: markerBg }]}>
                 {isCompleted ? (
-                  <MaterialIcons name="check" size={16} color="#fff" />
-                ) : isCurrent ? (
-                  <MaterialIcons name="play-arrow" size={16} color="#fff" />
+                  <MaterialIcons name="check" size={18} color="#fff" />
                 ) : stop.sourceType === 'booking' ? (
-                  <MaterialIcons name="person" size={16} color="#fff" />
+                  <MaterialIcons name="person" size={18} color="#fff" />
                 ) : (
-                  <MaterialIcons name="inbox" size={16} color="#fff" />
+                  <MaterialIcons name="inventory-2" size={18} color="#fff" />
                 )}
               </View>
             </MapboxMarker>
           );
         })}
+
+        {/* Driver position marker */}
+        {driverPosition && (
+          <MapboxMarker
+            id="driver"
+            coordinate={driverPosition}
+            anchor={{ x: 0.5, y: 0.5 }}
+          >
+            <View style={styles.driverPulse}>
+              <View style={styles.driverMarker}>
+                <MaterialIcons name="play-arrow" size={18} color="#fff" />
+              </View>
+            </View>
+          </MapboxMarker>
+        )}
       </MapboxMap>
 
-      {/* Safe area wrapper so back button doesn't clip */}
-      <SafeAreaView edges={[]} style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
+      {/* ── Overlay UI ──────────────────────────────────────── */}
+      <SafeAreaView edges={['top', 'bottom']} style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
+
         {/* Left sidebar */}
         <View style={styles.sidebar}>
           {stops.map((stop, idx) => {
             const isCompleted = idx < currentStopIndex;
             const isCurrent = idx === currentStopIndex;
-            const btnBg = isCompleted ? DARK : GOLD;
-            const opacity = !isCompleted && !isCurrent ? 0.6 : 1;
-
+            const btnBg = isCompleted ? '#374151' : GOLD;
+            const opacity = !isCompleted && !isCurrent ? 0.5 : 1;
             return (
               <TouchableOpacity
                 key={stop.id}
                 style={[styles.sidebarBtn, { backgroundColor: btnBg, opacity }]}
-                onPress={() => {
-                  if (idx === currentStopIndex) openDetail();
-                }}
+                onPress={() => { if (idx === currentStopIndex) openDetail(); }}
                 activeOpacity={0.8}
               >
                 {isCompleted ? (
@@ -405,58 +526,54 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 ) : stop.sourceType === 'booking' ? (
                   <MaterialIcons name="person" size={20} color="#fff" />
                 ) : (
-                  <MaterialIcons name="inbox" size={20} color="#fff" />
+                  <MaterialIcons name="inventory-2" size={20} color="#fff" />
                 )}
               </TouchableOpacity>
             );
           })}
         </View>
 
-        {/* Mini bottom sheet */}
+        {/* Mini bottom card */}
         {currentStop && !detailVisible && (
           <TouchableOpacity style={styles.miniSheet} onPress={openDetail} activeOpacity={0.95}>
             <View style={styles.handle} />
 
             <View style={styles.miniSheetTopRow}>
-              {/* Stop type pill */}
               <View style={styles.stopTypePill}>
                 <View style={styles.stopTypeDot} />
                 <Text style={styles.stopTypePillText}>
                   {currentStop.type === 'pickup' ? 'Coleta' : 'Entrega'}
                 </Text>
               </View>
-
-              {/* ETA badge */}
-              <View style={styles.etaBadge}>
-                <Text style={styles.etaBadgeText}>~12 min</Text>
-              </View>
+              {etaSeconds !== null && (
+                <View style={styles.etaBadge}>
+                  <Text style={styles.etaBadgeText}>{formatEta(etaSeconds)}</Text>
+                </View>
+              )}
             </View>
 
             <Text style={styles.miniSheetName}>{currentStop.name}</Text>
 
             <View style={styles.addressRow}>
               <MaterialIcons name="location-on" size={14} color="#6B7280" />
-              <Text style={styles.addressText} numberOfLines={1}>
-                {currentStop.address}
-              </Text>
+              <Text style={styles.addressText} numberOfLines={1}>{currentStop.address}</Text>
             </View>
 
-            {/* Progress bar */}
-            <View style={styles.progressBarContainer}>
-              <View
-                style={[
-                  styles.progressBarFill,
-                  { width: `${((currentStopIndex + 1) / totalStops) * 100}%` },
-                ]}
-              />
+            <View style={styles.progressRow}>
+              <View style={styles.progressBarContainer}>
+                <View
+                  style={[
+                    styles.progressBarFill,
+                    { width: `${((currentStopIndex + 1) / Math.max(totalStops, 1)) * 100}%` as any },
+                  ]}
+                />
+              </View>
+              <Text style={styles.progressText}>{currentStopIndex + 1}/{totalStops}</Text>
             </View>
-            <Text style={styles.progressText}>
-              {currentStopIndex + 1}/{totalStops}
-            </Text>
           </TouchableOpacity>
         )}
 
-        {/* All done floating button */}
+        {/* All done float button */}
         {allDone && !finalizeVisible && !completedVisible && (
           <TouchableOpacity style={styles.finalizeFloatBtn} onPress={openFinalize} activeOpacity={0.85}>
             <Text style={styles.finalizeFloatBtnText}>Finalizar viagem</Text>
@@ -464,21 +581,18 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         )}
       </SafeAreaView>
 
-      {/* Detail bottom sheet modal */}
+      {/* ── Detail bottom sheet ─────────────────────────────── */}
       <Modal visible={detailVisible} transparent animationType="none" onRequestClose={closeDetail}>
         <Pressable style={styles.overlay} onPress={closeDetail} />
         <Animated.View style={[styles.detailSheet, { transform: [{ translateY: detailSlide }] }]}>
           <View style={styles.handle} />
 
-          {/* Top row */}
           <View style={styles.detailTopRow}>
             <TouchableOpacity style={styles.iconCircleBtn} onPress={closeDetail} activeOpacity={0.7}>
               <MaterialIcons name="close" size={20} color={DARK} />
             </TouchableOpacity>
             <Text style={styles.detailTitle}>
-              {currentStop?.type === 'pickup'
-                ? 'Detalhes da coleta'
-                : `Entrega para ${currentStop?.name ?? ''}`}
+              {currentStop?.type === 'pickup' ? 'Detalhes da coleta' : `Entrega para ${currentStop?.name ?? ''}`}
             </Text>
             <TouchableOpacity style={styles.iconCircleBtn} activeOpacity={0.7}>
               <MaterialIcons name="phone" size={20} color={DARK} />
@@ -487,19 +601,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.detailScroll}>
             {currentStop?.type === 'pickup' ? (
-              /* ---- PICKUP detail ---- */
               <>
-                {/* Avatar */}
                 <View style={styles.avatarCenter}>
                   <View style={styles.avatarCircle}>
-                    <Text style={styles.avatarInitials}>
-                      {getInitials(currentStop?.name ?? '?')}
-                    </Text>
+                    <Text style={styles.avatarInitials}>{getInitials(currentStop?.name ?? '?')}</Text>
                   </View>
                 </View>
-
                 <Text style={styles.detailName}>{currentStop?.name}</Text>
-
                 <View style={styles.detailMetaRow}>
                   {currentStop?.rating !== undefined && (
                     <>
@@ -511,72 +619,49 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                     <Text style={styles.detailMetaText}> · {currentStop.bagSize}</Text>
                   )}
                 </View>
-
                 <Text style={styles.detailLabel}>Endereço da coleta</Text>
                 <Text style={styles.detailValue}>{currentStop?.address}</Text>
-
                 {currentStop?.notes ? (
                   <>
                     <Text style={styles.detailLabel}>Observações</Text>
                     <Text style={styles.detailValue}>{currentStop.notes}</Text>
                   </>
                 ) : null}
-
                 <TouchableOpacity
                   style={styles.actionBtn}
-                  onPress={() => {
-                    setConfirmCode('');
-                    setConfirmError('');
-                    setConfirmPickupVisible(true);
-                  }}
+                  onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmPickupVisible(true); }}
                   activeOpacity={0.85}
                 >
                   <Text style={styles.actionBtnText}>Iniciar coleta</Text>
                 </TouchableOpacity>
-
                 <TouchableOpacity style={styles.cancelBtn} activeOpacity={0.7}>
                   <Text style={styles.cancelBtnText}>Cancelar coleta</Text>
                 </TouchableOpacity>
               </>
             ) : (
-              /* ---- DELIVERY detail ---- */
               <>
-                {/* Package icon */}
                 <View style={styles.avatarCenter}>
                   <View style={[styles.avatarCircle, { backgroundColor: GOLD }]}>
-                    <MaterialIcons name="inbox" size={28} color="#fff" />
+                    <MaterialIcons name="inventory-2" size={26} color="#fff" />
                   </View>
                 </View>
-
-                <View style={styles.deliveryNamesRow}>
-                  <Text style={styles.detailName}>{currentStop?.sourceId ? 'Remetente' : ''}</Text>
-                </View>
-
                 <View style={styles.deliveryArrowRow}>
                   <Text style={styles.deliveryNameText}>
-                    {/* Show sender → receiver. We store receiver in "name" for delivery stops */}
                     {'Destinatário: '}
                     <Text style={{ fontWeight: '700' }}>{currentStop?.name}</Text>
                   </Text>
                 </View>
-
                 <Text style={styles.detailLabel}>Local de entrega</Text>
                 <Text style={styles.detailValue}>{currentStop?.address}</Text>
-
                 {currentStop?.notes ? (
                   <>
                     <Text style={styles.detailLabel}>Observações</Text>
                     <Text style={styles.detailValue}>{currentStop.notes}</Text>
                   </>
                 ) : null}
-
                 <TouchableOpacity
                   style={styles.actionBtn}
-                  onPress={() => {
-                    setConfirmCode('');
-                    setConfirmError('');
-                    setConfirmDeliveryVisible(true);
-                  }}
+                  onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmDeliveryVisible(true); }}
                   activeOpacity={0.85}
                 >
                   <Text style={styles.actionBtnText}>Confirmar entrega</Text>
@@ -587,42 +672,43 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         </Animated.View>
       </Modal>
 
-      {/* Confirm Pickup modal */}
-      <Modal visible={confirmPickupVisible} transparent animationType="fade" onRequestClose={() => setConfirmPickupVisible(false)}>
+      {/* ── Confirm Pickup ──────────────────────────────────── */}
+      <Modal
+        visible={confirmPickupVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfirmPickupVisible(false)}
+      >
         <View style={styles.centeredModalOverlay}>
           <View style={styles.centeredModal}>
             <Text style={styles.centeredModalTitle}>Confirmar coleta</Text>
             <Text style={styles.centeredModalSubtitle}>
-              Insira o código informado pelo passageiro para confirmar a coleta.
+              {currentStop?.sourceType === 'shipment'
+                ? 'Insira o código de 4 dígitos informado pelo remetente.'
+                : 'Confirme a coleta do passageiro.'}
             </Text>
-
-            <Text style={styles.fieldLabel}>Código de coleta</Text>
-            <TextInput
-              style={styles.codeInput}
-              value={confirmCode}
-              onChangeText={(v) => {
-                setConfirmCode(v.replace(/\D/g, '').slice(0, 4));
-                setConfirmError('');
-              }}
-              keyboardType="numeric"
-              maxLength={4}
-              placeholder="0000"
-              placeholderTextColor="#9CA3AF"
-              textAlign="center"
-            />
+            {currentStop?.sourceType === 'shipment' && (
+              <>
+                <Text style={styles.fieldLabel}>Código de coleta</Text>
+                <TextInput
+                  style={styles.codeInput}
+                  value={confirmCode}
+                  onChangeText={(v) => { setConfirmCode(v.replace(/\D/g, '').slice(0, 4)); setConfirmError(''); }}
+                  keyboardType="numeric"
+                  maxLength={4}
+                  placeholder="0000"
+                  placeholderTextColor="#9CA3AF"
+                  textAlign="center"
+                />
+              </>
+            )}
             {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
-
             <TouchableOpacity style={styles.actionBtn} onPress={handleConfirmStop} activeOpacity={0.85}>
               <Text style={styles.actionBtnText}>Confirmar coleta</Text>
             </TouchableOpacity>
-
             <TouchableOpacity
               style={styles.cancelBtn}
-              onPress={() => {
-                setConfirmCode('');
-                setConfirmError('');
-                setConfirmPickupVisible(false);
-              }}
+              onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmPickupVisible(false); }}
               activeOpacity={0.7}
             >
               <Text style={styles.cancelBtnText}>Voltar</Text>
@@ -631,23 +717,24 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         </View>
       </Modal>
 
-      {/* Confirm Delivery modal */}
-      <Modal visible={confirmDeliveryVisible} transparent animationType="fade" onRequestClose={() => setConfirmDeliveryVisible(false)}>
+      {/* ── Confirm Delivery ────────────────────────────────── */}
+      <Modal
+        visible={confirmDeliveryVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfirmDeliveryVisible(false)}
+      >
         <View style={styles.centeredModalOverlay}>
           <View style={styles.centeredModal}>
             <Text style={styles.centeredModalTitle}>Confirmar entrega</Text>
             <Text style={styles.centeredModalSubtitle}>
               Insira o código informado pelo cliente para confirmar a entrega.
             </Text>
-
             <Text style={styles.fieldLabel}>Código de entrega</Text>
             <TextInput
               style={styles.codeInput}
               value={confirmCode}
-              onChangeText={(v) => {
-                setConfirmCode(v.replace(/\D/g, '').slice(0, 4));
-                setConfirmError('');
-              }}
+              onChangeText={(v) => { setConfirmCode(v.replace(/\D/g, '').slice(0, 4)); setConfirmError(''); }}
               keyboardType="numeric"
               maxLength={4}
               placeholder="0000"
@@ -655,18 +742,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               textAlign="center"
             />
             {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
-
             <TouchableOpacity style={styles.actionBtn} onPress={handleConfirmStop} activeOpacity={0.85}>
               <Text style={styles.actionBtnText}>Confirmar entrega</Text>
             </TouchableOpacity>
-
             <TouchableOpacity
               style={styles.cancelBtn}
-              onPress={() => {
-                setConfirmCode('');
-                setConfirmError('');
-                setConfirmDeliveryVisible(false);
-              }}
+              onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmDeliveryVisible(false); }}
               activeOpacity={0.7}
             >
               <Text style={styles.cancelBtnText}>Voltar</Text>
@@ -675,12 +756,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         </View>
       </Modal>
 
-      {/* Finalize Trip modal (bottom sheet style) */}
+      {/* ── Finalize Trip sheet ─────────────────────────────── */}
       <Modal visible={finalizeVisible} transparent animationType="none" onRequestClose={closeFinalize}>
         <Pressable style={styles.overlay} onPress={closeFinalize} />
         <Animated.View style={[styles.detailSheet, { transform: [{ translateY: finalizeSlide }] }]}>
           <View style={styles.handle} />
-
           <Text style={styles.detailTitle}>Finalizar viagem</Text>
 
           <View style={styles.finalizeSummaryCard}>
@@ -693,7 +773,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             <View style={styles.finalizeDivider} />
             <View style={styles.finalizeSummaryRow}>
               <Text style={styles.finalizeSummaryLabel}>Distância</Text>
-              <Text style={styles.finalizeSummaryValue}>18.4 km</Text>
+              <Text style={styles.finalizeSummaryValue}>
+                {stopsRouteCoords.length >= 2 ? `~${Math.round(stopsRouteCoords.length * 0.02)} km` : '—'}
+              </Text>
             </View>
             <View style={styles.finalizeDivider} />
             <View style={styles.finalizeSummaryRow}>
@@ -705,17 +787,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             </View>
           </View>
 
-          {/* Expense attachment */}
           <TouchableOpacity
             style={[styles.expenseBox, expenseAttached && styles.expenseBoxAttached]}
             onPress={() => setExpenseAttached(!expenseAttached)}
             activeOpacity={0.8}
           >
-            <MaterialIcons
-              name="description"
-              size={24}
-              color={expenseAttached ? GOLD : '#9CA3AF'}
-            />
+            <MaterialIcons name="description" size={24} color={expenseAttached ? GOLD : '#9CA3AF'} />
             <Text style={[styles.expenseText, expenseAttached && { color: GOLD }]}>
               {expenseAttached ? 'Despesa anexada' : 'Clique para anexar'}
             </Text>
@@ -737,22 +814,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         </Animated.View>
       </Modal>
 
-      {/* Trip Completed overlay */}
+      {/* ── Trip Completed overlay ──────────────────────────── */}
       <Modal visible={completedVisible} transparent={false} animationType="fade" onRequestClose={() => {}}>
         <SafeAreaView style={styles.completedContainer} edges={[]}>
           <StatusBar style="dark" />
           <ScrollView contentContainerStyle={styles.completedScroll} showsVerticalScrollIndicator={false}>
-            {/* Success icon */}
             <View style={styles.completedIconCircle}>
               <MaterialIcons name="check" size={40} color="#fff" />
             </View>
-
             <Text style={styles.completedTitle}>Viagem Concluída!</Text>
-            <Text style={styles.completedSubtitle}>
-              Todas as entregas foram realizadas com sucesso
-            </Text>
+            <Text style={styles.completedSubtitle}>Todas as entregas foram realizadas com sucesso</Text>
 
-            {/* Stats */}
             <View style={styles.completedStatsRow}>
               <View style={styles.completedStatItem}>
                 <Text style={styles.completedStatValue}>
@@ -762,8 +834,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               </View>
               <View style={styles.completedStatDivider} />
               <View style={styles.completedStatItem}>
-                <Text style={styles.completedStatValue}>18.4 km</Text>
-                <Text style={styles.completedStatLabel}>Distância percorrida</Text>
+                <Text style={styles.completedStatValue}>{totalStops}</Text>
+                <Text style={styles.completedStatLabel}>Paradas</Text>
               </View>
               <View style={styles.completedStatDivider} />
               <View style={styles.completedStatItem}>
@@ -776,7 +848,6 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               </View>
             </View>
 
-            {/* Rating */}
             <Text style={styles.ratingQuestion}>Como foi a viagem?</Text>
             <View style={styles.starsRow}>
               {[1, 2, 3, 4, 5].map((star) => (
@@ -830,43 +901,84 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' },
 
-  // Map markers
+  // ── Map markers ──────────────────────────────────────────
   mapMarker: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
     borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 4,
   },
 
-  // Left sidebar
-  sidebar: {
-    position: 'absolute',
-    left: 12,
-    top: 80,
-    gap: 8,
-  },
-  sidebarBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 8,
+  // Driver marker
+  driverPulse: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(17,24,39,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  driverMarker: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: DARK,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2.5,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 6,
+  },
 
-  // Mini bottom sheet
+  // ── Left sidebar ─────────────────────────────────────────
+  sidebar: {
+    position: 'absolute',
+    left: 14,
+    top: 100,
+    gap: 8,
+  },
+  sidebarBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+
+  // ── Mini bottom sheet ─────────────────────────────────────
   miniSheet: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
     backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    paddingBottom: 36,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 28,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 8,
   },
   handle: {
     width: 40,
@@ -874,27 +986,27 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: '#D1D5DB',
     alignSelf: 'center',
-    marginBottom: 12,
+    marginBottom: 14,
   },
   miniSheetTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 10,
   },
   stopTypePill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     backgroundColor: '#FEF9C3',
-    borderRadius: 12,
+    borderRadius: 20,
   },
   stopTypeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
     backgroundColor: GOLD,
   },
   stopTypePillText: {
@@ -904,51 +1016,59 @@ const styles = StyleSheet.create({
   },
   etaBadge: {
     backgroundColor: DARK,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
   },
   etaBadgeText: {
     color: '#fff',
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '700',
   },
   miniSheetName: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: '700',
     color: DARK,
-    marginBottom: 4,
+    marginBottom: 6,
   },
   addressRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    marginBottom: 0,
   },
   addressText: {
     fontSize: 13,
     color: '#6B7280',
     flex: 1,
   },
+  progressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 14,
+  },
   progressBarContainer: {
-    height: 4,
+    flex: 1,
+    height: 6,
     backgroundColor: '#E5E7EB',
-    borderRadius: 2,
-    marginTop: 12,
+    borderRadius: 3,
     overflow: 'hidden',
   },
   progressBarFill: {
-    height: 4,
-    borderRadius: 2,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: GOLD,
   },
   progressText: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginTop: 4,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+    minWidth: 28,
     textAlign: 'right',
   },
 
-  // Finalize float button (when all stops done)
+  // ── Finalize float button ────────────────────────────────
   finalizeFloatBtn: {
     position: 'absolute',
     bottom: 36,
@@ -965,13 +1085,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // Overlay
+  // ── Overlay ───────────────────────────────────────────────
   overlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.5)',
   },
 
-  // Detail / Finalize bottom sheet
+  // ── Detail / Finalize sheet ───────────────────────────────
   detailSheet: {
     position: 'absolute',
     bottom: 0,
@@ -1005,295 +1125,156 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  detailScroll: {
-    paddingBottom: 16,
-  },
-  avatarCenter: {
-    alignItems: 'center',
-    marginBottom: 12,
-  },
+  detailScroll: { paddingBottom: 16 },
+  avatarCenter: { alignItems: 'center', marginBottom: 12 },
   avatarCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     backgroundColor: '#7C3AED',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarInitials: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  detailName: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: DARK,
-    textAlign: 'center',
-    marginBottom: 4,
-  },
+  avatarInitials: { color: '#fff', fontSize: 20, fontWeight: '700' },
+  detailName: { fontSize: 20, fontWeight: '700', color: DARK, textAlign: 'center', marginBottom: 6 },
   detailMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
-    marginBottom: 16,
+    gap: 4,
+    marginBottom: 20,
   },
-  detailMetaText: {
-    fontSize: 13,
-    color: '#6B7280',
-  },
-  detailLabel: {
-    fontSize: 13,
-    color: '#6B7280',
-    fontWeight: '600',
-    marginTop: 12,
-    marginBottom: 4,
-  },
-  detailValue: {
-    fontSize: 15,
-    color: DARK,
-    lineHeight: 22,
-  },
-  deliveryNamesRow: {
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  deliveryArrowRow: {
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  deliveryNameText: {
-    fontSize: 15,
-    color: '#374151',
-  },
-
-  // Action buttons
+  detailMetaText: { fontSize: 14, color: '#6B7280' },
+  detailLabel: { fontSize: 12, color: '#9CA3AF', marginTop: 14, marginBottom: 4, fontWeight: '600' },
+  detailValue: { fontSize: 15, color: DARK, fontWeight: '500' },
+  deliveryArrowRow: { alignItems: 'center', marginBottom: 16 },
+  deliveryNameText: { fontSize: 15, color: '#6B7280', textAlign: 'center' },
   actionBtn: {
     backgroundColor: DARK,
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: 'center',
-    marginTop: 16,
+    marginTop: 20,
   },
-  actionBtnText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
+  actionBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   cancelBtn: {
-    alignItems: 'center',
+    borderRadius: 14,
     paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 8,
   },
-  cancelBtnText: {
-    color: '#EF4444',
-    fontSize: 15,
-    fontWeight: '600',
-  },
+  cancelBtnText: { color: '#EF4444', fontSize: 15, fontWeight: '600' },
 
-  // Centered confirm modals
+  // ── Centered modal ────────────────────────────────────────
   centeredModalOverlay: {
     flex: 1,
-    justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
   },
   centeredModal: {
     backgroundColor: '#fff',
-    borderRadius: 16,
+    borderRadius: 20,
     padding: 24,
+    width: '100%',
+    maxWidth: 360,
   },
-  centeredModalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: DARK,
-    marginBottom: 8,
-  },
-  centeredModalSubtitle: {
-    fontSize: 14,
-    color: '#6B7280',
-    marginBottom: 4,
-    lineHeight: 20,
-  },
-  fieldLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: DARK,
-    marginTop: 12,
-    marginBottom: 8,
-  },
+  centeredModalTitle: { fontSize: 18, fontWeight: '700', color: DARK, marginBottom: 8 },
+  centeredModalSubtitle: { fontSize: 14, color: '#6B7280', lineHeight: 20, marginBottom: 16 },
+  fieldLabel: { fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 8, marginTop: 4 },
   codeInput: {
-    backgroundColor: '#F3F4F6',
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
     borderRadius: 12,
-    paddingHorizontal: 16,
     paddingVertical: 14,
+    paddingHorizontal: 16,
     fontSize: 24,
     fontWeight: '700',
     color: DARK,
     letterSpacing: 8,
-  },
-  errorText: {
-    color: '#EF4444',
-    fontSize: 13,
-    marginTop: 6,
-  },
-
-  // Finalize summary
-  finalizeSummaryCard: {
     backgroundColor: '#F9FAFB',
-    borderRadius: 12,
-    padding: 16,
-    marginVertical: 16,
+    marginBottom: 4,
+  },
+  errorText: { fontSize: 13, color: '#EF4444', marginTop: 4, marginBottom: 4, textAlign: 'center' },
+
+  // ── Finalize summary card ─────────────────────────────────
+  finalizeSummaryCard: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginBottom: 20,
+    marginTop: 12,
   },
   finalizeSummaryRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
-  finalizeSummaryLabel: {
-    fontSize: 14,
-    color: '#6B7280',
-  },
-  finalizeSummaryValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: DARK,
-  },
-  finalizeDivider: {
-    height: 1,
-    backgroundColor: '#E5E7EB',
-  },
-  statusBadge: {
+  finalizeSummaryLabel: { fontSize: 14, color: '#6B7280' },
+  finalizeSummaryValue: { fontSize: 15, fontWeight: '700', color: DARK },
+  finalizeDivider: { height: 1, backgroundColor: '#F3F4F6' },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#22C55E' },
+  statusBadgeText: { fontSize: 14, fontWeight: '600', color: '#166534' },
+  expenseBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#D1FAE5',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 12,
-  },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#10B981',
-  },
-  statusBadgeText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#065F46',
-  },
-  expenseBox: {
+    gap: 10,
     borderWidth: 1.5,
     borderColor: '#E5E7EB',
     borderStyle: 'dashed',
     borderRadius: 12,
-    padding: 20,
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 4,
+    padding: 14,
+    marginBottom: 6,
   },
-  expenseBoxAttached: {
-    borderColor: GOLD,
-    backgroundColor: '#FEF9C3',
-  },
-  expenseText: {
-    fontSize: 14,
-    color: '#9CA3AF',
-  },
-  expenseOptional: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginTop: 6,
-    marginBottom: 8,
-  },
+  expenseBoxAttached: { borderColor: GOLD },
+  expenseText: { fontSize: 14, color: '#9CA3AF', fontWeight: '500' },
+  expenseOptional: { fontSize: 12, color: '#9CA3AF', textAlign: 'center', marginBottom: 20 },
 
-  // Trip completed overlay
-  completedContainer: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  completedScroll: {
-    padding: 24,
-    alignItems: 'center',
-  },
+  // ── Completed screen ─────────────────────────────────────
+  completedContainer: { flex: 1, backgroundColor: '#fff' },
+  completedScroll: { paddingHorizontal: 24, paddingBottom: 48, paddingTop: 40, alignItems: 'center' },
   completedIconCircle: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: '#10B981',
+    backgroundColor: '#22C55E',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 32,
-    marginBottom: 16,
+    marginBottom: 20,
   },
-  completedTitle: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: DARK,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  completedSubtitle: {
-    fontSize: 15,
-    color: '#6B7280',
-    textAlign: 'center',
-    marginBottom: 24,
-  },
+  completedTitle: { fontSize: 26, fontWeight: '700', color: DARK, marginBottom: 8, textAlign: 'center' },
+  completedSubtitle: { fontSize: 15, color: '#6B7280', textAlign: 'center', marginBottom: 28, lineHeight: 22 },
   completedStatsRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     borderRadius: 16,
-    padding: 16,
-    marginBottom: 24,
+    overflow: 'hidden',
+    marginBottom: 28,
     width: '100%',
   },
-  completedStatItem: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  completedStatValue: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: DARK,
-    marginBottom: 2,
-  },
-  completedStatLabel: {
-    fontSize: 11,
-    color: '#6B7280',
-    textAlign: 'center',
-  },
-  completedStatDivider: {
-    width: 1,
-    height: 36,
-    backgroundColor: '#E5E7EB',
-  },
-  ratingQuestion: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: DARK,
-    marginBottom: 12,
-  },
-  starsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 8,
-  },
-  ratingHint: {
-    fontSize: 12,
-    color: '#9CA3AF',
-    marginBottom: 16,
-  },
+  completedStatItem: { flex: 1, paddingVertical: 16, alignItems: 'center' },
+  completedStatValue: { fontSize: 16, fontWeight: '700', color: DARK, marginBottom: 4 },
+  completedStatLabel: { fontSize: 11, color: '#9CA3AF', textAlign: 'center' },
+  completedStatDivider: { width: 1, backgroundColor: '#E5E7EB' },
+  ratingQuestion: { fontSize: 17, fontWeight: '700', color: DARK, marginBottom: 12, textAlign: 'center' },
+  starsRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  ratingHint: { fontSize: 12, color: '#9CA3AF', marginBottom: 20, textAlign: 'center' },
   commentInput: {
     width: '100%',
-    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
     borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    fontSize: 15,
+    padding: 12,
+    fontSize: 14,
     color: DARK,
     minHeight: 100,
+    backgroundColor: '#F9FAFB',
+    marginBottom: 20,
   },
 });

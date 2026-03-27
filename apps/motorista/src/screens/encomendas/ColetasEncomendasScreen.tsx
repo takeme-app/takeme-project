@@ -143,9 +143,6 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
 
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Coletas</Text>
-        <TouchableOpacity style={styles.bellButton} activeOpacity={0.7}>
-          <MaterialIcons name="notifications-none" size={22} color="#111827" />
-        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -159,7 +156,7 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
             <TouchableOpacity
               style={styles.activeCard}
               activeOpacity={0.85}
-              onPress={() => navigation.navigate('DetalhesEncomenda', { shipmentId: active.id })}
+              onPress={() => navigation.navigate('ActiveShipment', { shipmentId: active.id })}
             >
               <View style={styles.activeCardTop}>
                 <Text style={styles.activeCardTitle} numberOfLines={1}>
@@ -199,7 +196,10 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
 
           <View style={styles.listCard}>
             {history.length === 0 ? (
-              <Text style={styles.emptyListText}>Sem histórico ainda</Text>
+              <View style={styles.emptyHistory}>
+                <MaterialIcons name="history" size={32} color="#D1D5DB" />
+                <Text style={styles.emptyListText}>Sem histórico ainda</Text>
+              </View>
             ) : (
               history.map((item, idx) => (
                 <View key={item.id}>
@@ -261,34 +261,35 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
         <MaterialIcons name="headset-mic" size={20} color="#92400E" />
       </TouchableOpacity>
 
-      {/* Modal suporte */}
-      <Modal visible={supportVisible} transparent animationType="slide">
-        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setSupportVisible(false)} />
-        <View style={styles.sheet}>
-          <TouchableOpacity style={styles.sheetCloseBtn} onPress={() => setSupportVisible(false)} activeOpacity={0.7}>
-            <MaterialIcons name="close" size={20} color="#374151" />
-          </TouchableOpacity>
-          <Text style={styles.sheetTitle}>Como podemos ajudar?</Text>
-          <Text style={styles.sheetSubtitle}>Escolha uma das opções abaixo{'\n'}para entrar em contato</Text>
-          <View style={styles.sheetDivider} />
-          <TouchableOpacity style={styles.supportOption} onPress={handleCall} activeOpacity={0.85}>
-            <View style={styles.supportOptionIcon}>
-              <MaterialIcons name="phone" size={24} color="#92400E" />
-            </View>
-            <Text style={styles.supportOptionText}>Ligar para o suporte Take Me</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.supportOption} onPress={handleWhatsApp} activeOpacity={0.85}>
-            <View style={styles.supportOptionIcon}>
-              <MaterialIcons name="chat" size={24} color="#92400E" />
-            </View>
-            <Text style={styles.supportOptionText}>WhatsApp do Take Me</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.supportOption} onPress={() => setSupportVisible(false)} activeOpacity={0.85}>
-            <View style={styles.supportOptionIcon}>
-              <MaterialIcons name="headset-mic" size={24} color="#92400E" />
-            </View>
-            <Text style={styles.supportOptionText}>Chat com o suporte Take Me</Text>
-          </TouchableOpacity>
+      {/* Modal suporte — card centralizado */}
+      <Modal visible={supportVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setSupportVisible(false)} />
+          <View style={styles.modalCard}>
+            <TouchableOpacity style={styles.closeBtn} onPress={() => setSupportVisible(false)} activeOpacity={0.7}>
+              <MaterialIcons name="close" size={20} color="#374151" />
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Como podemos{'\n'}ajudar?</Text>
+            <Text style={styles.modalSubtitle}>Escolha uma das opções abaixo para entrar em contato</Text>
+            <TouchableOpacity style={styles.supportOption} onPress={handleCall} activeOpacity={0.85}>
+              <View style={styles.supportOptionIcon}>
+                <MaterialIcons name="phone" size={22} color="#92400E" />
+              </View>
+              <Text style={styles.supportOptionText}>Ligar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.supportOption} onPress={() => setSupportVisible(false)} activeOpacity={0.85}>
+              <View style={styles.supportOptionIcon}>
+                <MaterialIcons name="chat-bubble-outline" size={22} color="#92400E" />
+              </View>
+              <Text style={styles.supportOptionText}>Chat</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.supportOption} onPress={handleWhatsApp} activeOpacity={0.85}>
+              <View style={styles.supportOptionIcon}>
+                <MaterialIcons name="chat" size={22} color="#92400E" />
+              </View>
+              <Text style={styles.supportOptionText}>WhatsApp</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </Modal>
     </SafeAreaView>
@@ -305,10 +306,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
   },
   headerTitle: { flex: 1, fontSize: 16, fontWeight: '700', color: '#111827', textAlign: 'center' },
-  bellButton: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
-  },
   scroll: { paddingHorizontal: 20, paddingBottom: 32, paddingTop: 20 },
   sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   sectionTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 12 },
@@ -344,6 +341,7 @@ const styles = StyleSheet.create({
   verMaisText: { fontSize: 14, fontWeight: '600', color: '#374151', textDecorationLine: 'underline' },
   chatEmptyRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 16 },
   emptyListText: { fontSize: 14, color: '#9CA3AF' },
+  emptyHistory: { paddingVertical: 28, alignItems: 'center', gap: 10 },
   // FAB
   fab: {
     position: 'absolute',
@@ -361,33 +359,33 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 5,
   },
-  // Support modal
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
-  sheet: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingHorizontal: 24,
-    paddingBottom: 48,
-    paddingTop: 24,
+  // Support modal — centered card
+  modalBackdrop: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center', alignItems: 'center',
   },
-  sheetCloseBtn: {
+  modalCard: {
+    width: '88%', backgroundColor: '#FFFFFF',
+    borderRadius: 24, padding: 24,
+    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 20, shadowOffset: { width: 0, height: 8 },
+    elevation: 12,
+  },
+  closeBtn: {
     alignSelf: 'flex-end',
-    width: 40, height: 40, borderRadius: 20,
+    width: 36, height: 36, borderRadius: 18,
     backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
-  sheetTitle: { fontSize: 24, fontWeight: '800', color: '#111827', marginBottom: 8 },
-  sheetSubtitle: { fontSize: 14, color: '#9CA3AF', lineHeight: 22, marginBottom: 20 },
-  sheetDivider: { height: 1, backgroundColor: '#F3F4F6', marginBottom: 20 },
+  modalTitle: { fontSize: 22, fontWeight: '800', color: '#111827', marginBottom: 6, lineHeight: 30 },
+  modalSubtitle: { fontSize: 13, color: '#9CA3AF', lineHeight: 20, marginBottom: 20 },
   supportOption: {
-    flexDirection: 'row', alignItems: 'center', gap: 16,
-    backgroundColor: '#FFFBEB', borderRadius: 16,
-    paddingVertical: 18, paddingHorizontal: 16, marginBottom: 12,
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: '#FFFBEB', borderRadius: 14,
+    paddingVertical: 16, paddingHorizontal: 14, marginBottom: 10,
   },
   supportOptionIcon: {
-    width: 48, height: 48, borderRadius: 24,
+    width: 44, height: 44, borderRadius: 22,
     backgroundColor: '#FDE68A', alignItems: 'center', justifyContent: 'center',
   },
-  supportOptionText: { fontSize: 16, fontWeight: '600', color: '#111827', flex: 1 },
+  supportOptionText: { fontSize: 15, fontWeight: '600', color: '#111827', flex: 1 },
 });

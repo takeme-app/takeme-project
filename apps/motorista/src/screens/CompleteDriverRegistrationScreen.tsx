@@ -56,6 +56,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
   const [pixKey, setPixKey] = useState('');
 
   const isParceiro = driverType !== 'take_me';
+  const isExcursoes = driverType === 'preparador_excursões';
 
   const subtitleLabel: Record<RegistrationType, string> = {
     take_me: 'como motorista TakeMe.',
@@ -166,7 +167,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       return;
     }
 
-    const requiresVehicle = isParceiro || ownsVehicle;
+    const requiresVehicle = !isExcursoes && (isParceiro || ownsVehicle);
     if (requiresVehicle) {
       if (!vehicleYear.trim() || onlyDigits(vehicleYear).length !== 4) {
         showAlert('Atenção', 'Informe o ano do veículo com 4 dígitos.');
@@ -398,8 +399,8 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
           />
         </FieldBlock>
 
-        {sectionTitle('Veículo de transporte')}
-        {!isParceiro ? (
+        {!isExcursoes ? sectionTitle('Veículo de transporte') : null}
+        {(!isExcursoes && !isParceiro) ? (
           <>
             <Text style={styles.questionLabel}>Possui veículo próprio?</Text>
             <View style={styles.radioRow}>
@@ -426,7 +427,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
             </View>
           </>
         ) : null}
-        {(isParceiro || ownsVehicle) ? (
+        {(!isExcursoes && (isParceiro || ownsVehicle)) ? (
           <>
             <FieldBlock label="Ano do veículo">
               <TextInput
@@ -532,7 +533,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         ) : null}
 
-        {(isParceiro || ownsVehicle) ? (
+        {(!isExcursoes && (isParceiro || ownsVehicle)) ? (
           <>
             <TouchableOpacity style={styles.uploadBox} onPress={() => pickImage(setVehicleDocUri)} activeOpacity={0.8}>
               <MaterialIcons name="cloud-upload" size={40} color="#9CA3AF" />

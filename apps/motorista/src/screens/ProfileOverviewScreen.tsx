@@ -47,7 +47,9 @@ type Loaded = {
 
 function subtypeToLabel(subtype: string | null): string {
   const s = (subtype ?? '').toLowerCase();
-  if (s === 'parceiro') return 'Parceiro TakeMe';
+  if (s === 'partner') return 'Parceiro TakeMe';
+  if (s === 'excursions') return 'Preparador de Excursões';
+  if (s === 'shipments') return 'Preparador de Encomendas';
   return 'Motorista TakeMe';
 }
 
@@ -166,7 +168,7 @@ export function ProfileOverviewScreen({ navigation }: Props) {
           <MaterialIcons name="arrow-back" size={22} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.topTitle}>Perfil</Text>
-        <View style={styles.iconBtn} />
+        <View style={{ width: 40 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
@@ -234,6 +236,12 @@ export function ProfileOverviewScreen({ navigation }: Props) {
         >
           <MaterialIcons name="lock-outline" size={22} color="#111827" />
           <Text style={styles.listLabel}>Recuperar senha</Text>
+        </TouchableOpacity>
+        <View style={styles.listSep} />
+
+        <TouchableOpacity style={styles.listRow} onPress={handleLogout} activeOpacity={0.7}>
+          <MaterialIcons name="logout" size={22} color="#111827" />
+          <Text style={styles.listLabel}>Sair</Text>
         </TouchableOpacity>
         <View style={styles.listSep} />
 

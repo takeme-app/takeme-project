@@ -5,6 +5,7 @@ import {
   StyleSheet,
   ScrollView,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -84,11 +85,16 @@ function TripRow({ trip, onPress }: { trip: Trip; onPress: () => void }) {
     <TouchableOpacity style={styles.tripRow} onPress={onPress} activeOpacity={0.75}>
       {/* Icon */}
       <View style={styles.tripIcon}>
-        <MaterialIcons
-          name={isPackage ? 'inventory-2' : 'directions-car'}
-          size={28}
-          color="#9CA3AF"
-        />
+        {isPackage ? (
+          <MaterialIcons name="inventory-2" size={28} color="#9CA3AF" />
+        ) : (
+          <Image
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            source={require('../../assets/ChatGPT Image Oct 2, 2025 at 06_08_38 PM.png')}
+            style={styles.tripIconImage}
+            resizeMode="contain"
+          />
+        )}
       </View>
 
       {/* Content */}
@@ -310,6 +316,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#F3F4F6',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  tripIconImage: {
+    width: 40,
+    height: 40,
   },
   tripContent: { flex: 1 },
   tripDestination: {

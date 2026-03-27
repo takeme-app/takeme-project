@@ -20,16 +20,19 @@ import { ResetPasswordSuccessScreen } from '../screens/ResetPasswordSuccessScree
 import { TermsOfUseScreen } from '../screens/TermsOfUseScreen';
 import { PrivacyPolicyScreen } from '../screens/PrivacyPolicyScreen';
 import { MainTabs } from './MainTabs';
+import { MainTabsExcursoes } from './MainTabsExcursoes';
+import { MainTabsEncomendas } from './MainTabsEncomendas';
 import { PendingRequestsScreen } from '../screens/PendingRequestsScreen';
 import { TripHistoryScreen } from '../screens/TripHistoryScreen';
 import { TripDetailScreen } from '../screens/TripDetailScreen';
 import { ActiveTripScreen } from '../screens/ActiveTripScreen';
+import { PaymentHistoryScreen } from '../screens/PaymentHistoryScreen';
 import type { RootStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 type RootNavigatorProps = {
-  initialRouteName: 'Welcome' | 'Main';
+  initialRouteName: 'Welcome' | 'Main' | 'MainExcursoes' | 'MainEncomendas' | 'MotoristaPendingApproval';
 };
 
 export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
@@ -61,10 +64,13 @@ export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
             options={{ animation: 'fade' }}
           />
           <Stack.Screen name="Main" component={MainTabs} options={{ animation: 'fade' }} />
+          <Stack.Screen name="MainExcursoes" component={MainTabsExcursoes} options={{ animation: 'fade' }} />
+          <Stack.Screen name="MainEncomendas" component={MainTabsEncomendas} options={{ animation: 'fade' }} />
           <Stack.Screen name="PendingRequests" component={PendingRequestsScreen} options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="TripHistory" component={TripHistoryScreen} options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="TripDetail" component={TripDetailScreen} options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="ActiveTrip" component={ActiveTripScreen} options={{ animation: 'fade', gestureEnabled: false }} />
+          <Stack.Screen name="PaymentHistory" component={PaymentHistoryScreen} options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
           <Stack.Screen name="ForgotPasswordEmailSent" component={ForgotPasswordEmailSentScreen} />
           <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />

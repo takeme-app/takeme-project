@@ -18,279 +18,240 @@ import { supabase } from '../../lib/supabase';
 
 type Props = NativeStackScreenProps<ColetasExcursoesStackParamList, 'ColetasMain'>;
 
-type ActiveExcursion = {
+type Excursion = {
   id: string;
-  shortId: string;
-  clientName: string;
+  origin: string;
   destination: string;
-  excursionDate: string;
+  departureTime: string | null;
+  returnTime: string | null;
+  passengerCount: number;
+  transportType: string;
+  responsible: string;
+  direction: string;
+  status: string;
+  expanded: boolean;
 };
 
-type HistoryItem = {
-  id: string;
-  clientName: string;
-  dateLabel: string;
+type StatusConfig = { label: string; bg: string; text: string; border: string };
+
+const STATUS_MAP: Record<string, StatusConfig> = {
+  contacted:       { label: 'Em andamento',       bg: '#FEF3C7', text: '#92400E', border: '#C9A227' },
+  in_progress:     { label: 'Em andamento',       bg: '#FEF3C7', text: '#92400E', border: '#C9A227' },
+  active:          { label: 'Em andamento',       bg: '#FEF3C7', text: '#92400E', border: '#C9A227' },
+  payment_done:    { label: 'Pagamento realizado', bg: '#DBEAFE', text: '#1E40AF', border: '#E5E7EB' },
+  paid:            { label: 'Pagamento realizado', bg: '#DBEAFE', text: '#1E40AF', border: '#E5E7EB' },
+  pending_rating:  { label: 'Avaliação Pendente', bg: '#F3F4F6', text: '#374151', border: '#E5E7EB' },
+  confirmed:       { label: 'Concluído',          bg: '#D1FAE5', text: '#065F46', border: '#E5E7EB' },
+  completed:       { label: 'Concluído',          bg: '#D1FAE5', text: '#065F46', border: '#E5E7EB' },
+  cancelled:       { label: 'Cancelado',          bg: '#FEE2E2', text: '#991B1B', border: '#E5E7EB' },
 };
 
-function shortId(id: string): string {
-  return id.replace(/-/g, '').slice(-4).toUpperCase();
+const DEFAULT_STATUS: StatusConfig = { label: 'Pendente', bg: '#F3F4F6', text: '#374151', border: '#E5E7EB' };
+
+function statusCfg(status: string): StatusConfig {
+  return STATUS_MAP[status] ?? DEFAULT_STATUS;
 }
 
-function formatHistoryDate(iso: string): string {
+function formatDateLabel(iso: string | null, direction: string): string {
+  if (!iso) return '—';
   try {
     const d = new Date(iso);
     const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-    const month = months[d.getMonth()] ?? '';
     const day = d.getDate().toString().padStart(2, '0');
+    const mon = months[d.getMonth()] ?? '';
     const time = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    return `${day} ${month}, ${time}`;
-  } catch { return iso; }
-}
-
-function formatExcursionDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  } catch { return iso; }
+    return `${day} ${mon} • ${time} (${direction})`;
+  } catch { return '—'; }
 }
 
 export function ColetasExcursoesScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
-  const [active, setActive] = useState<ActiveExcursion | null>(null);
-  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [excursions, setExcursions] = useState<Excursion[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user?.id) { setLoading(false); return; }
 
-    // Excursão ativa (status contacted = aceita mas não concluída)
-    const { data: activeData } = await supabase
+    const { data } = await supabase
       .from('excursion_requests')
-      .select('id, destination, excursion_date, user_id')
+      .select(
+        'id, origin, destination, excursion_date, departure_time, return_time, return_date, people_count, transport_type, responsible_name, direction, status, user_id, created_at',
+      )
       .eq('preparer_id', user.id)
-      .eq('status', 'contacted')
-      .order('excursion_date', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    if (activeData) {
-      const row = activeData as { id: string; destination: string; excursion_date: string; user_id: string };
-      const { data: prof } = await supabase
-        .from('profiles').select('full_name').eq('id', row.user_id).maybeSingle();
-      const p = prof as { full_name?: string | null } | null;
-      setActive({
-        id: row.id,
-        shortId: shortId(row.id),
-        clientName: p?.full_name ?? 'Cliente',
-        destination: row.destination,
-        excursionDate: formatExcursionDate(row.excursion_date),
-      });
-    } else {
-      setActive(null);
-    }
-
-    // Histórico recente (últimas 4 excursões concluídas/canceladas)
-    const { data: histData } = await supabase
-      .from('excursion_requests')
-      .select('id, excursion_date, user_id, created_at')
-      .eq('preparer_id', user.id)
-      .in('status', ['confirmed', 'cancelled'])
       .order('created_at', { ascending: false })
-      .limit(4);
+      .limit(50);
 
-    const rows = (histData ?? []) as { id: string; excursion_date: string; user_id: string; created_at: string }[];
-    const items: HistoryItem[] = [];
+    const rows = (data ?? []) as any[];
+    const list: Excursion[] = [];
+
     for (const r of rows) {
-      const { data: prof } = await supabase
-        .from('profiles').select('full_name').eq('id', r.user_id).maybeSingle();
-      const p = prof as { full_name?: string | null } | null;
-      items.push({
+      // responsible: use responsible_name column or fall back to client profile
+      let responsible = r.responsible_name ?? null;
+      if (!responsible) {
+        const { data: prof } = await supabase
+          .from('profiles').select('full_name').eq('id', r.user_id).maybeSingle();
+        responsible = (prof as any)?.full_name ?? 'Cliente';
+      }
+
+      const depIso = r.departure_time ?? r.excursion_date ?? null;
+      const retIso = r.return_time ?? r.return_date ?? null;
+
+      list.push({
         id: r.id,
-        clientName: p?.full_name ?? 'Cliente',
-        dateLabel: formatHistoryDate(r.created_at),
+        origin: r.origin ?? 'Origem',
+        destination: r.destination ?? 'Destino',
+        departureTime: depIso,
+        returnTime: retIso,
+        passengerCount: r.people_count ?? 0,
+        transportType: r.transport_type ?? 'Van',
+        responsible,
+        direction: r.direction ?? 'Ida',
+        status: r.status ?? 'pending',
+        expanded: true,
       });
     }
-    setHistory(items);
+
+    setExcursions(list);
     setLoading(false);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const toggleExpand = useCallback((id: string) => {
+    setExcursions((prev) => prev.map((e) => e.id === id ? { ...e, expanded: !e.expanded } : e));
+  }, []);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
 
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Coletas</Text>
-        <TouchableOpacity style={styles.bellButton} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.canGoBack() ? navigation.goBack() : undefined} activeOpacity={0.7}>
+          <MaterialIcons name="arrow-back" size={22} color="#111827" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Excursões</Text>
+        <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7}>
           <MaterialIcons name="notifications-none" size={22} color="#111827" />
         </TouchableOpacity>
       </View>
 
       {loading ? (
         <ActivityIndicator size="large" color="#111827" style={{ marginTop: 48 }} />
+      ) : excursions.length === 0 ? (
+        <View style={styles.emptyState}>
+          <MaterialIcons name="directions-bus" size={48} color="#D1D5DB" />
+          <Text style={styles.emptyText}>Nenhuma excursão ainda</Text>
+        </View>
       ) : (
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-
-          {/* Em rota */}
-          <Text style={styles.sectionTitle}>Em rota</Text>
-          {active ? (
-            <TouchableOpacity
-              style={styles.activeCard}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('DetalhesExcursao', { excursionId: active.id })}
-            >
-              <View style={styles.activeCardTop}>
-                <Text style={styles.activeCardTitle} numberOfLines={1}>
-                  Pedido #{active.shortId} — {active.clientName}
-                </Text>
-                <View style={styles.activeStatusBadge}>
-                  <Text style={styles.activeStatusText}>Em coleta</Text>
-                </View>
-              </View>
-              <View style={styles.activeRouteRow}>
-                <Text style={styles.activeRouteText} numberOfLines={1}>{active.destination}</Text>
-              </View>
-              <View style={styles.activeTimeRow}>
-                <MaterialIcons name="access-time" size={14} color="#6B7280" />
-                <Text style={styles.activeTimeText}>{active.excursionDate}</Text>
-              </View>
-            </TouchableOpacity>
-          ) : (
-            <View style={styles.emptyCard}>
-              <Text style={styles.emptyCardText}>Nenhuma excursão em andamento</Text>
-            </View>
-          )}
-
-          {/* Histórico */}
-          <View style={styles.sectionRow}>
-            <Text style={styles.sectionTitle}>Histórico</Text>
-            <TouchableOpacity
-              style={styles.filterBtn}
-              activeOpacity={0.7}
-              onPress={() => navigation.navigate('HistoricoExcursoes')}
-            >
-              <MaterialIcons name="tune" size={20} color="#374151" />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.listCard}>
-            {history.length === 0 ? (
-              <Text style={styles.emptyListText}>Sem histórico ainda</Text>
-            ) : (
-              history.map((item, idx) => (
-                <View key={item.id}>
-                  <TouchableOpacity
-                    style={styles.historyRow}
-                    activeOpacity={0.7}
-                    onPress={() => navigation.navigate('DetalhesExcursao', { excursionId: item.id })}
-                  >
-                    <View style={styles.historyInfo}>
-                      <Text style={styles.historyName}>{item.clientName}</Text>
-                      <Text style={styles.historyDate}>{item.dateLabel}</Text>
-                    </View>
-                    <MaterialIcons name="chevron-right" size={20} color="#9CA3AF" />
-                  </TouchableOpacity>
-                  {idx < history.length - 1 && <View style={styles.sep} />}
-                </View>
-              ))
-            )}
-            {history.length > 0 && (
-              <>
-                <View style={styles.sep} />
+          {excursions.map((exc) => {
+            const cfg = statusCfg(exc.status);
+            return (
+              <View key={exc.id} style={[styles.card, { borderColor: cfg.border }]}>
+                {/* Status row */}
                 <TouchableOpacity
-                  style={styles.verMaisBtn}
+                  style={styles.cardTopRow}
+                  onPress={() => toggleExpand(exc.id)}
                   activeOpacity={0.7}
-                  onPress={() => navigation.navigate('HistoricoExcursoes')}
                 >
-                  <Text style={styles.verMaisText}>Ver mais</Text>
+                  <View style={[styles.statusPill, { backgroundColor: cfg.bg }]}>
+                    <Text style={[styles.statusText, { color: cfg.text }]}>{cfg.label}</Text>
+                  </View>
+                  <MaterialIcons
+                    name={exc.expanded ? 'expand-less' : 'expand-more'}
+                    size={22}
+                    color="#9CA3AF"
+                  />
                 </TouchableOpacity>
-              </>
-            )}
-          </View>
 
-          {/* Chat */}
-          <Text style={[styles.sectionTitle, { marginTop: 8 }]}>Chat</Text>
-          <View style={styles.listCard}>
-            <View style={styles.chatEmptyRow}>
-              <MaterialIcons name="chat-bubble-outline" size={28} color="#D1D5DB" />
-              <Text style={styles.emptyListText}>Nenhuma conversa recente</Text>
-            </View>
-            <View style={styles.sep} />
-            <TouchableOpacity
-              style={styles.verMaisBtn}
-              activeOpacity={0.7}
-              onPress={() => navigation.getParent()?.navigate('ChatExc')}
-            >
-              <Text style={styles.verMaisText}>Ver mais</Text>
-            </TouchableOpacity>
-          </View>
+                {/* Route */}
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => navigation.navigate('DetalhesExcursao', { excursionId: exc.id })}
+                >
+                  <View style={styles.routeRow}>
+                    <Text style={styles.routeCity}>{exc.origin}</Text>
+                    <MaterialIcons name="arrow-forward" size={16} color="#374151" style={{ marginHorizontal: 8 }} />
+                    <Text style={[styles.routeCity, { textAlign: 'right', flex: 1 }]}>{exc.destination}</Text>
+                  </View>
+                  <View style={styles.datesRow}>
+                    <Text style={styles.dateLabel}>{formatDateLabel(exc.departureTime, 'ida')}</Text>
+                    {exc.returnTime ? (
+                      <>
+                        <Text style={styles.dateSep}> | </Text>
+                        <Text style={styles.dateLabel}>{formatDateLabel(exc.returnTime, 'retorno')}</Text>
+                      </>
+                    ) : null}
+                  </View>
 
+                  {exc.expanded && (
+                    <View style={styles.detailsSection}>
+                      <DetailRow label="Passageiros" value={`${exc.passengerCount} passageiros`} />
+                      <DetailRow label="Tipo de transporte" value={exc.transportType} />
+                      <DetailRow label="Responsável" value={exc.responsible} />
+                      <DetailRow label="Navegação" value={exc.direction} />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              </View>
+            );
+          })}
         </ScrollView>
       )}
     </SafeAreaView>
   );
 }
 
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.detailRow}>
+      <Text style={styles.detailLabel}>{label}</Text>
+      <Text style={styles.detailValue}>{value}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 12 + SCREEN_TOP_EXTRA_PADDING,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 8 + SCREEN_TOP_EXTRA_PADDING,
     paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
+    borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
   },
-  headerTitle: { flex: 1, fontSize: 16, fontWeight: '700', color: '#111827', textAlign: 'center' },
-  bellButton: {
+  headerTitle: { fontSize: 16, fontWeight: '700', color: '#111827' },
+  iconBtn: {
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
   },
-  scroll: { paddingHorizontal: 20, paddingBottom: 32, paddingTop: 20 },
-  sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
-  sectionTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 12 },
-  filterBtn: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
+  scroll: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 32 },
+  emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
+  emptyText: { fontSize: 15, color: '#9CA3AF' },
+
+  // Cards
+  card: {
+    borderWidth: 1.5, borderRadius: 16,
+    paddingHorizontal: 16, paddingVertical: 12,
+    marginBottom: 16, backgroundColor: '#FFFFFF',
   },
-  // Active card
-  activeCard: {
-    borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 16,
-    padding: 16, marginBottom: 28, backgroundColor: '#FFFFFF',
+  cardTopRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: 12,
   },
-  activeCardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
-  activeCardTitle: { fontSize: 15, fontWeight: '700', color: '#111827', flex: 1, marginRight: 8 },
-  activeStatusBadge: {
-    backgroundColor: '#D1FAE5', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4,
-  },
-  activeStatusText: { fontSize: 12, fontWeight: '700', color: '#065F46' },
-  activeRouteRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  activeRouteText: { fontSize: 14, fontWeight: '600', color: '#111827', flex: 1 },
-  activeTimeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  activeTimeText: { fontSize: 13, color: '#6B7280' },
-  emptyCard: {
-    borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 16,
-    padding: 20, alignItems: 'center', marginBottom: 28,
-  },
-  emptyCardText: { fontSize: 14, color: '#9CA3AF' },
-  // List card
-  listCard: {
-    borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 16,
-    overflow: 'hidden', marginBottom: 24,
-  },
-  historyRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 14, paddingHorizontal: 16,
-  },
-  historyInfo: { flex: 1 },
-  historyName: { fontSize: 15, fontWeight: '600', color: '#111827' },
-  historyDate: { fontSize: 13, color: '#6B7280', marginTop: 2 },
-  sep: { height: 1, backgroundColor: '#F3F4F6', marginHorizontal: 16 },
-  verMaisBtn: { paddingVertical: 14, alignItems: 'center' },
-  verMaisText: { fontSize: 14, fontWeight: '600', color: '#374151', textDecorationLine: 'underline' },
-  chatEmptyRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 16 },
-  emptyListText: { fontSize: 14, color: '#9CA3AF' },
+  statusPill: { borderRadius: 20, paddingHorizontal: 12, paddingVertical: 5 },
+  statusText: { fontSize: 13, fontWeight: '700' },
+
+  routeRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  routeCity: { fontSize: 15, fontWeight: '700', color: '#111827', flex: 1 },
+
+  datesRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 },
+  dateLabel: { fontSize: 13, color: '#6B7280' },
+  dateSep: { fontSize: 13, color: '#D1D5DB' },
+
+  detailsSection: { gap: 8, paddingTop: 4 },
+  detailRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  detailLabel: { fontSize: 14, color: '#9CA3AF' },
+  detailValue: { fontSize: 14, color: '#111827', fontWeight: '500', textAlign: 'right' },
 });
