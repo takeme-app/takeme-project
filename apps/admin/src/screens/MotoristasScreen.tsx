@@ -9,8 +9,9 @@ import {
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
-import { fetchMotoristas } from '../data/queries';
+import { fetchMotoristas, fetchMotoristaTableRows } from '../data/queries';
 import type { MotoristaListItem } from '../data/types';
+import type { MotoristaTableRow } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -70,7 +71,7 @@ const chartLegend = [
 // ── Local styles ──────────────────────────────────────────────────────
 const s = {
   metricCard: {
-    flex: '1 1 calc(25% - 18px)', minWidth: 180, background: '#f6f6f6', borderRadius: 16,
+    flex: '1 1 0', minWidth: 0, background: '#f6f6f6', borderRadius: 16,
     padding: '16px 20px', display: 'flex', flexDirection: 'column' as const, gap: 24,
     boxSizing: 'border-box' as const,
   } as React.CSSProperties,
@@ -107,11 +108,14 @@ export default function MotoristasScreen() {
 
   // ── Real data from Supabase ─────────────────────────────────────────
   const [motoristasData, setMotoristasData] = useState<MotoristaListItem[]>([]);
+  const [tableData, setTableData] = useState<MotoristaTableRow[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    fetchMotoristas().then((items) => { if (!cancelled) { setMotoristasData(items); setDataLoading(false); } });
+    Promise.all([fetchMotoristas(), fetchMotoristaTableRows()]).then(([stats, rows]) => {
+      if (!cancelled) { setMotoristasData(stats); setTableData(rows); setDataLoading(false); }
+    });
     return () => { cancelled = true; };
   }, []);
 
@@ -129,14 +133,14 @@ export default function MotoristasScreen() {
 
   const topDrivers = motoristasData.slice(0, 5).map((m) => ({ viagens: m.totalViagens, nome: m.nome }));
 
-  const tableRows: MotoristaRow[] = motoristasData.map((m) => ({
-    nome: m.nome,
-    origem: '—',
-    destino: '—',
-    data: '—',
-    embarque: '—',
-    chegada: '—',
-    status: m.viagensAtivas > 0 ? 'Em andamento' as const : 'Concluído' as const,
+  const tableRows: MotoristaRow[] = tableData.map((t) => ({
+    nome: t.nome,
+    origem: t.origem,
+    destino: t.destino,
+    data: t.data,
+    embarque: t.embarque,
+    chegada: t.chegada,
+    status: t.status,
   }));
 
   // ── Search row ────────────────────────────────────────────────────────
