@@ -378,6 +378,60 @@ export async function fetchMotoristas(): Promise<MotoristaListItem[]> {
   }).sort((a, b) => b.totalViagens - a.totalViagens);
 }
 
+// ── Motorista Table Rows (with trip details) ────────────────────────────
+
+export interface MotoristaTableRow {
+  nome: string;
+  origem: string;
+  destino: string;
+  data: string;
+  embarque: string;
+  chegada: string;
+  status: 'Concluído' | 'Cancelado' | 'Agendado' | 'Em andamento';
+  driverId: string;
+  avatarUrl: string | null;
+}
+
+export async function fetchMotoristaTableRows(): Promise<MotoristaTableRow[]> {
+  // Get trips with driver profiles
+  const { data: trips, error } = await supabase
+    .from('scheduled_trips')
+    .select('id, driver_id, origin_address, destination_address, departure_at, arrival_at, status')
+    .order('departure_at', { ascending: false })
+    .limit(100);
+
+  if (error || !trips || trips.length === 0) return [];
+
+  const driverIds = [...new Set((trips as any[]).map((t) => t.driver_id))];
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('id, full_name, avatar_url')
+    .in('id', driverIds);
+
+  const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p]));
+
+  return (trips as any[]).map((t) => {
+    const p = profileMap.get(t.driver_id) as any;
+    const tripStatus = t.status as string;
+    let uiStatus: MotoristaTableRow['status'] = 'Em andamento';
+    if (tripStatus === 'completed') uiStatus = 'Concluído';
+    else if (tripStatus === 'cancelled') uiStatus = 'Cancelado';
+    else if (tripStatus === 'scheduled') uiStatus = 'Agendado';
+
+    return {
+      nome: p?.full_name ?? 'Sem nome',
+      origem: shortAddr(t.origin_address || ''),
+      destino: shortAddr(t.destination_address || ''),
+      data: t.departure_at ? fmtDate(t.departure_at) : '—',
+      embarque: t.departure_at ? fmtTime(t.departure_at) : '—',
+      chegada: t.arrival_at ? fmtTime(t.arrival_at) : '—',
+      status: uiStatus,
+      driverId: t.driver_id,
+      avatarUrl: p?.avatar_url ?? null,
+    };
+  });
+}
+
 // ── Destinos ────────────────────────────────────────────────────────────
 
 export async function fetchDestinos(): Promise<DestinoListItem[]> {
