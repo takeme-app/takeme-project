@@ -2,12 +2,15 @@
  * PagamentosGestaoScreen — Gestão de pagamentos conforme Figma 905-22168.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
   filterIconSvg,
 } from '../styles/webStyles';
+import { fetchPricingRoutes, fetchSurchargeCatalog, fetchWorkerRatings, fetchMotoristas } from '../data/queries';
+import type { PricingRouteRow, SurchargeCatalogRow, MotoristaListItem } from '../data/types';
+import type { RatingListItem } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -199,6 +202,38 @@ const s = {
 export default function PagamentosGestaoScreen() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<typeof tabs[number]>('Motorista');
+
+  // ── Real data from Supabase ─────────────────────────────────────────
+  const [motoristasData, setMotoristasData] = useState<MotoristaListItem[]>([]);
+  const [pricingDriverRoutes, setPricingDriverRoutes] = useState<PricingRouteRow[]>([]);
+  const [pricingEncRoutes, setPricingEncRoutes] = useState<PricingRouteRow[]>([]);
+  const [pricingExcRoutes, setPricingExcRoutes] = useState<PricingRouteRow[]>([]);
+  const [surcharges, setSurcharges] = useState<SurchargeCatalogRow[]>([]);
+  const [ratings, setRatings] = useState<RatingListItem[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      fetchMotoristas(),
+      fetchPricingRoutes('driver'),
+      fetchPricingRoutes('preparer_shipments'),
+      fetchPricingRoutes('preparer_excursions'),
+      fetchSurchargeCatalog(),
+      fetchWorkerRatings(),
+    ]).then(([mots, dRoutes, eRoutes, xRoutes, surcs, rats]) => {
+      if (!cancelled) {
+        setMotoristasData(mots);
+        setPricingDriverRoutes(dRoutes);
+        setPricingEncRoutes(eRoutes);
+        setPricingExcRoutes(xRoutes);
+        setSurcharges(surcs);
+        setRatings(rats);
+        setDataLoading(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   // ── Breadcrumb ────────────────────────────────────────────────────────
   const breadcrumb = React.createElement('div', {

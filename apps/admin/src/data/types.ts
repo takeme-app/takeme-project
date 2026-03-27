@@ -146,3 +146,116 @@ export interface PreparadorListItem {
   avaliacao: number | null;
   status: 'Em andamento' | 'Agendado' | 'Cancelado' | 'Concluído';
 }
+
+// ── Promotions ──────────────────────────────────────────────────────
+export interface PromotionRow {
+  id: string;
+  title: string;
+  description: string | null;
+  start_at: string;
+  end_at: string;
+  target_audiences: string[];
+  discount_type: 'percentage' | 'fixed';
+  discount_value: number;
+  applies_to: string[];
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PromocaoListItem {
+  id: string;
+  nome: string;
+  descricao: string;
+  dataInicio: string;
+  dataTermino: string;
+  tipoPublico: string;
+  tipoDesconto: string;
+  valorDesconto: number;
+  aplicaA: string;
+  status: 'Ativo' | 'Inativo';
+}
+
+// ── Pagamentos / Payouts ────────────────────────────────────────────
+export type PayoutStatus = 'pending' | 'processing' | 'paid' | 'failed';
+
+export interface PayoutRow {
+  id: string;
+  worker_id: string;
+  entity_type: 'booking' | 'shipment' | 'dependent_shipment' | 'excursion';
+  entity_id: string;
+  gross_amount_cents: number;
+  worker_amount_cents: number;
+  admin_amount_cents: number;
+  surcharges_cents: number;
+  promotion_discount_cents: number;
+  payout_method: 'pix' | 'fixed_monthly' | 'fixed_weekly';
+  status: PayoutStatus;
+  paid_at: string | null;
+  created_at: string;
+}
+
+export interface PagamentoListItem {
+  id: string;
+  workerName: string;
+  entityType: string;
+  dataFinalizacao: string;
+  status: 'Em andamento' | 'Agendado' | 'Cancelado' | 'Concluído';
+  grossAmountCents: number;
+  workerAmountCents: number;
+  adminAmountCents: number;
+}
+
+export interface PagamentoCounts {
+  pagamentosPrevistos: number;
+  pagamentosFeitos: number;
+  lucro: number;
+}
+
+// ── Pricing Routes ──────────────────────────────────────────────────
+export interface PricingRouteRow {
+  id: string;
+  role_type: 'driver' | 'preparer_excursions' | 'preparer_shipments';
+  title: string | null;
+  origin_address: string | null;
+  destination_address: string;
+  pricing_mode: 'daily_rate' | 'per_km' | 'fixed';
+  price_cents: number;
+  driver_pct: number;
+  admin_pct: number;
+  accepted_payment_methods: string[];
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface SurchargeCatalogRow {
+  id: string;
+  name: string;
+  description: string | null;
+  default_value_cents: number;
+  surcharge_mode: 'automatic' | 'manual';
+  is_active: boolean;
+}
+
+// ── Payment Methods (read-only for admin) ───────────────────────────
+export interface PaymentMethodRow {
+  id: string;
+  user_id: string;
+  type: 'credit' | 'debit';
+  last_four: string | null;
+  brand: string | null;
+  holder_name: string | null;
+  created_at: string;
+}
+
+// ── Admin Users ─────────────────────────────────────────────────────
+export interface AdminUserListItem {
+  id: string;
+  nome: string;
+  email: string;
+  nivel: string;
+  dataCriacao: string;
+  status: 'Ativo' | 'Inativo';
+  permissions: Record<string, boolean>;
+}

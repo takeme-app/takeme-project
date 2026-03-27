@@ -2,43 +2,22 @@
  * PromocoesScreen — Promoções conforme Figma 867-19582.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   webStyles,
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
+import { fetchPromocoes, fetchPromocaoCounts } from '../data/queries';
+import type { PromocaoListItem } from '../data/types';
+import type { PromocaoCounts } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
-// ── Mock data ───────────────────────────────────────────────────────────
-const metrics1 = [
-  { title: 'Total de Promoções', value: '48', pct: '+12%', desc: 'vs mês anterior' },
-  { title: 'Promoções Ativas', value: '12', pct: '+8%', desc: 'vs mês anterior' },
-  { title: 'Promoções Inativas', value: '36', pct: '-3%', desc: 'vs mês anterior', negative: true },
-];
-
+// metrics2 (Adesão) requires analytics not yet available — keep as mock
 const metrics2 = [
   { title: 'Adesão Motoristas', value: '68%', pct: '+5%', desc: 'vs mês anterior' },
   { title: 'Adesão Preparadores', value: '72%', pct: '+7%', desc: 'vs mês anterior' },
-];
-
-type PromoRow = {
-  nome: string;
-  dataInicio: string;
-  dataTermino: string;
-  tipoPublico: string;
-  status: 'Ativo' | 'Inativo';
-};
-
-const tableRows: PromoRow[] = [
-  { nome: 'Desconto de Natal 2025', dataInicio: '01/12/2025\n08:00', dataTermino: '15/12/2025\n23:59', tipoPublico: 'Passageiro', status: 'Inativo' },
-  { nome: 'Bônus Motoristas - Novembro', dataInicio: '01/11/2024\n08:00', dataTermino: '20/11/2024\n23:59', tipoPublico: 'Motorista', status: 'Inativo' },
-  { nome: 'Cashback Preparadores', dataInicio: '05/11/2024\n08:00', dataTermino: '10/11/2024\n23:59', tipoPublico: 'Preparador', status: 'Inativo' },
-  { nome: 'Black Friday', dataInicio: '01/11/2024\n08:00', dataTermino: '05/11/2024\n23:59', tipoPublico: 'Passageiro', status: 'Ativo' },
-  { nome: 'Bônus Preparadores', dataInicio: '05/10/2024\n08:00', dataTermino: '10/10/2024\n23:59', tipoPublico: 'Preparador', status: 'Ativo' },
-  { nome: 'Desconto Encomendas Express', dataInicio: '01/09/2024\n08:00', dataTermino: '15/09/2024\n23:59', tipoPublico: 'Encomenda', status: 'Ativo' },
-  { nome: 'Cashback Motoristas', dataInicio: '01/08/2024\n08:00', dataTermino: '10/08/2024\n23:59', tipoPublico: 'Motorista', status: 'Ativo' },
 ];
 
 const tableCols = [
@@ -115,6 +94,29 @@ function buildLineChart() {
 // ── Component ───────────────────────────────────────────────────────────
 export default function PromocoesScreen() {
   const [search, setSearch] = useState('');
+  const [promoData, setPromoData] = useState<PromocaoListItem[]>([]);
+  const [promoCounts, setPromoCounts] = useState<PromocaoCounts>({ total: 0, ativas: 0, inativas: 0 });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([fetchPromocoes(), fetchPromocaoCounts()]).then(([items, c]) => {
+      if (!cancelled) { setPromoData(items); setPromoCounts(c); setLoading(false); }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const metrics1 = [
+    { title: 'Total de Promoções', value: String(promoCounts.total), pct: '+12%', desc: 'vs mês anterior' },
+    { title: 'Promoções Ativas', value: String(promoCounts.ativas), pct: '+8%', desc: 'vs mês anterior' },
+    { title: 'Promoções Inativas', value: String(promoCounts.inativas), pct: '-3%', desc: 'vs mês anterior', negative: true },
+  ];
+
+  const filteredRows = promoData.filter((r) => {
+    if (!search) return true;
+    const s = search.toLowerCase();
+    return r.nome.toLowerCase().includes(s) || r.tipoPublico.toLowerCase().includes(s);
+  });
 
   // ── Title ─────────────────────────────────────────────────────────────
   const title = React.createElement('h1', { style: webStyles.homeTitle }, 'Promoções');
@@ -222,7 +224,7 @@ export default function PromocoesScreen() {
       style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 6px', display: 'flex', alignItems: 'center', height: '100%' },
     }, c.label)));
 
-  const tableRowEls = tableRows.map((row, idx) => {
+  const tableRowEls = filteredRows.map((row, idx) => {
     const statusBg = row.status === 'Ativo' ? '#b0e8d1' : '#eeafaa';
     const statusColor = row.status === 'Ativo' ? '#174f38' : '#551611';
     return React.createElement('div', {
@@ -255,6 +257,15 @@ export default function PromocoesScreen() {
         tableHeader,
         ...tableRowEls)));
 
+  if (loading) {
+    return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
+      React.createElement('span', { style: { fontSize: 16, color: '#767676', ...font } }, 'Carregando promoções...'));
+  }
+
+  const emptyMsg = filteredRows.length === 0
+    ? React.createElement('div', { style: { padding: 40, textAlign: 'center' as const, color: '#767676', ...font } }, 'Nenhuma promoção encontrada.')
+    : null;
+
   return React.createElement(React.Fragment, null,
-    title, searchRow, metricCards1, metricCards2, chartSection, tableSection);
+    title, searchRow, metricCards1, metricCards2, chartSection, emptyMsg || tableSection);
 }
