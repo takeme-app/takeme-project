@@ -175,22 +175,59 @@ export default function MotoristaEditScreen() {
     React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font, marginTop: 8 } }, 'Antecedentes Criminais'),
     docRow(worker?.background_check_url ? 'antecedentes_criminais.pdf' : 'Nenhum documento'));
 
+  // ── Fotos do veículo (placeholder cards) ─────────────────────────────
+  const vehiclePhotos = vehicles.length > 0 && vehicles[0].vehicle_photos_urls?.length > 0
+    ? vehicles[0].vehicle_photos_urls
+    : null;
+
+  const photosSection = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+    React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: '8px 0 0', ...font } }, 'Fotos do veículo principal'),
+    React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Máx. 4 fotos. 2MB'),
+    vehiclePhotos
+      ? React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 } },
+          ...vehiclePhotos.map((url: string, i: number) =>
+            React.createElement('div', {
+              key: i,
+              style: { width: '100%', height: 130, borderRadius: 12, background: '#f1f1f1', overflow: 'hidden' },
+            }, React.createElement('img', { src: url, alt: `Foto ${i + 1}`, style: { width: '100%', height: '100%', objectFit: 'cover' } }))))
+      : React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 } },
+          ...[1, 2, 3, 4].map((n) =>
+            React.createElement('div', {
+              key: n,
+              style: { width: '100%', height: 130, borderRadius: 12, background: '#f1f1f1', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+            }, React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Sem foto')))));
+
   // ── Rotas e valores ───────────────────────────────────────────────────
+  const fmtBRL = (cents: number) => `R$ ${(cents / 100).toFixed(2).replace('.', ',')}`;
+
+  const routeCard = (r: any, i: number) =>
+    React.createElement('div', {
+      key: i,
+      style: { padding: '12px 16px', border: '1px solid #e2e2e2', borderRadius: 12, display: 'flex', flexDirection: 'column' as const, gap: 4 },
+    },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } },
+          `${r.origin_address || '?'}`),
+        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, '→'),
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } },
+          `${r.destination_address || '?'}`)),
+      React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } },
+        r.price_per_person_cents ? `${fmtBRL(r.price_per_person_cents)} por pessoa` : '—'));
+
   const routesSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 12, padding: 24, background: '#fff', borderRadius: 16, border: '1px solid #e2e2e2' },
   },
     React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Rotas e valores'),
-    React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Defina os trechos e valores do motorista.'),
-    ...routes.map((r: any, i: number) =>
-      React.createElement('div', {
-        key: i,
-        style: { display: 'flex', flexDirection: 'column' as const, gap: 4, padding: '12px 0', borderBottom: '1px solid #f1f1f1' },
-      },
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } },
-          `${r.origin_address || '?'} → ${r.destination_address || '?'}`),
-        React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } },
-          r.price_per_person_cents ? `R$ ${(r.price_per_person_cents / 100).toFixed(2)} por pessoa` : '—'))),
-    routes.length === 0 ? React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, 'Nenhuma rota cadastrada') : null);
+    React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Defina seus trechos e valores.'),
+    ...routes.map((r: any, i: number) => routeCard(r, i)),
+    routes.length === 0 ? React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, 'Nenhuma rota cadastrada') : null,
+    React.createElement('button', {
+      type: 'button',
+      style: { display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font, marginTop: 4 },
+    },
+      React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+        React.createElement('path', { d: 'M12 5v14M5 12h14', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })),
+      'Adicionar nova rota'));
 
   // ── Veículos cadastrados ──────────────────────────────────────────────
   const vehiclesSection = React.createElement('div', {
@@ -200,20 +237,24 @@ export default function MotoristaEditScreen() {
     ...vehicles.map((v: any, i: number) =>
       React.createElement('div', {
         key: i,
-        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: '#f6f6f6', borderRadius: 12 },
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', border: '1px solid #e2e2e2', borderRadius: 12 },
       },
-        React.createElement('div', null,
-          React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, `${v.model} ${v.year || ''}`),
-          React.createElement('div', { style: { fontSize: 12, color: '#767676', ...font, marginTop: 2 } },
-            `${v.plate || '—'} • ${v.passenger_capacity || 4} passageiros`)),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+          React.createElement('span', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', ...font } }, `${v.model} ${v.year || ''}`),
+          React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, v.plate || '—'),
+          React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, `${v.passenger_capacity || 4} passageiros`)),
         React.createElement('span', {
           style: {
-            padding: '4px 12px', borderRadius: 999, fontSize: 12, fontWeight: 700,
-            background: v.status === 'approved' ? '#b0e8d1' : '#fee59a',
-            color: v.status === 'approved' ? '#174f38' : '#654c01', ...font,
+            padding: '4px 14px', borderRadius: 999, fontSize: 13, fontWeight: 700,
+            background: v.status === 'approved' ? '#b0e8d1' : v.status === 'rejected' ? '#eeafaa' : '#fee59a',
+            color: v.status === 'approved' ? '#174f38' : v.status === 'rejected' ? '#551611' : '#654c01', ...font,
           },
-        }, v.status === 'approved' ? 'Aprovado' : v.status === 'pending' ? 'Pendente' : v.status))),
-    vehicles.length === 0 ? React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, 'Nenhum veículo cadastrado') : null);
+        }, v.status === 'approved' ? 'Aprovado' : v.status === 'pending' ? 'Pendente' : v.status === 'rejected' ? 'Rejeitado' : v.status))),
+    vehicles.length === 0 ? React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, 'Nenhum veículo cadastrado') : null,
+    React.createElement('button', {
+      type: 'button',
+      style: { display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 14, fontWeight: 500, color: '#767676', ...font, marginTop: 4 },
+    }, 'Adicionar novo veículo'));
 
   // ── Métricas ──────────────────────────────────────────────────────────
   const completedTrips = trips.filter((t: any) => t.status === 'completed').length;
@@ -244,8 +285,37 @@ export default function MotoristaEditScreen() {
       },
     }, 'Salvar dados'));
 
+  // ── Histórico de alterações ───────────────────────────────────────────
+  const timelineItems = [
+    { icon: '✓', label: 'Rota alterada', person: 'João Henrique', date: '14 Out, 14:00' },
+    { icon: '↔', label: 'Motorista substituído', person: 'Pedro Silva', date: '14 Out, 18:20' },
+    { icon: '👤', label: 'Passageiro adicionado', person: 'Ana Costa', date: '14 Out, 14:00' },
+    { icon: '📦', label: 'Encomenda adicionada', person: 'Teck Store', date: '14 Out, 14:53' },
+  ];
+
+  const historicoSection = React.createElement('div', {
+    style: { display: 'flex', flexDirection: 'column' as const, gap: 12 },
+  },
+    React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Histórico de alterações'),
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, borderLeft: '2px solid #e2e2e2', marginLeft: 12, paddingLeft: 20 } },
+      ...timelineItems.map((item, i) =>
+        React.createElement('div', {
+          key: i,
+          style: { display: 'flex', flexDirection: 'column' as const, gap: 2, paddingBottom: 20, position: 'relative' as const },
+        },
+          React.createElement('div', {
+            style: {
+              position: 'absolute' as const, left: -29, top: 2, width: 20, height: 20,
+              borderRadius: '50%', background: '#fff', border: '2px solid #e2e2e2',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10,
+            },
+          }, item.icon),
+          React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } },
+            `${item.label} • `, React.createElement('span', { style: { color: '#cba04b' } }, item.person)),
+          React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, item.date)))));
+
   return React.createElement(React.Fragment, null,
     breadcrumb, header, toast,
-    dadosSection, salvarBtn,
-    routesSection, vehiclesSection, metricsSection);
+    dadosSection, photosSection, salvarBtn,
+    routesSection, vehiclesSection, metricsSection, historicoSection);
 }
