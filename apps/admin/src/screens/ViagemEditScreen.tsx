@@ -111,7 +111,7 @@ export default function ViagemEditScreen() {
     return React.createElement('div', { style: webStyles.detailPage },
       React.createElement('div', { style: webStyles.detailSection },
         React.createElement('p', null, 'Nenhuma viagem selecionada.'),
-        React.createElement('button', { type: 'button', style: webStyles.detailBackBtn, onClick: () => navigate('/viagens') }, arrowBackSvg, 'Voltar à lista')));
+        React.createElement('button', { type: 'button', style: webStyles.detailBackBtn, onClick: () => navigate(-1) }, arrowBackSvg, 'Voltar à lista')));
   }
 
   // ── 1. Header Section ────────────────────────────────────────────────
@@ -123,7 +123,7 @@ export default function ViagemEditScreen() {
       React.createElement('span', { style: webStyles.detailBreadcrumbCurrent }, 'Editar viagem')),
     // Toolbar
     React.createElement('div', { style: webStyles.detailToolbar },
-      React.createElement('button', { type: 'button', style: { ...webStyles.detailBackBtn, borderRadius: 999 }, onClick: () => navigate('/viagens') },
+      React.createElement('button', { type: 'button', style: { ...webStyles.detailBackBtn, borderRadius: 999 }, onClick: () => navigate(-1) },
         arrowBackSvg, 'Voltar'),
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 16 } },
         React.createElement('button', { type: 'button', style: pillBtn('#f1f1f1', '#b53838') }, closeXSvg, 'Cancelar'),

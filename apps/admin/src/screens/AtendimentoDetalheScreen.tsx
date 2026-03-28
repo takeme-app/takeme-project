@@ -87,7 +87,7 @@ export default function AtendimentoDetalheScreen() {
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 2 } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
           React.createElement('button', {
-            type: 'button', onClick: () => navigate('/atendimentos'),
+            type: 'button', onClick: () => navigate(-1),
             style: { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' },
           }, arrowLeftSvg),
           React.createElement('h1', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Atendimento')),
