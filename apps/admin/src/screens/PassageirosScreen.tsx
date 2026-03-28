@@ -384,8 +384,8 @@ export default function PassageirosScreen() {
         style: { flex: tableCols[6].flex, minWidth: tableCols[6].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
       },
         React.createElement('div', { style: webStyles.viagensActionIcons },
-          React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar', onClick: () => { const item = passageirosData[idx]; navigate(`/passageiros/${item?.id ?? idx}`, { state: { passageiro: row } }); } }, eyeActionSvg),
-          React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => { const item = passageirosData[idx]; navigate(`/passageiros/${item?.id ?? idx}/editar-viagem`, { state: { passageiro: row } }); } }, pencilActionSvg))));
+          React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar', onClick: () => { const item = passageirosData[idx]; navigate(`/passageiros/${item?.id ?? idx}/viagem/0`, { state: { trip: { passageiro: row.nome, origem: row.cidade, destino: '—', data: row.dataCriacao, embarque: '—', chegada: '—', status: 'em_andamento' } } }); } }, eyeActionSvg),
+          React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => { const item = passageirosData[idx]; navigate(`/passageiros/${item?.id ?? idx}/viagem/0/editar`, { state: { trip: { passageiro: row.nome, origem: row.cidade, destino: '—', data: row.dataCriacao, embarque: '—', chegada: '—', status: 'em_andamento' }, from: 'Passageiros' } }); } }, pencilActionSvg))));
   };
 
   const tableSectionEl = React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 16, width: '100%' } },

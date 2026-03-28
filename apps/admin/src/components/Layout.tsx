@@ -38,6 +38,12 @@ export default function Layout() {
   const navigate = useNavigate();
   const { session, signOut } = useAuth();
 
+  // Scroll to top on route change
+  useEffect(() => {
+    const scrollContainer = document.querySelector('main')?.parentElement;
+    if (scrollContainer) scrollContainer.scrollTop = 0;
+  }, [location.pathname]);
+
   const [visibleCount, setVisibleCount] = useState(() => getVisibleCount(typeof window !== 'undefined' ? window.innerWidth : 1280));
   const [moreOpen, setMoreOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);

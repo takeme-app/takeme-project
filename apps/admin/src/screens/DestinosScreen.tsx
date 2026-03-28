@@ -70,6 +70,14 @@ const s = {
 export default function DestinosScreen() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const [criarRotaOpen, setCriarRotaOpen] = useState(false);
+  const [crEstadoOrigem, setCrEstadoOrigem] = useState('');
+  const [crCidadeOrigem, setCrCidadeOrigem] = useState('');
+  const [crEstadoDestino, setCrEstadoDestino] = useState('');
+  const [crCidadeDestino, setCrCidadeDestino] = useState('');
+  const [crRotaAtiva, setCrRotaAtiva] = useState(true);
+  const [estadosDropdownOpen, setEstadosDropdownOpen] = useState(false);
+  const [estadoSelected, setEstadoSelected] = useState('Todos os estados');
 
   // ── Real data from Supabase ─────────────────────────────────────────
   const [destinosData, setDestinosData] = useState<DestinoListItem[]>([]);
@@ -116,21 +124,23 @@ export default function DestinosScreen() {
     // + Nova rota button
     React.createElement('button', {
       type: 'button',
+      onClick: () => setCriarRotaOpen(true),
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
-        background: '#22c55e', color: '#fff', border: 'none', borderRadius: 999,
+        background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999,
         fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const,
       },
     }, plusSvg, 'Nova rota'),
     // Todos os estados dropdown
     React.createElement('button', {
       type: 'button',
+      onClick: () => setEstadosDropdownOpen(!estadosDropdownOpen),
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 16px',
         background: '#fff', border: '1px solid #e2e2e2', borderRadius: 999,
         fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const,
       },
-    }, 'Todos os estados', chevronDownSvg),
+    }, estadoSelected, chevronDownSvg),
     // Filtro button
     React.createElement('button', {
       type: 'button',
@@ -252,6 +262,98 @@ export default function DestinosScreen() {
       React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando destinos...'));
   }
 
+  // ── Criar rota modal ───────────────────────────────────────────────────
+  const selectField = (label: string, placeholder: string, value: string, onChange: (v: string) => void) =>
+    React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column' as const, gap: 4, minWidth: 180 } },
+      React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
+      React.createElement('div', {
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', cursor: 'pointer' },
+      },
+        React.createElement('span', { style: { fontSize: 14, color: value ? '#0d0d0d' : '#999', ...font } }, value || placeholder),
+        React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+          React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))));
+
+  const toggleSvg = (active: boolean) =>
+    React.createElement('div', {
+      onClick: () => setCrRotaAtiva(!crRotaAtiva),
+      style: {
+        width: 48, height: 28, borderRadius: 14, background: active ? '#0d0d0d' : '#d9d9d9',
+        position: 'relative' as const, cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0,
+      },
+    },
+      React.createElement('div', {
+        style: {
+          width: 22, height: 22, borderRadius: '50%', background: '#fff',
+          position: 'absolute' as const, top: 3, left: active ? 23 : 3, transition: 'left 0.2s',
+        },
+      }));
+
+  const criarRotaModal = criarRotaOpen ? React.createElement('div', {
+    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+    onClick: () => setCriarRotaOpen(false),
+  },
+    React.createElement('div', {
+      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 540, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)' },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      // Header
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Criar rota'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setCriarRotaOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      // Origem
+      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+        selectField('Estado da origem', 'Selecione um estado', crEstadoOrigem, setCrEstadoOrigem),
+        selectField('Cidade de origem', 'Selecione uma cidade', crCidadeOrigem, setCrCidadeOrigem)),
+      // Destino
+      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+        selectField('Estado do destino', 'Selecione um estado', crEstadoDestino, setCrEstadoDestino),
+        selectField('Cidade de destino', 'Selecione uma cidade', crCidadeDestino, setCrCidadeDestino)),
+      // Manter rota ativa
+      React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 } },
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+          React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Manter rota ativa'),
+          React.createElement('span', { style: { fontSize: 12, color: '#767676', lineHeight: 1.5, ...font } }, 'Ao manter a rota ativa, você garante que ela seja exibida e possa ser utilizada por todos os usuários da plataforma.')),
+        toggleSvg(crRotaAtiva)),
+      // Buttons
+      React.createElement('button', {
+        type: 'button', onClick: () => setCriarRotaOpen(false),
+        style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+      }, 'Salvar'),
+      React.createElement('button', {
+        type: 'button', onClick: () => setCriarRotaOpen(false),
+        style: { height: 40, background: 'none', border: 'none', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
+      }, 'Cancelar'))) : null;
+
+  // ── Estados dropdown overlay ────────────────────────────────────────────
+  const estadosList = ['Todos os estados', 'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
+  const estadosDropdown = estadosDropdownOpen ? React.createElement('div', {
+    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 },
+    onClick: () => setEstadosDropdownOpen(false),
+  },
+    React.createElement('div', {
+      style: {
+        position: 'fixed' as const, top: 160, right: 120, background: '#fff', borderRadius: 12,
+        boxShadow: '0 8px 30px rgba(0,0,0,0.15)', minWidth: 200, maxHeight: 300,
+        overflowY: 'auto' as const, padding: '8px 0',
+      },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      ...estadosList.map((e) =>
+        React.createElement('button', {
+          key: e, type: 'button',
+          onClick: () => { setEstadoSelected(e); setEstadosDropdownOpen(false); },
+          style: {
+            display: 'block', width: '100%', padding: '12px 20px', background: 'none', border: 'none',
+            fontSize: 14, fontWeight: estadoSelected === e ? 700 : 400, color: '#0d0d0d',
+            cursor: 'pointer', textAlign: 'left' as const, ...font,
+          },
+        }, e)))) : null;
+
   // ── Render ─────────────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Destinos'),
@@ -259,5 +361,7 @@ export default function DestinosScreen() {
     metricCardsRow1,
     origensChart,
     destinosChart,
-    tableSection);
+    tableSection,
+    criarRotaModal,
+    estadosDropdown);
 }

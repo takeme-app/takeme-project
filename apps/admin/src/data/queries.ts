@@ -235,6 +235,12 @@ export async function fetchViagemCounts(): Promise<ViagemCounts> {
 // ── Passageiros ─────────────────────────────────────────────────────────
 
 export async function fetchPassageiros(): Promise<PassageiroListItem[]> {
+  // Exclude workers (drivers, preparers, admins) — only show client app users
+  const { data: workerIds } = await supabase
+    .from('worker_profiles')
+    .select('id');
+  const excludeSet = new Set((workerIds ?? []).map((w: any) => w.id));
+
   const { data, error } = await supabase
     .from('profiles')
     .select('id, full_name, phone, avatar_url, cpf, city, state, verified, created_at')
@@ -243,16 +249,18 @@ export async function fetchPassageiros(): Promise<PassageiroListItem[]> {
 
   if (error || !data) return [];
 
-  return data.map((p: any) => ({
-    id: p.id,
-    nome: p.full_name ?? 'Sem nome',
-    cidade: p.city ?? '—',
-    estado: p.state ?? '—',
-    dataCriacao: fmtDate(p.created_at),
-    cpf: p.cpf ?? '—',
-    status: p.verified ? 'Ativo' as const : 'Inativo' as const,
-    avatarUrl: p.avatar_url,
-  }));
+  return data
+    .filter((p: any) => !excludeSet.has(p.id))
+    .map((p: any) => ({
+      id: p.id,
+      nome: p.full_name ?? 'Sem nome',
+      cidade: p.city ?? '—',
+      estado: p.state ?? '—',
+      dataCriacao: fmtDate(p.created_at),
+      cpf: p.cpf ?? '—',
+      status: p.verified ? 'Ativo' as const : 'Inativo' as const,
+      avatarUrl: p.avatar_url,
+    }));
 }
 
 export interface PassageiroCounts {

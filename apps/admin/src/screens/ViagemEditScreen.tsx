@@ -118,7 +118,7 @@ export default function ViagemEditScreen() {
   const headerSection = React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 32, display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' } },
     // Breadcrumb
     React.createElement('div', { style: webStyles.detailBreadcrumb },
-      React.createElement('span', null, 'Viagens'),
+      React.createElement('span', null, location.pathname.startsWith('/motoristas') ? 'Motoristas' : location.pathname.startsWith('/passageiros') ? 'Passageiros' : location.pathname.startsWith('/encomendas') ? 'Encomendas' : location.pathname.startsWith('/preparadores') ? 'Preparadores' : 'Viagens'),
       React.createElement('span', { style: { margin: '0 4px' } }, '\u203A'),
       React.createElement('span', { style: webStyles.detailBreadcrumbCurrent }, 'Editar viagem')),
     // Toolbar

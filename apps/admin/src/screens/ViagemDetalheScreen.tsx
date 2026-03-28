@@ -31,7 +31,13 @@ export default function ViagemDetalheScreen() {
   const navigate = useNavigate();
   const stateObj = location.state as { trip?: ViagemRow; from?: string } | null;
   const trip = stateObj?.trip ?? null;
-  const fromLabel = stateObj?.from || (location.pathname.includes('motorista') ? 'Motoristas' : 'Viagens');
+  const isMotoristas = location.pathname.startsWith('/motoristas');
+  const isPassageiros = location.pathname.startsWith('/passageiros');
+  const fromLabel = isMotoristas ? 'Motoristas'
+    : isPassageiros ? 'Passageiros'
+    : location.pathname.startsWith('/encomendas') ? 'Encomendas'
+    : location.pathname.startsWith('/preparadores') ? 'Preparadores'
+    : stateObj?.from || 'Viagens';
 
   if (!trip) {
     return React.createElement('div', { style: webStyles.detailPage },
@@ -125,10 +131,34 @@ export default function ViagemDetalheScreen() {
     React.createElement('div', { style: webStyles.detailToolbar },
       React.createElement('button', { type: 'button', style: webStyles.detailBackBtn, onClick: () => navigate(-1) }, arrowBackSvg, 'Voltar'),
       React.createElement('div', { style: { ...webStyles.detailDocBtns, gap: 8 } },
-        React.createElement('button', { type: 'button', style: { ...webStyles.detailDocBtn, background: '#0d0d0d', color: '#fff', borderRadius: 999 } }, 'Acompanhar em tempo real'),
-        React.createElement('button', { type: 'button', style: { ...webStyles.detailDocBtn, borderRadius: 999 } }, 'Ver NF'),
-        React.createElement('button', { type: 'button', style: { ...webStyles.detailDocBtn, borderRadius: 999 } }, 'Recibo'),
-        React.createElement('button', { type: 'button', style: { ...webStyles.detailDocBtn, borderRadius: 999 } }, 'Histórico'))),
+        // "Acompanhar em tempo real" — only for Motoristas and Passageiros
+        (isMotoristas || isPassageiros) ? React.createElement('button', { type: 'button', style: { ...webStyles.detailDocBtn, background: '#0d0d0d', color: '#fff', borderRadius: 999, border: '1px solid #0d0d0d' } },
+          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+            React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#fff', strokeWidth: 2 }),
+            React.createElement('circle', { cx: 12, cy: 12, r: 3, fill: '#fff' })),
+          'Acompanhar em tempo real') : null,
+        // Ver NF
+        React.createElement('button', { type: 'button', style: { ...webStyles.detailDocBtn, borderRadius: 999, border: '1px solid #e2e2e2' } },
+          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+            React.createElement('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z', stroke: '#0d0d0d', strokeWidth: 2 }),
+            React.createElement('path', { d: 'M14 2v6h6', stroke: '#0d0d0d', strokeWidth: 2 })),
+          'Ver NF'),
+        // Recibo
+        React.createElement('button', { type: 'button', style: { ...webStyles.detailDocBtn, borderRadius: 999, border: '1px solid #e2e2e2' } },
+          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+            React.createElement('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z', stroke: '#0d0d0d', strokeWidth: 2 }),
+            React.createElement('path', { d: 'M14 2v6h6M8 13h8M8 17h8M8 9h2', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })),
+          'Recibo'),
+        // "Histórico" — only for Motoristas
+        isMotoristas ? React.createElement('button', {
+          type: 'button',
+          onClick: () => navigate(location.pathname + '/historico', { state: location.state }),
+          style: { ...webStyles.detailDocBtn, borderRadius: 999, border: '1px solid #e2e2e2' },
+        },
+          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+            React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#0d0d0d', strokeWidth: 2 }),
+            React.createElement('path', { d: 'M12 6v6l4 2', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })),
+          'Histórico') : null)),
     React.createElement('div', { style: webStyles.detailMapTimelineRow },
       React.createElement('div', { style: { ...webStyles.detailMapWrap, cursor: 'pointer' }, onClick: () => setImageZoomOpen(true) },
         React.createElement('div', { style: { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#767676', fontSize: 14 } }, 'Mapa do trajeto')),
@@ -300,13 +330,21 @@ export default function ViagemDetalheScreen() {
         },
       }, 'Confirmar substituição')));
 
+  // Section order varies by context:
+  // Viagens/Destinos/Encomendas/Preparadores: Motorista → Passageiros → Encomendas (no Motoristas disponíveis)
+  // Passageiros: Passageiros → Motorista → Encomendas (no Motoristas disponíveis)
+  // Motoristas: Motoristas disponíveis → Passageiros → Encomendas
+  const contextSections = isMotoristas
+    ? [motoristasDispSection, passageirosSection, encomendasSection]
+    : isPassageiros
+    ? [passageirosSection, motoristaSection, encomendasSection]
+    : [motoristaSection, passageirosSection, encomendasSection];
+
   return React.createElement(React.Fragment, null,
     React.createElement('div', { style: webStyles.detailPage },
       firstSection,
       resumoSection,
       ocupacaoSection,
-      motoristasDispSection,
-      passageirosSection,
-      encomendasSection),
+      ...contextSections),
     imageZoomModal);
 }
