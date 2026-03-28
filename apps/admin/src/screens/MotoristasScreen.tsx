@@ -109,6 +109,12 @@ export default function MotoristasScreen() {
   const [trocarSelected, setTrocarSelected] = useState(0);
   const [trocarDate, setTrocarDate] = useState('01 de setembro');
   const [trocarMotivo, setTrocarMotivo] = useState('');
+  const [filtroOpen, setFiltroOpen] = useState(false);
+  const [filtroDateInicio, setFiltroDateInicio] = useState('05 de setembro');
+  const [filtroDateFim, setFiltroDateFim] = useState('30 de setembro');
+  const [filtroDatasIncluidas, setFiltroDatasIncluidas] = useState<'passadas' | 'passadas_futuras' | 'futuras'>('passadas_futuras');
+  const [filtroStatus, setFiltroStatus] = useState<'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('em_andamento');
+  const [filtroCategoria, setFiltroCategoria] = useState<'todos' | 'take_me' | 'parceiro'>('take_me');
 
   // ── Real data from Supabase ─────────────────────────────────────────
   const [motoristasData, setMotoristasData] = useState<MotoristaListItem[]>([]);
@@ -180,6 +186,7 @@ export default function MotoristasScreen() {
     // Filtro button
     React.createElement('button', {
       type: 'button',
+      onClick: () => setFiltroOpen(true),
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#f1f1f1', border: 'none', borderRadius: 999,
@@ -431,6 +438,94 @@ export default function MotoristasScreen() {
           style: { height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#0d0d0d', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
         }, 'Cancelar')))) : null;
 
+  // ── Filtro modal ───────────────────────────────────────────────────────
+  const fRadio = (selected: boolean, label: string, onClick: () => void) =>
+    React.createElement('button', {
+      type: 'button', onClick,
+      style: { display: 'flex', alignItems: 'center', gap: 10, background: 'none', border: 'none', cursor: 'pointer', padding: '6px 0' },
+    },
+      React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none' },
+        React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#0d0d0d', strokeWidth: 2 }),
+        selected ? React.createElement('circle', { cx: 12, cy: 12, r: 5, fill: '#0d0d0d' }) : null),
+      React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, label));
+
+  const fChip = (label: string, active: boolean, onClick: () => void) =>
+    React.createElement('button', {
+      type: 'button', onClick,
+      style: {
+        height: 36, padding: '0 16px', borderRadius: 999,
+        border: active ? 'none' : '1px solid #e2e2e2',
+        background: active ? '#0d0d0d' : '#fff', color: active ? '#fff' : '#0d0d0d',
+        fontSize: 14, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' as const, ...font,
+      },
+    }, label);
+
+  const fDateField = (label: string, value: string) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+      React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, label),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px' } },
+        React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+          React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
+        React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, value)));
+
+  const filtroModal = filtroOpen ? React.createElement('div', {
+    style: {
+      position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+    },
+    onClick: () => setFiltroOpen(false),
+  },
+    React.createElement('div', {
+      style: {
+        background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, padding: '28px 32px',
+        display: 'flex', flexDirection: 'column' as const, gap: 20,
+        boxShadow: '0 20px 60px rgba(0,0,0,.15)', maxHeight: '90vh', overflowY: 'auto' as const,
+      },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      // Header
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setFiltroOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      // Data da atividade
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Data da atividade'),
+      fDateField('Data inicial', filtroDateInicio),
+      fDateField('Data final', filtroDateFim),
+      // Datas incluídas
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Datas incluídas'),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+        fRadio(filtroDatasIncluidas === 'passadas', 'Somente passadas', () => setFiltroDatasIncluidas('passadas')),
+        fRadio(filtroDatasIncluidas === 'passadas_futuras', 'Passadas e futuras', () => setFiltroDatasIncluidas('passadas_futuras')),
+        fRadio(filtroDatasIncluidas === 'futuras', 'Somente futuras', () => setFiltroDatasIncluidas('futuras'))),
+      // Status da viagem
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Status da viagem'),
+      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        fChip('Em andamento', filtroStatus === 'em_andamento', () => setFiltroStatus('em_andamento')),
+        fChip('Agendadas', filtroStatus === 'agendadas', () => setFiltroStatus('agendadas')),
+        fChip('Concluídas', filtroStatus === 'concluidas', () => setFiltroStatus('concluidas')),
+        fChip('Canceladas', filtroStatus === 'canceladas', () => setFiltroStatus('canceladas'))),
+      // Categoria
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Categoria'),
+      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        fChip('Todos', filtroCategoria === 'todos', () => setFiltroCategoria('todos')),
+        fChip('Take Me', filtroCategoria === 'take_me', () => setFiltroCategoria('take_me')),
+        fChip('Motorista parceiro', filtroCategoria === 'parceiro', () => setFiltroCategoria('parceiro'))),
+      // Buttons
+      React.createElement('button', {
+        type: 'button', onClick: () => setFiltroOpen(false),
+        style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+      }, 'Aplicar filtro'),
+      React.createElement('button', {
+        type: 'button', onClick: () => setFiltroOpen(false),
+        style: { height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#0d0d0d', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+      }, 'Voltar'))) : null;
+
   // ── Render ─────────────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Motoristas'),
@@ -439,5 +534,6 @@ export default function MotoristasScreen() {
     secondRow,
     chartSection,
     tableSection,
-    trocarMotoristaPanel);
+    trocarMotoristaPanel,
+    filtroModal);
 }
