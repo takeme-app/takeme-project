@@ -286,33 +286,37 @@ export default function MotoristaEditScreen() {
     }, 'Salvar dados'));
 
   // ── Histórico de alterações ───────────────────────────────────────────
+  const histIcon = (pathD: string) =>
+    React.createElement('div', {
+      style: { width: 36, height: 36, borderRadius: '50%', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+    }, React.createElement('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none' },
+      React.createElement('path', { d: pathD, stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })));
+
   const timelineItems = [
-    { icon: '✓', label: 'Rota alterada', person: 'João Henrique', date: '14 Out, 14:00' },
-    { icon: '↔', label: 'Motorista substituído', person: 'Pedro Silva', date: '14 Out, 18:20' },
-    { icon: '👤', label: 'Passageiro adicionado', person: 'Ana Costa', date: '14 Out, 14:00' },
-    { icon: '📦', label: 'Encomenda adicionada', person: 'Teck Store', date: '14 Out, 14:53' },
+    { iconPath: 'M2 12c0 0 4-8 10-8s10 8 10 8-4 8-10 8S2 12 2 12z', label: 'Rota alterada', person: 'João Henrique', date: '14 Out, 14:30' },
+    { iconPath: 'M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8z', label: 'Motorista substituído', person: 'Pedro Silva', date: '14 Out, 14:35' },
+    { iconPath: 'M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M12.5 7.5a4 4 0 100-8 4 4 0 000 8zM20 8v6M23 11h-6', label: 'Passageiro adicionado', person: 'Ana Costa', date: '14 Out, 14:55' },
+    { iconPath: 'M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z', label: 'Encomenda adicionada', person: 'Tech Store', date: '14 Out, 14:55' },
   ];
 
   const historicoSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 12 },
   },
     React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Histórico de alterações'),
-    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, borderLeft: '2px solid #e2e2e2', marginLeft: 12, paddingLeft: 20 } },
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
       ...timelineItems.map((item, i) =>
         React.createElement('div', {
           key: i,
-          style: { display: 'flex', flexDirection: 'column' as const, gap: 2, paddingBottom: 20, position: 'relative' as const },
+          style: {
+            display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px',
+            background: '#f6f6f6', borderRadius: 12,
+          },
         },
-          React.createElement('div', {
-            style: {
-              position: 'absolute' as const, left: -29, top: 2, width: 20, height: 20,
-              borderRadius: '50%', background: '#fff', border: '2px solid #e2e2e2',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10,
-            },
-          }, item.icon),
-          React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } },
-            `${item.label} • `, React.createElement('span', { style: { color: '#cba04b' } }, item.person)),
-          React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, item.date)))));
+          histIcon(item.iconPath),
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 2, flex: 1 } },
+            React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } },
+              `${item.label} • `, React.createElement('span', { style: { color: '#cba04b' } }, item.person)),
+            React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, item.date))))));
 
   return React.createElement(React.Fragment, null,
     breadcrumb, header, toast,
