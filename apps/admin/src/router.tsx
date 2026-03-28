@@ -13,6 +13,7 @@ import ViagemEditScreen from './screens/ViagemEditScreen';
 import PassageirosScreen from './screens/PassageirosScreen';
 import PassageiroDetalheScreen from './screens/PassageiroDetalheScreen';
 import MotoristasScreen from './screens/MotoristasScreen';
+import MotoristaEditScreen from './screens/MotoristaEditScreen';
 import DestinosScreen from './screens/DestinosScreen';
 import EncomendasScreen from './screens/EncomendasScreen';
 import PreparadoresScreen from './screens/PreparadoresScreen';
@@ -47,6 +48,7 @@ export const router = createBrowserRouter([
           { path: '/passageiros', element: React.createElement(PassageirosScreen) },
           { path: '/passageiros/:id', element: React.createElement(PassageiroDetalheScreen) },
           { path: '/motoristas', element: React.createElement(MotoristasScreen) },
+          { path: '/motoristas/:id/editar', element: React.createElement(MotoristaEditScreen) },
           { path: '/destinos', element: React.createElement(DestinosScreen) },
           { path: '/encomendas', element: React.createElement(EncomendasScreen) },
           { path: '/preparadores', element: React.createElement(PreparadoresScreen) },
