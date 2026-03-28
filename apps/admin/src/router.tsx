@@ -24,6 +24,7 @@ import PlaceholderScreen from './screens/PlaceholderScreen';
 import AtendimentosScreen from './screens/AtendimentosScreen';
 import AtendimentoDetalheScreen from './screens/AtendimentoDetalheScreen';
 import ElaborarOrcamentoScreen from './screens/ElaborarOrcamentoScreen';
+import HistoricoViagensScreen from './screens/HistoricoViagensScreen';
 import ConfiguracoesScreen from './screens/ConfiguracoesScreen';
 
 export const router = createBrowserRouter([
@@ -44,14 +45,21 @@ export const router = createBrowserRouter([
           { path: '/', element: React.createElement(HomeScreen) },
           { path: '/viagens', element: React.createElement(ViagensScreen) },
           { path: '/viagens/:id', element: React.createElement(ViagemDetalheScreen) },
+          { path: '/viagens/:id/historico', element: React.createElement(HistoricoViagensScreen) },
           { path: '/viagens/:id/editar', element: React.createElement(ViagemEditScreen) },
           { path: '/passageiros', element: React.createElement(PassageirosScreen) },
           { path: '/passageiros/:id', element: React.createElement(PassageiroDetalheScreen) },
           { path: '/motoristas', element: React.createElement(MotoristasScreen) },
+          { path: '/motoristas/:mid/viagem/:id', element: React.createElement(ViagemDetalheScreen) },
+          { path: '/motoristas/:mid/viagem/:id/historico', element: React.createElement(HistoricoViagensScreen) },
           { path: '/motoristas/:id/editar', element: React.createElement(MotoristaEditScreen) },
           { path: '/destinos', element: React.createElement(DestinosScreen) },
           { path: '/encomendas', element: React.createElement(EncomendasScreen) },
+          { path: '/encomendas/:eid/viagem/:id', element: React.createElement(ViagemDetalheScreen) },
           { path: '/preparadores', element: React.createElement(PreparadoresScreen) },
+          { path: '/preparadores/:pid/viagem/:id', element: React.createElement(ViagemDetalheScreen) },
+          { path: '/passageiros/:pid/viagem/:id', element: React.createElement(ViagemDetalheScreen) },
+          { path: '/passageiros/:pid/viagem/:id/editar', element: React.createElement(ViagemEditScreen) },
           { path: '/promocoes', element: React.createElement(PromocoesScreen) },
           { path: '/pagamentos', element: React.createElement(PagamentosScreen) },
           { path: '/pagamentos/gestao', element: React.createElement(PagamentosGestaoScreen) },
