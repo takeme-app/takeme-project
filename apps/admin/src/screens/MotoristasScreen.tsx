@@ -317,7 +317,7 @@ export default function MotoristasScreen() {
         style: { flex: tableCols[7].flex, minWidth: tableCols[7].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
       },
         React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar' }, eyeActionSvg),
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar' }, pencilActionSvg)));
+        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => navigate(`/motoristas/${tableData[idx]?.driverId || ''}/editar`) }, pencilActionSvg)));
   });
 
   const tableSection = React.createElement('div', {
