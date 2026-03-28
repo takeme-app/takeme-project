@@ -316,7 +316,10 @@ export default function MotoristasScreen() {
       React.createElement('div', {
         style: { flex: tableCols[7].flex, minWidth: tableCols[7].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
       },
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar' }, eyeActionSvg),
+        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar', onClick: () => {
+          const t = tableData[idx];
+          if (t) navigate(`/viagens/${idx}`, { state: { trip: { passageiro: t.nome, origem: t.origem, destino: t.destino, data: t.data, embarque: t.embarque, chegada: t.chegada, status: t.status === 'Concluído' ? 'concluído' : t.status === 'Cancelado' ? 'cancelado' : t.status === 'Agendado' ? 'agendado' : 'em_andamento' } } });
+        } }, eyeActionSvg),
         React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => navigate(`/motoristas/${tableData[idx]?.driverId || ''}/editar`) }, pencilActionSvg)));
   });
 
