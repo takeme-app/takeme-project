@@ -35,7 +35,7 @@ export default function ViagemDetalheScreen() {
     return React.createElement('div', { style: webStyles.detailPage },
       React.createElement('div', { style: webStyles.detailSection },
         React.createElement('p', null, 'Nenhuma viagem selecionada.'),
-        React.createElement('button', { type: 'button', style: webStyles.detailBackBtn, onClick: () => navigate('/viagens') }, arrowBackSvg, 'Voltar à lista')));
+        React.createElement('button', { type: 'button', style: webStyles.detailBackBtn, onClick: () => navigate(-1) }, arrowBackSvg, 'Voltar à lista')));
   }
 
   const t = trip;
@@ -121,7 +121,7 @@ export default function ViagemDetalheScreen() {
       React.createElement('span', { style: { margin: '0 4px' } }, '›'),
       React.createElement('span', { style: webStyles.detailBreadcrumbCurrent }, 'Detalhes da viagem')),
     React.createElement('div', { style: webStyles.detailToolbar },
-      React.createElement('button', { type: 'button', style: webStyles.detailBackBtn, onClick: () => navigate('/viagens') }, arrowBackSvg, 'Voltar'),
+      React.createElement('button', { type: 'button', style: webStyles.detailBackBtn, onClick: () => navigate(-1) }, arrowBackSvg, 'Voltar'),
       React.createElement('div', { style: webStyles.detailDocBtns },
         React.createElement('button', { type: 'button', style: webStyles.detailDocBtn }, 'Ver NF'),
         React.createElement('button', { type: 'button', style: webStyles.detailDocBtn }, 'Recibo'))),

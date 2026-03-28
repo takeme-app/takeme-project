@@ -225,7 +225,7 @@ export default function PassageiroDetalheScreen() {
   // ── Breadcrumb ───────────────────────────────────────────────────────
   const breadcrumb = React.createElement('div', { style: s.breadcrumb },
     React.createElement('button', {
-      type: 'button', onClick: () => navigate('/passageiros'), style: s.breadcrumbLink,
+      type: 'button', onClick: () => navigate(-1), style: s.breadcrumbLink,
     }, 'Passageiros'),
     React.createElement('span', null, '>'),
     React.createElement('span', { style: s.breadcrumbCurrent }, 'Detalhes do passageiro'));
@@ -233,7 +233,7 @@ export default function PassageiroDetalheScreen() {
   // ── Header row: ← Voltar + Editar dados ──────────────────────────────
   const headerRow = React.createElement('div', { style: s.headerRow },
     React.createElement('button', {
-      type: 'button', onClick: () => navigate('/passageiros'), style: s.backBtn,
+      type: 'button', onClick: () => navigate(-1), style: s.backBtn,
     }, arrowBackSvg, 'Voltar'),
     React.createElement('button', { type: 'button', style: s.editBtn }, editSmallSvg, 'Editar dados'));
 
