@@ -44,14 +44,14 @@ type MotoristaRow = {
 };
 
 const tableCols = [
-  { label: 'Motoristas', flex: '1 1 16%', minWidth: 150 },
-  { label: 'Origem', flex: '1 1 14%', minWidth: 130 },
-  { label: 'Destino', flex: '1 1 14%', minWidth: 120 },
-  { label: 'Data', flex: '0 0 100px', minWidth: 100 },
-  { label: 'Embarque', flex: '0 0 80px', minWidth: 80 },
+  { label: 'Motoristas', flex: '1 1 15%', minWidth: 140 },
+  { label: 'Origem', flex: '1 1 15%', minWidth: 120 },
+  { label: 'Destino', flex: '1 1 15%', minWidth: 120 },
+  { label: 'Data', flex: '0 0 96px', minWidth: 96 },
+  { label: 'Embarque', flex: '0 0 76px', minWidth: 76 },
   { label: 'Chegada', flex: '0 0 72px', minWidth: 72 },
-  { label: 'Status', flex: '0 0 130px', minWidth: 130 },
-  { label: 'Visualizar/Editar', flex: '0 0 96px', minWidth: 96 },
+  { label: 'Status', flex: '0 0 120px', minWidth: 120 },
+  { label: 'Visualizar/Editar', flex: '0 0 90px', minWidth: 90 },
 ];
 
 const statusStyles: Record<string, { bg: string; color: string }> = {
@@ -105,6 +105,10 @@ const s = {
 export default function MotoristasScreen() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const [trocarOpen, setTrocarOpen] = useState(false);
+  const [trocarSelected, setTrocarSelected] = useState(0);
+  const [trocarDate, setTrocarDate] = useState('01 de setembro');
+  const [trocarMotivo, setTrocarMotivo] = useState('');
 
   // ── Real data from Supabase ─────────────────────────────────────────
   const [motoristasData, setMotoristasData] = useState<MotoristaListItem[]>([]);
@@ -166,6 +170,7 @@ export default function MotoristasScreen() {
     // Trocar motorista button
     React.createElement('button', {
       type: 'button',
+      onClick: () => setTrocarOpen(true),
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999,
@@ -272,19 +277,19 @@ export default function MotoristasScreen() {
     },
       // Motoristas (avatar + name)
       React.createElement('div', {
-        style: { ...cellBase, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth, gap: 10 },
+        style: { ...cellBase, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth, gap: 8, overflow: 'hidden' },
       },
         React.createElement('div', {
           style: {
-            width: 40, height: 40, borderRadius: '50%', background: avatarBg, flexShrink: 0,
+            width: 36, height: 36, borderRadius: '50%', background: avatarBg, flexShrink: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
           },
-        }, React.createElement('span', { style: { color: '#fff', fontSize: 16, fontWeight: 600, ...font } }, initial)),
-        React.createElement('span', { style: { fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, row.nome)),
+        }, React.createElement('span', { style: { color: '#fff', fontSize: 14, fontWeight: 600, ...font } }, initial)),
+        React.createElement('span', { style: { fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 } }, row.nome)),
       // Origem
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, row.origem),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 } }, row.origem),
       // Destino
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, row.destino),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 } }, row.destino),
       // Data
       React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth } }, row.data),
       // Embarque
@@ -322,6 +327,110 @@ export default function MotoristasScreen() {
       React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando motoristas...'));
   }
 
+  // ── Trocar motorista slide panel ──────────────────────────────────────
+  const tmDrivers = tableData.length > 0
+    ? [...new Map(tableData.map((t) => [t.driverId, t])).values()].map((t, i) => ({
+        nome: t.nome, rota: `${t.origem} → ${t.destino}`, data: t.data,
+        valorTotal: 'R$ 150,00', valorUnitario: 'R$ 75,00', pessoasRestantes: '2', ocupacao: '80%',
+      }))
+    : [{ nome: 'Motorista', rota: '—', data: '—', valorTotal: '—', valorUnitario: '—', pessoasRestantes: '—', ocupacao: '—' }];
+
+  const radioSvg = (selected: boolean) => React.createElement('svg', { width: 22, height: 22, viewBox: '0 0 24 24', fill: 'none' },
+    React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#0d0d0d', strokeWidth: 2, fill: 'none' }),
+    selected ? React.createElement('circle', { cx: 12, cy: 12, r: 5, fill: '#0d0d0d' }) : null);
+
+  const tmField = (label: string, val: string) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 2 } },
+      React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#0d0d0d', ...font } }, label),
+      React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, val));
+
+  const trocarMotoristaPanel = trocarOpen ? React.createElement('div', {
+    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000 },
+    onClick: () => setTrocarOpen(false),
+  },
+    React.createElement('div', {
+      style: {
+        position: 'fixed' as const, top: 0, right: 0, bottom: 0, width: '100%', maxWidth: 480,
+        background: '#fff', borderRadius: '16px 0 0 16px', padding: '28px 24px',
+        display: 'flex', flexDirection: 'column' as const, gap: 20,
+        overflowY: 'auto' as const, maxHeight: '100vh',
+      },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      // Header
+      React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' } },
+        React.createElement('div', null,
+          React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Trocar motorista'),
+          React.createElement('p', { style: { fontSize: 13, color: '#767676', margin: '4px 0 0', ...font } }, 'Selecione outro motorista disponível para continuar.')),
+        React.createElement('button', {
+          type: 'button', onClick: () => setTrocarOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      // Data da atividade
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Data da atividade'),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, 'Data'),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px' } },
+          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+            React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+            React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
+          React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, trocarDate))),
+      // Viagem atual
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Viagem atual'),
+      ...tmDrivers.slice(0, 1).map((d, i) =>
+        React.createElement('button', {
+          key: `current-${i}`, type: 'button',
+          onClick: () => setTrocarSelected(i),
+          style: { display: 'flex', gap: 12, alignItems: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' as const },
+        },
+          radioSvg(trocarSelected === i),
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+            React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, d.nome),
+            tmField('Origem - Destino', d.rota),
+            tmField('Data', d.data),
+            tmField('Valor total', d.valorTotal),
+            tmField('Valor unitário', d.valorUnitario),
+            tmField('Pessoas restantes', d.pessoasRestantes),
+            tmField('Ocupação do bagageiro', d.ocupacao)))),
+      // Outras viagens disponíveis
+      tmDrivers.length > 1 ? React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Outras viagens disponíveis') : null,
+      ...tmDrivers.slice(1).map((d, i) =>
+        React.createElement('button', {
+          key: `other-${i}`, type: 'button',
+          onClick: () => setTrocarSelected(i + 1),
+          style: { display: 'flex', gap: 12, alignItems: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' as const },
+        },
+          radioSvg(trocarSelected === i + 1),
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+            React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, d.nome),
+            tmField('Origem - Destino', d.rota),
+            tmField('Data', d.data),
+            tmField('Valor total', d.valorTotal),
+            tmField('Valor unitário', d.valorUnitario),
+            tmField('Pessoas restantes', d.pessoasRestantes),
+            tmField('Ocupação do bagageiro', d.ocupacao)))),
+      // Motivo
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, 'Motivo da troca'),
+        React.createElement('textarea', {
+          value: trocarMotivo,
+          onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => setTrocarMotivo(e.target.value),
+          placeholder: 'Descreva o motivo da troca...',
+          style: { width: '100%', minHeight: 80, borderRadius: 8, border: '1px solid #e2e2e2', padding: 12, fontSize: 14, color: '#0d0d0d', resize: 'vertical' as const, outline: 'none', boxSizing: 'border-box' as const, ...font },
+        })),
+      // Buttons
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, marginTop: 8 } },
+        React.createElement('button', {
+          type: 'button', onClick: () => setTrocarOpen(false),
+          style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+        }, 'Confirmar troca'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setTrocarOpen(false),
+          style: { height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#0d0d0d', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+        }, 'Cancelar')))) : null;
+
   // ── Render ─────────────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Motoristas'),
@@ -329,5 +438,6 @@ export default function MotoristasScreen() {
     metricCards,
     secondRow,
     chartSection,
-    tableSection);
+    tableSection,
+    trocarMotoristaPanel);
 }
