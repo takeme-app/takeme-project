@@ -99,12 +99,26 @@ export default function MotoristaEditScreen() {
     React.createElement('div', { style: { display: 'flex', gap: 12 } },
       React.createElement('button', {
         type: 'button', onClick: () => navigate(-1),
-        style: { height: 40, padding: '0 20px', borderRadius: 999, border: 'none', background: '#b53838', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font },
-      }, 'Cancelar'),
+        style: {
+          display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px',
+          borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff',
+          color: '#b53838', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
+        },
+      },
+        React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#b53838', strokeWidth: 2, strokeLinecap: 'round' })),
+        'Cancelar'),
       React.createElement('button', {
         type: 'button', onClick: () => navigate(-1),
-        style: { height: 40, padding: '0 20px', borderRadius: 999, border: 'none', background: '#cba04b', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font },
-      }, 'Salvar alteração')));
+        style: {
+          display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px',
+          borderRadius: 999, border: 'none', background: '#0d0d0d',
+          color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
+        },
+      },
+        React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })),
+        'Salvar alteração')));
 
   // ── Toast warning ─────────────────────────────────────────────────────
   const toast = React.createElement('div', {
