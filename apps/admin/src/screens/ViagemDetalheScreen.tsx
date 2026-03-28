@@ -29,7 +29,9 @@ import {
 export default function ViagemDetalheScreen() {
   const location = useLocation();
   const navigate = useNavigate();
-  const trip = (location.state as { trip?: ViagemRow } | null)?.trip ?? null;
+  const stateObj = location.state as { trip?: ViagemRow; from?: string } | null;
+  const trip = stateObj?.trip ?? null;
+  const fromLabel = stateObj?.from || (location.pathname.includes('motorista') ? 'Motoristas' : 'Viagens');
 
   if (!trip) {
     return React.createElement('div', { style: webStyles.detailPage },
@@ -117,7 +119,7 @@ export default function ViagemDetalheScreen() {
 
   const firstSection = React.createElement('div', { style: { ...webStyles.detailSection, ...detailSectionBorder } },
     React.createElement('div', { style: webStyles.detailBreadcrumb },
-      React.createElement('span', null, 'Viagens'),
+      React.createElement('span', null, fromLabel),
       React.createElement('span', { style: { margin: '0 4px' } }, '›'),
       React.createElement('span', { style: webStyles.detailBreadcrumbCurrent }, 'Detalhes da viagem')),
     React.createElement('div', { style: webStyles.detailToolbar },
