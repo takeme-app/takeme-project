@@ -2,8 +2,9 @@
  * ElaborarOrcamentoScreen — Elaborar orçamento de excursão conforme Figma 1429-33354.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useCallback } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { submitExcursionBudget } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -64,6 +65,16 @@ const itemRow = (item: string, qty: string, valor: string) =>
 
 export default function ElaborarOrcamentoScreen() {
   const navigate = useNavigate();
+  const { id: excursionId } = useParams<{ id: string }>();
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleFinalizar = useCallback(async () => {
+    if (!excursionId) { navigate(-1); return; }
+    setSubmitting(true);
+    await submitExcursionBudget(excursionId, { team: [], basic_items: [], additional_services: [], recreation_items: [], total_cents: 0 }, true);
+    setSubmitting(false);
+    navigate(-1);
+  }, [excursionId, navigate]);
 
   // ── Breadcrumb ────────────────────────────────────────────────────────
   const breadcrumb = React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#767676', ...font } },
@@ -89,13 +100,13 @@ export default function ElaborarOrcamentoScreen() {
         },
       }, closeSvg, 'Cancelar'),
       React.createElement('button', {
-        type: 'button', onClick: () => navigate(-1),
+        type: 'button', onClick: handleFinalizar, disabled: submitting,
         style: {
           display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px',
           borderRadius: 999, border: 'none', background: '#0d0d0d',
-          fontSize: 14, fontWeight: 600, color: '#fff', cursor: 'pointer', ...font,
+          fontSize: 14, fontWeight: 600, color: '#fff', cursor: submitting ? 'wait' : 'pointer', opacity: submitting ? 0.6 : 1, ...font,
         },
-      }, checkSvg, 'Finalizar orçamento')));
+      }, checkSvg, submitting ? 'Finalizando...' : 'Finalizar orçamento')));
 
   // ── Title ─────────────────────────────────────────────────────────────
   const title = React.createElement('h1', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Orçamento de Excursão');
