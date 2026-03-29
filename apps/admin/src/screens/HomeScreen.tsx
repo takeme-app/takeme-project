@@ -15,15 +15,18 @@ import {
   calendarIconSvg,
   closeIconSvg,
 } from '../styles/webStyles';
-import { fetchHomeCounts, type HomeCounts } from '../data/queries';
+import { fetchHomeCounts, fetchPagamentoCounts, type HomeCounts, type PagamentoCounts } from '../data/queries';
 
 export default function HomeScreen() {
   const [homeSubTab, setHomeSubTab] = useState<'viagens' | 'encomendas'>('viagens');
   const [homeCounts, setHomeCounts] = useState<HomeCounts | null>(null);
+  const [pagCounts, setPagCounts] = useState<PagamentoCounts | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    fetchHomeCounts().then((c) => { if (!cancelled) setHomeCounts(c); });
+    Promise.all([fetchHomeCounts(), fetchPagamentoCounts()]).then(([hc, pc]) => {
+      if (!cancelled) { setHomeCounts(hc); setPagCounts(pc); }
+    });
     return () => { cancelled = true; };
   }, []);
   const [filterModalOpen, setFilterModalOpen] = useState(false);
@@ -99,22 +102,33 @@ export default function HomeScreen() {
 
   const chartTitle = isEncomendas ? 'Distribuição de valores das encomendas concluídas' : 'Distribuição de receitas';
   const chartDesc = isEncomendas ? 'Distribuição de valores das encomendas concluídas no período filtrado.' : 'A receita total inclui todas as viagens concluídas no período filtrado.';
+  // Real chart data from payouts
+  const grossCents = (pagCounts?.pagamentosPrevistos ?? 0) + (pagCounts?.pagamentosFeitos ?? 0);
+  const adminCents = pagCounts?.lucro ?? 0;
+  const workerCents = pagCounts?.pagamentosFeitos ?? 0;
+  const totalCents = grossCents || 1; // avoid div by 0
+  const adminPct = Math.round((adminCents / totalCents) * 100);
+  const workerPct = Math.round((workerCents / totalCents) * 100);
+  const otherPct = 100 - adminPct - workerPct;
+  const adminDeg = Math.round((adminPct / 100) * 360);
+  const workerDeg = adminDeg + Math.round((workerPct / 100) * 360);
+  const fmtBRL = (c: number) => `R$ ${(c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
   const chartCardEl = React.createElement('div', { style: webStyles.chartCard },
     React.createElement('h3', { style: webStyles.chartCardTitle }, chartTitle),
     React.createElement('p', { style: webStyles.chartCardDesc }, chartDesc),
     React.createElement('div', { style: webStyles.chartRow },
-      React.createElement('div', { style: { width: 200, height: 200, borderRadius: '50%', background: 'conic-gradient(#cba04b 0deg 144deg, #545454 144deg 252deg, #0d0d0d 252deg 360deg)', flexShrink: 0 } }),
+      React.createElement('div', { style: { width: 200, height: 200, borderRadius: '50%', background: `conic-gradient(#cba04b 0deg ${adminDeg}deg, #545454 ${adminDeg}deg ${workerDeg}deg, #0d0d0d ${workerDeg}deg 360deg)`, flexShrink: 0 } }),
       React.createElement('div', { style: webStyles.chartLegend },
-        React.createElement('p', { style: webStyles.chartTotal }, 'Faturamento total: R$ 40.000,00'),
+        React.createElement('p', { style: webStyles.chartTotal }, `Faturamento total: ${fmtBRL(grossCents)}`),
         React.createElement('div', { style: webStyles.chartLegendItem },
           React.createElement('span', { style: { ...webStyles.chartLegendDot, background: '#cba04b' } }),
-          React.createElement('span', { style: webStyles.chartLegendText }, '40% Taxas')),
+          React.createElement('span', { style: webStyles.chartLegendText }, `${adminPct}% Admin (taxas)`)),
         React.createElement('div', { style: webStyles.chartLegendItem },
           React.createElement('span', { style: { ...webStyles.chartLegendDot, background: '#545454' } }),
-          React.createElement('span', { style: webStyles.chartLegendText }, '30% Valor líquido')),
+          React.createElement('span', { style: webStyles.chartLegendText }, `${workerPct}% Motoristas/Preparadores`)),
         React.createElement('div', { style: webStyles.chartLegendItem },
           React.createElement('span', { style: { ...webStyles.chartLegendDot, background: '#0d0d0d' } }),
-          React.createElement('span', { style: webStyles.chartLegendText }, '30% Despesas')))));
+          React.createElement('span', { style: webStyles.chartLegendText }, `${otherPct}% Outros`)))));
 
   // Modal Filtro Início (Figma 756-19720)
   const statusOptions: { id: 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'; label: string }[] = [
