@@ -12,7 +12,7 @@ import {
 } from '../styles/webStyles';
 import EditarFormaPagamentoTrechoModal from '../components/EditarFormaPagamentoTrechoModal';
 import { preparadorEncomendaSlug } from '../utils/preparadorSlug';
-import { fetchPricingRoutes, fetchSurchargeCatalog, fetchWorkerRatings, fetchMotoristas, fetchBases, createBase } from '../data/queries';
+import { fetchPricingRoutes, fetchSurchargeCatalog, fetchWorkerRatings, fetchMotoristas, fetchBases, createBase, deletePricingRoute, updatePricingRoute } from '../data/queries';
 import type { PricingRouteRow, SurchargeCatalogRow, MotoristaListItem } from '../data/types';
 import type { RatingListItem, BaseListItem } from '../data/queries';
 
@@ -153,6 +153,7 @@ const metricsEncomenda = [
 ];
 
 type EncomendaTrechoRow = {
+  id?: string;
   codigo: string;
   origem: string;
   destino: string;
@@ -222,6 +223,7 @@ const metricsAdicionais = [
 // These are rendered inline in the tab content, not via the generic metrics renderer.
 
 type AdicionalRow = {
+  id?: string;
   codigo: string;
   nome: string;
   tipo: string;
@@ -311,6 +313,25 @@ export default function PagamentosGestaoScreen() {
     setEditEncOpen(true);
   }, []);
   const fecharEditEnc = useCallback(() => setEditEncOpen(false), []);
+  const salvarEditEnc = useCallback(async () => {
+    if (editEncRow?.id) {
+      const modeMap: Record<string, string> = { 'Pequena': 'fixed', 'Média': 'fixed', 'Grande': 'fixed', 'Por KM': 'per_km', 'Fixo': 'fixed', 'Diária': 'daily_rate' };
+      const valNum = parseFloat(editEncValor.replace('R$', '').replace('.', '').replace(',', '.').trim()) * 100;
+      await updatePricingRoute(editEncRow.id, { price_cents: Math.round(valNum) });
+      // Refresh data
+      const updated = await fetchPricingRoutes('preparer_shipments');
+      setPricingEncRoutes(updated);
+    }
+    setEditEncOpen(false);
+  }, [editEncRow, editEncTipo, editEncValor]);
+  const confirmarRemoveEnc = useCallback(async () => {
+    if (editEncRow?.id) {
+      await deletePricingRoute(editEncRow.id);
+      const updated = await fetchPricingRoutes('preparer_shipments');
+      setPricingEncRoutes(updated);
+    }
+    setRemoveEncOpen(false);
+  }, [editEncRow]);
 
   // ── Editar adicional modal state ────────────────────────────────────
   const [editAdicOpen, setEditAdicOpen] = useState(false);
@@ -432,7 +453,10 @@ export default function PagamentosGestaoScreen() {
 
   // ── Remover encomenda modal state ──────────────────────────────────
   const [removeEncOpen, setRemoveEncOpen] = useState(false);
-  const abrirRemoveEnc = useCallback(() => setRemoveEncOpen(true), []);
+  const abrirRemoveEnc = useCallback((row?: EncomendaTrechoRow) => {
+    if (row) setEditEncRow(row);
+    setRemoveEncOpen(true);
+  }, []);
   const fecharRemoveEnc = useCallback(() => setRemoveEncOpen(false), []);
 
   // ── Real data from Supabase ─────────────────────────────────────────
@@ -469,6 +493,44 @@ export default function PagamentosGestaoScreen() {
     });
     return () => { cancelled = true; };
   }, []);
+
+  // ── Computed rows from real Supabase data ─────────────────────────────
+  const fmtCents = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`;
+  const realEncRows: EncomendaTrechoRow[] = useMemo(() =>
+    pricingEncRoutes.map(r => ({
+      id: r.id,
+      codigo: `#${r.id.slice(0, 5)}`,
+      origem: r.origin_address || '—',
+      destino: r.destination_address,
+      tipo: r.pricing_mode === 'per_km' ? 'Por KM' : r.pricing_mode === 'fixed' ? 'Fixo' : 'Diária',
+      valor: fmtCents(r.price_cents),
+    })), [pricingEncRoutes]);
+
+  const realTrechoRows: EncomendaTrechoRow[] = useMemo(() =>
+    pricingDriverRoutes.map(r => ({
+      id: r.id,
+      codigo: `#${r.id.slice(0, 5)}`,
+      origem: r.origin_address || '—',
+      destino: r.destination_address,
+      tipo: r.pricing_mode === 'per_km' ? 'Por KM' : r.pricing_mode === 'fixed' ? 'Fixo' : 'Viagem',
+      valor: fmtCents(r.price_cents),
+    })), [pricingDriverRoutes]);
+
+  const realAdicRows: AdicionalRow[] = useMemo(() =>
+    surcharges.map(s => ({
+      id: s.id,
+      codigo: `#${s.id.slice(0, 5)}`,
+      nome: s.name,
+      tipo: s.description || '—',
+      unidade: '—',
+      valor: fmtCents(s.default_value_cents),
+      inclusao: s.surcharge_mode === 'automatic' ? 'Automática' : 'Manual',
+    })), [surcharges]);
+
+  // Use real data if available, fallback to mock
+  const activeEncRows = realEncRows.length > 0 ? realEncRows : encomendaTrechoRows;
+  const activeTrechoRows = realTrechoRows.length > 0 ? realTrechoRows : trechoRows;
+  const activeAdicRows = realAdicRows.length > 0 ? realAdicRows : adicionalRows;
 
   const [filtroGestaoOpen, setFiltroGestaoOpen] = useState(false);
   const [filtroGestaoAtivo, setFiltroGestaoAtivo] = useState(false);
@@ -837,7 +899,7 @@ export default function PagamentosGestaoScreen() {
     key: c.label, style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 6px', display: 'flex', alignItems: 'center', height: '100%' },
   }, c.label)));
 
-  const encTableRowEls = encomendaTrechoRows.map((row, idx) =>
+  const encTableRowEls = activeEncRows.map((row, idx) =>
     React.createElement('div', {
       key: idx, style: { display: 'flex', minHeight: 56, alignItems: 'center', padding: '8px 16px', borderBottom: '1px solid #d9d9d9', background: '#f6f6f6' },
     },
@@ -848,7 +910,7 @@ export default function PagamentosGestaoScreen() {
       React.createElement('div', { style: { ...cellBase, flex: encomendaCols[4].flex, minWidth: encomendaCols[4].minWidth, fontWeight: 600 } }, row.valor),
       React.createElement('div', { style: { flex: encomendaCols[5].flex, minWidth: encomendaCols[5].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 } },
         React.createElement('button', { type: 'button', onClick: () => abrirEditEnc(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar' }, pencilSvg),
-        React.createElement('button', { type: 'button', onClick: () => abrirRemoveEnc(), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
+        React.createElement('button', { type: 'button', onClick: () => abrirRemoveEnc(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
 
   const encTableSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' },
@@ -861,7 +923,7 @@ export default function PagamentosGestaoScreen() {
     style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 64, padding: '16px 28px', background: '#f6f6f6', borderRadius: '16px 16px 0 0' },
   }, React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Lista de trechos de encomendas'));
 
-  const trechoTableRowEls = trechoRows.map((row, idx) =>
+  const trechoTableRowEls = activeTrechoRows.map((row, idx) =>
     React.createElement('div', {
       key: idx, style: { display: 'flex', minHeight: 56, alignItems: 'center', padding: '8px 16px', borderBottom: '1px solid #d9d9d9', background: '#f6f6f6' },
     },
@@ -872,7 +934,7 @@ export default function PagamentosGestaoScreen() {
       React.createElement('div', { style: { ...cellBase, flex: encomendaCols[4].flex, minWidth: encomendaCols[4].minWidth, fontWeight: 600 } }, row.valor),
       React.createElement('div', { style: { flex: encomendaCols[5].flex, minWidth: encomendaCols[5].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 } },
         React.createElement('button', { type: 'button', onClick: () => abrirEditEnc(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar' }, pencilSvg),
-        React.createElement('button', { type: 'button', onClick: () => abrirRemoveEnc(), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
+        React.createElement('button', { type: 'button', onClick: () => abrirRemoveEnc(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
 
   const trechoTableSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' },
@@ -962,7 +1024,7 @@ export default function PagamentosGestaoScreen() {
     key: c.label, style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 6px', display: 'flex', alignItems: 'center', height: '100%' },
   }, c.label)));
 
-  const adicRowEls = adicionalRows.map((row, idx) =>
+  const adicRowEls = activeAdicRows.map((row, idx) =>
     React.createElement('div', {
       key: idx, style: { display: 'flex', minHeight: 56, alignItems: 'center', padding: '8px 16px', borderBottom: '1px solid #d9d9d9', background: '#f6f6f6' },
     },
@@ -1155,7 +1217,7 @@ export default function PagamentosGestaoScreen() {
           // CTA
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
             React.createElement('button', {
-              type: 'button', onClick: fecharEditEnc,
+              type: 'button', onClick: salvarEditEnc,
               style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font },
             }, 'Salvar alterações'),
             React.createElement('button', {
@@ -1184,7 +1246,7 @@ export default function PagamentosGestaoScreen() {
               }, React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
                 React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
-            React.createElement('button', { type: 'button', onClick: fecharRemoveEnc, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 600, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Remover'),
+            React.createElement('button', { type: 'button', onClick: confirmarRemoveEnc, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 600, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Remover'),
             React.createElement('button', { type: 'button', onClick: fecharRemoveEnc, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'none', color: '#0d0d0d', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Voltar'))))
     : null;
 
