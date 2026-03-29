@@ -164,18 +164,15 @@ export default function ViagensScreen() {
 
   // Apply filters
   const statusMap: Record<string, string[]> = {
-    em_andamento: ['Em andamento', 'em_andamento'],
+    em_andamento: ['Em andamento', 'em_andamento', 'confirmed', 'Confirmada', 'pending', 'Pendente'],
     agendadas: ['Agendada', 'agendadas', 'active'],
-    concluidas: ['Concluída', 'concluidas', 'completed'],
+    concluidas: ['Concluída', 'concluidas', 'completed', 'paid', 'Paga'],
     canceladas: ['Cancelada', 'canceladas', 'cancelled'],
   };
   const viagensTableRows = viagensTableRowsAll.filter((row) => {
     const allowed = statusMap[filterStatus] || [];
     if (allowed.length > 0 && !allowed.some(s => row.status.toLowerCase().includes(s.toLowerCase()))) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      if (!row.passageiro.toLowerCase().includes(q) && !row.origem.toLowerCase().includes(q) && !row.destino.toLowerCase().includes(q)) return false;
-    }
+    // Search is handled by the search modal, not inline
     return true;
   });
 
