@@ -109,7 +109,15 @@ export default function Layout() {
     setAccountOpen(false);
   }, [location.pathname]);
 
+  // When navigating from another module (e.g. encomendas → viagem detail),
+  // keep that module's nav tab active instead of matching /viagens
+  const fromModule = (location.state as any)?.from as string | undefined;
+  const fromPath = fromModule ? `/${fromModule}` : null;
+
   const activeNavIndex = navTabsList.findIndex((tab) => {
+    if (fromPath && location.pathname.startsWith('/viagens')) {
+      return tab.path === fromPath;
+    }
     if (tab.path === '/') return location.pathname === '/';
     return location.pathname.startsWith(tab.path);
   });

@@ -147,6 +147,81 @@ export interface PreparadorListItem {
   status: 'Em andamento' | 'Agendado' | 'Cancelado' | 'Concluído';
 }
 
+/** Detalhe completo para a tela Editar preparador (admin). */
+export interface PreparadorEditPassenger {
+  id: string;
+  fullName: string;
+  cpf: string | null;
+  phone: string | null;
+  observations: string | null;
+}
+
+export interface PreparadorEditDetail {
+  id: string;
+  userId: string;
+  destination: string;
+  excursionDate: string;
+  scheduledDepartureAt: string | null;
+  peopleCount: number;
+  fleetType: string;
+  observations: string | null;
+  statusRaw: string;
+  statusLabel: PreparadorListItem['status'];
+  totalAmountCents: number | null;
+  preparerId: string | null;
+  vehicleDetails: Record<string, unknown> | null;
+  budgetLines: unknown[];
+  assignmentNotes: Record<string, unknown>;
+  clientNome: string | null;
+  clientCity: string | null;
+  clientState: string | null;
+  clientCpf: string | null;
+  clientPhone: string | null;
+  passengers: PreparadorEditPassenger[];
+  preparerProfile: {
+    fullName: string | null;
+    phone: string | null;
+    cpf: string | null;
+    city: string | null;
+    state: string | null;
+    avatarUrl: string | null;
+    rating: number | null;
+  } | null;
+  preparerWorker: {
+    cpf: string | null;
+    age: number | null;
+    experienceYears: number | null;
+    bankCode: string | null;
+    bankAgency: string | null;
+    bankAccount: string | null;
+    pixKey: string | null;
+    subtype: string | null;
+  } | null;
+  vehicles: Array<{
+    id: string;
+    year: number | null;
+    model: string | null;
+    plate: string | null;
+    passengerCapacity: number | null;
+  }>;
+}
+
+export interface PreparadorCandidate {
+  id: string;
+  nome: string;
+  rating: number | null;
+  avatarUrl: string | null;
+  subtype: string;
+  badge: 'takeme' | 'parceiro';
+  valorKm: string;
+  valorFixo: string;
+}
+
+export interface ExcursionStatusHistoryRow {
+  status: string;
+  changedAt: string;
+}
+
 // ── Promotions ──────────────────────────────────────────────────────
 export interface PromotionRow {
   id: string;
@@ -170,6 +245,9 @@ export interface PromocaoListItem {
   descricao: string;
   dataInicio: string;
   dataTermino: string;
+  /** ISO timestamps para filtros de período no admin */
+  startAtIso: string;
+  endAtIso: string;
   tipoPublico: string;
   tipoDesconto: string;
   valorDesconto: number;
