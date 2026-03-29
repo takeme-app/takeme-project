@@ -299,6 +299,91 @@ export default function PagamentosGestaoScreen() {
     else setActiveTab('Motorista');
   }, [searchParams]);
 
+  // ── Editar encomenda modal state ────────────────────────────────────
+  const [editEncOpen, setEditEncOpen] = useState(false);
+  const [editEncRow, setEditEncRow] = useState<EncomendaTrechoRow | null>(null);
+  const [editEncTipo, setEditEncTipo] = useState('');
+  const [editEncValor, setEditEncValor] = useState('');
+  const abrirEditEnc = useCallback((row: EncomendaTrechoRow) => {
+    setEditEncRow(row);
+    setEditEncTipo(row.tipo);
+    setEditEncValor(row.valor);
+    setEditEncOpen(true);
+  }, []);
+  const fecharEditEnc = useCallback(() => setEditEncOpen(false), []);
+
+  // ── Editar adicional modal state ────────────────────────────────────
+  const [editAdicOpen, setEditAdicOpen] = useState(false);
+  const [editAdicRow, setEditAdicRow] = useState<AdicionalRow | null>(null);
+  const [editAdicNome, setEditAdicNome] = useState('');
+  const [editAdicTipo, setEditAdicTipo] = useState('');
+  const [editAdicUnidade, setEditAdicUnidade] = useState('');
+  const [editAdicValor, setEditAdicValor] = useState('');
+  const [editAdicInclusao, setEditAdicInclusao] = useState('');
+  const abrirEditAdic = useCallback((row: AdicionalRow) => {
+    setEditAdicRow(row); setEditAdicNome(row.nome); setEditAdicTipo(row.tipo);
+    setEditAdicUnidade(row.unidade); setEditAdicValor(row.valor); setEditAdicInclusao(row.inclusao);
+    setEditAdicOpen(true);
+  }, []);
+  const fecharEditAdic = useCallback(() => setEditAdicOpen(false), []);
+
+  // ── Filtro avaliações modal state ───────────────────────────────────
+  const [filtroAvalOpen, setFiltroAvalOpen] = useState(false);
+  const [filtroAvalPeriodo, setFiltroAvalPeriodo] = useState('Este mês');
+  const [filtroAvalTipo, setFiltroAvalTipo] = useState('Preparadores de excursões');
+  const [filtroAvalNota, setFiltroAvalNota] = useState('3+');
+  const [filtroAvalOrdem, setFiltroAvalOrdem] = useState('Antigos');
+  const [filtroAvalBusca, setFiltroAvalBusca] = useState('');
+  const abrirFiltroAval = useCallback(() => setFiltroAvalOpen(true), []);
+  const fecharFiltroAval = useCallback(() => setFiltroAvalOpen(false), []);
+
+  // ── Filtro encomenda modal state ────────────────────────────────────
+  const [filtroEncOpen, setFiltroEncOpen] = useState(false);
+  const [filtroEncDataIni, setFiltroEncDataIni] = useState('05 de setembro');
+  const [filtroEncDataFim, setFiltroEncDataFim] = useState('30 de setembro');
+  const [filtroEncCategoria, setFiltroEncCategoria] = useState('Take Me');
+  const abrirFiltroEnc = useCallback(() => setFiltroEncOpen(true), []);
+  const fecharFiltroEnc = useCallback(() => setFiltroEncOpen(false), []);
+
+  // ── Filtro trecho modal state ───────────────────────────────────────
+  const [filtroTrechoOpen, setFiltroTrechoOpen] = useState(false);
+  const [filtroTrechoPrimario, setFiltroTrechoPrimario] = useState('Take Me');
+  const [filtroTrechoSecundario, setFiltroTrechoSecundario] = useState('Excursão');
+  const abrirFiltroTrecho = useCallback(() => setFiltroTrechoOpen(true), []);
+  const fecharFiltroTrecho = useCallback(() => setFiltroTrechoOpen(false), []);
+
+  // ── Filtro adicionais modal state ───────────────────────────────────
+  const [filtroAdicOpen, setFiltroAdicOpen] = useState(false);
+  const [filtroAdicOrigem, setFiltroAdicOrigem] = useState('');
+  const [filtroAdicDestino, setFiltroAdicDestino] = useState('');
+  const abrirFiltroAdic = useCallback(() => setFiltroAdicOpen(true), []);
+  const fecharFiltroAdic = useCallback(() => setFiltroAdicOpen(false), []);
+
+  // ── Criar adicional modal state ─────────────────────────────────────
+  const [criarAdicOpen, setCriarAdicOpen] = useState(false);
+  const [criarAdicNome, setCriarAdicNome] = useState('');
+  const [criarAdicTipo, setCriarAdicTipo] = useState('');
+  const [criarAdicUnidade, setCriarAdicUnidade] = useState('');
+  const [criarAdicValor, setCriarAdicValor] = useState('');
+  const [criarAdicVincular, setCriarAdicVincular] = useState('');
+  const [criarAdicInclusao, setCriarAdicInclusao] = useState('Manual');
+  const abrirCriarAdic = useCallback(() => {
+    setCriarAdicNome(''); setCriarAdicTipo(''); setCriarAdicUnidade('');
+    setCriarAdicValor(''); setCriarAdicVincular(''); setCriarAdicInclusao('Manual');
+    setCriarAdicOpen(true);
+  }, []);
+  const fecharCriarAdic = useCallback(() => setCriarAdicOpen(false), []);
+
+  // ── Remover adicional modal state ──────────────────────────────────
+  const [removeAdicOpen, setRemoveAdicOpen] = useState(false);
+  const abrirRemoveAdic = useCallback(() => setRemoveAdicOpen(true), []);
+  const fecharRemoveAdic = useCallback(() => setRemoveAdicOpen(false), []);
+
+  // ── Remover encomenda modal state ──────────────────────────────────
+  const [removeEncOpen, setRemoveEncOpen] = useState(false);
+  const abrirRemoveEnc = useCallback(() => setRemoveEncOpen(true), []);
+  const fecharRemoveEnc = useCallback(() => setRemoveEncOpen(false), []);
+
   // ── Real data from Supabase ─────────────────────────────────────────
   const [motoristasData, setMotoristasData] = useState<MotoristaListItem[]>([]);
   const [pricingDriverRoutes, setPricingDriverRoutes] = useState<PricingRouteRow[]>([]);
@@ -549,14 +634,14 @@ export default function PagamentosGestaoScreen() {
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
       React.createElement('button', {
         type: 'button',
-        onClick: abrirFiltroGestao,
+        onClick: activeTab === 'Avaliações' ? abrirFiltroAval : activeTab === 'Adicionais' ? abrirFiltroAdic : activeTab === 'Encomenda' ? abrirFiltroEnc : activeTab === 'Trecho' ? abrirFiltroTrecho : abrirFiltroGestao,
         style: {
           display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
           background: '#f1f1f1', border: 'none', borderRadius: 999,
           fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
         },
       }, filterIconSvg, 'Filtro'),
-      React.createElement('button', {
+      (activeTab === 'Motorista' || activeTab === 'Preparadores') ? React.createElement('button', {
         type: 'button',
         onClick: abrirEditPagamento,
         style: {
@@ -568,19 +653,21 @@ export default function PagamentosGestaoScreen() {
         React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
           React.createElement('path', { d: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
           React.createElement('path', { d: 'M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })),
-        'Editar forma de pagamento'),
-      React.createElement('button', {
-        type: 'button',
-        onClick: () => navigate('/pagamentos/gestao/criar-trecho'),
-        style: {
-          display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
-          background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999,
-          fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
-        },
-      },
-        React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-          React.createElement('path', { d: 'M12 5v14M5 12h14', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })),
-        'Criar novo trecho')));
+        'Editar forma de pagamento') : null,
+      activeTab !== 'Avaliações'
+        ? React.createElement('button', {
+            type: 'button',
+            onClick: () => activeTab === 'Adicionais' ? abrirCriarAdic() : navigate('/pagamentos/gestao/criar-trecho'),
+            style: {
+              display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
+              background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999,
+              fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
+            },
+          },
+            React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+              React.createElement('path', { d: 'M12 5v14M5 12h14', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })),
+            activeTab === 'Adicionais' ? 'Criar adicional' : 'Criar novo trecho')
+        : null));
 
   // ── Tabs ───────────────────────────────────────────────────────────────
   const tabsEl = React.createElement('div', { style: s.tabsRow },
@@ -706,8 +793,8 @@ export default function PagamentosGestaoScreen() {
       React.createElement('div', { style: { ...cellBase, flex: encomendaCols[3].flex, minWidth: encomendaCols[3].minWidth, fontWeight: 500 } }, row.tipo),
       React.createElement('div', { style: { ...cellBase, flex: encomendaCols[4].flex, minWidth: encomendaCols[4].minWidth, fontWeight: 600 } }, row.valor),
       React.createElement('div', { style: { flex: encomendaCols[5].flex, minWidth: encomendaCols[5].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 } },
-        React.createElement('button', { type: 'button', style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar' }, pencilSvg),
-        React.createElement('button', { type: 'button', style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
+        React.createElement('button', { type: 'button', onClick: () => abrirEditEnc(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar' }, pencilSvg),
+        React.createElement('button', { type: 'button', onClick: () => abrirRemoveEnc(), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
 
   const encTableSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' },
@@ -730,8 +817,8 @@ export default function PagamentosGestaoScreen() {
       React.createElement('div', { style: { ...cellBase, flex: encomendaCols[3].flex, minWidth: encomendaCols[3].minWidth, fontWeight: 500 } }, row.tipo),
       React.createElement('div', { style: { ...cellBase, flex: encomendaCols[4].flex, minWidth: encomendaCols[4].minWidth, fontWeight: 600 } }, row.valor),
       React.createElement('div', { style: { flex: encomendaCols[5].flex, minWidth: encomendaCols[5].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 } },
-        React.createElement('button', { type: 'button', style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar' }, pencilSvg),
-        React.createElement('button', { type: 'button', style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
+        React.createElement('button', { type: 'button', onClick: () => abrirEditEnc(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar' }, pencilSvg),
+        React.createElement('button', { type: 'button', onClick: () => abrirRemoveEnc(), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
 
   const trechoTableSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' },
@@ -832,8 +919,8 @@ export default function PagamentosGestaoScreen() {
       React.createElement('div', { style: { ...cellBase, flex: adicionalCols[4].flex, minWidth: adicionalCols[4].minWidth, fontWeight: 600 } }, row.valor),
       React.createElement('div', { style: { ...cellBase, flex: adicionalCols[5].flex, minWidth: adicionalCols[5].minWidth } }, row.inclusao),
       React.createElement('div', { style: { flex: adicionalCols[6].flex, minWidth: adicionalCols[6].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 } },
-        React.createElement('button', { type: 'button', style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar' }, pencilSvg),
-        React.createElement('button', { type: 'button', style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
+        React.createElement('button', { type: 'button', onClick: () => abrirEditAdic(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar' }, pencilSvg),
+        React.createElement('button', { type: 'button', onClick: () => abrirRemoveAdic(), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
 
   const adicSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' },
@@ -894,7 +981,507 @@ export default function PagamentosGestaoScreen() {
   }
   else tabContent = [metricCards, tableSection];
 
+  // ── Editar encomenda modal ───────────────────────────────────────────
+  const editEncModal = editEncOpen
+    ? React.createElement('div', {
+        role: 'dialog', 'aria-modal': true,
+        style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 2100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, boxSizing: 'border-box' as const },
+        onClick: fecharEditEnc,
+      },
+        React.createElement('div', {
+          style: { background: '#fff', borderRadius: 16, boxShadow: '6px 6px 12px 0 rgba(0,0,0,0.15)', width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, gap: 24, padding: '24px 0', boxSizing: 'border-box' as const },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          // Header
+          React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 24, width: '100%' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+              React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+                React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, ...font } }, 'Editar valor de encomenda'),
+                React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, lineHeight: 1.5, ...font } }, `Atualize o tipo e o valor da encomenda ${editEncRow?.codigo ?? ''}`)),
+              React.createElement('button', {
+                type: 'button', onClick: fecharEditEnc, 'aria-label': 'Fechar',
+                style: { width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 },
+              }, React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+                React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
+          // Form
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            // Tipo
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Tipo'),
+              React.createElement('div', { style: { position: 'relative' as const, width: '100%' } },
+                React.createElement('select', {
+                  value: editEncTipo,
+                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setEditEncTipo(e.target.value),
+                  style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', boxSizing: 'border-box' as const, appearance: 'none' as const, WebkitAppearance: 'none' as const, cursor: 'pointer', ...font },
+                },
+                  React.createElement('option', { value: 'Pequena' }, 'Pequena'),
+                  React.createElement('option', { value: 'Média' }, 'Média'),
+                  React.createElement('option', { value: 'Grande' }, 'Grande')),
+                React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { position: 'absolute' as const, right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } },
+                  React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))),
+            // Valor
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Valor'),
+              React.createElement('input', {
+                type: 'text', value: editEncValor,
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditEncValor(e.target.value),
+                placeholder: 'R$ 75,00',
+                style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: editEncValor ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
+              }))),
+          // CTA
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('button', {
+              type: 'button', onClick: fecharEditEnc,
+              style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font },
+            }, 'Salvar alterações'),
+            React.createElement('button', {
+              type: 'button', onClick: fecharEditEnc,
+              style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font },
+            }, 'Cancelar'))))
+    : null;
+
+  // ── Remover encomenda modal ─────────────────────────────────────────
+  const removeEncModal = removeEncOpen
+    ? React.createElement('div', {
+        role: 'dialog', 'aria-modal': true,
+        style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 2100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, boxSizing: 'border-box' as const },
+        onClick: fecharRemoveEnc,
+      },
+        React.createElement('div', {
+          style: { background: '#fff', borderRadius: 16, boxShadow: '6px 6px 12px 0 rgba(0,0,0,0.15)', width: '100%', maxWidth: 560, display: 'flex', flexDirection: 'column' as const, gap: 24, padding: '24px 0', boxSizing: 'border-box' as const },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 24, width: '100%' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+              React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, maxWidth: 316, ...font } }, 'Tem certeza que deseja remover esta encomenda?'),
+              React.createElement('button', {
+                type: 'button', onClick: fecharRemoveEnc, 'aria-label': 'Fechar',
+                style: { width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 },
+              }, React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+                React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('button', { type: 'button', onClick: fecharRemoveEnc, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 600, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Remover'),
+            React.createElement('button', { type: 'button', onClick: fecharRemoveEnc, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'none', color: '#0d0d0d', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Voltar'))))
+    : null;
+
+  // ── Editar adicional modal ───────────────────────────────────────────
+  const chipStyle = (active: boolean): React.CSSProperties => ({
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', height: 36, padding: '0 16px',
+    borderRadius: 999, border: active ? '2px solid #0d0d0d' : '1px solid #d9d9d9', background: active ? '#0d0d0d' : '#fff',
+    color: active ? '#fff' : '#0d0d0d', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
+  });
+
+  const editAdicModal = editAdicOpen
+    ? React.createElement('div', {
+        role: 'dialog', 'aria-modal': true,
+        style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 2100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, boxSizing: 'border-box' as const },
+        onClick: fecharEditAdic,
+      },
+        React.createElement('div', {
+          style: { background: '#fff', borderRadius: 16, boxShadow: '6px 6px 12px 0 rgba(0,0,0,0.15)', width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, gap: 24, padding: '24px 0', boxSizing: 'border-box' as const },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          // Header
+          React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 24, width: '100%' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+              React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, ...font } }, 'Editar tabela'),
+              React.createElement('button', {
+                type: 'button', onClick: fecharEditAdic, 'aria-label': 'Fechar',
+                style: { width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 },
+              }, React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+                React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
+          // Form
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            // Nome
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Nome'),
+              React.createElement('input', {
+                type: 'text', value: editAdicNome,
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditAdicNome(e.target.value),
+                style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', boxSizing: 'border-box' as const, ...font },
+              })),
+            // Tipo
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Tipo'),
+              React.createElement('div', { style: { position: 'relative' as const, width: '100%' } },
+                React.createElement('select', {
+                  value: editAdicTipo,
+                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setEditAdicTipo(e.target.value),
+                  style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', boxSizing: 'border-box' as const, appearance: 'none' as const, WebkitAppearance: 'none' as const, cursor: 'pointer', ...font },
+                },
+                  React.createElement('option', { value: 'Viagem' }, 'Viagem'),
+                  React.createElement('option', { value: 'Encomenda' }, 'Encomenda'),
+                  React.createElement('option', { value: 'Excursão' }, 'Excursão')),
+                React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { position: 'absolute' as const, right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } },
+                  React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))),
+            // Unidade
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Unidade'),
+              React.createElement('div', { style: { position: 'relative' as const, width: '100%' } },
+                React.createElement('select', {
+                  value: editAdicUnidade,
+                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setEditAdicUnidade(e.target.value),
+                  style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: editAdicUnidade ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, appearance: 'none' as const, WebkitAppearance: 'none' as const, cursor: 'pointer', ...font },
+                },
+                  React.createElement('option', { value: '' }, 'Selecione a unidade'),
+                  React.createElement('option', { value: 'KM' }, 'KM'),
+                  React.createElement('option', { value: 'Ida' }, 'Ida'),
+                  React.createElement('option', { value: 'Hora' }, 'Hora')),
+                React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { position: 'absolute' as const, right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } },
+                  React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))),
+            // Valor
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Valor'),
+              React.createElement('input', {
+                type: 'text', value: editAdicValor,
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditAdicValor(e.target.value),
+                style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', boxSizing: 'border-box' as const, ...font },
+              })),
+            // Inclusão chips
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%', marginTop: 8 } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Inclusão'),
+              React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                React.createElement('button', { type: 'button', onClick: () => setEditAdicInclusao('Automática'), style: chipStyle(editAdicInclusao === 'Automática') }, 'Automática'),
+                React.createElement('button', { type: 'button', onClick: () => setEditAdicInclusao('Manual'), style: chipStyle(editAdicInclusao === 'Manual') }, 'Manual')))),
+          // CTA
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('button', { type: 'button', onClick: fecharEditAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Salvar alterações'),
+            React.createElement('button', { type: 'button', onClick: fecharEditAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Cancelar'))))
+    : null;
+
+  // ── Remover adicional modal ─────────────────────────────────────────
+  const removeAdicModal = removeAdicOpen
+    ? React.createElement('div', {
+        role: 'dialog', 'aria-modal': true,
+        style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 2100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, boxSizing: 'border-box' as const },
+        onClick: fecharRemoveAdic,
+      },
+        React.createElement('div', {
+          style: { background: '#fff', borderRadius: 16, boxShadow: '6px 6px 12px 0 rgba(0,0,0,0.15)', width: '100%', maxWidth: 560, display: 'flex', flexDirection: 'column' as const, gap: 24, padding: '24px 0', boxSizing: 'border-box' as const },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 24, width: '100%' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+              React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, maxWidth: 316, ...font } }, 'Tem certeza que deseja remover este adicional?'),
+              React.createElement('button', {
+                type: 'button', onClick: fecharRemoveAdic, 'aria-label': 'Fechar',
+                style: { width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 },
+              }, React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+                React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('button', { type: 'button', onClick: fecharRemoveAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 600, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Remover'),
+            React.createElement('button', { type: 'button', onClick: fecharRemoveAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'none', color: '#0d0d0d', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Voltar'))))
+    : null;
+
+  // ── Criar adicional modal ────────────────────────────────────────────
+  const criarAdicModal = criarAdicOpen
+    ? React.createElement('div', {
+        role: 'dialog', 'aria-modal': true,
+        style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 2100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, boxSizing: 'border-box' as const },
+        onClick: fecharCriarAdic,
+      },
+        React.createElement('div', {
+          style: { background: '#fff', borderRadius: 16, boxShadow: '6px 6px 12px 0 rgba(0,0,0,0.15)', width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, gap: 24, padding: '24px 0', boxSizing: 'border-box' as const },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          // Header
+          React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 24, width: '100%' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+              React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, ...font } }, 'Criar adicional'),
+              React.createElement('button', {
+                type: 'button', onClick: fecharCriarAdic, 'aria-label': 'Fechar',
+                style: { width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 },
+              }, React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+                React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
+          // Form
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            // Nome
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Nome'),
+              React.createElement('input', {
+                type: 'text', value: criarAdicNome, placeholder: 'Ex: Pedágio SP - Campinas',
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCriarAdicNome(e.target.value),
+                style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: criarAdicNome ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
+              })),
+            // Tipo
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Tipo'),
+              React.createElement('div', { style: { position: 'relative' as const, width: '100%' } },
+                React.createElement('select', {
+                  value: criarAdicTipo,
+                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setCriarAdicTipo(e.target.value),
+                  style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: criarAdicTipo ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, appearance: 'none' as const, WebkitAppearance: 'none' as const, cursor: 'pointer', ...font },
+                },
+                  React.createElement('option', { value: '', disabled: true }, 'Selecione o tipo'),
+                  React.createElement('option', { value: 'Viagem' }, 'Viagem'),
+                  React.createElement('option', { value: 'Encomenda' }, 'Encomenda'),
+                  React.createElement('option', { value: 'Excursão' }, 'Excursão')),
+                React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { position: 'absolute' as const, right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } },
+                  React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))),
+            // Unidade
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Unidade'),
+              React.createElement('div', { style: { position: 'relative' as const, width: '100%' } },
+                React.createElement('select', {
+                  value: criarAdicUnidade,
+                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setCriarAdicUnidade(e.target.value),
+                  style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: criarAdicUnidade ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, appearance: 'none' as const, WebkitAppearance: 'none' as const, cursor: 'pointer', ...font },
+                },
+                  React.createElement('option', { value: '', disabled: true }, 'Selecione a unidade'),
+                  React.createElement('option', { value: 'KM' }, 'KM'),
+                  React.createElement('option', { value: 'Ida' }, 'Ida'),
+                  React.createElement('option', { value: 'Hora' }, 'Hora')),
+                React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { position: 'absolute' as const, right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } },
+                  React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))),
+            // Valor
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Valor'),
+              React.createElement('input', {
+                type: 'text', value: criarAdicValor, placeholder: 'Ex: R$ 25,00',
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCriarAdicValor(e.target.value),
+                style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: criarAdicValor ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
+              })),
+            // Vincular trecho
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Vincular trecho'),
+              React.createElement('input', {
+                type: 'text', value: criarAdicVincular, placeholder: 'Ex: (21) 98888-7777',
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCriarAdicVincular(e.target.value),
+                style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: criarAdicVincular ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
+              })),
+            // Inclusão chips
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%', marginTop: 8 } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Inclusão'),
+              React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                React.createElement('button', { type: 'button', onClick: () => setCriarAdicInclusao('Automática'), style: chipStyle(criarAdicInclusao === 'Automática') }, 'Automática'),
+                React.createElement('button', { type: 'button', onClick: () => setCriarAdicInclusao('Manual'), style: chipStyle(criarAdicInclusao === 'Manual') }, 'Manual')))),
+          // CTA
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('button', { type: 'button', onClick: fecharCriarAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Salvar adicional'),
+            React.createElement('button', { type: 'button', onClick: fecharCriarAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Cancelar'))))
+    : null;
+
+  // ── Shared chip helper ──────────────────────────────────────────────
+  const avalChip = (label: string, selected: boolean, onClick: () => void): React.ReactElement =>
+    React.createElement('button', {
+      type: 'button', onClick,
+      style: {
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', height: 36, padding: '0 16px',
+        borderRadius: 999, border: selected ? '2px solid #0d0d0d' : '1px solid #d9d9d9',
+        background: selected ? '#0d0d0d' : '#fff', color: selected ? '#fff' : '#0d0d0d',
+        fontSize: 14, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' as const, ...font,
+      },
+    }, label);
+
+  // ── Filtro encomenda modal ───────────────────────────────────────────
+  const filtroEncModal = filtroEncOpen
+    ? React.createElement('div', {
+        role: 'dialog', 'aria-modal': true,
+        style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 2100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, boxSizing: 'border-box' as const },
+        onClick: fecharFiltroEnc,
+      },
+        React.createElement('div', {
+          style: { background: '#fff', borderRadius: 16, boxShadow: '6px 6px 12px 0 rgba(0,0,0,0.15)', width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, gap: 24, padding: '24px 0', boxSizing: 'border-box' as const },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          // Header
+          React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 24, width: '100%' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+              React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, ...font } }, 'Filtro da tabela'),
+              React.createElement('button', {
+                type: 'button', onClick: fecharFiltroEnc, 'aria-label': 'Fechar',
+                style: { width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 },
+              }, React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+                React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
+          // Body
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            // Data da atividade
+            React.createElement('span', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', lineHeight: 1.5, ...font } }, 'Data da atividade'),
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 32, display: 'flex', alignItems: 'center', ...font } }, 'Data inicial'),
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, borderRadius: 8, background: '#f1f1f1', paddingLeft: 16, overflow: 'hidden', width: '100%', boxSizing: 'border-box' as const } },
+                calendarSvgLg,
+                React.createElement('input', {
+                  type: 'text', value: filtroEncDataIni, placeholder: '05 de setembro',
+                  onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFiltroEncDataIni(e.target.value),
+                  style: { ...inputGestStyle, color: filtroEncDataIni ? '#0d0d0d' : '#767676' },
+                }))),
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 32, display: 'flex', alignItems: 'center', ...font } }, 'Data final'),
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, borderRadius: 8, background: '#f1f1f1', paddingLeft: 16, overflow: 'hidden', width: '100%', boxSizing: 'border-box' as const } },
+                calendarSvgLg,
+                React.createElement('input', {
+                  type: 'text', value: filtroEncDataFim, placeholder: '30 de setembro',
+                  onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFiltroEncDataFim(e.target.value),
+                  style: { ...inputGestStyle, color: filtroEncDataFim ? '#0d0d0d' : '#767676' },
+                }))),
+            // Categoria
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
+              React.createElement('span', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', lineHeight: 1.5, ...font } }, 'Categoria'),
+              React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+                avalChip('Todos', filtroEncCategoria === 'Todos', () => setFiltroEncCategoria('Todos')),
+                avalChip('Take Me', filtroEncCategoria === 'Take Me', () => setFiltroEncCategoria('Take Me')),
+                avalChip('Motorista parceiro', filtroEncCategoria === 'Motorista parceiro', () => setFiltroEncCategoria('Motorista parceiro'))))),
+          // CTA
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('button', { type: 'button', onClick: fecharFiltroEnc, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Aplicar filtro'),
+            React.createElement('button', { type: 'button', onClick: fecharFiltroEnc, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'none', color: '#0d0d0d', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Voltar'))))
+    : null;
+
+  // ── Filtro trecho modal ─────────────────────────────────────────────
+  const filtroTrechoModal = filtroTrechoOpen
+    ? React.createElement('div', {
+        role: 'dialog', 'aria-modal': true,
+        style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 2100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, boxSizing: 'border-box' as const },
+        onClick: fecharFiltroTrecho,
+      },
+        React.createElement('div', {
+          style: { background: '#fff', borderRadius: 16, boxShadow: '6px 6px 12px 0 rgba(0,0,0,0.15)', width: '100%', maxWidth: 560, display: 'flex', flexDirection: 'column' as const, gap: 24, padding: '24px 0', boxSizing: 'border-box' as const },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          // Header
+          React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 24, width: '100%' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+              React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, ...font } }, 'Filtro da tabela'),
+              React.createElement('button', {
+                type: 'button', onClick: fecharFiltroTrecho, 'aria-label': 'Fechar',
+                style: { width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 },
+              }, React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+                React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
+          // Body
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('span', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', lineHeight: 1.5, ...font } }, 'Tipo de motorista'),
+            // Primário
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Primário'),
+              React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+                avalChip('Todos', filtroTrechoPrimario === 'Todos', () => setFiltroTrechoPrimario('Todos')),
+                avalChip('Take Me', filtroTrechoPrimario === 'Take Me', () => setFiltroTrechoPrimario('Take Me')),
+                avalChip('Parceiros', filtroTrechoPrimario === 'Parceiros', () => setFiltroTrechoPrimario('Parceiros')))),
+            // Secundário
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Secundário'),
+              React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+                avalChip('Todos', filtroTrechoSecundario === 'Todos', () => setFiltroTrechoSecundario('Todos')),
+                avalChip('Viagem', filtroTrechoSecundario === 'Viagem', () => setFiltroTrechoSecundario('Viagem')),
+                avalChip('Excursão', filtroTrechoSecundario === 'Excursão', () => setFiltroTrechoSecundario('Excursão'))))),
+          // CTA
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('button', { type: 'button', onClick: fecharFiltroTrecho, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Aplicar filtro'),
+            React.createElement('button', { type: 'button', onClick: fecharFiltroTrecho, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'none', color: '#0d0d0d', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Voltar'))))
+    : null;
+
+  // ── Filtro adicionais modal ──────────────────────────────────────────
+  const filtroAdicModal = filtroAdicOpen
+    ? React.createElement('div', {
+        role: 'dialog', 'aria-modal': true,
+        style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 2100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, boxSizing: 'border-box' as const },
+        onClick: fecharFiltroAdic,
+      },
+        React.createElement('div', {
+          style: { background: '#fff', borderRadius: 16, boxShadow: '6px 6px 12px 0 rgba(0,0,0,0.15)', width: '100%', maxWidth: 560, display: 'flex', flexDirection: 'column' as const, gap: 24, padding: '24px 0', boxSizing: 'border-box' as const },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          // Header
+          React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 24, width: '100%' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+              React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, ...font } }, 'Filtro'),
+              React.createElement('button', {
+                type: 'button', onClick: fecharFiltroAdic, 'aria-label': 'Fechar',
+                style: { width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 },
+              }, React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+                React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
+          // Body
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Data da atividade'),
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 32, display: 'flex', alignItems: 'center', ...font } }, 'Origem'),
+              React.createElement('input', {
+                type: 'text', value: filtroAdicOrigem, placeholder: 'Ex: São Paulo - SP',
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFiltroAdicOrigem(e.target.value),
+                style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: filtroAdicOrigem ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
+              })),
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 32, display: 'flex', alignItems: 'center', ...font } }, 'Destino'),
+              React.createElement('input', {
+                type: 'text', value: filtroAdicDestino, placeholder: 'Ex: Brasilia - DF',
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFiltroAdicDestino(e.target.value),
+                style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: filtroAdicDestino ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
+              }))),
+          // CTA
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('button', { type: 'button', onClick: fecharFiltroAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Aplicar filtro'),
+            React.createElement('button', { type: 'button', onClick: fecharFiltroAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'none', color: '#0d0d0d', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Voltar'))))
+    : null;
+
+  // ── Filtro avaliações modal ───────────────────────────────────────────
+  const filtroAvalModal = filtroAvalOpen
+    ? React.createElement('div', {
+        role: 'dialog', 'aria-modal': true,
+        style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 2100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, boxSizing: 'border-box' as const },
+        onClick: fecharFiltroAval,
+      },
+        React.createElement('div', {
+          style: { background: '#fff', borderRadius: 16, boxShadow: '6px 6px 12px 0 rgba(0,0,0,0.15)', width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, gap: 24, padding: '24px 0', boxSizing: 'border-box' as const },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          // Header
+          React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 24, width: '100%' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+              React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, ...font } }, 'Filtro'),
+              React.createElement('button', {
+                type: 'button', onClick: fecharFiltroAval, 'aria-label': 'Fechar',
+                style: { width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 },
+              }, React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+                React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
+          // Body
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            // Período
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
+              React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Período'),
+              React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+                avalChip('Esta semana', filtroAvalPeriodo === 'Esta semana', () => setFiltroAvalPeriodo('Esta semana')),
+                avalChip('Este mês', filtroAvalPeriodo === 'Este mês', () => setFiltroAvalPeriodo('Este mês')),
+                avalChip('Este ano', filtroAvalPeriodo === 'Este ano', () => setFiltroAvalPeriodo('Este ano')))),
+            // Tipo de avaliação
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
+              React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Tipo de avaliação'),
+              React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+                avalChip('Todos', filtroAvalTipo === 'Todos', () => setFiltroAvalTipo('Todos')),
+                avalChip('Preparadores de excursões', filtroAvalTipo === 'Preparadores de excursões', () => setFiltroAvalTipo('Preparadores de excursões')),
+                avalChip('Preparadores de encomendas', filtroAvalTipo === 'Preparadores de encomendas', () => setFiltroAvalTipo('Preparadores de encomendas')))),
+            // Nota mínima
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
+              React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Nota mínima'),
+              React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+                avalChip('Qualquer', filtroAvalNota === 'Qualquer', () => setFiltroAvalNota('Qualquer')),
+                avalChip('3+', filtroAvalNota === '3+', () => setFiltroAvalNota('3+')),
+                avalChip('4+', filtroAvalNota === '4+', () => setFiltroAvalNota('4+')),
+                avalChip('4.5+', filtroAvalNota === '4.5+', () => setFiltroAvalNota('4.5+')))),
+            // Ordenar por
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
+              React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Ordenar por'),
+              React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+                avalChip('Recentes', filtroAvalOrdem === 'Recentes', () => setFiltroAvalOrdem('Recentes')),
+                avalChip('Antigos', filtroAvalOrdem === 'Antigos', () => setFiltroAvalOrdem('Antigos')),
+                avalChip('Maior nota', filtroAvalOrdem === 'Maior nota', () => setFiltroAvalOrdem('Maior nota')),
+                avalChip('Menor nota', filtroAvalOrdem === 'Menor nota', () => setFiltroAvalOrdem('Menor nota')))),
+            // Buscar
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Buscar por nome / documento'),
+              React.createElement('input', {
+                type: 'text', value: filtroAvalBusca, placeholder: 'Ex: Maria, 123.456.789-00',
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFiltroAvalBusca(e.target.value),
+                style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: filtroAvalBusca ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
+              }))),
+          // CTA
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('button', { type: 'button', onClick: fecharFiltroAval, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Aplicar filtro'),
+            React.createElement('button', { type: 'button', onClick: fecharFiltroAval, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'none', color: '#0d0d0d', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Voltar'))))
+    : null;
+
   return React.createElement(React.Fragment, null,
     breadcrumb, headerRow, tabsEl, ...tabContent, filtroGestaoModal,
-    React.createElement(EditarFormaPagamentoTrechoModal, { open: editPagamentoOpen, onClose: fecharEditPagamento }));
+    React.createElement(EditarFormaPagamentoTrechoModal, { open: editPagamentoOpen, onClose: fecharEditPagamento }),
+    editEncModal, removeEncModal, editAdicModal, removeAdicModal, criarAdicModal, filtroEncModal, filtroTrechoModal, filtroAdicModal, filtroAvalModal);
 }
