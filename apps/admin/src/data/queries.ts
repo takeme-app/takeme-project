@@ -1027,3 +1027,76 @@ export async function fetchWorkerRatings(): Promise<RatingListItem[]> {
     createdAt: fmtDate(r.created_at),
   }));
 }
+
+// ── Bases (centros de recebimento de encomendas) ──────────────────────
+
+export type BaseListItem = {
+  id: string;
+  name: string;
+  address: string;
+  city: string;
+  state: string;
+  lat: number | null;
+  lng: number | null;
+  isActive: boolean;
+  createdAt: string;
+};
+
+export async function fetchBases(): Promise<BaseListItem[]> {
+  if (!isSupabaseConfigured) return [];
+  const { data, error } = await supabase
+    .from('bases')
+    .select('id, name, address, city, state, lat, lng, is_active, created_at')
+    .order('created_at', { ascending: false });
+
+  if (error || !data) return [];
+  return data.map((b: any) => ({
+    id: b.id,
+    name: b.name,
+    address: b.address,
+    city: b.city,
+    state: b.state ?? '',
+    lat: b.lat,
+    lng: b.lng,
+    isActive: b.is_active,
+    createdAt: fmtDate(b.created_at),
+  }));
+}
+
+export type CreateBaseInput = {
+  name: string;
+  address: string;
+  city: string;
+  state: string;
+  lat?: number;
+  lng?: number;
+};
+
+export async function createBase(input: CreateBaseInput): Promise<BaseListItem | null> {
+  if (!isSupabaseConfigured) return null;
+  const { data, error } = await supabase
+    .from('bases')
+    .insert({
+      name: input.name,
+      address: input.address,
+      city: input.city,
+      state: input.state,
+      lat: input.lat ?? null,
+      lng: input.lng ?? null,
+    })
+    .select()
+    .single();
+
+  if (error || !data) return null;
+  return {
+    id: data.id,
+    name: data.name,
+    address: data.address,
+    city: data.city,
+    state: data.state ?? '',
+    lat: data.lat,
+    lng: data.lng,
+    isActive: data.is_active,
+    createdAt: fmtDate(data.created_at),
+  };
+}
