@@ -10,7 +10,7 @@ import {
   filterIconSvg,
   calendarIconSvg,
 } from '../styles/webStyles';
-import { fetchDestinos } from '../data/queries';
+import { fetchDestinos, fetchTakemeRoutes, createTakemeRoute, updateTakemeRoute, deleteTakemeRoute } from '../data/queries';
 import type { DestinoListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -373,7 +373,17 @@ export default function DestinosScreen() {
         toggleSvg(crRotaAtiva)),
       // Buttons
       React.createElement('button', {
-        type: 'button', onClick: () => setCriarRotaOpen(false),
+        type: 'button',
+        onClick: async () => {
+          const origin = `${crCidadeOrigem}${crEstadoOrigem ? ' - ' + crEstadoOrigem : ''}`;
+          const dest = `${crCidadeDestino}${crEstadoDestino ? ' - ' + crEstadoDestino : ''}`;
+          if (origin.trim() && dest.trim()) {
+            await createTakemeRoute({ origin_address: origin, destination_address: dest, price_per_person_cents: 0 });
+            const items = await fetchDestinos();
+            setDestinosData(items);
+          }
+          setCriarRotaOpen(false);
+        },
         style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
       }, 'Salvar'),
       React.createElement('button', {
