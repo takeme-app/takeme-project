@@ -308,6 +308,35 @@ export default function PassageiroDetalheScreen() {
       // Add payment link
       React.createElement('button', { type: 'button', style: s.addPaymentBtn, onClick: () => setPayModalOpen(true) }, plusSvg, 'Adicionar método de pagamento')));
 
+  // ── Dependents section (appended to dados tab) ──────────────────────
+  const dependentsSection = dependents.length > 0
+    ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, marginTop: 24 } },
+        React.createElement('h2', { style: s.sectionTitle }, 'Dependentes'),
+        ...dependents.map((dep: any, i: number) =>
+          React.createElement('div', {
+            key: dep.id || i,
+            style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: '#f6f6f6', borderRadius: 12, border: '1px solid #e2e2e2' },
+          },
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 2 } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, dep.full_name),
+              React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, `Idade: ${dep.age || '—'} • Status: ${dep.status === 'validated' ? 'Validado' : 'Pendente'}`)),
+            dep.status !== 'validated'
+              ? React.createElement('button', {
+                  type: 'button',
+                  onClick: async () => {
+                    await updateDependentStatus(dep.id, 'validated');
+                    if (passageiroId) fetchDependentsByUser(passageiroId).then(setDependents);
+                  },
+                  style: { height: 32, padding: '0 14px', borderRadius: 999, border: 'none', background: '#22c55e', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font },
+                }, 'Validar')
+              : React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', padding: '4px 10px', borderRadius: 999, background: '#e8f5e9', ...font } }, '✓ Validado'))))
+    : null;
+
+  // Append dependents to dados tab if present
+  if (dependentsSection) {
+    // We'll render it in the return alongside dadosTab
+  }
+
   // ── Tab: Histórico de atividades ──────────────────────────────────────
   const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 8px' };
 
@@ -554,6 +583,6 @@ export default function PassageiroDetalheScreen() {
     breadcrumb,
     headerRow,
     tabs,
-    activeTab === 'dados' ? dadosTab : historicoTab,
+    activeTab === 'dados' ? React.createElement(React.Fragment, null, dadosTab, dependentsSection) : historicoTab,
     payModal);
 }
