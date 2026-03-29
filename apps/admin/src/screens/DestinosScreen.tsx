@@ -79,6 +79,16 @@ export default function DestinosScreen() {
   const [crRotaAtiva, setCrRotaAtiva] = useState(true);
   const [estadosDropdownOpen, setEstadosDropdownOpen] = useState(false);
   const [estadoSelected, setEstadoSelected] = useState('Todos os estados');
+  // Visualizar destino modal
+  const [vizDestinoOpen, setVizDestinoOpen] = useState(false);
+  const [vizDestino, setVizDestino] = useState<DestinoRow | null>(null);
+  // Editar rota modal
+  const [editarRotaOpen, setEditarRotaOpen] = useState(false);
+  const [edEstadoOrigem, setEdEstadoOrigem] = useState('Maranhão');
+  const [edCidadeOrigem, setEdCidadeOrigem] = useState('Viana');
+  const [edEstadoDestino, setEdEstadoDestino] = useState('Maranhão');
+  const [edCidadeDestino, setEdCidadeDestino] = useState('São Luís');
+  const [edRotaAtiva, setEdRotaAtiva] = useState(true);
 
   const [filtroPaginaOpen, setFiltroPaginaOpen] = useState(false);
   const [filtroDataInicial, setFiltroDataInicial] = useState('');
@@ -169,7 +179,7 @@ export default function DestinosScreen() {
           overflowY: 'auto' as const, zIndex: 50,
         },
       },
-        ...['Todos os estados', 'AC', 'AL', 'AM', 'AP', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'].map((uf, i, arr) =>
+        ...['Todos os estados', 'Acre', 'Alagoas', 'Amapá', 'Amazonas', 'Bahia', 'Ceará', 'Distrito Federal', 'Espírito Santo', 'Goiás', 'Maranhão', 'Mato Grosso', 'Mato Grosso do Sul', 'Minas Gerais', 'Pará', 'Paraíba', 'Paraná', 'Pernambuco', 'Piauí', 'Rio de Janeiro', 'Rio Grande do Norte', 'Rio Grande do Sul', 'Rondônia', 'Roraima', 'Santa Catarina', 'São Paulo', 'Sergipe', 'Tocantins'].map((uf, i, arr) =>
           React.createElement('button', {
             key: uf, type: 'button',
             onClick: () => { setEstadoSelected(uf); setEstadosDropdownOpen(false); },
@@ -178,7 +188,7 @@ export default function DestinosScreen() {
               borderTop: 'none', borderRight: 'none', borderLeft: 'none',
               borderBottom: i < arr.length - 1 ? '1px solid #f1f1f1' : 'none',
               fontSize: 14, fontWeight: estadoSelected === uf ? 600 : 400,
-              color: '#0d0d0d', cursor: 'pointer', textAlign: 'left' as const, ...font,
+              color: estadoSelected === uf ? '#0d0d0d' : '#767676', cursor: 'pointer', textAlign: 'left' as const, ...font,
             },
           }, uf))) : null),
     // Filtro button
@@ -286,8 +296,8 @@ export default function DestinosScreen() {
       React.createElement('div', {
         style: { flex: tableCols[5].flex, minWidth: tableCols[5].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
       },
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar' }, eyeActionSvg),
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar' }, pencilActionSvg)));
+        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar', onClick: () => { setVizDestino(row); setVizDestinoOpen(true); } }, eyeActionSvg),
+        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => { setEdEstadoOrigem(row.origem.split(' - ')[1] || row.origem); setEdCidadeOrigem(row.origem.split(' - ')[0] || row.origem); setEdEstadoDestino(row.destino.split(' - ')[1] || row.destino); setEdCidadeDestino(row.destino.split(' - ')[0] || row.destino); setEditarRotaOpen(true); } }, pencilActionSvg)));
   });
 
   const tableSection = React.createElement('div', {
@@ -605,6 +615,108 @@ export default function DestinosScreen() {
   // estadosDropdown is now inline within searchRow (position: relative wrapper)
 
   // ── Render ─────────────────────────────────────────────────────────────
+  // ── Editar rota modal (Figma 1433-29359) ─────────────────────────────
+  const editToggleSvg = React.createElement('div', {
+    onClick: () => setEdRotaAtiva(!edRotaAtiva),
+    style: {
+      width: 48, height: 28, borderRadius: 14, background: edRotaAtiva ? '#0d0d0d' : '#d9d9d9',
+      position: 'relative' as const, cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0,
+    },
+  },
+    React.createElement('div', {
+      style: {
+        width: 22, height: 22, borderRadius: '50%', background: '#fff',
+        position: 'absolute' as const, top: 3, left: edRotaAtiva ? 23 : 3, transition: 'left 0.2s',
+      },
+    }));
+
+  const editarRotaModal = editarRotaOpen ? React.createElement('div', {
+    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+    onClick: () => setEditarRotaOpen(false),
+  },
+    React.createElement('div', {
+      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 540, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)' },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      // Header
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Editar rota'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setEditarRotaOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      // Origem
+      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+        selectField('Estado da origem', 'Selecione', edEstadoOrigem, setEdEstadoOrigem),
+        selectField('Cidade de origem', 'Selecione', edCidadeOrigem, setEdCidadeOrigem)),
+      // Destino
+      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+        selectField('Estado do destino', 'Selecione', edEstadoDestino, setEdEstadoDestino),
+        selectField('Cidade de destino', 'Selecione', edCidadeDestino, setEdCidadeDestino)),
+      // Manter rota ativa
+      React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 } },
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+          React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Manter rota ativa'),
+          React.createElement('span', { style: { fontSize: 12, color: '#767676', lineHeight: 1.5, ...font } }, 'Ao manter a rota ativa, você garante que ela seja exibida e possa ser utilizada por todos os usuários da plataforma.')),
+        editToggleSvg),
+      // Buttons
+      React.createElement('button', {
+        type: 'button', onClick: () => setEditarRotaOpen(false),
+        style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+      }, 'Salvar'),
+      React.createElement('button', {
+        type: 'button', onClick: () => setEditarRotaOpen(false),
+        style: { height: 40, background: 'none', border: 'none', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
+      }, 'Cancelar'))) : null;
+
+  // ── Visualizar destino modal ──────────────────────────────────────────
+  const vizReadField = (label: string, value: string) =>
+    React.createElement('div', { style: { flex: '1 1 0', minWidth: 180, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+      React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, label),
+      React.createElement('div', { style: { height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } }, value));
+
+  const vizDestinoModal = vizDestinoOpen && vizDestino ? React.createElement('div', {
+    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+    onClick: () => setVizDestinoOpen(false),
+  },
+    React.createElement('div', {
+      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 540, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)' },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      // Header
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Detalhes do destino'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setVizDestinoOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      // Fields
+      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+        vizReadField('Origem', vizDestino.origem),
+        vizReadField('Destino', vizDestino.destino)),
+      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+        vizReadField('Total de atividades', String(vizDestino.totalAtividades)),
+        vizReadField('Data de criação', vizDestino.dataCriacao)),
+      // Status
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Status:'),
+        React.createElement('span', {
+          style: {
+            display: 'inline-block', padding: '4px 14px', borderRadius: 999,
+            fontSize: 13, fontWeight: 700, background: statusStyles[vizDestino.status].bg,
+            color: statusStyles[vizDestino.status].color, ...font,
+          },
+        }, vizDestino.status)),
+      // Close button
+      React.createElement('button', {
+        type: 'button', onClick: () => setVizDestinoOpen(false),
+        style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+      }, 'Fechar'))) : null;
+
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Destinos'),
     searchRow,
@@ -613,6 +725,8 @@ export default function DestinosScreen() {
     destinosChart,
     tableSection,
     criarRotaModal,
+    editarRotaModal,
+    vizDestinoModal,
     filtroModal,
     filtroTabelaModal);
 }

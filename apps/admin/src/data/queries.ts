@@ -7,6 +7,9 @@ import type {
   MotoristaListItem,
   DestinoListItem,
   PreparadorListItem,
+  PreparadorEditDetail,
+  PreparadorCandidate,
+  ExcursionStatusHistoryRow,
   PromocaoListItem,
   PagamentoListItem,
   PagamentoCounts,
@@ -64,6 +67,7 @@ export async function createPromotion(body: {
   discount_type: 'percentage' | 'fixed';
   discount_value: number;
   applies_to: string[];
+  is_active?: boolean;
 }) {
   return invokeEdgeFunction('manage-promotions', 'POST', undefined, body);
 }
@@ -475,6 +479,20 @@ export async function fetchDestinos(): Promise<DestinoListItem[]> {
 
 // ── Preparadores ────────────────────────────────────────────────────────
 
+function fmtBRLFromCents(cents: number | null | undefined): string {
+  if (cents == null || Number.isNaN(Number(cents))) return '—';
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(cents) / 100);
+}
+
+/** Exibe centavos em BRL (ex.: painel preparador). */
+export function formatCurrencyBRL(cents: number | null | undefined): string {
+  return fmtBRLFromCents(cents);
+}
+
+function asRecord(raw: unknown): Record<string, unknown> {
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as Record<string, unknown>) } : {};
+}
+
 export async function fetchPreparadores(): Promise<PreparadorListItem[]> {
   const { data, error } = await supabase
     .from('excursion_requests')
@@ -501,6 +519,225 @@ export async function fetchPreparadores(): Promise<PreparadorListItem[]> {
       status: mapPreparadorStatus(e.status),
     };
   });
+}
+
+export async function fetchPreparadorById(id: string): Promise<PreparadorListItem | null> {
+  if (!isSupabaseConfigured) return null;
+  const { data, error } = await supabase
+    .from('excursion_requests')
+    .select(`
+      id, destination, excursion_date, status, preparer_id, scheduled_departure_at, created_at,
+      profiles!excursion_requests_preparer_id_fkey ( full_name )
+    `)
+    .eq('id', id)
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  const e = data as any;
+  const profile = e.profiles;
+  return {
+    id: e.id,
+    nome: profile?.full_name ?? 'Preparador',
+    origem: '—',
+    destino: e.destination,
+    dataInicio: e.scheduled_departure_at ? `${fmtDate(e.scheduled_departure_at)}\n${fmtTime(e.scheduled_departure_at)}` : fmtDate(e.excursion_date),
+    previsao: '—',
+    avaliacao: null,
+    status: mapPreparadorStatus(e.status),
+  };
+}
+
+export async function fetchPreparadorEditDetail(id: string): Promise<PreparadorEditDetail | null> {
+  if (!isSupabaseConfigured) return null;
+
+  const { data: er, error } = await supabase
+    .from('excursion_requests')
+    .select(`
+      id, user_id, destination, excursion_date, people_count, fleet_type, observations, status,
+      total_amount_cents, scheduled_departure_at, preparer_id, vehicle_details, budget_lines, assignment_notes,
+      excursion_passengers ( id, full_name, cpf, phone, observations )
+    `)
+    .eq('id', id)
+    .maybeSingle();
+
+  if (error || !er) return null;
+
+  const row = er as any;
+  const passengersRaw = row.excursion_passengers as any[] | null;
+  const passengers: PreparadorEditPassenger[] = (passengersRaw ?? []).map((p) => ({
+    id: p.id,
+    fullName: p.full_name ?? '',
+    cpf: p.cpf ?? null,
+    phone: p.phone ?? null,
+    observations: p.observations ?? null,
+  }));
+
+  const [{ data: clientProf }, { data: prepProf }, { data: worker }, { data: vehs }] = await Promise.all([
+    supabase.from('profiles').select('full_name, phone, cpf, city, state').eq('id', row.user_id).maybeSingle(),
+    row.preparer_id
+      ? supabase.from('profiles').select('full_name, phone, cpf, city, state, avatar_url, rating').eq('id', row.preparer_id).maybeSingle()
+      : Promise.resolve({ data: null } as const),
+    row.preparer_id
+      ? supabase.from('worker_profiles').select('cpf, age, experience_years, bank_code, bank_agency, bank_account, pix_key, subtype').eq('id', row.preparer_id).maybeSingle()
+      : Promise.resolve({ data: null } as const),
+    row.preparer_id
+      ? supabase.from('vehicles').select('id, year, model, plate, passenger_capacity').eq('worker_id', row.preparer_id).eq('is_active', true).order('created_at', { ascending: false })
+      : Promise.resolve({ data: [] } as const),
+  ]);
+
+  const cp = clientProf as any;
+  const pp = prepProf as any;
+  const wk = worker as any;
+  const vehiclesList = (vehs as any[]) ?? [];
+
+  return {
+    id: row.id,
+    userId: row.user_id,
+    destination: row.destination ?? '',
+    excursionDate: row.excursion_date ?? '',
+    scheduledDepartureAt: row.scheduled_departure_at ?? null,
+    peopleCount: row.people_count ?? 1,
+    fleetType: row.fleet_type ?? 'carro',
+    observations: row.observations ?? null,
+    statusRaw: row.status ?? 'pending',
+    statusLabel: mapPreparadorStatus(row.status as ExcursionDbStatus),
+    totalAmountCents: row.total_amount_cents ?? null,
+    preparerId: row.preparer_id ?? null,
+    vehicleDetails: asRecord(row.vehicle_details),
+    budgetLines: Array.isArray(row.budget_lines) ? row.budget_lines : [],
+    assignmentNotes: asRecord(row.assignment_notes),
+    clientNome: cp?.full_name ?? null,
+    clientCity: cp?.city ?? null,
+    clientState: cp?.state ?? null,
+    clientCpf: cp?.cpf ?? null,
+    clientPhone: cp?.phone ?? null,
+    passengers,
+    preparerProfile: row.preparer_id
+      ? {
+          fullName: pp?.full_name ?? null,
+          phone: pp?.phone ?? null,
+          cpf: pp?.cpf ?? null,
+          city: pp?.city ?? null,
+          state: pp?.state ?? null,
+          avatarUrl: pp?.avatar_url ?? null,
+          rating: pp?.rating != null ? Number(pp.rating) : null,
+        }
+      : null,
+    preparerWorker: row.preparer_id && wk
+      ? {
+          cpf: wk.cpf ?? null,
+          age: wk.age ?? null,
+          experienceYears: wk.experience_years ?? null,
+          bankCode: wk.bank_code ?? null,
+          bankAgency: wk.bank_agency ?? null,
+          bankAccount: wk.bank_account ?? null,
+          pixKey: wk.pix_key ?? null,
+          subtype: wk.subtype ?? null,
+        }
+      : null,
+    vehicles: vehiclesList.map((v) => ({
+      id: v.id,
+      year: v.year ?? null,
+      model: v.model ?? null,
+      plate: v.plate ?? null,
+      passengerCapacity: v.passenger_capacity ?? null,
+    })),
+  };
+}
+
+export async function fetchPreparadorCandidates(): Promise<PreparadorCandidate[]> {
+  if (!isSupabaseConfigured) return [];
+
+  const { data, error } = await supabase
+    .from('worker_profiles')
+    .select('id, subtype, profiles ( full_name, avatar_url, rating )')
+    .in('subtype', ['excursions', 'shipments'])
+    .neq('status', 'inactive')
+    .order('created_at', { ascending: false })
+    .limit(40);
+
+  if (error || !data) return [];
+
+  return (data as any[]).map((w) => {
+    const p = w.profiles;
+    const badge: 'takeme' | 'parceiro' = w.subtype === 'partner' ? 'parceiro' : 'takeme';
+    return {
+      id: w.id,
+      nome: p?.full_name ?? 'Preparador',
+      rating: p?.rating != null ? Number(p.rating) : null,
+      avatarUrl: p?.avatar_url ?? null,
+      subtype: w.subtype ?? '',
+      badge,
+      valorKm: '—',
+      valorFixo: '—',
+    };
+  });
+}
+
+export async function fetchExcursionStatusHistory(excursionId: string): Promise<ExcursionStatusHistoryRow[]> {
+  if (!isSupabaseConfigured) return [];
+
+  const { data, error } = await supabase
+    .from('status_history')
+    .select('status, changed_at')
+    .eq('entity_type', 'excursion')
+    .eq('entity_id', excursionId)
+    .order('changed_at', { ascending: false })
+    .limit(40);
+
+  if (error || !data) return [];
+  return (data as any[]).map((r) => ({ status: r.status, changedAt: r.changed_at }));
+}
+
+export async function savePreparadorExcursionFields(
+  excursionId: string,
+  fields: {
+    destination?: string;
+    scheduled_departure_at?: string | null;
+    observations?: string | null;
+    fleet_type?: string;
+    preparer_id?: string | null;
+    vehicle_details?: Record<string, unknown> | null;
+    assignment_notes?: Record<string, unknown> | null;
+  },
+): Promise<{ error: string | null }> {
+  const { error } = await (supabase.from('excursion_requests') as any).update(fields).eq('id', excursionId);
+  return { error: error ? (error as Error).message : null };
+}
+
+export async function saveProfileFields(
+  profileId: string,
+  fields: { full_name?: string; cpf?: string | null },
+): Promise<{ error: string | null }> {
+  const { error } = await (supabase.from('profiles') as any).update(fields).eq('id', profileId);
+  return { error: error ? (error as Error).message : null };
+}
+
+export async function saveWorkerProfileFields(
+  workerId: string,
+  fields: {
+    cpf?: string | null;
+    age?: number | null;
+    experience_years?: number | null;
+    bank_code?: string | null;
+    bank_agency?: string | null;
+    bank_account?: string | null;
+    pix_key?: string | null;
+  },
+): Promise<{ error: string | null }> {
+  const { error } = await (supabase.from('worker_profiles') as any)
+    .update({ ...fields, updated_at: new Date().toISOString() })
+    .eq('id', workerId);
+  return { error: error ? (error as Error).message : null };
+}
+
+export async function saveVehicleFields(
+  vehicleId: string,
+  fields: { year?: number | null; model?: string | null; plate?: string | null },
+): Promise<{ error: string | null }> {
+  const { error } = await (supabase.from('vehicles') as any).update(fields).eq('id', vehicleId);
+  return { error: error ? (error as Error).message : null };
 }
 
 // ── Home dashboard counts ───────────────────────────────────────────────
@@ -550,6 +787,8 @@ export async function fetchPromocoes(): Promise<PromocaoListItem[]> {
     descricao: p.description || '',
     dataInicio: fmtDate(p.start_at),
     dataTermino: fmtDate(p.end_at),
+    startAtIso: p.start_at ?? '',
+    endAtIso: p.end_at ?? '',
     tipoPublico: mapTargetAudience(p.target_audiences || []),
     tipoDesconto: p.discount_type === 'percentage' ? 'Percentual' : 'Fixo',
     valorDesconto: p.discount_value,

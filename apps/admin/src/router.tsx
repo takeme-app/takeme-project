@@ -17,9 +17,12 @@ import MotoristaEditScreen from './screens/MotoristaEditScreen';
 import DestinosScreen from './screens/DestinosScreen';
 import EncomendasScreen from './screens/EncomendasScreen';
 import PreparadoresScreen from './screens/PreparadoresScreen';
+import PreparadorEditScreen from './screens/PreparadorEditScreen';
 import PromocoesScreen from './screens/PromocoesScreen';
+import PromocaoCreateScreen from './screens/PromocaoCreateScreen';
 import PagamentosScreen from './screens/PagamentosScreen';
 import PagamentosGestaoScreen from './screens/PagamentosGestaoScreen';
+import EncomendaEditScreen from './screens/EncomendaEditScreen';
 import PlaceholderScreen from './screens/PlaceholderScreen';
 import AtendimentosScreen from './screens/AtendimentosScreen';
 import AtendimentoDetalheScreen from './screens/AtendimentoDetalheScreen';
@@ -55,12 +58,15 @@ export const router = createBrowserRouter([
           { path: '/motoristas/:id/editar', element: React.createElement(MotoristaEditScreen) },
           { path: '/destinos', element: React.createElement(DestinosScreen) },
           { path: '/encomendas', element: React.createElement(EncomendasScreen) },
+          { path: '/encomendas/:id/editar', element: React.createElement(EncomendaEditScreen) },
           { path: '/encomendas/:eid/viagem/:id', element: React.createElement(ViagemDetalheScreen) },
           { path: '/preparadores', element: React.createElement(PreparadoresScreen) },
+          { path: '/preparadores/:id/editar', element: React.createElement(PreparadorEditScreen) },
           { path: '/preparadores/:pid/viagem/:id', element: React.createElement(ViagemDetalheScreen) },
           { path: '/passageiros/:pid/viagem/:id', element: React.createElement(ViagemDetalheScreen) },
           { path: '/passageiros/:pid/viagem/:id/editar', element: React.createElement(ViagemEditScreen) },
           { path: '/promocoes', element: React.createElement(PromocoesScreen) },
+          { path: '/promocoes/nova', element: React.createElement(PromocaoCreateScreen) },
           { path: '/pagamentos', element: React.createElement(PagamentosScreen) },
           { path: '/pagamentos/gestao', element: React.createElement(PagamentosGestaoScreen) },
           { path: '/atendimentos', element: React.createElement(AtendimentosScreen) },
