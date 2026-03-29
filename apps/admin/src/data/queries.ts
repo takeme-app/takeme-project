@@ -740,6 +740,163 @@ export async function saveVehicleFields(
   return { error: error ? (error as Error).message : null };
 }
 
+// ── Worker status management (approve/reject/suspend) ───────────────
+
+export async function updateWorkerStatus(
+  workerId: string,
+  status: 'approved' | 'rejected' | 'suspended' | 'pending',
+  opts?: { rejection_reason?: string },
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const { data: { user } } = await supabase.auth.getUser();
+  const updateFields: any = {
+    status,
+    reviewed_by: user?.id ?? null,
+    reviewed_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (opts?.rejection_reason) updateFields.rejection_reason = opts.rejection_reason;
+  const { error } = await (supabase.from('worker_profiles') as any).update(updateFields).eq('id', workerId);
+  return { error: error ? (error as Error).message : null };
+}
+
+export async function updateVehicleStatus(
+  vehicleId: string,
+  status: 'approved' | 'rejected' | 'pending',
+  opts?: { rejection_reason?: string },
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const updateFields: any = {
+    status,
+    reviewed_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (opts?.rejection_reason) updateFields.rejection_reason = opts.rejection_reason;
+  const { error } = await (supabase.from('vehicles') as any).update(updateFields).eq('id', vehicleId);
+  return { error: error ? (error as Error).message : null };
+}
+
+// ── Shipment/Booking status management ──────────────────────────────
+
+export async function updateBookingStatus(
+  bookingId: string,
+  status: 'confirmed' | 'paid' | 'cancelled',
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const updateFields: any = { status, updated_at: new Date().toISOString() };
+  if (status === 'paid') updateFields.paid_at = new Date().toISOString();
+  const { error } = await (supabase.from('bookings') as any).update(updateFields).eq('id', bookingId);
+  return { error: error ? (error as Error).message : null };
+}
+
+export async function updateShipmentStatus(
+  shipmentId: string,
+  status: 'confirmed' | 'in_progress' | 'delivered' | 'cancelled',
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const updateFields: any = { status };
+  if (status === 'delivered') updateFields.delivered_at = new Date().toISOString();
+  const { error } = await (supabase.from('shipments') as any).update(updateFields).eq('id', shipmentId);
+  return { error: error ? (error as Error).message : null };
+}
+
+export async function updateDependentShipmentStatus(
+  id: string,
+  status: 'confirmed' | 'in_progress' | 'delivered' | 'cancelled',
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const updateFields: any = { status };
+  if (status === 'delivered') updateFields.delivered_at = new Date().toISOString();
+  const { error } = await (supabase.from('dependent_shipments') as any).update(updateFields).eq('id', id);
+  return { error: error ? (error as Error).message : null };
+}
+
+// ── Passageiro/Dependente management ────────────────────────────────
+
+export async function updateProfileVerified(
+  profileId: string,
+  verified: boolean,
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const { error } = await (supabase.from('profiles') as any)
+    .update({ verified, updated_at: new Date().toISOString() })
+    .eq('id', profileId);
+  return { error: error ? (error as Error).message : null };
+}
+
+export async function updateDependentStatus(
+  dependentId: string,
+  status: 'pending' | 'validated',
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const { error } = await (supabase.from('dependents') as any)
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq('id', dependentId);
+  return { error: error ? (error as Error).message : null };
+}
+
+export async function fetchDependentsByUser(userId: string): Promise<any[]> {
+  if (!isSupabaseConfigured) return [];
+  const { data, error } = await supabase
+    .from('dependents')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+  return data || [];
+}
+
+// ── Excursion status management ─────────────────────────────────────
+
+export async function updateExcursionStatus(
+  excursionId: string,
+  status: string,
+  opts?: { driver_id?: string; preparer_id?: string },
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const updateFields: any = { status };
+  if (opts?.driver_id) updateFields.driver_id = opts.driver_id;
+  if (opts?.preparer_id) updateFields.preparer_id = opts.preparer_id;
+  if (status === 'approved') updateFields.confirmed_at = new Date().toISOString();
+  const { error } = await (supabase.from('excursion_requests') as any).update(updateFields).eq('id', excursionId);
+  return { error: error ? (error as Error).message : null };
+}
+
+// ── TakeMe Routes CRUD ──────────────────────────────────────────────
+
+export async function fetchTakemeRoutes(): Promise<any[]> {
+  if (!isSupabaseConfigured) return [];
+  const { data } = await supabase
+    .from('takeme_routes')
+    .select('*')
+    .order('created_at', { ascending: false });
+  return data || [];
+}
+
+export async function createTakemeRoute(route: {
+  origin_address: string;
+  destination_address: string;
+  price_per_person_cents: number;
+}): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const { error } = await (supabase.from('takeme_routes') as any).insert(route);
+  return { error: error ? (error as Error).message : null };
+}
+
+export async function updateTakemeRoute(
+  id: string,
+  fields: { origin_address?: string; destination_address?: string; price_per_person_cents?: number; is_active?: boolean },
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const { error } = await (supabase.from('takeme_routes') as any).update({ ...fields, updated_at: new Date().toISOString() }).eq('id', id);
+  return { error: error ? (error as Error).message : null };
+}
+
+export async function deleteTakemeRoute(id: string): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const { error } = await (supabase.from('takeme_routes') as any).delete().eq('id', id);
+  return { error: error ? (error as Error).message : null };
+}
+
 // ── Home dashboard counts ───────────────────────────────────────────────
 
 export interface HomeCounts {
