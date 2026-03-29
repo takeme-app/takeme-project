@@ -9,7 +9,7 @@ import {
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
-import { fetchEncomendas, fetchEncomendaCounts, type EncomendaCounts } from '../data/queries';
+import { fetchEncomendas, fetchEncomendaCounts, updateShipmentStatus, updateDependentShipmentStatus, type EncomendaCounts } from '../data/queries';
 import type { EncomendaListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -308,7 +308,20 @@ export default function EncomendasScreen() {
         style: { flex: tableCols[7].flex, minWidth: tableCols[7].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
       },
         React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar', onClick: () => navigate(`/viagens/${idx}`, { state: { from: 'encomendas' } }) }, eyeActionSvg),
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => navigate(`/encomendas/${idx}/editar`, { state: { from: 'encomendas' } }) }, pencilActionSvg)));
+        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => navigate(`/encomendas/${idx}/editar`, { state: { from: 'encomendas' } }) }, pencilActionSvg),
+        row.rawStatus !== 'cancelled' && row.rawStatus !== 'delivered' ? React.createElement('button', {
+          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Cancelar encomenda',
+          onClick: async () => {
+            const item = encomendasData[idx];
+            if (item && confirm('Cancelar esta encomenda?')) {
+              if (item.tipo === 'Dependente') await updateDependentShipmentStatus(item.id, 'cancelled');
+              else await updateShipmentStatus(item.id, 'cancelled');
+              const [items, c] = await Promise.all([fetchEncomendas(), fetchEncomendaCounts()]);
+              setEncomendasData(items); setECounts(c);
+            }
+          },
+        }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#b53838', strokeWidth: 2, strokeLinecap: 'round' }))) : null));
   });
 
   const tableSection = React.createElement('div', {

@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { webStyles, arrowBackSvg, filterIconSvg } from '../styles/webStyles';
-import { fetchPassageiroPaymentMethods } from '../data/queries';
+import { fetchPassageiroPaymentMethods, updateProfileVerified, fetchDependentsByUser, updateDependentStatus } from '../data/queries';
 import type { PaymentMethodRow } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -187,6 +187,14 @@ export default function PassageiroDetalheScreen() {
   const passageiro = (location.state as { passageiro?: { nome: string; cidade: string; estado: string; dataCriacao: string; cpf: string; status: string } })?.passageiro;
 
   const [activeTab, setActiveTab] = useState<'dados' | 'historico'>('dados');
+  const passageiroId = (location.state as any)?.passageiro?.id;
+  const isVerified = passageiro?.status === 'Verificado';
+  const [verifying, setVerifying] = useState(false);
+  const [dependents, setDependents] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (passageiroId) fetchDependentsByUser(passageiroId).then(setDependents);
+  }, [passageiroId]);
 
   // ── Real payment methods from Supabase ──────────────────────────────
   const [realPayMethods, setRealPayMethods] = useState<PaymentMethodRow[]>([]);
@@ -235,7 +243,19 @@ export default function PassageiroDetalheScreen() {
     React.createElement('button', {
       type: 'button', onClick: () => navigate(-1), style: s.backBtn,
     }, arrowBackSvg, 'Voltar'),
-    React.createElement('button', { type: 'button', style: s.editBtn }, editSmallSvg, 'Editar dados'));
+    React.createElement('div', { style: { display: 'flex', gap: 8 } },
+      !isVerified && passageiroId ? React.createElement('button', {
+        type: 'button',
+        onClick: async () => {
+          setVerifying(true);
+          await updateProfileVerified(passageiroId, true);
+          setVerifying(false);
+          navigate(-1);
+        },
+        disabled: verifying,
+        style: { display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px', borderRadius: 999, border: 'none', background: '#22c55e', color: '#fff', fontSize: 14, fontWeight: 600, cursor: verifying ? 'wait' : 'pointer', ...font },
+      }, 'Verificar perfil') : null,
+      React.createElement('button', { type: 'button', style: s.editBtn }, editSmallSvg, 'Editar dados')));
 
   // ── Tabs ──────────────────────────────────────────────────────────────
   const tabs = React.createElement('div', { style: s.tabsRow },
