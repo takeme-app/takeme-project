@@ -323,6 +323,19 @@ export default function EncomendasScreen() {
       },
         React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar', onClick: () => navigate(`/viagens/${idx}`, { state: { from: 'encomendas' } }) }, eyeActionSvg),
         React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => navigate(`/encomendas/${idx}/editar`, { state: { from: 'encomendas' } }) }, pencilActionSvg),
+        row.rawStatus === 'pending_review' ? React.createElement('button', {
+          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Confirmar encomenda',
+          onClick: async () => {
+            const item = encomendasData[idx];
+            if (item && confirm('Confirmar esta encomenda?')) {
+              if (item.tipo === 'Dependente') await updateDependentShipmentStatus(item.id, 'confirmed');
+              else await updateShipmentStatus(item.id, 'confirmed');
+              const [items, c] = await Promise.all([fetchEncomendas(), fetchEncomendaCounts()]);
+              setEncomendasData(items); setECounts(c);
+            }
+          },
+        }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#22c55e', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))) : null,
         row.rawStatus !== 'cancelled' && row.rawStatus !== 'delivered' ? React.createElement('button', {
           type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Cancelar encomenda',
           onClick: async () => {

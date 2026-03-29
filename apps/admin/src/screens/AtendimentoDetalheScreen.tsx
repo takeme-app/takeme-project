@@ -3,7 +3,8 @@
  * Uses React.createElement() calls (NOT JSX).
  */
 import React, { useState, useCallback, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useParams } from 'react-router-dom';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -38,9 +39,41 @@ const actionChips = ['Dados cadastrais', 'Documentos', 'Encomendas', 'Viagens', 
 export default function AtendimentoDetalheScreen() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { id: conversationId } = useParams<{ id: string }>();
   const ticket = (location.state as any)?.ticket || {};
   const [orcamentoCriado, setOrcamentoCriado] = useState(false);
   const [orcamentoValor] = useState('R$ 5.000,00');
+
+  // ── Fetch real messages from Supabase ────────────────────────────────
+  const [realMessages, setRealMessages] = useState<{ sender: string; content: string; time: string }[]>([]);
+  const [convStatus, setConvStatus] = useState<'active' | 'closed'>('active');
+  useEffect(() => {
+    if (!isSupabaseConfigured || !conversationId) return;
+    let cancelled = false;
+    // Fetch conversation
+    supabase.from('conversations').select('status, participant_name').eq('id', conversationId).single()
+      .then(({ data }) => { if (!cancelled && data) setConvStatus(data.status); });
+    // Fetch messages
+    supabase.from('messages').select('id, sender_id, content, created_at')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true })
+      .limit(50)
+      .then(({ data }) => {
+        if (cancelled || !data) return;
+        setRealMessages(data.map((m: any) => ({
+          sender: m.sender_id?.slice(0, 8) || 'User',
+          content: m.content,
+          time: new Date(m.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        })));
+      });
+    return () => { cancelled = true; };
+  }, [conversationId]);
+
+  const handleCloseConversation = useCallback(async () => {
+    if (!isSupabaseConfigured || !conversationId) return;
+    await (supabase.from('conversations') as any).update({ status: 'closed', updated_at: new Date().toISOString() }).eq('id', conversationId);
+    setConvStatus('closed');
+  }, [conversationId]);
 
   const nome = ticket.nome || 'Maria Silva';
   const email = ticket.email || 'maria.silva@gmail.com';

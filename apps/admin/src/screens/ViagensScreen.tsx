@@ -259,6 +259,20 @@ export default function ViagensScreen() {
             type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
             onClick: (e: React.MouseEvent) => { e.stopPropagation(); const item = viagens[idx]; navigate('/viagens/' + (item?.bookingId ?? idx) + '/editar', { state: { trip: row } }); },
           }, pencilActionSvg),
+          row.status === 'confirmed' ? React.createElement('button', {
+            type: 'button', style: { ...webStyles.viagensActionBtn },
+            'aria-label': 'Confirmar pagamento',
+            onClick: async (e: React.MouseEvent) => {
+              e.stopPropagation();
+              const item = viagens[idx];
+              if (item?.bookingId && confirm('Confirmar pagamento desta viagem?')) {
+                await updateBookingStatus(item.bookingId, 'paid');
+                const [items, c] = await Promise.all([fetchViagens(), fetchViagemCounts()]);
+                setViagens(items); setCounts(c);
+              }
+            },
+          }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+            React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#22c55e', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))) : null,
           row.status !== 'cancelled' && row.status !== 'paid' ? React.createElement('button', {
             type: 'button', style: { ...webStyles.viagensActionBtn },
             'aria-label': 'Cancelar viagem',

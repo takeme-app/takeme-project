@@ -12,6 +12,7 @@ import {
 } from '../styles/webStyles';
 import { PAGAMENTOS_GESTAO_PREPARADORES_HREF } from '../constants/pagamentosGestaoNav';
 import { fetchPagamentos, fetchPagamentoCounts } from '../data/queries';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { PagamentoListItem, PagamentoCounts } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -398,7 +399,20 @@ export default function PagamentosScreen() {
             fontSize: 13, fontWeight: 700, lineHeight: 1.5, whiteSpace: 'nowrap' as const,
             background: st.bg, color: st.color, ...font,
           },
-        }, row.status)));
+        }, row.status)),
+      row.status === 'Pendente' || row.status === 'pending'
+        ? React.createElement('button', {
+            type: 'button',
+            onClick: async () => {
+              if (!isSupabaseConfigured || !row.id) return;
+              if (!confirm('Marcar este pagamento como pago?')) return;
+              await (supabase.from('payouts') as any).update({ status: 'paid', paid_at: new Date().toISOString() }).eq('id', row.id);
+              const [items, c] = await Promise.all([fetchPagamentos(), fetchPagamentoCounts()]);
+              setPagamentos(items); setPCounts(c);
+            },
+            style: { marginLeft: 8, height: 28, padding: '0 10px', borderRadius: 999, border: 'none', background: '#22c55e', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const },
+          }, 'Pagar')
+        : null);
   });
 
   const tableSection = React.createElement('div', {
