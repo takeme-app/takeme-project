@@ -1,18 +1,96 @@
 /**
  * PagamentosGestaoScreen — Gestão de pagamentos conforme Figma 905-22168.
+ * Modal filtro da tabela: Figma 905-22659.
+ * Modal editar forma de pagamento: Figma 905-23064.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   webStyles,
   filterIconSvg,
 } from '../styles/webStyles';
+import EditarFormaPagamentoTrechoModal from '../components/EditarFormaPagamentoTrechoModal';
+import { preparadorEncomendaSlug } from '../utils/preparadorSlug';
 import { fetchPricingRoutes, fetchSurchargeCatalog, fetchWorkerRatings, fetchMotoristas } from '../data/queries';
 import type { PricingRouteRow, SurchargeCatalogRow, MotoristaListItem } from '../data/types';
 import type { RatingListItem } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
+
+const calendarSvgLg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
+  React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+  React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' }));
+const closeModalSvg = React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
+
+type GestPeriodoFiltro = 'semana' | 'mes' | 'ano';
+type GestPrimarioFiltro = 'todos' | 'takeme' | 'parceiros';
+type GestSecundarioFiltro = 'todos' | 'viagem' | 'excursao';
+
+type GestAppliedFiltro = {
+  periodo: GestPeriodoFiltro;
+  primario: GestPrimarioFiltro;
+  secundario: GestSecundarioFiltro;
+  dataIni?: string;
+  dataFim?: string;
+};
+
+function getPeriodRangeGest(t: GestPeriodoFiltro): { start: Date; end: Date } {
+  const now = new Date();
+  if (t === 'semana') {
+    const d = new Date(now);
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    monday.setHours(0, 0, 0, 0);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+    return { start: monday, end: sunday };
+  }
+  if (t === 'mes') {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    return { start, end };
+  }
+  const start = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+  const end = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
+  return { start, end };
+}
+
+function parseDateBR(dataInicio: string): Date | null {
+  const m = dataInicio.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const dt = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), 12, 0, 0, 0);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+function motoristaDataInPeriod(dataInicio: string, rangeStart: Date, rangeEnd: Date): boolean {
+  const dt = parseDateBR(dataInicio);
+  if (!dt) return true;
+  const t = dt.getTime();
+  return t >= rangeStart.getTime() && t <= rangeEnd.getTime();
+}
+
+const chipFiltroGest = (label: string, selecionado: boolean, onClick: () => void) =>
+  React.createElement('button', {
+    type: 'button',
+    onClick,
+    style: {
+      height: 40,
+      padding: '0 16px',
+      borderRadius: 90,
+      border: 'none',
+      cursor: 'pointer',
+      background: selecionado ? '#0d0d0d' : '#f1f1f1',
+      color: selecionado ? '#fff' : '#0d0d0d',
+      fontSize: 14,
+      fontWeight: 500,
+      lineHeight: 1.5,
+      whiteSpace: 'nowrap' as const,
+      ...font,
+    },
+  }, label);
 
 // SVG icons
 const eyeActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
@@ -22,6 +100,12 @@ const starSvg = React.createElement('svg', { width: 12, height: 12, viewBox: '0 
   React.createElement('path', { d: 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z' }));
 
 const tabs = ['Motorista', 'Encomenda', 'Trecho', 'Preparadores', 'Adicionais', 'Avaliações'] as const;
+
+function tabFromQueryParam(v: string | null): typeof tabs[number] | null {
+  if (v == null || !v.trim()) return null;
+  const lower = v.trim().toLowerCase();
+  return tabs.find((t) => t.toLowerCase() === lower) ?? null;
+}
 
 const avatarColors: Record<string, string> = {
   C: '#4A90D9', J: '#7B61FF', E: '#50C878', M: '#F5A623', D: '#9B59B6',
@@ -33,16 +117,19 @@ type MotoristaRow = {
   numTrechos: string;
   horario: string;
   dataInicio: string;
+  /** Para o filtro «Tipo de motorista» (lista mock) */
+  primaryTipo: 'takeme' | 'parceiros';
+  secondaryTipo: 'viagem' | 'excursao';
 };
 
 const motoristaRows: MotoristaRow[] = [
-  { nome: 'Carlos Silva', rating: 4.4, numTrechos: '193 rotas', horario: '08:00 - 18:00', dataInicio: '12/10/2025' },
-  { nome: 'João Porto', rating: 4.2, numTrechos: '149 rotas', horario: '08:00 - 18:00', dataInicio: '09/09/2025' },
-  { nome: 'Jorge Silva', rating: 4.1, numTrechos: '156 rotas', horario: '08:00 - 18:00', dataInicio: '05/08/2025' },
-  { nome: 'Carlos Silva', rating: 4.1, numTrechos: '151 rotas', horario: '08:00 - 18:00', dataInicio: '02/07/2025' },
-  { nome: 'Everton Pereira', rating: 4.5, numTrechos: '161 rotas', horario: '08:00 - 18:00', dataInicio: '03/06/2025' },
-  { nome: 'Marcio Pontes', rating: 4.9, numTrechos: '205 rotas', horario: '08:00 - 18:00', dataInicio: '01/06/2025' },
-  { nome: 'Danilo Santos', rating: 4.3, numTrechos: '183 rotas', horario: '08:00 - 18:00', dataInicio: '10/04/2025' },
+  { nome: 'Carlos Silva', rating: 4.4, numTrechos: '193 rotas', horario: '08:00 - 18:00', dataInicio: '15/03/2026', primaryTipo: 'takeme', secondaryTipo: 'viagem' },
+  { nome: 'João Porto', rating: 4.2, numTrechos: '149 rotas', horario: '08:00 - 18:00', dataInicio: '08/03/2026', primaryTipo: 'parceiros', secondaryTipo: 'excursao' },
+  { nome: 'Jorge Silva', rating: 4.1, numTrechos: '156 rotas', horario: '08:00 - 18:00', dataInicio: '01/03/2026', primaryTipo: 'takeme', secondaryTipo: 'excursao' },
+  { nome: 'Carlos Silva', rating: 4.1, numTrechos: '151 rotas', horario: '08:00 - 18:00', dataInicio: '20/02/2026', primaryTipo: 'parceiros', secondaryTipo: 'viagem' },
+  { nome: 'Everton Pereira', rating: 4.5, numTrechos: '161 rotas', horario: '08:00 - 18:00', dataInicio: '22/03/2026', primaryTipo: 'takeme', secondaryTipo: 'viagem' },
+  { nome: 'Marcio Pontes', rating: 4.9, numTrechos: '205 rotas', horario: '08:00 - 18:00', dataInicio: '12/03/2026', primaryTipo: 'takeme', secondaryTipo: 'excursao' },
+  { nome: 'Danilo Santos', rating: 4.3, numTrechos: '183 rotas', horario: '08:00 - 18:00', dataInicio: '05/03/2026', primaryTipo: 'parceiros', secondaryTipo: 'viagem' },
 ];
 
 const tableCols = [
@@ -201,7 +288,15 @@ const s = {
 
 export default function PagamentosGestaoScreen() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<typeof tabs[number]>('Motorista');
+  const [searchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<typeof tabs[number]>(() =>
+    tabFromQueryParam(searchParams.get('tab')) ?? 'Preparadores',
+  );
+
+  useEffect(() => {
+    const t = tabFromQueryParam(searchParams.get('tab'));
+    if (t) setActiveTab(t);
+  }, [searchParams]);
 
   // ── Real data from Supabase ─────────────────────────────────────────
   const [motoristasData, setMotoristasData] = useState<MotoristaListItem[]>([]);
@@ -235,6 +330,200 @@ export default function PagamentosGestaoScreen() {
     return () => { cancelled = true; };
   }, []);
 
+  const [filtroGestaoOpen, setFiltroGestaoOpen] = useState(false);
+  const [filtroGestaoAtivo, setFiltroGestaoAtivo] = useState(false);
+  const [appliedGestaoFiltro, setAppliedGestaoFiltro] = useState<GestAppliedFiltro>({
+    periodo: 'mes',
+    primario: 'takeme',
+    secundario: 'excursao',
+  });
+  const [draftPeriodoGest, setDraftPeriodoGest] = useState<GestPeriodoFiltro>('mes');
+  const [draftPrimarioGest, setDraftPrimarioGest] = useState<GestPrimarioFiltro>('takeme');
+  const [draftSecundarioGest, setDraftSecundarioGest] = useState<GestSecundarioFiltro>('excursao');
+  const [draftDataIniGest, setDraftDataIniGest] = useState('');
+  const [draftDataFimGest, setDraftDataFimGest] = useState('');
+
+  const [editPagamentoOpen, setEditPagamentoOpen] = useState(false);
+
+  const fecharEditPagamento = useCallback(() => setEditPagamentoOpen(false), []);
+
+  const abrirEditPagamento = useCallback(() => {
+    setFiltroGestaoOpen(false);
+    setEditPagamentoOpen(true);
+  }, []);
+
+  const abrirFiltroGestao = useCallback(() => {
+    setEditPagamentoOpen(false);
+    if (filtroGestaoAtivo) {
+      setDraftPeriodoGest(appliedGestaoFiltro.periodo);
+      setDraftPrimarioGest(appliedGestaoFiltro.primario);
+      setDraftSecundarioGest(appliedGestaoFiltro.secundario);
+      setDraftDataIniGest(appliedGestaoFiltro.dataIni ?? '');
+      setDraftDataFimGest(appliedGestaoFiltro.dataFim ?? '');
+    } else {
+      setDraftPeriodoGest('mes');
+      setDraftPrimarioGest('takeme');
+      setDraftSecundarioGest('excursao');
+      setDraftDataIniGest('');
+      setDraftDataFimGest('');
+    }
+    setFiltroGestaoOpen(true);
+  }, [filtroGestaoAtivo, appliedGestaoFiltro]);
+
+  const fecharFiltroGestao = useCallback(() => setFiltroGestaoOpen(false), []);
+
+  const aplicarFiltroGestao = useCallback(() => {
+    setAppliedGestaoFiltro({
+      periodo: draftPeriodoGest,
+      primario: draftPrimarioGest,
+      secundario: draftSecundarioGest,
+      dataIni: draftDataIniGest.trim() || undefined,
+      dataFim: draftDataFimGest.trim() || undefined,
+    });
+    setFiltroGestaoAtivo(true);
+    setFiltroGestaoOpen(false);
+  }, [draftPeriodoGest, draftPrimarioGest, draftSecundarioGest, draftDataIniGest, draftDataFimGest]);
+
+  useEffect(() => {
+    if (!filtroGestaoOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') fecharFiltroGestao();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [filtroGestaoOpen, fecharFiltroGestao]);
+
+  const filteredMotoristaRows = useMemo(() => {
+    if (!filtroGestaoAtivo) return motoristaRows;
+    const { start, end } = getPeriodRangeGest(appliedGestaoFiltro.periodo);
+    return motoristaRows.filter((row) => {
+      if (appliedGestaoFiltro.primario !== 'todos' && row.primaryTipo !== appliedGestaoFiltro.primario) return false;
+      if (appliedGestaoFiltro.secundario !== 'todos' && row.secondaryTipo !== appliedGestaoFiltro.secundario) return false;
+      if (!motoristaDataInPeriod(row.dataInicio, start, end)) return false;
+      if (appliedGestaoFiltro.dataIni) {
+        const q = appliedGestaoFiltro.dataIni.toLowerCase();
+        if (!row.dataInicio.toLowerCase().includes(q)) return false;
+      }
+      if (appliedGestaoFiltro.dataFim) {
+        const q = appliedGestaoFiltro.dataFim.toLowerCase();
+        if (!row.dataInicio.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  }, [filtroGestaoAtivo, appliedGestaoFiltro]);
+
+  const labelTipoMotorista: React.CSSProperties = { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font };
+  const inputGestStyle: React.CSSProperties = {
+    flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent',
+    fontSize: 16, fontWeight: 400, color: '#0d0d0d', padding: '0 16px', height: '100%', ...font,
+  };
+  const tituloSecaoGest18: React.CSSProperties = { fontSize: 18, fontWeight: 600, color: '#0d0d0d', lineHeight: 1.5, ...font };
+
+  const campoDataGest = (rotulo: string, valor: string, onChange: (v: string) => void, placeholder: string) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%', gap: 0 } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, rotulo),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, borderRadius: 8, background: '#f1f1f1', paddingLeft: 16, overflow: 'hidden', width: '100%', boxSizing: 'border-box' as const } },
+        calendarSvgLg,
+        React.createElement('input', {
+          type: 'text',
+          value: valor,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+          placeholder,
+          style: { ...inputGestStyle, color: valor ? '#0d0d0d' : '#767676' },
+        })));
+
+  const overlayGestStyle: React.CSSProperties = {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(0,0,0,0.4)',
+    zIndex: 2000,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    boxSizing: 'border-box',
+  };
+
+  const filtroGestaoModal = filtroGestaoOpen
+    ? React.createElement('div', {
+      role: 'dialog',
+      'aria-modal': true,
+      'aria-labelledby': 'filtro-tabela-gestao-pagamentos-titulo',
+      style: overlayGestStyle,
+      onClick: fecharFiltroGestao,
+    },
+      React.createElement('div', {
+        style: {
+          background: '#fff',
+          borderRadius: 16,
+          boxShadow: '6px 6px 12px 0 rgba(0,0,0,0.15)',
+          width: '100%',
+          maxWidth: 520,
+          maxHeight: '90vh',
+          overflowY: 'auto' as const,
+          display: 'flex',
+          flexDirection: 'column' as const,
+          gap: 24,
+          padding: '24px 0',
+          boxSizing: 'border-box' as const,
+        },
+        onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      },
+        React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 24, width: '100%' } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, paddingLeft: 16, paddingRight: 16, width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('h2', { id: 'filtro-tabela-gestao-pagamentos-titulo', style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, ...font } }, 'Filtro da tabela'),
+            React.createElement('button', {
+              type: 'button',
+              onClick: fecharFiltroGestao,
+              'aria-label': 'Fechar',
+              style: {
+                width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0, marginTop: -2,
+              },
+            }, closeModalSvg))),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
+          React.createElement('span', { style: tituloSecaoGest18 }, 'Data da atividade'),
+          campoDataGest('Data inicial', draftDataIniGest, setDraftDataIniGest, '05 de setembro'),
+          campoDataGest('Data final', draftDataFimGest, setDraftDataFimGest, '30 de setembro')),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
+          React.createElement('span', { style: tituloSecaoGest18 }, 'Tipo de motorista'),
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
+            React.createElement('span', { style: labelTipoMotorista }, 'Primário'),
+            React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
+              chipFiltroGest('Todos', draftPrimarioGest === 'todos', () => setDraftPrimarioGest('todos')),
+              chipFiltroGest('Take Me', draftPrimarioGest === 'takeme', () => setDraftPrimarioGest('takeme')),
+              chipFiltroGest('Parceiros', draftPrimarioGest === 'parceiros', () => setDraftPrimarioGest('parceiros')))),
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
+            React.createElement('span', { style: labelTipoMotorista }, 'Secundário'),
+            React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
+              chipFiltroGest('Todos', draftSecundarioGest === 'todos', () => setDraftSecundarioGest('todos')),
+              chipFiltroGest('Viagem', draftSecundarioGest === 'viagem', () => setDraftSecundarioGest('viagem')),
+              chipFiltroGest('Excursão', draftSecundarioGest === 'excursao', () => setDraftSecundarioGest('excursao'))))),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
+          React.createElement('span', { style: tituloSecaoGest18 }, 'Período'),
+          React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
+            chipFiltroGest('Esta semana', draftPeriodoGest === 'semana', () => setDraftPeriodoGest('semana')),
+            chipFiltroGest('Este mês', draftPeriodoGest === 'mes', () => setDraftPeriodoGest('mes')),
+            chipFiltroGest('Este ano', draftPeriodoGest === 'ano', () => setDraftPeriodoGest('ano')))),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
+          React.createElement('button', {
+            type: 'button',
+            onClick: aplicarFiltroGestao,
+            style: {
+              width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff',
+              fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font,
+            },
+          }, 'Aplicar filtro'),
+          React.createElement('button', {
+            type: 'button',
+            onClick: fecharFiltroGestao,
+            style: {
+              width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'transparent', color: '#0d0d0d',
+              fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font,
+            },
+          }, 'Voltar'))))
+    : null;
+
   // ── Breadcrumb ────────────────────────────────────────────────────────
   const breadcrumb = React.createElement('div', {
     style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#767676', ...font },
@@ -259,6 +548,7 @@ export default function PagamentosGestaoScreen() {
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
       React.createElement('button', {
         type: 'button',
+        onClick: abrirFiltroGestao,
         style: {
           display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
           background: '#f1f1f1', border: 'none', borderRadius: 999,
@@ -267,6 +557,7 @@ export default function PagamentosGestaoScreen() {
       }, filterIconSvg, 'Filtro'),
       React.createElement('button', {
         type: 'button',
+        onClick: abrirEditPagamento,
         style: {
           display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
           background: '#fff', border: '1px solid #e2e2e2', borderRadius: 999,
@@ -279,6 +570,7 @@ export default function PagamentosGestaoScreen() {
         'Editar forma de pagamento'),
       React.createElement('button', {
         type: 'button',
+        onClick: () => navigate('/pagamentos/gestao/criar-trecho'),
         style: {
           display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
           background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999,
@@ -333,7 +625,7 @@ export default function PagamentosGestaoScreen() {
       },
     }, c.label)));
 
-  const tableRowEls = motoristaRows.map((row, idx) => {
+  const tableRowEls = filteredMotoristaRows.map((row, idx) => {
     const initial = row.nome.charAt(0);
     const avatarBg = avatarColors[initial] || '#999';
     return React.createElement('div', {
@@ -362,11 +654,21 @@ export default function PagamentosGestaoScreen() {
       React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth } }, row.horario),
       // Data início
       React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth } }, row.dataInicio),
-      // Visualizar
+      // Visualizar → edição do motorista quando existe na API; senão lista de motoristas
       React.createElement('div', {
         style: { flex: tableCols[4].flex, minWidth: tableCols[4].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'center' },
       },
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar' }, eyeActionSvg)));
+        React.createElement('button', {
+          type: 'button',
+          style: webStyles.viagensActionBtn,
+          'aria-label': 'Visualizar motorista',
+          onClick: () => {
+            const nomeNorm = row.nome.trim().toLowerCase();
+            const m = motoristasData.find((x) => x.nome.trim().toLowerCase() === nomeNorm);
+            if (m) navigate(`/motoristas/${m.id}/editar`);
+            else navigate('/motoristas');
+          },
+        }, eyeActionSvg)));
   });
 
   const tableSection = React.createElement('div', {
@@ -467,7 +769,17 @@ export default function PagamentosGestaoScreen() {
       React.createElement('div', { style: { ...cellBase, flex: preparadorGestaoCols[3].flex, minWidth: preparadorGestaoCols[3].minWidth } }, String(row.numCidades)),
       React.createElement('div', { style: { ...cellBase, flex: preparadorGestaoCols[4].flex, minWidth: preparadorGestaoCols[4].minWidth } }, row.horario),
       React.createElement('div', { style: { flex: preparadorGestaoCols[5].flex, minWidth: preparadorGestaoCols[5].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'center' } },
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar' }, eyeActionSvg)));
+        React.createElement('button', {
+          type: 'button',
+          style: webStyles.viagensActionBtn,
+          'aria-label': 'Visualizar preparador de encomendas',
+          onClick: (e: React.MouseEvent) => {
+            e.stopPropagation();
+            const slug = preparadorEncomendaSlug(row.nome);
+            if (!slug) return;
+            navigate(`/pagamentos/gestao/preparador-encomendas/${slug}`);
+          },
+        }, eyeActionSvg)));
   });
 
   const prepGestaoSection = React.createElement('div', {
@@ -584,5 +896,6 @@ export default function PagamentosGestaoScreen() {
   else tabContent = [metricCards, tableSection];
 
   return React.createElement(React.Fragment, null,
-    breadcrumb, headerRow, tabsEl, ...tabContent);
+    breadcrumb, headerRow, tabsEl, ...tabContent, filtroGestaoModal,
+    React.createElement(EditarFormaPagamentoTrechoModal, { open: editPagamentoOpen, onClose: fecharEditPagamento }));
 }

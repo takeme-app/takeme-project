@@ -848,6 +848,7 @@ export async function fetchPagamentos(): Promise<PagamentoListItem[]> {
     workerName: nameMap[p.worker_id] || 'Sem nome',
     entityType: mapEntityType(p.entity_type),
     dataFinalizacao: p.paid_at ? fmtDate(p.paid_at) : fmtDate(p.created_at),
+    dateAtIso: p.paid_at || p.created_at || '',
     status: mapPayoutStatus(p.status),
     grossAmountCents: p.gross_amount_cents,
     workerAmountCents: p.worker_amount_cents,

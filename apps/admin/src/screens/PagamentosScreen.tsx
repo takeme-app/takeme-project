@@ -1,18 +1,78 @@
 /**
  * PagamentosScreen — Pagamentos conforme Figma 905-15884.
+ * Modal filtro da tabela: Figma 905-21772.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
+import { PAGAMENTOS_GESTAO_PREPARADORES_HREF } from '../constants/pagamentosGestaoNav';
 import { fetchPagamentos, fetchPagamentoCounts } from '../data/queries';
 import type { PagamentoListItem, PagamentoCounts } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
+
+const calendarSvgLg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
+  React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+  React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' }));
+const closeModalSvg = React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
+
+type PagPeriodoFiltro = 'semana' | 'mes' | 'ano';
+type PagStatusFiltro = PagamentoListItem['status'];
+
+function getPeriodRange(t: PagPeriodoFiltro): { start: Date; end: Date } {
+  const now = new Date();
+  if (t === 'semana') {
+    const d = new Date(now);
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    monday.setHours(0, 0, 0, 0);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+    return { start: monday, end: sunday };
+  }
+  if (t === 'mes') {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    return { start, end };
+  }
+  const start = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+  const end = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
+  return { start, end };
+}
+
+function payoutDateInPeriod(iso: string, rangeStart: Date, rangeEnd: Date): boolean {
+  if (!iso) return true;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return true;
+  return t >= rangeStart.getTime() && t <= rangeEnd.getTime();
+}
+
+const chipFiltro = (label: string, selecionado: boolean, onClick: () => void) =>
+  React.createElement('button', {
+    type: 'button',
+    onClick,
+    style: {
+      height: 40,
+      padding: '0 16px',
+      borderRadius: 90,
+      border: 'none',
+      cursor: 'pointer',
+      background: selecionado ? '#0d0d0d' : '#f1f1f1',
+      color: selecionado ? '#fff' : '#0d0d0d',
+      fontSize: 14,
+      fontWeight: 500,
+      lineHeight: 1.5,
+      whiteSpace: 'nowrap' as const,
+      ...font,
+    },
+  }, label);
 
 function fmtBRL(cents: number): string {
   return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -41,12 +101,29 @@ const s = {
   } as React.CSSProperties,
 };
 
+type PagAppliedFiltro = {
+  status: PagStatusFiltro;
+  periodo: PagPeriodoFiltro;
+  dataIni?: string;
+  dataFim?: string;
+};
+
 export default function PagamentosScreen() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [pagamentos, setPagamentos] = useState<PagamentoListItem[]>([]);
   const [counts, setCounts] = useState<PagamentoCounts>({ pagamentosPrevistos: 0, pagamentosFeitos: 0, lucro: 0 });
   const [loading, setLoading] = useState(true);
+  const [filtroModalOpen, setFiltroModalOpen] = useState(false);
+  const [filtroTabelaAtivo, setFiltroTabelaAtivo] = useState(false);
+  const [appliedFiltro, setAppliedFiltro] = useState<PagAppliedFiltro>({
+    status: 'Concluído',
+    periodo: 'mes',
+  });
+  const [draftStatus, setDraftStatus] = useState<PagStatusFiltro>('Concluído');
+  const [draftPeriodo, setDraftPeriodo] = useState<PagPeriodoFiltro>('mes');
+  const [draftDataIni, setDraftDataIni] = useState('');
+  const [draftDataFim, setDraftDataFim] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -56,17 +133,184 @@ export default function PagamentosScreen() {
     return () => { cancelled = true; };
   }, []);
 
+  const abrirFiltroModal = useCallback(() => {
+    if (filtroTabelaAtivo) {
+      setDraftStatus(appliedFiltro.status);
+      setDraftPeriodo(appliedFiltro.periodo);
+      setDraftDataIni(appliedFiltro.dataIni ?? '');
+      setDraftDataFim(appliedFiltro.dataFim ?? '');
+    } else {
+      setDraftStatus('Concluído');
+      setDraftPeriodo('mes');
+      setDraftDataIni('');
+      setDraftDataFim('');
+    }
+    setFiltroModalOpen(true);
+  }, [filtroTabelaAtivo, appliedFiltro]);
+
+  const fecharFiltroModal = useCallback(() => setFiltroModalOpen(false), []);
+
+  const aplicarFiltroModal = useCallback(() => {
+    setAppliedFiltro({
+      status: draftStatus,
+      periodo: draftPeriodo,
+      dataIni: draftDataIni.trim() || undefined,
+      dataFim: draftDataFim.trim() || undefined,
+    });
+    setFiltroTabelaAtivo(true);
+    setFiltroModalOpen(false);
+  }, [draftStatus, draftPeriodo, draftDataIni, draftDataFim]);
+
+  useEffect(() => {
+    if (!filtroModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') fecharFiltroModal();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [filtroModalOpen, fecharFiltroModal]);
+
   const metrics = [
     { title: 'Pagamentos previstos', value: fmtBRL(counts.pagamentosPrevistos), pct: '+12.5%', desc: 'vs período anterior' },
     { title: 'Pagamentos feitos', value: fmtBRL(counts.pagamentosFeitos), pct: '+8.2%', desc: 'vs período anterior' },
     { title: 'Lucro', value: fmtBRL(counts.lucro), pct: counts.lucro > 0 ? '+' : '', desc: 'vs período anterior', negative: counts.lucro <= 0 },
   ];
 
-  const filteredRows = pagamentos.filter((r) => {
-    if (!search) return true;
-    const s = search.toLowerCase();
-    return r.workerName.toLowerCase().includes(s) || r.entityType.toLowerCase().includes(s);
-  });
+  const filteredRows = useMemo(() => {
+    return pagamentos.filter((r) => {
+      if (search) {
+        const s = search.toLowerCase();
+        if (!r.workerName.toLowerCase().includes(s) && !r.entityType.toLowerCase().includes(s)) return false;
+      }
+      if (!filtroTabelaAtivo) return true;
+      if (r.status !== appliedFiltro.status) return false;
+      const { start, end } = getPeriodRange(appliedFiltro.periodo);
+      if (!payoutDateInPeriod(r.dateAtIso, start, end)) return false;
+      if (appliedFiltro.dataIni) {
+        const q = appliedFiltro.dataIni.toLowerCase();
+        if (!r.dataFinalizacao.toLowerCase().includes(q)) return false;
+      }
+      if (appliedFiltro.dataFim) {
+        const q = appliedFiltro.dataFim.toLowerCase();
+        if (!r.dataFinalizacao.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  }, [pagamentos, search, filtroTabelaAtivo, appliedFiltro]);
+
+  const inputTabelaStyle: React.CSSProperties = {
+    flex: 1,
+    minWidth: 0,
+    border: 'none',
+    outline: 'none',
+    background: 'transparent',
+    fontSize: 16,
+    fontWeight: 400,
+    color: '#0d0d0d',
+    padding: '0 16px',
+    height: '100%',
+    ...font,
+  };
+
+  const tituloSecaoModal18: React.CSSProperties = { fontSize: 18, fontWeight: 600, color: '#0d0d0d', lineHeight: 1.5, ...font };
+
+  const campoDataPagamento = (rotulo: string, valor: string, onChange: (v: string) => void, placeholder: string) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%', gap: 0 } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, rotulo),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, borderRadius: 8, background: '#f1f1f1', paddingLeft: 16, overflow: 'hidden', width: '100%', boxSizing: 'border-box' as const } },
+        calendarSvgLg,
+        React.createElement('input', {
+          type: 'text',
+          value: valor,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+          placeholder,
+          style: { ...inputTabelaStyle, color: valor ? '#0d0d0d' : '#767676' },
+        })));
+
+  const overlayModalStyle: React.CSSProperties = {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(0,0,0,0.4)',
+    zIndex: 1000,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    boxSizing: 'border-box',
+  };
+
+  const filtroTabelaModal = filtroModalOpen
+    ? React.createElement('div', {
+      role: 'dialog',
+      'aria-modal': true,
+      'aria-labelledby': 'filtro-tabela-pagamentos-titulo',
+      style: overlayModalStyle,
+      onClick: fecharFiltroModal,
+    },
+      React.createElement('div', {
+        style: {
+          background: '#fff',
+          borderRadius: 16,
+          boxShadow: '6px 6px 12px 0 rgba(0,0,0,0.15)',
+          width: '100%',
+          maxWidth: 420,
+          maxHeight: '90vh',
+          overflowY: 'auto' as const,
+          display: 'flex',
+          flexDirection: 'column' as const,
+          gap: 24,
+          padding: '24px 0',
+          boxSizing: 'border-box' as const,
+        },
+        onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      },
+        React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 24, width: '100%' } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, paddingLeft: 16, paddingRight: 16, width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('h2', { id: 'filtro-tabela-pagamentos-titulo', style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, ...font } }, 'Filtro da tabela'),
+            React.createElement('button', {
+              type: 'button',
+              onClick: fecharFiltroModal,
+              'aria-label': 'Fechar',
+              style: {
+                width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0, marginTop: -2,
+              },
+            }, closeModalSvg))),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
+          React.createElement('span', { style: tituloSecaoModal18 }, 'Data da atividade'),
+          campoDataPagamento('Data inicial', draftDataIni, setDraftDataIni, '05 de setembro'),
+          campoDataPagamento('Data final', draftDataFim, setDraftDataFim, '30 de setembro')),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
+          React.createElement('span', { style: tituloSecaoModal18 }, 'Status da excursão'),
+          React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
+            chipFiltro('Concluída', draftStatus === 'Concluído', () => setDraftStatus('Concluído')),
+            chipFiltro('Agendada', draftStatus === 'Agendado', () => setDraftStatus('Agendado')),
+            chipFiltro('Em andamento', draftStatus === 'Em andamento', () => setDraftStatus('Em andamento')),
+            chipFiltro('Cancelada', draftStatus === 'Cancelado', () => setDraftStatus('Cancelado')))),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
+          React.createElement('span', { style: tituloSecaoModal18 }, 'Período'),
+          React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
+            chipFiltro('Esta semana', draftPeriodo === 'semana', () => setDraftPeriodo('semana')),
+            chipFiltro('Este mês', draftPeriodo === 'mes', () => setDraftPeriodo('mes')),
+            chipFiltro('Este ano', draftPeriodo === 'ano', () => setDraftPeriodo('ano')))),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
+          React.createElement('button', {
+            type: 'button',
+            onClick: aplicarFiltroModal,
+            style: {
+              width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff',
+              fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font,
+            },
+          }, 'Aplicar filtro'),
+          React.createElement('button', {
+            type: 'button',
+            onClick: fecharFiltroModal,
+            style: {
+              width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'transparent', color: '#0d0d0d',
+              fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font,
+            },
+          }, 'Voltar'))))
+    : null;
 
   const title = React.createElement('h1', { style: webStyles.homeTitle }, 'Pagamentos');
 
@@ -88,6 +332,7 @@ export default function PagamentosScreen() {
       })),
     React.createElement('button', {
       type: 'button',
+      onClick: abrirFiltroModal,
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#f1f1f1', border: 'none', borderRadius: 999,
@@ -96,7 +341,7 @@ export default function PagamentosScreen() {
     }, filterIconSvg, 'Filtro'),
     React.createElement('button', {
       type: 'button',
-      onClick: () => navigate('/pagamentos/gestao'),
+      onClick: () => navigate(PAGAMENTOS_GESTAO_PREPARADORES_HREF),
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 24px',
         background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999,
@@ -174,5 +419,5 @@ export default function PagamentosScreen() {
     : null;
 
   return React.createElement(React.Fragment, null,
-    title, searchRow, metricCards, emptyMsg || tableSection);
+    title, searchRow, metricCards, emptyMsg || tableSection, filtroTabelaModal);
 }
