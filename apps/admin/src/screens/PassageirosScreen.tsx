@@ -212,7 +212,7 @@ export default function PassageirosScreen() {
     return () => { cancelled = true; };
   }, []);
 
-  const tableRows: PassageiroRow[] = passageirosData.map((p) => ({
+  const tableRowsAll: PassageiroRow[] = passageirosData.map((p) => ({
     nome: p.nome,
     cidade: p.cidade,
     estado: p.estado,
@@ -220,6 +220,15 @@ export default function PassageirosScreen() {
     cpf: p.cpf,
     status: p.status,
   }));
+
+  // Apply filters
+  const tableRows = tableRowsAll.filter((row) => {
+    const statusLower = row.status.toLowerCase();
+    if (filterStatus === 'em_andamento' && !statusLower.includes('ativ')) return false;
+    if (filterStatus === 'concluidas' && !statusLower.includes('verificad')) return false;
+    if (filterStatus === 'canceladas' && !statusLower.includes('inativ') && !statusLower.includes('cancel')) return false;
+    return true;
+  });
 
   const metrics = [
     { title: 'Totais de passageiros', pct: '', pctPositive: true, desc: '', value: String(pCounts.total) },

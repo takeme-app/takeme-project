@@ -152,7 +152,7 @@ export default function ViagensScreen() {
     { label: 'Visualizar/Editar', flex: '0 0 96px', minWidth: 96 },
   ];
 
-  const viagensTableRows: ViagemRow[] = viagens.map((v) => ({
+  const viagensTableRowsAll: ViagemRow[] = viagens.map((v) => ({
     passageiro: v.passageiro,
     origem: v.origem,
     destino: v.destino,
@@ -161,6 +161,23 @@ export default function ViagensScreen() {
     chegada: v.chegada,
     status: v.status,
   }));
+
+  // Apply filters
+  const statusMap: Record<string, string[]> = {
+    em_andamento: ['Em andamento', 'em_andamento'],
+    agendadas: ['Agendada', 'agendadas', 'active'],
+    concluidas: ['Concluída', 'concluidas', 'completed'],
+    canceladas: ['Cancelada', 'canceladas', 'cancelled'],
+  };
+  const viagensTableRows = viagensTableRowsAll.filter((row) => {
+    const allowed = statusMap[filterStatus] || [];
+    if (allowed.length > 0 && !allowed.some(s => row.status.toLowerCase().includes(s.toLowerCase()))) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      if (!row.passageiro.toLowerCase().includes(q) && !row.origem.toLowerCase().includes(q) && !row.destino.toLowerCase().includes(q)) return false;
+    }
+    return true;
+  });
 
   // Table header
   const viagensTableHeader = React.createElement('div', {
