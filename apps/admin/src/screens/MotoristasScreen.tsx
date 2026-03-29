@@ -155,7 +155,7 @@ export default function MotoristasScreen() {
 
   const topDrivers = motoristasData.slice(0, 5).map((m) => ({ viagens: m.totalViagens, nome: m.nome }));
 
-  const tableRows: MotoristaRow[] = tableData.map((t) => ({
+  const tableRowsAll: MotoristaRow[] = tableData.map((t) => ({
     nome: t.nome,
     origem: t.origem,
     destino: t.destino,
@@ -164,6 +164,20 @@ export default function MotoristasScreen() {
     chegada: t.chegada,
     status: t.status,
   }));
+
+  // Apply filters
+  const tableRows = tableRowsAll.filter((row) => {
+    if (search) {
+      const q = search.toLowerCase();
+      if (!row.nome.toLowerCase().includes(q) && !row.origem.toLowerCase().includes(q) && !row.destino.toLowerCase().includes(q)) return false;
+    }
+    const statusLower = row.status.toLowerCase();
+    if (filtroStatus === 'em_andamento' && !statusLower.includes('andamento') && !statusLower.includes('active')) return false;
+    if (filtroStatus === 'agendadas' && !statusLower.includes('agendad')) return false;
+    if (filtroStatus === 'concluidas' && !statusLower.includes('conclu') && !statusLower.includes('completed')) return false;
+    if (filtroStatus === 'canceladas' && !statusLower.includes('cancel')) return false;
+    return true;
+  });
 
   // ── Search row ────────────────────────────────────────────────────────
   const searchRow = React.createElement('div', {

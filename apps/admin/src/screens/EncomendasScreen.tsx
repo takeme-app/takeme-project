@@ -118,7 +118,7 @@ export default function EncomendasScreen() {
     return () => { cancelled = true; };
   }, []);
 
-  const tableRows: EncomendaRow[] = encomendasData.map((e) => ({
+  const tableRowsAll: EncomendaRow[] = encomendasData.map((e) => ({
     destino: e.destino,
     origem: e.origem,
     remetente: e.remetente,
@@ -126,7 +126,21 @@ export default function EncomendasScreen() {
     embarque: '—',
     chegada: '—',
     status: e.status,
+    rawStatus: (e as any).rawStatus || e.status,
   }));
+
+  // Apply filters
+  const tableRows = tableRowsAll.filter((row) => {
+    if (filtroStatus && filtroStatus !== 'Todos') {
+      const statusLower = row.status.toLowerCase();
+      const filtroLower = filtroStatus.toLowerCase();
+      if (filtroLower === 'em andamento' && !statusLower.includes('andamento') && !statusLower.includes('progress')) return false;
+      if (filtroLower === 'agendadas' && !statusLower.includes('agendad') && !statusLower.includes('confirmed')) return false;
+      if (filtroLower === 'concluídas' && !statusLower.includes('conclu') && !statusLower.includes('delivered')) return false;
+      if (filtroLower === 'canceladas' && !statusLower.includes('cancel')) return false;
+    }
+    return true;
+  });
 
   const metricsRow1 = [
     { title: 'Total de Entregas', value: String(eCounts.total), pct: '', pctColor: '', desc: '' },
