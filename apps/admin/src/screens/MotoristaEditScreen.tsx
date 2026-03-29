@@ -2,10 +2,11 @@
  * MotoristaEditScreen — Editar motorista conforme Figma 830-10503.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { webStyles, arrowBackSvg } from '../styles/webStyles';
 import { supabase } from '../lib/supabase';
+import { updateWorkerStatus, updateVehicleStatus } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -79,6 +80,30 @@ export default function MotoristaEditScreen() {
   const conta = worker?.bank_account || '—';
   const pix = worker?.pix_key || '—';
   const possuiVeiculo = worker?.has_own_vehicle;
+  const workerStatus = worker?.status || 'pending';
+
+  const [actionLoading, setActionLoading] = useState(false);
+  const handleApprove = useCallback(async () => {
+    if (!worker?.id) return;
+    setActionLoading(true);
+    await updateWorkerStatus(worker.id, 'approved');
+    setActionLoading(false);
+    navigate(-1);
+  }, [worker, navigate]);
+  const handleReject = useCallback(async () => {
+    if (!worker?.id) return;
+    setActionLoading(true);
+    await updateWorkerStatus(worker.id, 'rejected');
+    setActionLoading(false);
+    navigate(-1);
+  }, [worker, navigate]);
+  const handleSuspend = useCallback(async () => {
+    if (!worker?.id) return;
+    setActionLoading(true);
+    await updateWorkerStatus(worker.id, 'suspended');
+    setActionLoading(false);
+    navigate(-1);
+  }, [worker, navigate]);
 
   // ── Breadcrumb ────────────────────────────────────────────────────────
   const breadcrumb = React.createElement('div', {
@@ -119,6 +144,27 @@ export default function MotoristaEditScreen() {
         React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
           React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })),
         'Salvar alteração')));
+
+  // ── Status action bar ─────────────────────────────────────────────────
+  const statusBadgeColor = workerStatus === 'approved' ? '#b0e8d1' : workerStatus === 'rejected' ? '#eeafaa' : workerStatus === 'suspended' ? '#eeafaa' : '#fee59a';
+  const statusBadgeText = workerStatus === 'approved' ? '#174f38' : workerStatus === 'rejected' ? '#551611' : workerStatus === 'suspended' ? '#551611' : '#654c01';
+  const statusLabel = workerStatus === 'approved' ? 'Aprovado' : workerStatus === 'rejected' ? 'Rejeitado' : workerStatus === 'suspended' ? 'Suspenso' : workerStatus === 'pending' ? 'Pendente' : workerStatus;
+  const actionBtnStyle = (bg: string, color: string): React.CSSProperties => ({
+    display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px',
+    borderRadius: 999, border: 'none', background: bg, color, fontSize: 14, fontWeight: 600,
+    cursor: actionLoading ? 'wait' : 'pointer', opacity: actionLoading ? 0.6 : 1, ...font,
+  });
+
+  const statusActions = React.createElement('div', {
+    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', background: '#fff', borderRadius: 16, border: '1px solid #e2e2e2', flexWrap: 'wrap' as const, gap: 12 },
+  },
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Status do motorista:'),
+      React.createElement('span', { style: { fontSize: 12, fontWeight: 600, padding: '4px 12px', borderRadius: 999, background: statusBadgeColor, color: statusBadgeText, ...font } }, statusLabel)),
+    React.createElement('div', { style: { display: 'flex', gap: 8 } },
+      workerStatus !== 'approved' ? React.createElement('button', { type: 'button', onClick: handleApprove, disabled: actionLoading, style: actionBtnStyle('#22c55e', '#fff') }, 'Aprovar') : null,
+      workerStatus !== 'rejected' ? React.createElement('button', { type: 'button', onClick: handleReject, disabled: actionLoading, style: actionBtnStyle('#fff', '#b53838') }, 'Rejeitar') : null,
+      workerStatus === 'approved' ? React.createElement('button', { type: 'button', onClick: handleSuspend, disabled: actionLoading, style: actionBtnStyle('#f1f1f1', '#b53838') }, 'Suspender') : null));
 
   // ── Toast warning ─────────────────────────────────────────────────────
   const toast = React.createElement('div', {
@@ -319,7 +365,7 @@ export default function MotoristaEditScreen() {
             React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, item.date))))));
 
   return React.createElement(React.Fragment, null,
-    breadcrumb, header, toast,
+    breadcrumb, header, statusActions, toast,
     dadosSection, photosSection, salvarBtn,
     routesSection, vehiclesSection, metricsSection, historicoSection);
 }
