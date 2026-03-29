@@ -409,9 +409,13 @@ export default function PagamentosGestaoScreen() {
   const [editBaseEndereco, setEditBaseEndereco] = useState('');
   const [editBaseCidade, setEditBaseCidade] = useState('');
   const [editBaseEstado, setEditBaseEstado] = useState('');
+  const [editBaseLat, setEditBaseLat] = useState('');
+  const [editBaseLng, setEditBaseLng] = useState('');
   const abrirEditBase = useCallback((row: BaseListItem) => {
     setEditBaseRow(row); setEditBaseNome(row.name); setEditBaseEndereco(row.address);
     setEditBaseCidade(row.city); setEditBaseEstado(row.state);
+    setEditBaseLat(row.lat != null ? String(row.lat) : '');
+    setEditBaseLng(row.lng != null ? String(row.lng) : '');
     setEditBaseOpen(true);
   }, []);
   const fecharEditBase = useCallback(() => setEditBaseOpen(false), []);
@@ -1663,7 +1667,7 @@ export default function PagamentosGestaoScreen() {
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
               React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Editar base'),
               React.createElement('button', { type: 'button', onClick: fecharEditBase, 'aria-label': 'Fechar', style: { width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 } }, closeModalSvg))),
-          baseFormFields(editBaseNome, setEditBaseNome, editBaseEndereco, setEditBaseEndereco, editBaseCidade, setEditBaseCidade, editBaseEstado, setEditBaseEstado),
+          baseFormFields(editBaseNome, setEditBaseNome, editBaseEndereco, setEditBaseEndereco, editBaseCidade, setEditBaseCidade, editBaseEstado, setEditBaseEstado, editBaseLat, setEditBaseLat, editBaseLng, setEditBaseLng),
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
             React.createElement('button', { type: 'button', onClick: fecharEditBase, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Salvar alterações'),
             React.createElement('button', { type: 'button', onClick: fecharEditBase, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Cancelar'))))
