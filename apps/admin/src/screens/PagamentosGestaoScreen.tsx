@@ -290,12 +290,13 @@ export default function PagamentosGestaoScreen() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<typeof tabs[number]>(() =>
-    tabFromQueryParam(searchParams.get('tab')) ?? 'Preparadores',
+    tabFromQueryParam(searchParams.get('tab')) ?? 'Motorista',
   );
 
   useEffect(() => {
     const t = tabFromQueryParam(searchParams.get('tab'));
     if (t) setActiveTab(t);
+    else setActiveTab('Motorista');
   }, [searchParams]);
 
   // ── Real data from Supabase ─────────────────────────────────────────
@@ -663,10 +664,8 @@ export default function PagamentosGestaoScreen() {
           style: webStyles.viagensActionBtn,
           'aria-label': 'Visualizar motorista',
           onClick: () => {
-            const nomeNorm = row.nome.trim().toLowerCase();
-            const m = motoristasData.find((x) => x.nome.trim().toLowerCase() === nomeNorm);
-            if (m) navigate(`/motoristas/${m.id}/editar`);
-            else navigate('/motoristas');
+            const slug = row.nome.trim().toLowerCase().replace(/\s+/g, '-');
+            navigate(`/pagamentos/gestao/motorista/${slug}`);
           },
         }, eyeActionSvg)));
   });

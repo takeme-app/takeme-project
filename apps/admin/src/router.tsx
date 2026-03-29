@@ -24,6 +24,7 @@ import PagamentosScreen from './screens/PagamentosScreen';
 import PagamentosGestaoScreen from './screens/PagamentosGestaoScreen';
 import PagamentoCriarTrechoScreen from './screens/PagamentoCriarTrechoScreen';
 import PagamentoPreparadorEncomendaDetailScreen from './screens/PagamentoPreparadorEncomendaDetailScreen';
+import PagamentoMotoristaDetailScreen from './screens/PagamentoMotoristaDetailScreen';
 import EncomendaEditScreen from './screens/EncomendaEditScreen';
 import PlaceholderScreen from './screens/PlaceholderScreen';
 import AtendimentosScreen from './screens/AtendimentosScreen';
@@ -73,6 +74,7 @@ export const router = createBrowserRouter([
           { path: '/pagamentos/gestao', element: React.createElement(PagamentosGestaoScreen) },
           { path: '/pagamentos/gestao/criar-trecho', element: React.createElement(PagamentoCriarTrechoScreen) },
           { path: '/pagamentos/gestao/preparador-encomendas/:slug', element: React.createElement(PagamentoPreparadorEncomendaDetailScreen) },
+          { path: '/pagamentos/gestao/motorista/:slug', element: React.createElement(PagamentoMotoristaDetailScreen) },
           { path: '/atendimentos', element: React.createElement(AtendimentosScreen) },
           { path: '/atendimentos/:id', element: React.createElement(AtendimentoDetalheScreen) },
           { path: '/atendimentos/:id/orcamento', element: React.createElement(ElaborarOrcamentoScreen) },
