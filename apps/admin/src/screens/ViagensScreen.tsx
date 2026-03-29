@@ -22,7 +22,7 @@ import {
   statusPill,
   type ViagemRow,
 } from '../styles/webStyles';
-import { fetchViagens, fetchViagemCounts, type ViagemCounts } from '../data/queries';
+import { fetchViagens, fetchViagemCounts, updateBookingStatus, type ViagemCounts } from '../data/queries';
 import type { ViagemListItem } from '../data/types';
 
 // SVG icons for view/edit actions (stroke-based, matching project icons)
@@ -241,7 +241,21 @@ export default function ViagensScreen() {
           React.createElement('button', {
             type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
             onClick: (e: React.MouseEvent) => { e.stopPropagation(); const item = viagens[idx]; navigate('/viagens/' + (item?.bookingId ?? idx) + '/editar', { state: { trip: row } }); },
-          }, pencilActionSvg))));
+          }, pencilActionSvg),
+          row.status !== 'cancelled' && row.status !== 'paid' ? React.createElement('button', {
+            type: 'button', style: { ...webStyles.viagensActionBtn },
+            'aria-label': 'Cancelar viagem',
+            onClick: async (e: React.MouseEvent) => {
+              e.stopPropagation();
+              const item = viagens[idx];
+              if (item?.bookingId && confirm('Cancelar esta viagem?')) {
+                await updateBookingStatus(item.bookingId, 'cancelled');
+                const [items, c] = await Promise.all([fetchViagens(), fetchViagemCounts()]);
+                setViagens(items); setCounts(c);
+              }
+            },
+          }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+            React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#b53838', strokeWidth: 2, strokeLinecap: 'round' }))) : null)));
   };
 
   const viagensTableBody = viagensTableRows.map(viagensTableRowEl);

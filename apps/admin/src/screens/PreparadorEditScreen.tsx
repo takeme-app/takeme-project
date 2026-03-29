@@ -14,6 +14,7 @@ import {
   saveWorkerProfileFields,
   saveVehicleFields,
   formatCurrencyBRL,
+  updateExcursionStatus,
 } from '../data/queries';
 import type { PreparadorEditDetail, PreparadorCandidate, ExcursionStatusHistoryRow } from '../data/types';
 
@@ -580,6 +581,44 @@ export default function PreparadorEditScreen() {
             fontSize: 13, fontWeight: 700, alignSelf: 'flex-start', ...font,
           },
         }, detail.statusLabel),
+        // Status advancement buttons
+        React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const, marginTop: 4 } },
+          ...((): React.ReactElement[] => {
+            const statusFlow: Record<string, { next: string; label: string }> = {
+              'pending': { next: 'in_analysis', label: 'Iniciar análise' },
+              'in_analysis': { next: 'quoted', label: 'Enviar orçamento' },
+              'quoted': { next: 'approved', label: 'Aprovar' },
+              'approved': { next: 'scheduled', label: 'Agendar' },
+              'scheduled': { next: 'in_progress', label: 'Iniciar viagem' },
+              'in_progress': { next: 'completed', label: 'Concluir' },
+            };
+            const current = detail.statusRaw;
+            const flow = statusFlow[current];
+            const btns: React.ReactElement[] = [];
+            if (flow) {
+              btns.push(React.createElement('button', {
+                key: 'advance', type: 'button',
+                onClick: async () => {
+                  await updateExcursionStatus(detail.id, flow.next);
+                  navigate(0);
+                },
+                style: { display: 'flex', alignItems: 'center', gap: 6, height: 36, padding: '0 16px', borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font },
+              }, flow.label));
+            }
+            if (current !== 'cancelled' && current !== 'completed') {
+              btns.push(React.createElement('button', {
+                key: 'cancel', type: 'button',
+                onClick: async () => {
+                  if (confirm('Cancelar esta excursão?')) {
+                    await updateExcursionStatus(detail.id, 'cancelled');
+                    navigate(0);
+                  }
+                },
+                style: { display: 'flex', alignItems: 'center', gap: 6, height: 36, padding: '0 16px', borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font },
+              }, 'Cancelar'));
+            }
+            return btns;
+          })()),
         React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Rota'),
         React.createElement('div', { style: { minHeight: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } }, rotaResumo),
         React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Horário de saída'),
