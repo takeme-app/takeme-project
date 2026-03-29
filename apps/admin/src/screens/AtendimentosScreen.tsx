@@ -6,6 +6,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
 import { fetchViagemCounts, fetchEncomendaCounts, fetchMotoristas } from '../data/queries';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -104,6 +105,42 @@ export default function AtendimentosScreen() {
     });
     return () => { cancelled = true; };
   }, []);
+
+  // ── Real conversations from Supabase as tickets ─────────────────────
+  const [realTickets, setRealTickets] = useState<Ticket[]>([]);
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    let cancelled = false;
+    supabase
+      .from('conversations')
+      .select('id, driver_id, client_id, status, participant_name, last_message, last_message_at, created_at')
+      .order('last_message_at', { ascending: false })
+      .limit(20)
+      .then(({ data }) => {
+        if (cancelled || !data) return;
+        const now = Date.now();
+        const tickets: Ticket[] = data.map((c: any) => {
+          const name = c.participant_name || 'Usuário';
+          const diff = now - new Date(c.last_message_at || c.created_at).getTime();
+          const mins = Math.floor(diff / 60000);
+          const tempo = mins < 60 ? `há ${mins} min` : mins < 1440 ? `há ${Math.floor(mins / 60)}h` : `há ${Math.floor(mins / 1440)} dias`;
+          return {
+            nome: name,
+            avatar: name.charAt(0).toUpperCase(),
+            categoria: c.status === 'active' ? 'Viagem' : 'Finalizada',
+            descricao: c.last_message || 'Sem mensagens',
+            tempo,
+            status: c.status === 'active' ? 'em_atendimento' : 'finalizada',
+          };
+        });
+        setRealTickets(tickets);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Use real tickets if available, fallback to mock
+  const activeMeuTickets = realTickets.length > 0 ? realTickets.filter(t => t.status !== 'finalizada') : meuAtendimentoTickets;
+  const activeTodosTickets = realTickets.length > 0 ? realTickets : [...meuAtendimentoTickets, ...todosTickets];
 
   const metrics = [
     { title: 'Viagens no momento', value: String(realMetrics.viagens || 0) },
@@ -310,7 +347,7 @@ export default function AtendimentosScreen() {
   const meuTicketCards = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, background: '#f6f6f6', borderRadius: 16, padding: '0 24px' },
   },
-    ...meuAtendimentoTickets.map((t, i) => ticketCard(t, i)));
+    ...activeMeuTickets.map((t, i) => ticketCard(t, i)));
 
   const meuSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' },
@@ -331,7 +368,7 @@ export default function AtendimentosScreen() {
   const todosCards = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, background: '#f6f6f6', borderRadius: 16, padding: '0 24px' },
   },
-    ...todosTickets.map((t, i) => ticketCard(t, i)));
+    ...activeTodosTickets.map((t, i) => ticketCard(t, i)));
 
   const todosSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' },
