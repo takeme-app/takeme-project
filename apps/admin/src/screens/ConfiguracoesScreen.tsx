@@ -5,7 +5,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
 import { useAuth } from '../contexts/AuthContext';
-import { fetchAdminUsers } from '../data/queries';
+import { fetchAdminUsers, createAdminUser, deleteAdminUser } from '../data/queries';
 import type { AdminUserListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -224,7 +224,19 @@ export default function ConfiguracoesScreen() {
         React.createElement('span', { style: { display: 'inline-block', padding: '4px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700, background: stBg, color: stColor, ...font } }, row.status)),
       React.createElement('div', { style: { flex: userCols[5].flex, minWidth: userCols[5].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 } },
         React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar' }, eyeSvg),
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar' }, pencilSvg)));
+        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar' }, pencilSvg),
+        React.createElement('button', {
+          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Remover',
+          onClick: async () => {
+            const u = adminUsers[idx];
+            if (u && confirm(`Remover admin ${u.fullName}?`)) {
+              await deleteAdminUser(u.id);
+              const items = await fetchAdminUsers();
+              setAdminUsers(items);
+            }
+          },
+        }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14', stroke: '#b53838', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))));
   });
 
   const usuariosContent = React.createElement('div', {
@@ -307,7 +319,16 @@ export default function ConfiguracoesScreen() {
           style: { flex: 1, height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', fontSize: 16, fontWeight: 600, color: '#0d0d0d', cursor: 'pointer', ...font },
         }, 'Cancelar'),
         React.createElement('button', {
-          type: 'button', onClick: () => setNovoUsuarioOpen(false),
+          type: 'button',
+          onClick: async () => {
+            if (nuNome.trim() && nuEmail.trim()) {
+              const perms = Object.entries(nuPermissoes).filter(([, v]) => v).map(([k]) => k);
+              await createAdminUser({ full_name: nuNome, email: nuEmail, permissions: perms });
+              const items = await fetchAdminUsers();
+              setAdminUsers(items);
+            }
+            setNovoUsuarioOpen(false);
+          },
           style: { flex: 1, height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', fontSize: 16, fontWeight: 600, color: '#fff', cursor: 'pointer', ...font },
         }, 'Salvar')))) : null;
 
