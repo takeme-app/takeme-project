@@ -186,25 +186,35 @@ function mapPreparadorStatus(s: ExcursionDbStatus): PreparadorListItem['status']
 // ── Viagens ─────────────────────────────────────────────────────────────
 
 export async function fetchViagens(): Promise<ViagemListItem[]> {
+  // Step 1: fetch bookings with trip join (profiles FK goes to auth.users, not profiles table)
   const { data, error } = await supabase
     .from('bookings')
     .select(`
       id, user_id, origin_address, destination_address, status, created_at,
       scheduled_trip_id,
-      scheduled_trips!inner ( id, departure_at, arrival_at, driver_id, status ),
-      profiles!bookings_user_id_fkey ( full_name )
+      scheduled_trips!inner ( id, departure_at, arrival_at, driver_id, status )
     `)
     .order('created_at', { ascending: false })
     .limit(200);
 
   if (error || !data) return [];
 
+  // Step 2: fetch profile names for all user_ids
+  const userIds = [...new Set(data.map((b: any) => b.user_id).filter(Boolean))];
+  const profileMap: Record<string, string> = {};
+  if (userIds.length > 0) {
+    const { data: profiles } = await supabase
+      .from('profiles')
+      .select('id, full_name')
+      .in('id', userIds);
+    if (profiles) profiles.forEach((p: any) => { profileMap[p.id] = p.full_name; });
+  }
+
   return data.map((b: any) => {
     const trip = b.scheduled_trips;
-    const profile = b.profiles;
     return {
       bookingId: b.id,
-      passageiro: profile?.full_name ?? 'Sem nome',
+      passageiro: profileMap[b.user_id] ?? 'Sem nome',
       origem: shortAddr(b.origin_address),
       destino: shortAddr(b.destination_address),
       data: fmtDate(trip?.departure_at ?? b.created_at),
