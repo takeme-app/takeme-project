@@ -279,6 +279,8 @@ export interface PagamentoListItem {
   workerName: string;
   entityType: string;
   dataFinalizacao: string;
+  /** ISO (paid_at ou created_at) para filtros de período no admin */
+  dateAtIso: string;
   status: 'Em andamento' | 'Agendado' | 'Cancelado' | 'Concluído';
   grossAmountCents: number;
   workerAmountCents: number;
