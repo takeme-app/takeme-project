@@ -1,12 +1,20 @@
 /**
  * PassageiroDetalheScreen — Detalhes do passageiro (Figma 1415-42889).
+ * Aba «Histórico de atividades»: métricas + lista «Histórico de alterações» alinhadas ao Figma 802:24098 (nós 1185:39674, 1185:39705).
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { webStyles, arrowBackSvg, filterIconSvg } from '../styles/webStyles';
-import { fetchPassageiroPaymentMethods, updateProfileVerified, fetchDependentsByUser, updateDependentStatus } from '../data/queries';
-import type { PaymentMethodRow } from '../data/types';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate, useLocation, useParams } from 'react-router-dom';
+import { webStyles, arrowBackSvg } from '../styles/webStyles';
+import {
+  fetchPassageiroPaymentMethods,
+  updateProfileVerified,
+  fetchDependentsByUser,
+  updateDependentStatus,
+  fetchPassageiroDetailForAdmin,
+  fetchPassageiroBookings,
+} from '../data/queries';
+import type { PaymentMethodRow, ViagemListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -42,13 +50,18 @@ const editSmallSvg = React.createElement('svg', { width: 16, height: 16, viewBox
 const plusSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M12 5v14M5 12h14', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 
-// ── Fallback payment methods (used when no real data) ────────────────────
-const fallbackPaymentMethods = [
-  { name: 'Nubank', type: 'Débito', lastDigits: '9424', icon: mastercardIcon },
-  { name: 'BlackVisa', type: 'Crédito', lastDigits: '9414', icon: visaIcon },
-  { name: 'PIX', type: '', lastDigits: '', icon: pixIcon },
-  { name: 'Apple Pay', type: '', lastDigits: '', icon: applePayIcon },
-];
+// Ícones métricas (Figma 1185:39674 — admin, sem Tailwind)
+const metricIconChart = React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', { d: 'M3 3v18h18M7 16l4-4 4 4 5-7', stroke: '#0d0d0d', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+const metricIconLuggage = React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', { d: 'M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2m-10 0h10a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2V9a2 2 0 012-2z', stroke: '#0d0d0d', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+const metricIconPeople = React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', { d: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zm12 0a3 3 0 10-6 0', stroke: '#0d0d0d', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+
+// Ícones linha do histórico (Figma 1185:39705)
+const histRowIconRoute = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', { d: 'M3 17l6-6 4 4 8-8', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+const accentActor = '#a37e38';
 
 // ── Styles ────────────────────────────────────────────────────────────────
 const s = {
@@ -119,76 +132,50 @@ const s = {
   } as React.CSSProperties,
 };
 
-// ── SVG: eye action ──────────────────────────────────────────────────────
-const eyeActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-  React.createElement('path', { d: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-  React.createElement('circle', { cx: 12, cy: 12, r: 3, stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
-
-// SVG: pencil action
-const pencilActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-  React.createElement('path', { d: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-  React.createElement('path', { d: 'M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
-
-// SVG: chevron left / right for pagination
-const chevronLeftSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-  React.createElement('path', { d: 'M15 18l-6-6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
-const chevronRightSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-  React.createElement('path', { d: 'M9 18l6-6-6-6', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
-
-// ── Activity history table data ──────────────────────────────────────────
-type ActivityRow = {
-  atividade: string;
-  origem: string;
-  destino: string;
-  data: string;
-  embarque: string;
-  chegada: string;
-  status: 'agendado' | 'concluido' | 'cancelado' | 'em_andamento';
-};
-
-const activityRows: ActivityRow[] = [
-  { atividade: 'Viagem', origem: 'São Luís - MA', destino: 'Viana - MA', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'em_andamento' },
-  { atividade: 'Viagem', origem: 'São Luís - MA', destino: 'Viana - MA', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'agendado' },
-  { atividade: 'Viagem', origem: 'São Luís - MA', destino: 'Viana - MA', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'concluido' },
-  { atividade: 'Envio de encomenda', origem: 'São Luís - MA', destino: 'Viana - MA', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'cancelado' },
-  { atividade: 'Envio de encomenda', origem: 'São Luís - MA', destino: 'Viana - MA', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'cancelado' },
-  { atividade: 'Envio de dependente', origem: 'São Luís - MA', destino: 'Viana - MA', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'concluido' },
-  { atividade: 'Envio de dependente', origem: 'São Luís - MA', destino: 'Viana - MA', data: '25/10/2025', embarque: '08:00', chegada: '09:30', status: 'concluido' },
-];
-
-// Metric cards for historico tab
-const histMetrics = [
-  { title: 'Viagens realizadas', value: '35' },
-  { title: 'Envios realizados', value: '3' },
-  { title: 'Excursões realizadas', value: '2' },
-];
-
-const activityCols = [
-  { label: 'Atividade', flex: '1 1 15%', minWidth: 140 },
-  { label: 'Origem', flex: '1 1 12%', minWidth: 110 },
-  { label: 'Destino', flex: '1 1 12%', minWidth: 90 },
-  { label: 'Data', flex: '0 0 100px', minWidth: 100 },
-  { label: 'Embarque', flex: '0 0 80px', minWidth: 80 },
-  { label: 'Chegada', flex: '0 0 72px', minWidth: 72 },
-  { label: 'Status', flex: '0 0 130px', minWidth: 130 },
-  { label: 'Visualizar/Editar', flex: '0 0 96px', minWidth: 96 },
-];
-
-const statusConfig: Record<ActivityRow['status'], { label: string; bg: string; color: string }> = {
-  em_andamento: { label: 'Em andamento', bg: '#fee59a', color: '#654c01' },
-  agendado: { label: 'Agendado', bg: '#a8c6ef', color: '#102d57' },
-  concluido: { label: 'Concluído', bg: '#b0e8d1', color: '#174f38' },
-  cancelado: { label: 'Cancelado', bg: '#eeafaa', color: '#551611' },
-};
-
 export default function PassageiroDetalheScreen() {
   const navigate = useNavigate();
   const location = useLocation();
-  const passageiro = (location.state as { passageiro?: { nome: string; cidade: string; estado: string; dataCriacao: string; cpf: string; status: string } })?.passageiro;
+  const { id: idFromRoute } = useParams<{ id: string }>();
+  const passageiroState = (location.state as { passageiro?: { id?: string; nome: string; cidade: string; estado: string; dataCriacao: string; cpf: string; status: string } })?.passageiro;
+
+  const passageiroId = idFromRoute || passageiroState?.id || '';
+  const [detailLoad, setDetailLoad] = useState<Awaited<ReturnType<typeof fetchPassageiroDetailForAdmin>>>(null);
+  const [detailLoading, setDetailLoading] = useState(!!passageiroId);
+  const [bookings, setBookings] = useState<ViagemListItem[]>([]);
+
+  useEffect(() => {
+    if (!passageiroId) {
+      setDetailLoading(false);
+      setDetailLoad(null);
+      setBookings([]);
+      return;
+    }
+    let cancel = false;
+    setDetailLoading(true);
+    (async () => {
+      const d = await fetchPassageiroDetailForAdmin(passageiroId);
+      const b = await fetchPassageiroBookings(passageiroId);
+      if (cancel) return;
+      setDetailLoad(d);
+      setBookings(b);
+      setDetailLoading(false);
+    })();
+    return () => { cancel = true; };
+  }, [passageiroId]);
+
+  const passageiro = passageiroState ?? (detailLoad
+    ? {
+        nome: detailLoad.nome,
+        cidade: detailLoad.cidade,
+        estado: detailLoad.estado,
+        dataCriacao: detailLoad.dataCriacao,
+        cpf: detailLoad.cpf,
+        status: detailLoad.status === 'Ativo' ? 'Verificado' : 'Pendente',
+      }
+    : undefined);
 
   const [activeTab, setActiveTab] = useState<'dados' | 'historico'>('dados');
-  const passageiroId = (location.state as any)?.passageiro?.id;
-  const isVerified = passageiro?.status === 'Verificado';
+  const isVerified = detailLoad ? detailLoad.status === 'Ativo' : passageiro?.status === 'Verificado';
   const [verifying, setVerifying] = useState(false);
   const [dependents, setDependents] = useState<any[]>([]);
 
@@ -196,25 +183,39 @@ export default function PassageiroDetalheScreen() {
     if (passageiroId) fetchDependentsByUser(passageiroId).then(setDependents);
   }, [passageiroId]);
 
-  // ── Real payment methods from Supabase ──────────────────────────────
   const [realPayMethods, setRealPayMethods] = useState<PaymentMethodRow[]>([]);
   useEffect(() => {
-    const pId = (location.state as any)?.passageiro?.id;
-    if (pId) {
-      fetchPassageiroPaymentMethods(pId).then(setRealPayMethods);
-    }
-  }, [location.state]);
+    if (passageiroId) fetchPassageiroPaymentMethods(passageiroId).then(setRealPayMethods);
+  }, [passageiroId]);
 
-  // Use real data if available, fallback to mock
   const brandIconMap: Record<string, React.ReactElement> = { mastercard: mastercardIcon, visa: visaIcon };
-  const paymentMethods = realPayMethods.length > 0
-    ? realPayMethods.map((pm) => ({
-        name: pm.holder_name || pm.brand || 'Cartão',
-        type: pm.type === 'credit' ? 'Crédito' : 'Débito',
-        lastDigits: pm.last_four || '',
-        icon: brandIconMap[(pm.brand || '').toLowerCase()] || visaIcon,
-      }))
-    : fallbackPaymentMethods;
+  const paymentMethods = realPayMethods.map((pm) => ({
+    name: pm.holder_name || pm.brand || 'Cartão',
+    type: pm.type === 'credit' ? 'Crédito' : 'Débito',
+    lastDigits: pm.last_four || '',
+    icon: brandIconMap[(pm.brand || '').toLowerCase()] || visaIcon,
+  }));
+
+  const viagensConcluidas = useMemo(() => bookings.filter((b) => b.status === 'concluído').length, [bookings]);
+  const histMetricsData = useMemo(
+    () => [
+      { title: 'Viagens realizadas', value: String(viagensConcluidas), icon: metricIconChart },
+      { title: 'Envios realizados', value: '—', icon: metricIconLuggage },
+      { title: 'Excursões realizadas', value: '—', icon: metricIconPeople },
+    ],
+    [viagensConcluidas],
+  );
+
+  const historicoAlteracoesRows = useMemo(
+    () =>
+      bookings.map((b) => ({
+        action: `Viagem (${b.status})`,
+        actor: `${b.origem} → ${b.destino}`,
+        when: `${b.data} · ${b.embarque}`,
+        icon: histRowIconRoute,
+      })),
+    [bookings],
+  );
 
   // ── Add payment method modal state ────────────────────────────────────
   const [payModalOpen, setPayModalOpen] = useState(false);
@@ -224,11 +225,27 @@ export default function PassageiroDetalheScreen() {
   const [payValidade, setPayValidade] = useState('');
   const [payCvv, setPayCvv] = useState('');
 
-  const nome = passageiro?.nome ?? 'Carlos Silva';
-  const cpf = passageiro?.cpf ?? '123.456.789-99';
-  const cidade = passageiro?.cidade ?? 'São Luís';
-  const estado = passageiro?.estado ?? 'Maranhão';
-  const telefone = '(11) 91234-5678';
+  const nome = passageiro?.nome ?? detailLoad?.nome ?? '—';
+  const cpf = passageiro?.cpf ?? detailLoad?.cpf ?? '—';
+  const cidade = passageiro?.cidade ?? detailLoad?.cidade ?? '—';
+  const estado = passageiro?.estado ?? detailLoad?.estado ?? '—';
+  const telefone = detailLoad?.phone ?? '—';
+
+  if (!passageiroId) {
+    return React.createElement('div', { style: { padding: 40, ...font } },
+      React.createElement('p', { style: { margin: '0 0 16px' } }, 'Passageiro não identificado.'),
+      React.createElement('button', { type: 'button', style: s.breadcrumbLink, onClick: () => navigate('/passageiros') }, 'Voltar à lista'));
+  }
+
+  if (detailLoading) {
+    return React.createElement('div', { style: { padding: 40, ...font } }, 'Carregando…');
+  }
+
+  if (!detailLoad && !passageiroState) {
+    return React.createElement('div', { style: { padding: 40, ...font } },
+      React.createElement('p', { style: { margin: '0 0 16px' } }, 'Passageiro não encontrado.'),
+      React.createElement('button', { type: 'button', style: s.breadcrumbLink, onClick: () => navigate('/passageiros') }, 'Voltar à lista'));
+  }
 
   // ── Breadcrumb ───────────────────────────────────────────────────────
   const breadcrumb = React.createElement('div', { style: s.breadcrumb },
@@ -295,16 +312,18 @@ export default function PassageiroDetalheScreen() {
       React.createElement('div', { style: { width: '100%', height: 1, background: '#e2e2e2' } }),
       // Métodos de pagamento
       React.createElement('h3', { style: s.subtitle }, 'Métodos de pagamento'),
-      React.createElement('div', { style: s.paymentGrid },
-        ...paymentMethods.map((pm, i) =>
-          React.createElement('div', { key: i, style: s.paymentCard },
-            pm.icon,
-            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const } },
-              React.createElement('span', { style: s.paymentName },
-                pm.lastDigits ? `${pm.name} ${pm.type.toLowerCase()} ••••${pm.lastDigits}` : pm.name),
-              pm.type && pm.lastDigits
-                ? React.createElement('span', { style: s.paymentDetails }, pm.type)
-                : null)))),
+      paymentMethods.length === 0
+        ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhum método de pagamento cadastrado.')
+        : React.createElement('div', { style: s.paymentGrid },
+          ...paymentMethods.map((pm, i) =>
+            React.createElement('div', { key: i, style: s.paymentCard },
+              pm.icon,
+              React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const } },
+                React.createElement('span', { style: s.paymentName },
+                  pm.lastDigits ? `${pm.name} ${pm.type.toLowerCase()} ••••${pm.lastDigits}` : pm.name),
+                pm.type && pm.lastDigits
+                  ? React.createElement('span', { style: s.paymentDetails }, pm.type)
+                  : null)))),
       // Add payment link
       React.createElement('button', { type: 'button', style: s.addPaymentBtn, onClick: () => setPayModalOpen(true) }, plusSvg, 'Adicionar método de pagamento')));
 
@@ -337,106 +356,70 @@ export default function PassageiroDetalheScreen() {
     // We'll render it in the return alongside dadosTab
   }
 
-  // ── Tab: Histórico de atividades ──────────────────────────────────────
-  const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 8px' };
-
-  // ── Metrics section ─────────────────────────────────────────────────
+  // ── Tab: Histórico (Figma 802:24098 — blocos 1185:39674 + 1185:39705) ──
   const metricsSection = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' } },
-    React.createElement('p', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Métricas e estatísticas'),
-    React.createElement('div', { style: { display: 'flex', gap: 24, width: '100%' } },
-      ...histMetrics.map((m) =>
+    React.createElement('p', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 'normal', ...font } }, 'Métricas e histórico'),
+    React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 24, width: '100%' } },
+      ...histMetricsData.map((m) =>
         React.createElement('div', {
           key: m.title,
           style: {
-            flex: '1 1 0', background: '#f6f6f6', borderRadius: 16, padding: '16px 24px',
-            display: 'flex', flexDirection: 'column' as const, gap: 56,
+            flex: '1 1 280px',
+            minWidth: 0,
+            background: '#f6f6f6',
+            borderRadius: 16,
+            paddingLeft: 24,
+            paddingRight: 24,
           },
         },
-          React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font } }, m.title),
-          React.createElement('p', {
-            style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, lineHeight: 1.5, fontFamily: "'Open Sans', Inter, sans-serif" },
-          }, m.value)))));
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 56, width: '100%' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 16, width: '100%' } },
+              React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font } }, m.title),
+              React.createElement('div', {
+                style: {
+                  width: 44, height: 44, borderRadius: 999, background: '#fff',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                },
+              }, m.icon)),
+            React.createElement('div', { style: { paddingBottom: 16 } },
+              React.createElement('p', {
+                style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, lineHeight: 1.5, fontFamily: "'Open Sans', Inter, sans-serif" },
+              }, m.value)))))));
 
-  // ── Activity table section ──────────────────────────────────────────
-  // Filter toolbar
-  const histFilterBar = React.createElement('div', {
-    style: {
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      height: 80, padding: '20px 28px', background: '#f6f6f6', borderRadius: '16px 16px 0 0',
-    },
-  },
-    React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font } }, 'Lista de atividades'),
-    React.createElement('button', {
-      type: 'button',
-      style: {
-        display: 'flex', alignItems: 'center', gap: 8, height: 40, padding: '8px 24px',
-        background: '#fff', border: 'none', borderRadius: 999, cursor: 'pointer',
-        fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font, minWidth: 104,
+  const historicoAlteracoesSection = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' } },
+    React.createElement('p', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 'normal', ...font } }, 'Histórico de alterações'),
+    historicoAlteracoesRows.length === 0
+      ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhuma viagem registrada para este passageiro.')
+      : null,
+    ...historicoAlteracoesRows.map((row, idx) =>
+      React.createElement('div', {
+        key: idx,
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 16,
+          padding: 16,
+          background: '#f1f1f1',
+          borderRadius: 12,
+          width: '100%',
+          boxSizing: 'border-box' as const,
+        },
       },
-    }, React.createElement('span', null, filterIconSvg), 'Filtro'));
-
-  // Table header
-  const histHeader = React.createElement('div', {
-    style: {
-      display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9',
-      padding: '0 16px', alignItems: 'center',
-    },
-  },
-    ...activityCols.map((c) => React.createElement('div', {
-      key: c.label,
-      style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 8px', display: 'flex', alignItems: 'center', height: '100%' },
-    }, c.label)));
-
-  // Table rows
-  const histRows = activityRows.map((row, idx) => {
-    const sc = statusConfig[row.status];
-    return React.createElement('div', {
-      key: idx,
-      style: {
-        display: 'flex', height: 64, alignItems: 'center', padding: '0 16px',
-        borderBottom: '1px solid #d9d9d9', background: '#f6f6f6',
-      },
-    },
-      // Atividade
-      React.createElement('div', { style: { ...cellBase, flex: activityCols[0].flex, minWidth: activityCols[0].minWidth, fontWeight: 500 } }, row.atividade),
-      // Origem
-      React.createElement('div', { style: { ...cellBase, flex: activityCols[1].flex, minWidth: activityCols[1].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, row.origem),
-      // Destino
-      React.createElement('div', { style: { ...cellBase, flex: activityCols[2].flex, minWidth: activityCols[2].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, row.destino),
-      // Data
-      React.createElement('div', { style: { ...cellBase, flex: activityCols[3].flex, minWidth: activityCols[3].minWidth, fontWeight: 400 } }, row.data),
-      // Embarque
-      React.createElement('div', { style: { ...cellBase, flex: activityCols[4].flex, minWidth: activityCols[4].minWidth, fontWeight: 400 } }, row.embarque),
-      // Chegada
-      React.createElement('div', { style: { ...cellBase, flex: activityCols[5].flex, minWidth: activityCols[5].minWidth, fontWeight: 400 } }, row.chegada),
-      // Status
-      React.createElement('div', { style: { ...cellBase, flex: activityCols[6].flex, minWidth: activityCols[6].minWidth } },
-        React.createElement('span', {
+        React.createElement('div', {
           style: {
-            display: 'inline-block', padding: '4px 12px', borderRadius: 999,
-            fontSize: 13, fontWeight: 700, lineHeight: 1.5, whiteSpace: 'nowrap' as const,
-            background: sc.bg, color: sc.color, ...font,
+            width: 40, height: 40, borderRadius: 999, background: '#fff',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
           },
-        }, sc.label)),
-      // Visualizar/Editar
-      React.createElement('div', { style: { flex: activityCols[7].flex, minWidth: activityCols[7].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 } },
-        React.createElement('button', { type: 'button', style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Visualizar' }, eyeActionSvg),
-        React.createElement('button', { type: 'button', style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar' }, pencilActionSvg)));
-  });
-
-  const activityTableSection = React.createElement('div', {
-    style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%', borderBottom: '1px solid #e2e2e2', paddingBottom: 32 },
-  },
-    React.createElement('p', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: '0 0 16px 0', ...font } }, 'Histórico de atividades'),
-    React.createElement('div', { style: { background: '#fff', borderRadius: 16, overflow: 'hidden', width: '100%' } },
-      histFilterBar,
-      React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } },
-        histHeader,
-        ...histRows)));
+        }, row.icon),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 2, minWidth: 0, flex: 1 } },
+          React.createElement('p', { style: { margin: 0, fontSize: 16, fontWeight: 600, color: '#0d0d0d', lineHeight: 1.5, ...font } },
+            React.createElement('span', null, `${row.action} • `),
+            React.createElement('span', { style: { color: accentActor } }, row.actor)),
+          React.createElement('p', { style: { margin: 0, fontSize: 14, fontWeight: 500, color: '#767676', lineHeight: 1.5, ...font } }, row.when)))));
 
   const historicoTab = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 32, width: '100%' } },
     metricsSection,
-    activityTableSection);
+    historicoAlteracoesSection);
 
   // ── Credit card icon for payment modal ─────────────────────────────────
   const creditCardSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },

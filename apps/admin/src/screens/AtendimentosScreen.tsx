@@ -2,10 +2,11 @@
  * AtendimentosScreen — Atendimentos conforme Figma 1044-38472.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
-import { fetchViagemCounts, fetchEncomendaCounts, fetchMotoristas } from '../data/queries';
+import { fetchViagemCounts, fetchEncomendaCounts, fetchMotoristas, fetchConversationCategoryCounts } from '../data/queries';
+import type { ConversationCategoryCount } from '../data/queries';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -29,38 +30,6 @@ type Ticket = {
   tempo: string;
   status: string;
 };
-
-const meuAtendimentoTickets: Ticket[] = [
-  { nome: 'Maria Silva', avatar: 'M', categoria: 'Excursão', descricao: 'Preciso organizar uma viagem para 15 pessoas de São Paulo para Santos...', tempo: 'há 5 min', status: 'nao_atendida' },
-  { nome: 'João Santos', avatar: 'J', categoria: 'Cadastro de transporte', descricao: 'Documentação do veículo anexada para análise', tempo: 'há 5 min', status: 'em_atendimento' },
-  { nome: 'Ana Costa', avatar: 'A', categoria: 'Reembolso', descricao: 'Solicitação de reembolso para viagem cancelada', tempo: 'há 2 dias', status: 'atrasada' },
-];
-
-const todosTickets: Ticket[] = [
-  { nome: 'Pedro Oliveira', avatar: 'P', categoria: 'Ouvidoria', descricao: 'Não consigo acessar minha conta', tempo: 'há 5 min', status: 'nao_atendida' },
-  { nome: 'Carla Souza', avatar: 'C', categoria: 'Denúncia', descricao: 'Gostaria de reportar um problema com o motorista', tempo: 'há 16 horas', status: 'atrasada' },
-];
-
-// ── Category chips for first section ────────────────────────────────────
-const meuCategorias = [
-  { label: 'Todos', count: 24 },
-  { label: 'Excursão', count: 8 },
-  { label: 'Encomendas', count: 5 },
-  { label: 'Reembolso', count: 3 },
-  { label: 'Cadastro de transporte', count: 6 },
-  { label: 'Aurorizar menores', count: 6 },
-];
-
-// ── Status chips for second section ─────────────────────────────────────
-const todosStatusChips = [
-  { label: 'Todos', count: 24 },
-  { label: 'Atrasadas', count: 4 },
-  { label: 'Não atendidas', count: 3 },
-  { label: 'Em atendimento', count: 9 },
-  { label: 'Ouvidoria', count: 2 },
-  { label: 'Denúncia', count: 6 },
-  { label: 'Finalizadas', count: 21 },
-];
 
 // ── Avatar colors ───────────────────────────────────────────────────────
 const avatarColors: Record<string, string> = {
@@ -111,12 +80,12 @@ export default function AtendimentosScreen() {
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     let cancelled = false;
-    supabase
+    (supabase as any)
       .from('conversations')
       .select('id, driver_id, client_id, status, participant_name, last_message, last_message_at, created_at')
       .order('last_message_at', { ascending: false })
       .limit(20)
-      .then(({ data }) => {
+      .then(({ data }: { data: any[] | null }) => {
         if (cancelled || !data) return;
         const now = Date.now();
         const tickets: Ticket[] = data.map((c: any) => {
@@ -138,9 +107,40 @@ export default function AtendimentosScreen() {
     return () => { cancelled = true; };
   }, []);
 
-  // Use real tickets if available, fallback to mock
-  const activeMeuTickets = realTickets.length > 0 ? realTickets.filter(t => t.status !== 'finalizada') : meuAtendimentoTickets;
-  const activeTodosTickets = realTickets.length > 0 ? realTickets : [...meuAtendimentoTickets, ...todosTickets];
+  const activeMeuTickets = realTickets.filter((t) => t.status !== 'finalizada');
+  const activeTodosTickets = realTickets;
+
+  const [convCategoryCounts, setConvCategoryCounts] = useState<ConversationCategoryCount[]>([]);
+  useEffect(() => {
+    fetchConversationCategoryCounts().then(setConvCategoryCounts);
+  }, []);
+
+  const meuCategorias = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of activeMeuTickets) {
+      counts.set(t.categoria, (counts.get(t.categoria) || 0) + 1);
+    }
+    return [
+      { label: 'Todos', count: activeMeuTickets.length },
+      ...[...counts.entries()].map(([label, count]) => ({ label, count })),
+    ];
+  }, [activeMeuTickets]);
+
+  const meuTicketsFiltered = useMemo(() => {
+    if (meuCatActive === 'Todos') return activeMeuTickets;
+    return activeMeuTickets.filter((t) => t.categoria === meuCatActive);
+  }, [activeMeuTickets, meuCatActive]);
+
+  const todosStatusChips = convCategoryCounts.length > 0
+    ? convCategoryCounts
+    : [{ label: 'Todos', count: activeTodosTickets.length }];
+
+  const todosTicketsFiltered = useMemo(() => {
+    if (todosStatusActive === 'Todos') return activeTodosTickets;
+    if (todosStatusActive === 'Em atendimento') return activeTodosTickets.filter((t) => t.status === 'em_atendimento');
+    if (todosStatusActive === 'Finalizadas') return activeTodosTickets.filter((t) => t.status === 'finalizada');
+    return activeTodosTickets;
+  }, [activeTodosTickets, todosStatusActive]);
 
   const metrics = [
     { title: 'Viagens no momento', value: String(realMetrics.viagens || 0) },
@@ -176,6 +176,7 @@ export default function AtendimentosScreen() {
     const avatarBg = avatarColors[t.avatar] || '#999';
     return React.createElement('div', {
       key: `${t.nome}-${idx}`,
+      'data-testid': 'atendimento-ticket-row',
       style: {
         display: 'flex', flexDirection: 'column' as const, gap: 16, padding: '20px 0',
         borderBottom: '1px solid #e2e2e2',
@@ -347,7 +348,9 @@ export default function AtendimentosScreen() {
   const meuTicketCards = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, background: '#f6f6f6', borderRadius: 16, padding: '0 24px' },
   },
-    ...activeMeuTickets.map((t, i) => ticketCard(t, i)));
+    meuTicketsFiltered.length === 0
+      ? [React.createElement('p', { key: 'empty', style: { padding: '24px 0', fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhum atendimento nesta visão.')]
+      : meuTicketsFiltered.map((t, i) => ticketCard(t, i)));
 
   const meuSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' },
@@ -368,7 +371,9 @@ export default function AtendimentosScreen() {
   const todosCards = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, background: '#f6f6f6', borderRadius: 16, padding: '0 24px' },
   },
-    ...activeTodosTickets.map((t, i) => ticketCard(t, i)));
+    todosTicketsFiltered.length === 0
+      ? [React.createElement('p', { key: 'empty-todos', style: { padding: '24px 0', fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhuma conversa listada.')]
+      : todosTicketsFiltered.map((t, i) => ticketCard(t, i)));
 
   const todosSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' },

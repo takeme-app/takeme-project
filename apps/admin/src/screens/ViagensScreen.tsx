@@ -2,7 +2,7 @@
  * ViagensScreen — Lista de viagens conforme Figma node 783-10796.
  * Uses React.createElement() calls (NOT JSX).
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -22,7 +22,13 @@ import {
   statusPill,
   type ViagemRow,
 } from '../styles/webStyles';
-import { fetchViagens, fetchViagemCounts, updateBookingStatus, type ViagemCounts } from '../data/queries';
+import {
+  fetchViagens,
+  updateBookingStatus,
+  filterViagemListItem,
+  viagemCountsFromItems,
+  type ViagemListFilter,
+} from '../data/queries';
 import type { ViagemListItem } from '../data/types';
 
 // SVG icons for view/edit actions (stroke-based, matching project icons)
@@ -43,14 +49,13 @@ export default function ViagensScreen() {
 
   // ── Real data from Supabase ─────────────────────────────────────────
   const [viagens, setViagens] = useState<ViagemListItem[]>([]);
-  const [counts, setCounts] = useState<ViagemCounts>({ total: 0, concluidas: 0, agendadas: 0, emAndamento: 0, canceladas: 0 });
   const [dataLoading, setDataLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [items, c] = await Promise.all([fetchViagens(), fetchViagemCounts()]);
-      if (!cancelled) { setViagens(items); setCounts(c); setDataLoading(false); }
+      const items = await fetchViagens();
+      if (!cancelled) { setViagens(items); setDataLoading(false); }
     })();
     return () => { cancelled = true; };
   }, []);
@@ -62,13 +67,32 @@ export default function ViagensScreen() {
   const [filterDatasIncluidas, setFilterDatasIncluidas] = useState<'somente_passadas' | 'passadas_e_futuras' | 'somente_futuras'>('passadas_e_futuras');
   const [filterStatus, setFilterStatus] = useState<'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('em_andamento');
   const [filterCategoria, setFilterCategoria] = useState<'todos' | 'take_me' | 'motorista'>('take_me');
-  // Table filter modal (Figma 1132-26548)
+  // Table filter modal (Figma 1132-26548) — status/categoria partilhados com o modal da barra (estado único)
   const [tableFilterOpen, setTableFilterOpen] = useState(false);
   const [tableFilterNome, setTableFilterNome] = useState('');
   const [tableFilterOrigem, setTableFilterOrigem] = useState('');
   const [tableFilterDate, setTableFilterDate] = useState('');
-  const [tableFilterStatus, setTableFilterStatus] = useState<'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('em_andamento');
-  const [tableFilterCategoria, setTableFilterCategoria] = useState<'todos' | 'take_me' | 'motorista'>('take_me');
+
+  const listFilter: ViagemListFilter = useMemo(
+    () => ({
+      status: filterStatus,
+      categoria: filterCategoria,
+      nomeNeedle: tableFilterNome,
+      origemNeedle: tableFilterOrigem,
+      tableDateYmd: tableFilterDate,
+      periodoInicioYmd: filterDateInicio,
+      periodoFimYmd: filterDateFim,
+      datasIncluidas: filterDatasIncluidas,
+    }),
+    [filterStatus, filterCategoria, tableFilterNome, tableFilterOrigem, tableFilterDate, filterDateInicio, filterDateFim, filterDatasIncluidas],
+  );
+
+  const viagensFiltradas = useMemo(
+    () => viagens.filter((v) => filterViagemListItem(v, listFilter)),
+    [viagens, listFilter],
+  );
+
+  const counts = useMemo(() => viagemCountsFromItems(viagensFiltradas), [viagensFiltradas]);
 
   // ── Alterar passageiro panel (Figma 1271-32750) ────────────────────
   const [alterarPassageiroOpen, setAlterarPassageiroOpen] = useState(false);
@@ -152,29 +176,19 @@ export default function ViagensScreen() {
     { label: 'Visualizar/Editar', flex: '0 0 96px', minWidth: 96 },
   ];
 
-  const viagensTableRowsAll: ViagemRow[] = viagens.map((v) => ({
-    passageiro: v.passageiro,
-    origem: v.origem,
-    destino: v.destino,
-    data: v.data,
-    embarque: v.embarque,
-    chegada: v.chegada,
-    status: v.status,
+  type RowWithItem = { row: ViagemRow; item: ViagemListItem };
+  const viagensTableRows: RowWithItem[] = viagensFiltradas.map((v) => ({
+    item: v,
+    row: {
+      passageiro: v.passageiro,
+      origem: v.origem,
+      destino: v.destino,
+      data: v.data,
+      embarque: v.embarque,
+      chegada: v.chegada,
+      status: v.status,
+    },
   }));
-
-  // Apply filters
-  const statusMap: Record<string, string[]> = {
-    em_andamento: ['Em andamento', 'em_andamento', 'confirmed', 'Confirmada', 'pending', 'Pendente'],
-    agendadas: ['Agendada', 'agendadas', 'active'],
-    concluidas: ['Concluída', 'concluidas', 'completed', 'paid', 'Paga'],
-    canceladas: ['Cancelada', 'canceladas', 'cancelled'],
-  };
-  const viagensTableRows = viagensTableRowsAll.filter((row) => {
-    const allowed = statusMap[filterStatus] || [];
-    if (allowed.length > 0 && !allowed.some(s => row.status.toLowerCase().includes(s.toLowerCase()))) return false;
-    // Search is handled by the search modal, not inline
-    return true;
-  });
 
   // Table header
   const viagensTableHeader = React.createElement('div', {
@@ -189,9 +203,8 @@ export default function ViagensScreen() {
       },
     }, c.label)));
 
-  const openTripDetail = (row: ViagemRow, idx: number) => {
-    const item = viagens[idx];
-    navigate(`/viagens/${item?.bookingId ?? idx}`, { state: { trip: row } });
+  const openTripDetail = (row: ViagemRow, item: ViagemListItem) => {
+    navigate(`/viagens/${item.bookingId}`, { state: { trip: row } });
   };
 
   // Render avatar with initial letter and colored bg
@@ -207,15 +220,19 @@ export default function ViagensScreen() {
 
   // Table rows
   const cellBase = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', padding: '0 8px' } as const;
-  const viagensTableRowEl = (row: ViagemRow, idx: number) => {
+  const viagensTableRowEl = (entry: RowWithItem, idx: number) => {
+    const { row, item } = entry;
     const st = statusStyles[row.status];
+    const canConfirmPay = item.bookingDbStatus === 'pending' || item.bookingDbStatus === 'confirmed';
+    const canCancelBooking = item.bookingDbStatus !== 'cancelled' && item.bookingDbStatus !== 'paid';
     return React.createElement('div', {
-      key: idx,
+      key: item.bookingId,
+      'data-testid': 'viagem-table-row',
       style: { ...webStyles.viagensTableRow, display: 'flex', cursor: 'pointer' },
-      onClick: () => openTripDetail(row, idx),
+      onClick: () => openTripDetail(row, item),
       role: 'button',
       tabIndex: 0,
-      onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTripDetail(row, idx); } },
+      onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTripDetail(row, item); } },
     },
       // Passageiros
       React.createElement('div', { style: { ...webStyles.viagensPassengerCell, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth } },
@@ -223,8 +240,7 @@ export default function ViagensScreen() {
           style: { cursor: 'pointer' },
           onClick: (e: React.MouseEvent) => {
             e.stopPropagation();
-            const ids = ['#312312312', '#312312313', '#312312314', '#312312315', '#312312316', '#312312317', '#312312318'];
-            setAlterarPassageiroData({ id: ids[idx] || '#312312312', nome: row.passageiro, contato: '(21) 98888-7777', mala: 'Pequena', valor: 'R$ 25,00' });
+            setAlterarPassageiroData({ id: item.bookingId, nome: row.passageiro, contato: '(21) 98888-7777', mala: 'Pequena', valor: 'R$ 25,00' });
             setAlterarPassageiroOpen(true);
           },
         }, renderAvatar(row.passageiro)),
@@ -250,47 +266,45 @@ export default function ViagensScreen() {
         React.createElement('div', { style: webStyles.viagensActionIcons },
           React.createElement('button', {
             type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar',
-            onClick: (e: React.MouseEvent) => { e.stopPropagation(); openTripDetail(row, idx); },
+            onClick: (e: React.MouseEvent) => { e.stopPropagation(); openTripDetail(row, item); },
           }, eyeActionSvg),
           React.createElement('button', {
             type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
-            onClick: (e: React.MouseEvent) => { e.stopPropagation(); const item = viagens[idx]; navigate('/viagens/' + (item?.bookingId ?? idx) + '/editar', { state: { trip: row } }); },
+            onClick: (e: React.MouseEvent) => { e.stopPropagation(); navigate(`/viagens/${item.bookingId}/editar`, { state: { trip: row } }); },
           }, pencilActionSvg),
-          row.status === 'confirmed' ? React.createElement('button', {
+          canConfirmPay ? React.createElement('button', {
             type: 'button', style: { ...webStyles.viagensActionBtn },
             'aria-label': 'Confirmar pagamento',
             onClick: async (e: React.MouseEvent) => {
               e.stopPropagation();
-              const item = viagens[idx];
-              if (item?.bookingId && confirm('Confirmar pagamento desta viagem?')) {
+              if (confirm('Confirmar pagamento desta viagem?')) {
                 await updateBookingStatus(item.bookingId, 'paid');
-                const [items, c] = await Promise.all([fetchViagens(), fetchViagemCounts()]);
-                setViagens(items); setCounts(c);
+                setViagens(await fetchViagens());
               }
             },
           }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
             React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#22c55e', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))) : null,
-          row.status !== 'cancelled' && row.status !== 'paid' ? React.createElement('button', {
+          canCancelBooking ? React.createElement('button', {
             type: 'button', style: { ...webStyles.viagensActionBtn },
             'aria-label': 'Cancelar viagem',
             onClick: async (e: React.MouseEvent) => {
               e.stopPropagation();
-              const item = viagens[idx];
-              if (item?.bookingId && confirm('Cancelar esta viagem?')) {
+              if (confirm('Cancelar esta viagem?')) {
                 await updateBookingStatus(item.bookingId, 'cancelled');
-                const [items, c] = await Promise.all([fetchViagens(), fetchViagemCounts()]);
-                setViagens(items); setCounts(c);
+                setViagens(await fetchViagens());
               }
             },
           }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
             React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#b53838', strokeWidth: 2, strokeLinecap: 'round' }))) : null)));
   };
 
-  const viagensTableBody = viagensTableRows.map(viagensTableRowEl);
+  const viagensTableBody = viagensTableRows.map((entry, idx) => viagensTableRowEl(entry, idx));
 
   // Filtro button for section header (pill style matching Figma)
   const filtroBtn = React.createElement('button', {
     type: 'button',
+    'data-testid': 'viagens-open-table-filter',
+    'aria-label': 'Abrir filtro da tabela de viagens',
     style: {
       display: 'flex', alignItems: 'center', gap: 8, height: 40,
       padding: '8px 24px', borderRadius: 999, border: 'none',
@@ -473,8 +487,8 @@ export default function ViagensScreen() {
         ...statusOptions.map((opt) =>
           React.createElement('button', {
             key: opt.id, type: 'button',
-            style: tableFilterStatus === opt.id ? chipActive : chipInactive,
-            onClick: () => setTableFilterStatus(opt.id),
+            style: filterStatus === opt.id ? chipActive : chipInactive,
+            onClick: () => setFilterStatus(opt.id),
           }, opt.label)))),
     React.createElement('div', { style: { ...modalFieldWrap, gap: 0 } },
       React.createElement('span', { style: modalSectionLabel }, 'Categoria'),
@@ -482,8 +496,8 @@ export default function ViagensScreen() {
         ...categoriaOptions.map((opt) =>
           React.createElement('button', {
             key: opt.id, type: 'button',
-            style: tableFilterCategoria === opt.id ? chipActive : chipInactive,
-            onClick: () => setTableFilterCategoria(opt.id),
+            style: filterCategoria === opt.id ? chipActive : chipInactive,
+            onClick: () => setFilterCategoria(opt.id),
           }, opt.label)))),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, padding: '0 23px' } },
       React.createElement('button', { type: 'button', style: modalPrimaryBtn, onClick: () => setTableFilterOpen(false) }, 'Aplicar filtro'),

@@ -229,7 +229,7 @@ export default function ConfiguracoesScreen() {
           type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Remover',
           onClick: async () => {
             const u = adminUsers[idx];
-            if (u && confirm(`Remover admin ${u.fullName}?`)) {
+            if (u && confirm(`Remover admin ${u.nome}?`)) {
               await deleteAdminUser(u.id);
               const items = await fetchAdminUsers();
               setAdminUsers(items);
@@ -322,8 +322,7 @@ export default function ConfiguracoesScreen() {
           type: 'button',
           onClick: async () => {
             if (nuNome.trim() && nuEmail.trim()) {
-              const perms = Object.entries(nuPermissoes).filter(([, v]) => v).map(([k]) => k);
-              await createAdminUser({ full_name: nuNome, email: nuEmail, permissions: perms });
+              await createAdminUser({ full_name: nuNome, email: nuEmail, permissions: nuPermissoes });
               const items = await fetchAdminUsers();
               setAdminUsers(items);
             }

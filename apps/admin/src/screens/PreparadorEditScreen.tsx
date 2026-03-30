@@ -275,7 +275,8 @@ export default function PreparadorEditScreen() {
       setBagagemPct(typeof bp === 'number' ? Math.min(100, Math.max(0, bp)) : 75);
       setKmLabel(typeof d.assignmentNotes.admin_km_label === 'string' ? d.assignmentNotes.admin_km_label : '15km');
       setDraftPreparerId(d.preparerId);
-      const vc = d.vehicleDetails.vehicle_ui_class;
+      const vd0 = d.vehicleDetails ?? {};
+      const vc = (vd0 as { vehicle_ui_class?: string }).vehicle_ui_class;
       setVeiculoTipo(vc === 'moto' ? 'moto' : 'carro');
       setValorPercStr(typeof d.assignmentNotes.admin_valor_percent_str === 'string' ? d.assignmentNotes.admin_valor_percent_str : '');
       setValorFixoStr(typeof d.assignmentNotes.admin_valor_fixed_str === 'string' ? d.assignmentNotes.admin_valor_fixed_str : formatCurrencyBRL(d.totalAmountCents));
@@ -292,8 +293,8 @@ export default function PreparadorEditScreen() {
       setContaPrep(wk?.bankAccount ?? '');
       setPixPrep(wk?.pixKey ?? '');
       setAnoVeic(v0?.year != null ? String(v0.year) : '');
-      setModeloVeic(v0?.model ?? String(d.vehicleDetails.model ?? ''));
-      setPlacaVeic(v0?.plate ?? String(d.vehicleDetails.license_plate ?? ''));
+      setModeloVeic(v0?.model ?? String((vd0 as { model?: string }).model ?? ''));
+      setPlacaVeic(v0?.plate ?? String((vd0 as { license_plate?: string }).license_plate ?? ''));
     }
   }, [id]);
 
@@ -368,11 +369,12 @@ export default function PreparadorEditScreen() {
       admin_valor_fixed_str: valorFixoStr,
       admin_gender: generoPrep,
     };
+    const vdBase = (detail.vehicleDetails && typeof detail.vehicleDetails === 'object' ? detail.vehicleDetails : {}) as Record<string, unknown>;
     const vehicle_details = {
-      ...detail.vehicleDetails,
+      ...vdBase,
       vehicle_ui_class: veiculoTipo,
-      model: modeloVeic || detail.vehicleDetails.model,
-      license_plate: placaVeic || detail.vehicleDetails.license_plate,
+      model: modeloVeic || vdBase.model,
+      license_plate: placaVeic || vdBase.license_plate,
     };
     const scheduledIso = fromDatetimeLocalValue(scheduledLocal);
     const { error: e1 } = await savePreparadorExcursionFields(id, {

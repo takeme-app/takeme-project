@@ -12,8 +12,21 @@ import {
 } from '../styles/webStyles';
 import EditarFormaPagamentoTrechoModal from '../components/EditarFormaPagamentoTrechoModal';
 import { preparadorEncomendaSlug } from '../utils/preparadorSlug';
-import { fetchPricingRoutes, fetchSurchargeCatalog, fetchWorkerRatings, fetchMotoristas, fetchBases, createBase, deletePricingRoute, updatePricingRoute } from '../data/queries';
-import type { PricingRouteRow, SurchargeCatalogRow, MotoristaListItem } from '../data/types';
+import {
+  fetchPricingRoutes,
+  fetchSurchargeCatalog,
+  fetchWorkerRatings,
+  fetchMotoristas,
+  fetchBases,
+  createBase,
+  deletePricingRoute,
+  updatePricingRoute,
+  fetchPreparadores,
+  fetchWorkerSubtypesForGestao,
+  motoristasToGestaoRows,
+  slugifyMotoristaNome,
+} from '../data/queries';
+import type { PricingRouteRow, SurchargeCatalogRow, MotoristaListItem, PreparadorListItem } from '../data/types';
 import type { RatingListItem, BaseListItem } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -117,20 +130,10 @@ type MotoristaRow = {
   numTrechos: string;
   horario: string;
   dataInicio: string;
-  /** Para o filtro «Tipo de motorista» (lista mock) */
   primaryTipo: 'takeme' | 'parceiros';
   secondaryTipo: 'viagem' | 'excursao';
+  driverId: string;
 };
-
-const motoristaRows: MotoristaRow[] = [
-  { nome: 'Carlos Silva', rating: 4.4, numTrechos: '193 rotas', horario: '08:00 - 18:00', dataInicio: '15/03/2026', primaryTipo: 'takeme', secondaryTipo: 'viagem' },
-  { nome: 'João Porto', rating: 4.2, numTrechos: '149 rotas', horario: '08:00 - 18:00', dataInicio: '08/03/2026', primaryTipo: 'parceiros', secondaryTipo: 'excursao' },
-  { nome: 'Jorge Silva', rating: 4.1, numTrechos: '156 rotas', horario: '08:00 - 18:00', dataInicio: '01/03/2026', primaryTipo: 'takeme', secondaryTipo: 'excursao' },
-  { nome: 'Carlos Silva', rating: 4.1, numTrechos: '151 rotas', horario: '08:00 - 18:00', dataInicio: '20/02/2026', primaryTipo: 'parceiros', secondaryTipo: 'viagem' },
-  { nome: 'Everton Pereira', rating: 4.5, numTrechos: '161 rotas', horario: '08:00 - 18:00', dataInicio: '22/03/2026', primaryTipo: 'takeme', secondaryTipo: 'viagem' },
-  { nome: 'Marcio Pontes', rating: 4.9, numTrechos: '205 rotas', horario: '08:00 - 18:00', dataInicio: '12/03/2026', primaryTipo: 'takeme', secondaryTipo: 'excursao' },
-  { nome: 'Danilo Santos', rating: 4.3, numTrechos: '183 rotas', horario: '08:00 - 18:00', dataInicio: '05/03/2026', primaryTipo: 'parceiros', secondaryTipo: 'viagem' },
-];
 
 const tableCols = [
   { label: 'Motorista', flex: '1 1 25%', minWidth: 180 },
@@ -138,18 +141,6 @@ const tableCols = [
   { label: 'Horário de\nfuncionamento', flex: '0 0 140px', minWidth: 140 },
   { label: 'Data de início\nna plataforma', flex: '0 0 130px', minWidth: 130 },
   { label: 'Visualizar/Editar', flex: '0 0 100px', minWidth: 100 },
-];
-
-const metricsMotorista = [
-  { title: 'Média de ganho por trecho', value: '18.5%', suffix: ' de lucro', pct: '+12.5%', negative: false },
-  { title: 'Média de ganho fixo por trecho', value: 'R$ 45,80', suffix: ' por rota', pct: '+8.2%', negative: false },
-  { title: 'Média de ganho por trecho pelo administrador', value: '12.3%', suffix: ' de lucro', pct: '-3.1%', negative: true },
-];
-
-const metricsEncomenda = [
-  { title: 'Média de valor\nde encomenda pequena', value: 'R$ 45,00', suffix: '', pct: '', negative: false },
-  { title: 'Média de valor\nde encomenda média', value: 'R$ 75,00', suffix: '', pct: '', negative: false },
-  { title: 'Média de valor\nde encomenda grande', value: 'R$ 45,00', suffix: '', pct: '', negative: false },
 ];
 
 type EncomendaTrechoRow = {
@@ -161,14 +152,6 @@ type EncomendaTrechoRow = {
   valor: string;
 };
 
-const encomendaTrechoRows: EncomendaTrechoRow[] = [
-  { codigo: '#98712', origem: 'São Paulo - SP', destino: 'Campinas - SP', tipo: 'Média', valor: 'R$ 75.00' },
-  { codigo: '#98713', origem: 'Recife - PE', destino: 'João Pessoa - PB', tipo: 'Grande', valor: 'R$ 120.00' },
-  { codigo: '#98714', origem: 'Brasília - DF', destino: 'São Paulo - SP', tipo: 'Pequena', valor: 'R$ 45.00' },
-  { codigo: '#98715', origem: 'Brasília - DF', destino: 'Campinas - SP', tipo: 'Média', valor: 'R$ 72.00' },
-  { codigo: '#98716', origem: 'Porto Alegre - RS', destino: 'Curitiba - PR', tipo: 'Grande', valor: 'R$ 118.00' },
-];
-
 const encomendaCols = [
   { label: 'Código (ID)', flex: '0 0 110px', minWidth: 110 },
   { label: 'Origem', flex: '1 1 20%', minWidth: 140 },
@@ -176,16 +159,6 @@ const encomendaCols = [
   { label: 'Tipo', flex: '0 0 100px', minWidth: 100 },
   { label: 'Valor', flex: '0 0 110px', minWidth: 110 },
   { label: 'Editar/Remover', flex: '0 0 110px', minWidth: 110 },
-];
-
-const metricsTrecho = [
-  { title: 'Média de valor por trecho', value: 'R$ 85,00', suffix: ' por trajeto', pct: '+4.3%', negative: false },
-];
-
-const metricsPreparadores = [
-  { title: 'Média de ganho por trecho', value: '12.5%', suffix: ' de lucro', pct: '+8.5%', negative: false },
-  { title: 'Média de ganho fixo por trecho', value: 'R$ 41,40', suffix: ' por rota', pct: '+7.5%', negative: false },
-  { title: 'Média de ganho por trecho pelo administrador', value: '11.5%', suffix: ' de lucro', pct: '-2.9%', negative: true },
 ];
 
 type PreparadorGestaoRow = {
@@ -197,15 +170,6 @@ type PreparadorGestaoRow = {
   horario: string;
 };
 
-const preparadorGestaoRows: PreparadorGestaoRow[] = [
-  { nome: 'Everton Pereira', rating: 4.5, origem: 'São Paulo - SP', destino: 'Brasília - DF', numCidades: 7, horario: '08:00 - 18:00' },
-  { nome: 'Jorge Silva', rating: 4.3, origem: 'João Pessoa - PB', destino: 'São Paulo - SP', numCidades: 12, horario: '09:00 - 19:00' },
-  { nome: 'João Porto', rating: 4.1, origem: 'São Paulo - SP', destino: 'Curitiba - PR', numCidades: 8, horario: '10:00 - 20:00' },
-  { nome: 'Carlos Magno', rating: 4.2, origem: 'Recife - PE', destino: 'João Pessoa - PB', numCidades: 10, horario: '08:00 - 18:00' },
-  { nome: 'Eduardo Silva', rating: 4.3, origem: 'Brasília - DF', destino: 'Curitiba - PR', numCidades: 9, horario: '10:00 - 20:00' },
-  { nome: 'Danilo Santos', rating: 4.1, origem: 'São Paulo - SP', destino: 'Curitiba - PR', numCidades: 7, horario: '08:00 - 18:00' },
-];
-
 const preparadorGestaoCols = [
   { label: 'Preparador', flex: '1 1 22%', minWidth: 170 },
   { label: 'Origem', flex: '1 1 16%', minWidth: 130 },
@@ -213,10 +177,6 @@ const preparadorGestaoCols = [
   { label: 'Número de cidades', flex: '0 0 130px', minWidth: 130 },
   { label: 'Horário de\nfuncionamento', flex: '0 0 130px', minWidth: 130 },
   { label: 'Visualizar', flex: '0 0 80px', minWidth: 80 },
-];
-
-const metricsAdicionais = [
-  { title: 'Média de valor de adicionais', value: 'R$ 85,00', suffix: ' por trajeto', pct: '', negative: false },
 ];
 
 // Special card for Adicionais: "Adicionais automáticos vs. manuais" and "Total de adicionais ativos"
@@ -231,14 +191,6 @@ type AdicionalRow = {
   valor: string;
   inclusao: string;
 };
-
-const adicionalRows: AdicionalRow[] = [
-  { codigo: '#98712', nome: 'Pedágio SP - Campinas', tipo: 'Viagem', unidade: 'KM', valor: 'R$ 12,50', inclusao: 'Automática' },
-  { codigo: '#98712', nome: 'Taxa de embarque', tipo: 'Excursão', unidade: 'Ida', valor: 'R$ 25,00', inclusao: 'Manual' },
-  { codigo: '#98712', nome: 'Combustível adicional', tipo: 'Encomenda', unidade: 'KM', valor: 'R$ 38,00', inclusao: 'Automática' },
-  { codigo: '#98712', nome: 'Lavagem interna', tipo: 'Viagem', unidade: 'Hora', valor: 'R$ 45,00', inclusao: 'Manual' },
-  { codigo: '#98712', nome: 'Taxa de entrega expressa', tipo: 'Encomenda', unidade: 'Ida', valor: 'R$ 60,00', inclusao: 'Automática' },
-];
 
 const adicionalCols = [
   { label: 'Código trecho', flex: '0 0 110px', minWidth: 110 },
@@ -263,14 +215,6 @@ const avaliacoes: AvaliacaoItem[] = [
   { nome: 'João Santos', data: '14/01/2025', stars: 4, comentario: 'Bom atendimento, mas poderia ser mais rápido na preparação.', tipo: 'Preparador de excursões' },
   { nome: 'Ana Paula', data: '11/01/2025', stars: 5, comentario: 'Perfeito! Encomenda muito bem embalada e organizada.', tipo: 'Preparador de encomendas' },
   { nome: 'Carlos Pereira', data: '11/01/2025', stars: 3, comentario: 'Serviço ok, mas o ônibus estava um pouco sujo.', tipo: 'Motorista' },
-];
-
-const trechoRows: EncomendaTrechoRow[] = [
-  { codigo: '#98712', origem: 'São Paulo - SP', destino: 'Campinas - SP', tipo: 'Viagem', valor: 'R$ 75.00' },
-  { codigo: '#98713', origem: 'Recife - PE', destino: 'João Pessoa - PB', tipo: 'Excursão', valor: 'R$ 120.00' },
-  { codigo: '#98714', origem: 'Brasília - DF', destino: 'São Paulo - SP', tipo: 'Excursão', valor: 'R$ 45.00' },
-  { codigo: '#98715', origem: 'Brasília - DF', destino: 'Campinas - SP', tipo: 'Viagem', valor: 'R$ 72.00' },
-  { codigo: '#98716', origem: 'Porto Alegre - RS', destino: 'Curitiba - PR', tipo: 'Viagem', valor: 'R$ 118.00' },
 ];
 
 const s = {
@@ -461,6 +405,8 @@ export default function PagamentosGestaoScreen() {
 
   // ── Real data from Supabase ─────────────────────────────────────────
   const [motoristasData, setMotoristasData] = useState<MotoristaListItem[]>([]);
+  const [preparadoresList, setPreparadoresList] = useState<PreparadorListItem[]>([]);
+  const [workerSubs, setWorkerSubs] = useState<{ id: string; subtype?: string }[]>([]);
   const [pricingDriverRoutes, setPricingDriverRoutes] = useState<PricingRouteRow[]>([]);
   const [pricingEncRoutes, setPricingEncRoutes] = useState<PricingRouteRow[]>([]);
   const [pricingExcRoutes, setPricingExcRoutes] = useState<PricingRouteRow[]>([]);
@@ -473,15 +419,19 @@ export default function PagamentosGestaoScreen() {
     let cancelled = false;
     Promise.all([
       fetchMotoristas(),
+      fetchPreparadores(),
+      fetchWorkerSubtypesForGestao(),
       fetchPricingRoutes('driver'),
       fetchPricingRoutes('preparer_shipments'),
       fetchPricingRoutes('preparer_excursions'),
       fetchSurchargeCatalog(),
       fetchWorkerRatings(),
       fetchBases(),
-    ]).then(([mots, dRoutes, eRoutes, xRoutes, surcs, rats, bases]) => {
+    ]).then(([mots, preps, wsub, dRoutes, eRoutes, xRoutes, surcs, rats, bases]) => {
       if (!cancelled) {
         setMotoristasData(mots);
+        setPreparadoresList(preps);
+        setWorkerSubs(wsub);
         setPricingDriverRoutes(dRoutes);
         setPricingEncRoutes(eRoutes);
         setPricingExcRoutes(xRoutes);
@@ -527,10 +477,27 @@ export default function PagamentosGestaoScreen() {
       inclusao: s.surcharge_mode === 'automatic' ? 'Automática' : 'Manual',
     })), [surcharges]);
 
-  // Use real data if available, fallback to mock
-  const activeEncRows = realEncRows.length > 0 ? realEncRows : encomendaTrechoRows;
-  const activeTrechoRows = realTrechoRows.length > 0 ? realTrechoRows : trechoRows;
-  const activeAdicRows = realAdicRows.length > 0 ? realAdicRows : adicionalRows;
+  const activeEncRows = realEncRows;
+  const activeTrechoRows = realTrechoRows;
+  const activeAdicRows = realAdicRows;
+
+  const motoristaRowsFromApi: MotoristaRow[] = useMemo(
+    () => motoristasToGestaoRows(motoristasData, workerSubs),
+    [motoristasData, workerSubs],
+  );
+
+  const preparadorGestaoRows: PreparadorGestaoRow[] = useMemo(
+    () =>
+      preparadoresList.map((p) => ({
+        nome: p.nome,
+        rating: Number(p.avaliacao ?? 0),
+        origem: p.origem || '—',
+        destino: p.destino || '—',
+        numCidades: 0,
+        horario: '—',
+      })),
+    [preparadoresList],
+  );
 
   const [filtroGestaoOpen, setFiltroGestaoOpen] = useState(false);
   const [filtroGestaoAtivo, setFiltroGestaoAtivo] = useState(false);
@@ -596,9 +563,9 @@ export default function PagamentosGestaoScreen() {
   }, [filtroGestaoOpen, fecharFiltroGestao]);
 
   const filteredMotoristaRows = useMemo(() => {
-    if (!filtroGestaoAtivo) return motoristaRows;
+    if (!filtroGestaoAtivo) return motoristaRowsFromApi;
     const { start, end } = getPeriodRangeGest(appliedGestaoFiltro.periodo);
-    return motoristaRows.filter((row) => {
+    return motoristaRowsFromApi.filter((row) => {
       if (appliedGestaoFiltro.primario !== 'todos' && row.primaryTipo !== appliedGestaoFiltro.primario) return false;
       if (appliedGestaoFiltro.secundario !== 'todos' && row.secondaryTipo !== appliedGestaoFiltro.secundario) return false;
       if (!motoristaDataInPeriod(row.dataInicio, start, end)) return false;
@@ -612,7 +579,7 @@ export default function PagamentosGestaoScreen() {
       }
       return true;
     });
-  }, [filtroGestaoAtivo, appliedGestaoFiltro]);
+  }, [filtroGestaoAtivo, appliedGestaoFiltro, motoristaRowsFromApi]);
 
   const labelTipoMotorista: React.CSSProperties = { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font };
   const inputGestStyle: React.CSSProperties = {
@@ -791,18 +758,9 @@ export default function PagamentosGestaoScreen() {
       key: t, type: 'button', onClick: () => setActiveTab(t), style: s.tab(activeTab === t),
     }, t)));
 
-  // ── Metrics ───────────────────────────────────────────────────────────
-  const currentMetrics = activeTab === 'Encomenda' ? metricsEncomenda : activeTab === 'Trecho' ? metricsTrecho : activeTab === 'Preparadores' ? metricsPreparadores : metricsMotorista;
-  const metricCards = React.createElement('div', {
-    style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
-  },
-    ...currentMetrics.map((m) =>
-      React.createElement('div', { key: m.title, style: { ...s.metricCard, whiteSpace: 'pre-line' as const } },
-        React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, whiteSpace: 'pre-line' as const, ...font } }, m.title),
-        m.pct ? React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: m.negative ? '#b53838' : '#22c55e', marginTop: 4, ...font } }, m.pct) : null,
-        React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 4 } },
-          React.createElement('span', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', ...font } }, m.value),
-          m.suffix ? React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, m.suffix) : null))));
+  const gestaoKpiPlaceholder = React.createElement('p', {
+    style: { fontSize: 14, color: '#767676', margin: '0 0 16px', maxWidth: 640, lineHeight: 1.5, ...font },
+  }, 'Indicadores agregados desta aba não têm fonte numérica consolidada no painel. As tabelas abaixo refletem dados reais do Supabase.');
 
   // ── Table ─────────────────────────────────────────────────────────────
   const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 6px' };
@@ -867,7 +825,7 @@ export default function PagamentosGestaoScreen() {
           style: webStyles.viagensActionBtn,
           'aria-label': 'Visualizar motorista',
           onClick: () => {
-            const slug = row.nome.trim().toLowerCase().replace(/\s+/g, '-');
+            const slug = slugifyMotoristaNome(row.nome);
             navigate(`/pagamentos/gestao/motorista/${slug}`);
           },
         }, eyeActionSvg)));
@@ -990,29 +948,35 @@ export default function PagamentosGestaoScreen() {
     prepGestaoToolbar, React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } }, prepGestaoHeader, ...prepGestaoRowEls)));
 
   // ── Adicionais content ─────────────────────────────────────────────────
+  const adicAuto = surcharges.filter((s) => s.surcharge_mode === 'automatic').length;
+  const adicManual = surcharges.filter((s) => s.surcharge_mode !== 'automatic').length;
+  const adicTotalMode = adicAuto + adicManual;
+  const adicAutoPct = adicTotalMode ? Math.round((adicAuto / adicTotalMode) * 100) : 0;
+  const adicManualPct = adicTotalMode ? 100 - adicAutoPct : 0;
+  const adicAvgCents = surcharges.length
+    ? Math.round(surcharges.reduce((s, x) => s + (x.default_value_cents || 0), 0) / surcharges.length)
+    : 0;
+
   const adicionaisMetricRow = React.createElement('div', {
     style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
   },
-    // Card 1: Média de valor
     React.createElement('div', { style: { ...s.metricCard } },
       React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Média de valor de adicionais'),
       React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 16 } },
-        React.createElement('span', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', ...font } }, 'R$ 85,00'),
-        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, ' por trajeto'))),
-    // Card 2: Automáticos vs Manuais
+        React.createElement('span', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', ...font } }, surcharges.length ? fmtCents(adicAvgCents) : '—'),
+        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, ' (catálogo ativo)'))),
     React.createElement('div', { style: { ...s.metricCard } },
       React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Adicionais automáticos vs. manuais'),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, marginTop: 16 } },
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between' } },
           React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'Automáticos'),
-          React.createElement('span', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', ...font } }, '65%')),
+          React.createElement('span', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', ...font } }, adicTotalMode ? `${adicAutoPct}%` : '—')),
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between' } },
           React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'Manuais'),
-          React.createElement('span', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', ...font } }, '35%')))),
-    // Card 3: Total ativos
+          React.createElement('span', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', ...font } }, adicTotalMode ? `${adicManualPct}%` : '—')))),
     React.createElement('div', { style: { ...s.metricCard } },
       React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Total de adicionais ativos'),
-      React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, marginTop: 16, ...font } }, '27')));
+      React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, marginTop: 16, ...font } }, String(surcharges.length))));
 
   const adicToolbar = React.createElement('div', {
     style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 64, padding: '16px 28px', background: '#f6f6f6', borderRadius: '16px 16px 0 0' },
@@ -1114,9 +1078,9 @@ export default function PagamentosGestaoScreen() {
 
   // ── Conditional content ───────────────────────────────────────────────
   let tabContent: React.ReactElement[];
-  if (activeTab === 'Encomenda') tabContent = [metricCards, encTableSection];
-  else if (activeTab === 'Trecho') tabContent = [metricCards, trechoTableSection];
-  else if (activeTab === 'Preparadores') tabContent = [metricCards, prepGestaoSection];
+  if (activeTab === 'Encomenda') tabContent = [gestaoKpiPlaceholder, encTableSection];
+  else if (activeTab === 'Trecho') tabContent = [gestaoKpiPlaceholder, trechoTableSection];
+  else if (activeTab === 'Preparadores') tabContent = [gestaoKpiPlaceholder, prepGestaoSection];
   else if (activeTab === 'Adicionais') tabContent = [adicionaisMetricRow, adicSection];
   else if (activeTab === 'Avaliações') {
     const starIcon = (filled: boolean) => React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: filled ? '#cba04b' : 'none', style: { display: 'block' } },
@@ -1165,7 +1129,7 @@ export default function PagamentosGestaoScreen() {
     tabContent = [avgCard, reviewList];
   }
   else if (activeTab === 'Bases') tabContent = [basesMetrics, basesSection];
-  else tabContent = [metricCards, tableSection];
+  else tabContent = [gestaoKpiPlaceholder, tableSection];
 
   // ── Editar encomenda modal ───────────────────────────────────────────
   const editEncModal = editEncOpen

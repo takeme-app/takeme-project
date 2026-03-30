@@ -8,6 +8,8 @@
  */
 import React, { useState, useCallback, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { createPricingRoute, fetchSurchargeCatalog } from '../data/queries';
+import type { SurchargeCatalogRow } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -32,7 +34,12 @@ type TrechoFormSlice = {
   adicionalId: string;
 };
 
-const ADICIONAIS_MOCK = ['Pedágio', 'Refeição motorista', 'Hospedagem', 'Outro'] as const;
+function parseBRLToCents(s: string): number {
+  const t = s.trim().replace(/R\$\s?/gi, '').replace(/\./g, '').replace(',', '.');
+  const n = Number.parseFloat(t);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 100);
+}
 
 const PLACEHOLDERS: Record<TabTrecho, { origem: string; destino: string; diaria: string }> = {
   motorista: {
@@ -199,6 +206,13 @@ export default function PagamentoCriarTrechoScreen() {
   }, [searchParams]);
   const [forms, setForms] = useState<Record<TabTrecho, TrechoFormSlice>>(initialForms);
   const [toastSalvoOpen, setToastSalvoOpen] = useState(false);
+  const [surcharges, setSurcharges] = useState<SurchargeCatalogRow[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchSurchargeCatalog().then(setSurcharges);
+  }, []);
 
   const f = forms[tab];
   const ph = PLACEHOLDERS[tab];
@@ -208,10 +222,66 @@ export default function PagamentoCriarTrechoScreen() {
   }, [tab]);
 
   const voltar = useCallback(() => navigate('/pagamentos/gestao'), [navigate]);
-  const salvar = useCallback(() => {
-    if (toastSalvoOpen) return;
+  const salvar = useCallback(async () => {
+    if (saving || toastSalvoOpen) return;
+    setSaveErr(null);
+    const dest = f.destino.trim();
+    if (!dest) {
+      setSaveErr('Indique o destino do trecho.');
+      return;
+    }
+    const methods: string[] = [];
+    if (f.payPix) methods.push('pix');
+    if (f.payCredito) methods.push('credit_card');
+    if (f.payDebito) methods.push('debit_card');
+
+    let role_type: string;
+    let pricing_mode: string;
+    let price_cents: number;
+    if (tab === 'motorista') {
+      role_type = 'driver';
+      pricing_mode = 'daily_rate';
+      price_cents = parseBRLToCents(f.diaria);
+    } else if (tab === 'prep_exc') {
+      role_type = 'preparer_excursions';
+      pricing_mode = 'daily_rate';
+      price_cents = parseBRLToCents(f.diaria);
+    } else {
+      role_type = 'preparer_shipments';
+      pricing_mode = f.encTipoValor === 'por_km' ? 'per_km' : 'fixed';
+      price_cents = f.encTipoValor === 'por_km' ? parseBRLToCents(f.encValorKm) : parseBRLToCents(f.encValorFixo);
+    }
+    if (price_cents <= 0) {
+      setSaveErr('Indique um valor válido (preço / diária).');
+      return;
+    }
+
+    const dw = Number.parseFloat(f.pctWorker.replace(',', '.'));
+    const da = Number.parseFloat(f.pctAdmin.replace(',', '.'));
+    const surcharges = f.manualExtra && f.adicionalId
+      ? [{ surcharge_id: f.adicionalId }]
+      : undefined;
+
+    setSaving(true);
+    const { error } = await createPricingRoute({
+      role_type,
+      title: `${f.origem.trim() || 'Origem'} → ${dest}`.slice(0, 120),
+      origin_address: f.origem.trim() || undefined,
+      destination_address: dest,
+      pricing_mode,
+      price_cents,
+      ...(Number.isFinite(dw) ? { driver_pct: dw } : {}),
+      ...(Number.isFinite(da) ? { admin_pct: da } : {}),
+      accepted_payment_methods: methods.length ? methods : undefined,
+      surcharges,
+    });
+    setSaving(false);
+    if (error) {
+      setSaveErr(error);
+      return;
+    }
     setToastSalvoOpen(true);
-  }, [toastSalvoOpen]);
+  }, [saving, toastSalvoOpen, f, tab]);
 
   useEffect(() => {
     if (!toastSalvoOpen) return;
@@ -362,8 +432,22 @@ export default function PagamentoCriarTrechoScreen() {
     cursor: 'pointer',
     ...font,
   };
-  const btnSalvarTop = React.createElement('button', { type: 'button', onClick: salvar, style: salvarBtnStyle }, checkWhiteSvg, 'Salvar trecho');
-  const btnSalvarFooter = React.createElement('button', { type: 'button', onClick: salvar, style: salvarBtnStyle }, checkWhiteSvg, 'Salvar trecho');
+  const salvarBtnStyleBusy: React.CSSProperties = saving ? { ...salvarBtnStyle, opacity: 0.65, cursor: 'not-allowed' } : salvarBtnStyle;
+  const btnSalvarTop = React.createElement('button', {
+    type: 'button',
+    disabled: saving,
+    onClick: () => { void salvar(); },
+    style: salvarBtnStyleBusy,
+  }, checkWhiteSvg, saving ? 'A guardar…' : 'Salvar trecho');
+  const btnSalvarFooter = React.createElement('button', {
+    type: 'button',
+    disabled: saving,
+    onClick: () => { void salvar(); },
+    style: salvarBtnStyleBusy,
+  }, checkWhiteSvg, saving ? 'A guardar…' : 'Salvar trecho');
+  const saveErrEl = saveErr
+    ? React.createElement('p', { style: { margin: 0, fontSize: 14, color: '#b53838', ...font } }, saveErr)
+    : null;
 
   const radioValorEncRow = (
     tipo: 'por_km' | 'fixo',
@@ -509,7 +593,8 @@ export default function PagamentoCriarTrechoScreen() {
         },
       },
         React.createElement('option', { value: '' }, 'Selecione adicional'),
-        ...ADICIONAIS_MOCK.map((a) => React.createElement('option', { key: a, value: a }, a))),
+        ...surcharges.filter((s) => s.is_active && s.surcharge_mode === 'manual').map((s) =>
+          React.createElement('option', { key: s.id, value: s.id }, s.name))),
       React.createElement('div', { style: { position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } }, chevronDownSvg)));
 
   const custoManualBlock = React.createElement('div', {
@@ -604,7 +689,8 @@ export default function PagamentoCriarTrechoScreen() {
     },
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%' } },
         breadcrumb,
-        headerActions),
+        headerActions,
+        saveErrEl),
       tabsRow,
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%' } }, ...formStack),
       footerSalvar),

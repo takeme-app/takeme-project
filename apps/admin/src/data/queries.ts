@@ -1,13 +1,19 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import Constants from 'expo-constants';
+import { preparadorEncomendaSlug } from '../utils/preparadorSlug';
+
+/** Tabelas fora do `Database` gerado — evita erros de tipo em `.from()`. */
+const sb = supabase as any;
 import type {
   ViagemListItem,
   PassageiroListItem,
   EncomendaListItem,
   MotoristaListItem,
   DestinoListItem,
+  DestinoTripStatusCounts,
   PreparadorListItem,
   PreparadorEditDetail,
+  PreparadorEditPassenger,
   PreparadorCandidate,
   ExcursionStatusHistoryRow,
   PromocaoListItem,
@@ -17,6 +23,8 @@ import type {
   SurchargeCatalogRow,
   PaymentMethodRow,
   AdminUserListItem,
+  BookingDetailForAdmin,
+  EncomendaEditDetail,
 } from './types';
 
 // ── Edge Function Helper ─────────────────────────────────────────────────
@@ -191,8 +199,8 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
     .from('bookings')
     .select(`
       id, user_id, origin_address, destination_address, status, created_at,
-      scheduled_trip_id,
-      scheduled_trips!inner ( id, departure_at, arrival_at, driver_id, status )
+      passenger_count, amount_cents, scheduled_trip_id,
+      scheduled_trips!inner ( id, departure_at, arrival_at, driver_id, status, trunk_occupancy_pct )
     `)
     .order('created_at', { ascending: false })
     .limit(200);
@@ -210,21 +218,610 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
     if (profiles) profiles.forEach((p: any) => { profileMap[p.id] = p.full_name; });
   }
 
+  const driverIds = [...new Set(data.map((b: any) => b.scheduled_trips?.driver_id).filter(Boolean))] as string[];
+  const driverNameMap: Record<string, string> = {};
+  const driverPartnerMap: Record<string, boolean> = {};
+  if (driverIds.length > 0) {
+    const { data: driverProfiles } = await supabase
+      .from('profiles')
+      .select('id, full_name')
+      .in('id', driverIds);
+    (driverProfiles || []).forEach((p: any) => { driverNameMap[p.id] = p.full_name || 'Sem nome'; });
+    const { data: workers } = await (supabase as any)
+      .from('worker_profiles')
+      .select('id, subtype')
+      .in('id', driverIds);
+    (workers || []).forEach((w: any) => { driverPartnerMap[w.id] = w.subtype === 'partner'; });
+  }
+
   return data.map((b: any) => {
     const trip = b.scheduled_trips;
+    const dep = trip?.departure_at ?? b.created_at;
+    const driverId = (trip?.driver_id ?? '') as string;
+    const isPartner = driverId ? !!driverPartnerMap[driverId] : false;
+    const trunk = Number(trip?.trunk_occupancy_pct);
     return {
       bookingId: b.id,
       passageiro: profileMap[b.user_id] ?? 'Sem nome',
       origem: shortAddr(b.origin_address),
       destino: shortAddr(b.destination_address),
-      data: fmtDate(trip?.departure_at ?? b.created_at),
-      embarque: fmtTime(trip?.departure_at ?? b.created_at),
+      data: fmtDate(dep),
+      embarque: fmtTime(dep),
       chegada: fmtTime(trip?.arrival_at ?? b.created_at),
       status: mapViagemStatus(b.status, trip?.status ?? 'active'),
       tripId: trip?.id ?? b.scheduled_trip_id,
-      driverId: trip?.driver_id ?? '',
+      driverId,
+      departureAtIso: dep ? new Date(dep).toISOString() : new Date(b.created_at).toISOString(),
+      motoristaNome: driverId ? (driverNameMap[driverId] ?? '—') : '—',
+      motoristaCategoria: (isPartner ? 'motorista' : 'take_me') as 'take_me' | 'motorista',
+      bookingDbStatus: String(b.status ?? ''),
+      passengerCount: Number(b.passenger_count ?? 1),
+      amountCents: Number(b.amount_cents ?? 0),
+      trunkOccupancyPct: Number.isFinite(trunk) ? Math.round(trunk) : 0,
     };
   });
+}
+
+function listItemFromBookingJoin(
+  b: any,
+  profileMap: Record<string, string>,
+  driverNameMap: Record<string, string>,
+  driverPartnerMap: Record<string, boolean>,
+): ViagemListItem {
+  const trip = b.scheduled_trips;
+  const dep = trip?.departure_at ?? b.created_at;
+  const driverId = (trip?.driver_id ?? '') as string;
+  const isPartner = driverId ? !!driverPartnerMap[driverId] : false;
+  const trunk = Number(trip?.trunk_occupancy_pct);
+  return {
+    bookingId: b.id,
+    passageiro: profileMap[b.user_id] ?? 'Sem nome',
+    origem: shortAddr(b.origin_address),
+    destino: shortAddr(b.destination_address),
+    data: fmtDate(dep),
+    embarque: fmtTime(dep),
+    chegada: fmtTime(trip?.arrival_at ?? b.created_at),
+    status: mapViagemStatus(b.status, trip?.status ?? 'active'),
+    tripId: trip?.id ?? b.scheduled_trip_id ?? '',
+    driverId,
+    departureAtIso: dep ? new Date(dep).toISOString() : new Date(b.created_at).toISOString(),
+    motoristaNome: driverId ? (driverNameMap[driverId] ?? '—') : '—',
+    motoristaCategoria: (isPartner ? 'motorista' : 'take_me') as 'take_me' | 'motorista',
+    bookingDbStatus: String(b.status ?? ''),
+    passengerCount: Number(b.passenger_count ?? 1),
+    amountCents: Number(b.amount_cents ?? 0),
+    trunkOccupancyPct: Number.isFinite(trunk) ? Math.round(trunk) : 0,
+  };
+}
+
+/** Slug em `/pagamentos/gestao/motorista/:slug` (igual à navegação a partir da lista). */
+export function slugifyMotoristaNome(nome: string): string {
+  return nome.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+}
+
+export function findMotoristaIdByPaymentSlug(slug: string, motoristas: MotoristaListItem[]): string | null {
+  const t = slug.trim().toLowerCase();
+  for (const m of motoristas) {
+    if (slugifyMotoristaNome(m.nome) === t) return m.id;
+  }
+  return null;
+}
+
+export function findPreparadorEncomendaIdBySlug(slug: string, preparadores: PreparadorListItem[]): string | null {
+  const t = slug.trim().toLowerCase();
+  for (const p of preparadores) {
+    if (preparadorEncomendaSlug(p.nome) === t) return p.id;
+  }
+  return null;
+}
+
+export async function fetchBookingDetailForAdmin(bookingOrTripId: string): Promise<BookingDetailForAdmin | null> {
+  if (!isSupabaseConfigured) return null;
+  const sel = `
+    id, user_id, origin_address, destination_address, status, created_at,
+    passenger_count, bags_count, passenger_data, amount_cents, scheduled_trip_id,
+    scheduled_trips ( id, departure_at, arrival_at, driver_id, status, seats_available, bags_available, trunk_occupancy_pct )
+  `;
+  let { data: b, error } = await supabase.from('bookings').select(sel).eq('id', bookingOrTripId).maybeSingle();
+  if (error || !b) {
+    const r2 = await supabase.from('bookings').select(sel).eq('scheduled_trip_id', bookingOrTripId).maybeSingle();
+    b = r2.data as any;
+  }
+  if (!b) return null;
+
+  const row = b as any;
+  const userIds = [row.user_id].filter(Boolean);
+  const trip = row.scheduled_trips;
+  const driverId = trip?.driver_id as string | undefined;
+  const driverIds = driverId ? [driverId] : [];
+
+  const profileMap: Record<string, string> = {};
+  let clientPhone: string | null = null;
+  if (userIds.length) {
+    const { data: profiles } = await supabase.from('profiles').select('id, full_name, phone').in('id', userIds);
+    (profiles || []).forEach((p: any) => {
+      profileMap[p.id] = p.full_name ?? 'Sem nome';
+      clientPhone = p.phone ?? null;
+    });
+  }
+
+  const driverNameMap: Record<string, string> = {};
+  const driverPartnerMap: Record<string, boolean> = {};
+  if (driverIds.length) {
+    const { data: driverProfiles } = await supabase.from('profiles').select('id, full_name').in('id', driverIds);
+    (driverProfiles || []).forEach((p: any) => { driverNameMap[p.id] = p.full_name || 'Sem nome'; });
+    const { data: workers } = await sb.from('worker_profiles').select('id, subtype').in('id', driverIds);
+    (workers || []).forEach((w: any) => { driverPartnerMap[w.id] = w.subtype === 'partner'; });
+  }
+
+  const pd = row.passenger_data;
+  const passengerData = Array.isArray(pd) ? pd as Array<{ name?: string; cpf?: string; bags?: number }> : [];
+
+  const listItem = listItemFromBookingJoin(row, profileMap, driverNameMap, driverPartnerMap);
+  const trunk = Number(trip?.trunk_occupancy_pct);
+  return {
+    listItem,
+    originFull: row.origin_address ?? '',
+    destinationFull: row.destination_address ?? '',
+    amountCents: Number(row.amount_cents ?? 0),
+    passengerCount: Number(row.passenger_count ?? 1),
+    bagsCount: Number(row.bags_count ?? 0),
+    passengerData,
+    userId: row.user_id,
+    clientPhone,
+    trunkOccupancyPct: Number.isFinite(trunk) ? trunk : 0,
+  };
+}
+
+export async function fetchBookingsForDriver(driverId: string): Promise<ViagemListItem[]> {
+  if (!isSupabaseConfigured) return [];
+  const { data, error } = await supabase
+    .from('bookings')
+    .select(`
+      id, user_id, origin_address, destination_address, status, created_at,
+      passenger_count, amount_cents, scheduled_trip_id,
+      scheduled_trips!inner ( id, departure_at, arrival_at, driver_id, status, trunk_occupancy_pct )
+    `)
+    .eq('scheduled_trips.driver_id', driverId)
+    .order('created_at', { ascending: false })
+    .limit(150);
+
+  if (error || !data?.length) return [];
+
+  const userIds = [...new Set(data.map((x: any) => x.user_id).filter(Boolean))];
+  const profileMap: Record<string, string> = {};
+  if (userIds.length) {
+    const { data: profiles } = await supabase.from('profiles').select('id, full_name').in('id', userIds);
+    (profiles || []).forEach((p: any) => { profileMap[p.id] = p.full_name; });
+  }
+  const driverNameMap: Record<string, string> = {};
+  const driverPartnerMap: Record<string, boolean> = {};
+  const { data: driverProfiles } = await supabase.from('profiles').select('id, full_name').in('id', [driverId]);
+  (driverProfiles || []).forEach((p: any) => { driverNameMap[p.id] = p.full_name || 'Sem nome'; });
+  const { data: workers } = await sb.from('worker_profiles').select('id, subtype').eq('id', driverId);
+  (workers || []).forEach((w: any) => { driverPartnerMap[w.id] = w.subtype === 'partner'; });
+
+  return (data as any[]).map((row) => listItemFromBookingJoin(row, profileMap, driverNameMap, driverPartnerMap));
+}
+
+export async function fetchBookingsForPassengerUser(userId: string): Promise<ViagemListItem[]> {
+  if (!isSupabaseConfigured) return [];
+  const { data, error } = await supabase
+    .from('bookings')
+    .select(`
+      id, user_id, origin_address, destination_address, status, created_at,
+      passenger_count, amount_cents, scheduled_trip_id,
+      scheduled_trips ( id, departure_at, arrival_at, driver_id, status, trunk_occupancy_pct )
+    `)
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(100);
+
+  if (error || !data?.length) return [];
+
+  const userIds = [...new Set(data.map((x: any) => x.user_id).filter(Boolean))];
+  const driverIds = [...new Set(data.map((x: any) => x.scheduled_trips?.driver_id).filter(Boolean))] as string[];
+  const profileMap: Record<string, string> = {};
+  if (userIds.length) {
+    const { data: profiles } = await supabase.from('profiles').select('id, full_name').in('id', userIds);
+    (profiles || []).forEach((p: any) => { profileMap[p.id] = p.full_name; });
+  }
+  const driverNameMap: Record<string, string> = {};
+  const driverPartnerMap: Record<string, boolean> = {};
+  if (driverIds.length) {
+    const { data: driverProfiles } = await supabase.from('profiles').select('id, full_name').in('id', driverIds);
+    (driverProfiles || []).forEach((p: any) => { driverNameMap[p.id] = p.full_name || 'Sem nome'; });
+    const { data: workers } = await sb.from('worker_profiles').select('id, subtype').in('id', driverIds);
+    (workers || []).forEach((w: any) => { driverPartnerMap[w.id] = w.subtype === 'partner'; });
+  }
+
+  return (data as any[]).map((row) => listItemFromBookingJoin(row, profileMap, driverNameMap, driverPartnerMap));
+}
+
+export async function updateBookingFields(
+  bookingId: string,
+  fields: {
+    origin_address?: string;
+    destination_address?: string;
+    passenger_count?: number;
+    bags_count?: number;
+    passenger_data?: unknown;
+  },
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const { data: existing, error: fe } = await supabase
+    .from('bookings')
+    .select('origin_lat, origin_lng, destination_lat, destination_lng')
+    .eq('id', bookingId)
+    .maybeSingle();
+  if (fe || !existing) return { error: fe?.message || 'Reserva não encontrada' };
+  const ex = existing as any;
+  const upd: any = { updated_at: new Date().toISOString() };
+  if (fields.origin_address != null) {
+    upd.origin_address = fields.origin_address;
+    upd.origin_lat = ex.origin_lat ?? 0;
+    upd.origin_lng = ex.origin_lng ?? 0;
+  }
+  if (fields.destination_address != null) {
+    upd.destination_address = fields.destination_address;
+    upd.destination_lat = ex.destination_lat ?? 0;
+    upd.destination_lng = ex.destination_lng ?? 0;
+  }
+  if (fields.passenger_count != null) upd.passenger_count = fields.passenger_count;
+  if (fields.bags_count != null) upd.bags_count = fields.bags_count;
+  if (fields.passenger_data != null) upd.passenger_data = fields.passenger_data;
+  const { error } = await (supabase.from('bookings') as any).update(upd).eq('id', bookingId);
+  return { error: error ? (error as Error).message : null };
+}
+
+export async function updateScheduledTripFields(
+  tripId: string,
+  fields: {
+    departure_at?: string;
+    arrival_at?: string;
+    driver_id?: string;
+    seats_available?: number;
+    bags_available?: number;
+    trunk_occupancy_pct?: number;
+  },
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const upd: any = { updated_at: new Date().toISOString() };
+  if (fields.departure_at != null) upd.departure_at = fields.departure_at;
+  if (fields.arrival_at != null) upd.arrival_at = fields.arrival_at;
+  if (fields.driver_id != null) upd.driver_id = fields.driver_id;
+  if (fields.seats_available != null) upd.seats_available = fields.seats_available;
+  if (fields.bags_available != null) upd.bags_available = fields.bags_available;
+  if (fields.trunk_occupancy_pct != null) upd.trunk_occupancy_pct = fields.trunk_occupancy_pct;
+  const { error } = await (supabase.from('scheduled_trips') as any).update(upd).eq('id', tripId);
+  return { error: error ? (error as Error).message : null };
+}
+
+export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEditDetail | null> {
+  if (!isSupabaseConfigured) return null;
+  const { data: s, error } = await supabase.from('shipments').select('*').eq('id', id).maybeSingle();
+  if (!error && s) {
+    const r = s as any;
+    return {
+      kind: 'shipment',
+      id: r.id,
+      originAddress: r.origin_address ?? '',
+      destinationAddress: r.destination_address ?? '',
+      recipientName: r.recipient_name ?? '',
+      recipientPhone: r.recipient_phone ?? '',
+      recipientEmail: r.recipient_email ?? '',
+      packageSize: r.package_size ?? '',
+      amountCents: r.amount_cents ?? 0,
+      status: r.status ?? '',
+      instructions: r.instructions ?? null,
+      whenOption: r.when_option ?? '',
+      createdAt: r.created_at ?? '',
+      scheduledAt: r.scheduled_at ?? null,
+    };
+  }
+  const { data: d, error: e2 } = await supabase.from('dependent_shipments').select('*').eq('id', id).maybeSingle();
+  if (e2 || !d) return null;
+  const r = d as any;
+  return {
+    kind: 'dependent_shipment',
+    id: r.id,
+    originAddress: r.origin_address ?? '',
+    destinationAddress: r.destination_address ?? '',
+    fullName: r.full_name ?? '',
+    contactPhone: r.contact_phone ?? '',
+    receiverName: r.receiver_name ?? null,
+    amountCents: r.amount_cents ?? 0,
+    status: r.status ?? '',
+    instructions: r.instructions ?? null,
+    whenOption: r.when_option ?? '',
+    createdAt: r.created_at ?? '',
+    bagsCount: r.bags_count ?? 0,
+    scheduledAt: r.scheduled_at ?? null,
+  };
+}
+
+export async function updateShipmentFields(
+  id: string,
+  patch: {
+    instructions?: string | null;
+    status?: string;
+    origin_address?: string;
+    destination_address?: string;
+    recipient_name?: string;
+    recipient_phone?: string;
+    recipient_email?: string;
+    package_size?: string;
+    when_option?: string;
+    scheduled_at?: string | null;
+  },
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const { error } = await (supabase.from('shipments') as any).update(patch).eq('id', id);
+  return { error: error ? (error as Error).message : null };
+}
+
+export async function updateDependentShipmentFields(
+  id: string,
+  patch: {
+    instructions?: string | null;
+    status?: string;
+    origin_address?: string;
+    destination_address?: string;
+    full_name?: string;
+    contact_phone?: string;
+    receiver_name?: string | null;
+    when_option?: string;
+    bags_count?: number;
+    scheduled_at?: string | null;
+  },
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const { error } = await (supabase.from('dependent_shipments') as any).update(patch).eq('id', id);
+  return { error: error ? (error as Error).message : null };
+}
+
+export interface DriverTripRow {
+  tripId: string;
+  origem: string;
+  destino: string;
+  data: string;
+  embarque: string;
+  chegada: string;
+  valor: string;
+  pctMotorista: string;
+  pctAdmin: string;
+  pagamento: string;
+}
+
+export async function fetchDriverTripRowsForPaymentDetail(driverId: string): Promise<DriverTripRow[]> {
+  if (!isSupabaseConfigured) return [];
+  const { data: trips, error } = await supabase
+    .from('scheduled_trips')
+    .select('id, origin_address, destination_address, departure_at, arrival_at, amount_cents, driver_id')
+    .eq('driver_id', driverId)
+    .order('departure_at', { ascending: false })
+    .limit(50);
+  if (error || !trips?.length) return [];
+  const fmtMoney = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`;
+  return (trips as any[]).map((t) => ({
+    tripId: t.id,
+    origem: shortAddr(t.origin_address || ''),
+    destino: shortAddr(t.destination_address || ''),
+    data: t.departure_at ? fmtDate(t.departure_at) : '—',
+    embarque: t.departure_at ? fmtTime(t.departure_at) : '—',
+    chegada: t.arrival_at ? fmtTime(t.arrival_at) : '—',
+    valor: fmtMoney(Number(t.amount_cents ?? 0)),
+    pctMotorista: '—',
+    pctAdmin: '—',
+    pagamento: '—',
+  }));
+}
+
+export interface PreparerEncTrechoRow {
+  origem: string;
+  destino: string;
+  valor: string;
+  idaLinha1: string;
+  idaLinha2: string;
+  retLinha1: string;
+  retLinha2: string;
+  valorKm: string;
+  pctAdmin: string;
+  pagamento: string;
+}
+
+export function pricingRoutesToPreparerEncRows(routes: PricingRouteRow[]): PreparerEncTrechoRow[] {
+  const fmtMoney = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`;
+  const fmtPay = (methods: string[] | null | undefined) =>
+    (methods || [])
+      .map((m) =>
+        m === 'pix' ? 'Pix' : m === 'credit_card' ? 'Crédito' : m === 'debit_card' ? 'Débito' : String(m),
+      )
+      .join(', ') || '—';
+  return routes.map((r) => ({
+    origem: r.origin_address || '—',
+    destino: r.destination_address || '—',
+    valor: fmtMoney(r.price_cents),
+    idaLinha1: '',
+    idaLinha2: '',
+    retLinha1: '',
+    retLinha2: '',
+    valorKm: r.pricing_mode === 'per_km' ? fmtMoney(r.price_cents) : '—',
+    pctAdmin: `${r.admin_pct ?? 0}%`,
+    pagamento: fmtPay(r.accepted_payment_methods),
+  }));
+}
+
+export interface MotoristaPaymentHeader {
+  nome: string;
+  rating: number;
+  pixChave: string;
+  numRotas: number;
+  mediaAval: string;
+  ganhoMes: string;
+  ganhoAno: string;
+  totalMensal: string;
+  lucroMedio: string;
+}
+
+export async function fetchMotoristaPaymentHeader(driverId: string): Promise<MotoristaPaymentHeader> {
+  const empty = (): MotoristaPaymentHeader => ({
+    nome: 'Motorista',
+    rating: 0,
+    pixChave: '—',
+    numRotas: 0,
+    mediaAval: '—',
+    ganhoMes: 'R$ 0,00',
+    ganhoAno: 'R$ 0,00',
+    totalMensal: 'R$ 0,00',
+    lucroMedio: '—',
+  });
+  if (!isSupabaseConfigured) return empty();
+  const { data: prof } = await supabase.from('profiles').select('full_name, rating').eq('id', driverId).maybeSingle();
+  const { data: worker } = await sb.from('worker_profiles').select('pix_key').eq('id', driverId).maybeSingle();
+  const { count } = await supabase.from('scheduled_trips').select('*', { count: 'exact', head: true }).eq('driver_id', driverId);
+  const { data: payouts } = await sb
+    .from('payouts')
+    .select('gross_amount_cents, worker_amount_cents, admin_amount_cents, status, created_at')
+    .eq('worker_id', driverId)
+    .order('created_at', { ascending: false })
+    .limit(200);
+  const nome = (prof as any)?.full_name ?? 'Motorista';
+  const rating = Number((prof as any)?.rating ?? 0);
+  const pixChave = (worker as any)?.pix_key ?? '—';
+  const numRotas = count ?? 0;
+  const paid = (payouts || []).filter((p: any) => p.status === 'paid');
+  const sumGross = paid.reduce((s: number, p: any) => s + (p.gross_amount_cents || 0), 0);
+  const sumWorker = paid.reduce((s: number, p: any) => s + (p.worker_amount_cents || 0), 0);
+  const fmt = (c: number) => `R$ ${(c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const lucroMedio = paid.length && sumGross > 0
+    ? `${Math.round((sumWorker / sumGross) * 100)}%`
+    : '—';
+  return {
+    nome,
+    rating,
+    pixChave,
+    numRotas,
+    mediaAval: rating ? String(rating) : '—',
+    ganhoMes: fmt(Math.round(sumWorker * 0.2)),
+    ganhoAno: fmt(sumWorker),
+    totalMensal: fmt(sumWorker),
+    lucroMedio,
+  };
+}
+
+export interface PreparerEncPaymentHeader {
+  nome: string;
+  rating: number;
+  pixChave: string;
+}
+
+export async function fetchPreparerEncPaymentHeader(preparerId: string): Promise<PreparerEncPaymentHeader> {
+  if (!isSupabaseConfigured) return { nome: 'Preparador', rating: 0, pixChave: '—' };
+  const { data: prof } = await supabase.from('profiles').select('full_name, rating').eq('id', preparerId).maybeSingle();
+  const { data: worker } = await sb.from('worker_profiles').select('pix_key').eq('id', preparerId).maybeSingle();
+  return {
+    nome: (prof as any)?.full_name ?? 'Preparador',
+    rating: Number((prof as any)?.rating ?? 0),
+    pixChave: (worker as any)?.pix_key ?? '—',
+  };
+}
+
+export interface ApprovedDriverCandidate {
+  id: string;
+  nome: string;
+  rating: number | null;
+  totalViagens: number;
+  isPartner: boolean;
+}
+
+export async function fetchApprovedDriversForEncomendaUI(): Promise<ApprovedDriverCandidate[]> {
+  const motoristas = await fetchMotoristas();
+  if (!motoristas.length) return [];
+  const ids = motoristas.map((m) => m.id);
+  const { data: workers } = await sb.from('worker_profiles').select('id, subtype, status').in('id', ids);
+  type W = { id: string; subtype?: string; status?: string };
+  const statusMap = new Map<string, W>((workers || []).map((w: W) => [w.id, w]));
+  return motoristas
+    .filter((m) => (statusMap.get(m.id)?.status ?? 'approved') === 'approved')
+    .map((m) => {
+      const w = statusMap.get(m.id);
+      return {
+        id: m.id,
+        nome: m.nome,
+        rating: m.rating,
+        totalViagens: m.totalViagens,
+        isPartner: w?.subtype === 'partner',
+      };
+    });
+}
+
+export interface HomeApprovedExpenseCents {
+  totalCents: number;
+}
+
+export async function fetchApprovedTripExpensesCents(): Promise<HomeApprovedExpenseCents> {
+  if (!isSupabaseConfigured) return { totalCents: 0 };
+  const { data } = await sb
+    .from('payouts')
+    .select('gross_amount_cents')
+    .eq('status', 'paid')
+    .in('entity_type', ['booking', 'shipment', 'dependent_shipment', 'excursion'])
+    .limit(5000);
+  const totalCents = (data || []).reduce((s: number, p: any) => s + (p.gross_amount_cents || 0), 0);
+  return { totalCents };
+}
+
+export interface ConversationCategoryCount {
+  label: string;
+  count: number;
+}
+
+export async function fetchConversationCategoryCounts(): Promise<ConversationCategoryCount[]> {
+  if (!isSupabaseConfigured) return [];
+  const { data, error } = await sb.from('conversations').select('id, status');
+  if (error || !data) return [];
+  const active = data.filter((c: any) => c.status === 'active').length;
+  const closed = data.filter((c: any) => c.status !== 'active').length;
+  return [
+    { label: 'Todos', count: data.length },
+    { label: 'Em atendimento', count: active },
+    { label: 'Finalizadas', count: closed },
+  ];
+}
+
+export interface PagamentosGestaoMotoristaRow {
+  nome: string;
+  rating: number;
+  numTrechos: string;
+  horario: string;
+  dataInicio: string;
+  primaryTipo: 'takeme' | 'parceiros';
+  secondaryTipo: 'viagem' | 'excursao';
+  driverId: string;
+}
+
+export function motoristasToGestaoRows(motoristas: MotoristaListItem[], workers: { id: string; subtype?: string }[]): PagamentosGestaoMotoristaRow[] {
+  const sub = new Map(workers.map((w) => [w.id, w.subtype]));
+  return motoristas.map((m) => ({
+    nome: m.nome,
+    rating: Number(m.rating ?? 0),
+    numTrechos: `${m.totalViagens} rotas`,
+    horario: '—',
+    dataInicio: '—',
+    primaryTipo: sub.get(m.id) === 'partner' ? 'parceiros' : 'takeme',
+    secondaryTipo: 'viagem' as const,
+    driverId: m.id,
+  }));
+}
+
+export async function fetchWorkerSubtypesForGestao(): Promise<{ id: string; subtype?: string }[]> {
+  if (!isSupabaseConfigured) return [];
+  const { data } = await sb.from('worker_profiles').select('id, subtype');
+  return ((data || []) as { id: string; subtype?: string | null }[]).map((w) => ({
+    id: w.id,
+    subtype: w.subtype ?? undefined,
+  }));
 }
 
 export interface ViagemCounts {
@@ -237,6 +834,10 @@ export interface ViagemCounts {
 
 export async function fetchViagemCounts(): Promise<ViagemCounts> {
   const items = await fetchViagens();
+  return viagemCountsFromItems(items);
+}
+
+export function viagemCountsFromItems(items: ViagemListItem[]): ViagemCounts {
   return {
     total: items.length,
     concluidas: items.filter((i) => i.status === 'concluído').length,
@@ -246,11 +847,95 @@ export async function fetchViagemCounts(): Promise<ViagemCounts> {
   };
 }
 
+/** YYYY-MM-DD no fuso local */
+export function localYmdFromIso(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function todayLocalYmd(): string {
+  return localYmdFromIso(new Date().toISOString());
+}
+
+export type ViagemDatasIncluidas = 'somente_passadas' | 'passadas_e_futuras' | 'somente_futuras';
+
+export type ViagemListFilter = {
+  status: 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas';
+  categoria: 'todos' | 'take_me' | 'motorista';
+  nomeNeedle: string;
+  origemNeedle: string;
+  /** YYYY-MM-DD — filtro opcional da tabela (dia exato) */
+  tableDateYmd: string;
+  /** YYYY-MM-DD — período barra de pesquisa */
+  periodoInicioYmd: string;
+  periodoFimYmd: string;
+  datasIncluidas: ViagemDatasIncluidas;
+};
+
+const STATUS_BUCKET: Record<ViagemListFilter['status'], ViagemListItem['status'][]> = {
+  em_andamento: ['em_andamento'],
+  agendadas: ['agendado'],
+  concluidas: ['concluído'],
+  canceladas: ['cancelado'],
+};
+
+export function filterViagemListItem(v: ViagemListItem, f: ViagemListFilter): boolean {
+  const bucket = STATUS_BUCKET[f.status];
+  if (!bucket.includes(v.status)) return false;
+  if (f.categoria === 'take_me' && v.motoristaCategoria !== 'take_me') return false;
+  if (f.categoria === 'motorista' && v.motoristaCategoria !== 'motorista') return false;
+  const n = f.nomeNeedle.trim().toLowerCase();
+  if (n) {
+    const hay = `${v.passageiro} ${v.motoristaNome}`.toLowerCase();
+    if (!hay.includes(n)) return false;
+  }
+  const o = f.origemNeedle.trim().toLowerCase();
+  if (o && !(`${v.origem} ${v.destino}`.toLowerCase().includes(o))) return false;
+  if (f.tableDateYmd) {
+    const dep = localYmdFromIso(v.departureAtIso);
+    if (dep !== f.tableDateYmd) return false;
+  }
+  const depY = localYmdFromIso(v.departureAtIso);
+  if (f.periodoInicioYmd && depY && depY < f.periodoInicioYmd) return false;
+  if (f.periodoFimYmd && depY && depY > f.periodoFimYmd) return false;
+  const today = todayLocalYmd();
+  if (f.datasIncluidas === 'somente_passadas' && depY && !(depY < today)) return false;
+  if (f.datasIncluidas === 'somente_futuras' && depY && !(depY > today)) return false;
+  return true;
+}
+
+export type HomeEncomendaFilterStatus = 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas';
+
+const ENC_STATUS_BUCKET: Record<HomeEncomendaFilterStatus, EncomendaListItem['status'][]> = {
+  em_andamento: ['Em andamento'],
+  agendadas: ['Agendado'],
+  concluidas: ['Concluído'],
+  canceladas: ['Cancelado'],
+};
+
+export function filterEncomendaForHome(
+  e: EncomendaListItem,
+  status: HomeEncomendaFilterStatus,
+  periodoInicioYmd: string,
+  periodoFimYmd: string,
+): boolean {
+  if (!ENC_STATUS_BUCKET[status].includes(e.status)) return false;
+  const cy = localYmdFromIso(e.createdAtIso);
+  if (periodoInicioYmd && cy && cy < periodoInicioYmd) return false;
+  if (periodoFimYmd && cy && cy > periodoFimYmd) return false;
+  return true;
+}
+
 // ── Passageiros ─────────────────────────────────────────────────────────
 
 export async function fetchPassageiros(): Promise<PassageiroListItem[]> {
   // Exclude workers (drivers, preparers, admins) — only show client app users
-  const { data: workerIds } = await supabase
+  const { data: workerIds } = await sb
     .from('worker_profiles')
     .select('id');
   const excludeSet = new Set((workerIds ?? []).map((w: any) => w.id));
@@ -292,6 +977,31 @@ export async function fetchPassageiroCounts(): Promise<PassageiroCounts> {
   };
 }
 
+/** Detalhe admin por `profiles.id` (exclui workers). */
+export async function fetchPassageiroDetailForAdmin(userId: string): Promise<PassageiroListItem & { phone: string | null } | null> {
+  if (!isSupabaseConfigured) return null;
+  const { data: worker } = await sb.from('worker_profiles').select('id').eq('id', userId).maybeSingle();
+  if (worker) return null;
+  const { data: p, error } = await supabase
+    .from('profiles')
+    .select('id, full_name, phone, avatar_url, cpf, city, state, verified, created_at')
+    .eq('id', userId)
+    .maybeSingle();
+  if (error || !p) return null;
+  const row = p as any;
+  return {
+    id: row.id,
+    nome: row.full_name ?? 'Sem nome',
+    cidade: row.city ?? '—',
+    estado: row.state ?? '—',
+    dataCriacao: fmtDate(row.created_at),
+    cpf: row.cpf ?? '—',
+    status: row.verified ? 'Ativo' : 'Inativo',
+    avatarUrl: row.avatar_url,
+    phone: row.phone ?? null,
+  };
+}
+
 // ── Encomendas ──────────────────────────────────────────────────────────
 
 export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
@@ -318,6 +1028,7 @@ export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
     status: mapEncomendaStatus(s.status),
     amountCents: s.amount_cents,
     packageSize: s.package_size,
+    createdAtIso: s.created_at ? new Date(s.created_at).toISOString() : '',
   }));
 
   const depShipments: EncomendaListItem[] = (depRes.data ?? []).map((d: any) => ({
@@ -329,6 +1040,7 @@ export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
     data: fmtDate(d.created_at),
     status: mapEncomendaStatus(d.status),
     amountCents: d.amount_cents,
+    createdAtIso: d.created_at ? new Date(d.created_at).toISOString() : '',
   }));
 
   return [...shipments, ...depShipments].sort(
@@ -344,8 +1056,7 @@ export interface EncomendaCounts {
   canceladas: number;
 }
 
-export async function fetchEncomendaCounts(): Promise<EncomendaCounts> {
-  const items = await fetchEncomendas();
+export function encomendaCountsFromItems(items: EncomendaListItem[]): EncomendaCounts {
   return {
     total: items.length,
     concluidas: items.filter((i) => i.status === 'Concluído').length,
@@ -353,6 +1064,11 @@ export async function fetchEncomendaCounts(): Promise<EncomendaCounts> {
     agendadas: items.filter((i) => i.status === 'Agendado').length,
     canceladas: items.filter((i) => i.status === 'Cancelado').length,
   };
+}
+
+export async function fetchEncomendaCounts(): Promise<EncomendaCounts> {
+  const items = await fetchEncomendas();
+  return encomendaCountsFromItems(items);
 }
 
 // ── Motoristas ──────────────────────────────────────────────────────────
@@ -403,6 +1119,7 @@ export async function fetchMotoristas(): Promise<MotoristaListItem[]> {
 // ── Motorista Table Rows (with trip details) ────────────────────────────
 
 export interface MotoristaTableRow {
+  tripId: string;
   nome: string;
   origem: string;
   destino: string;
@@ -441,6 +1158,7 @@ export async function fetchMotoristaTableRows(): Promise<MotoristaTableRow[]> {
     else if (tripStatus === 'scheduled') uiStatus = 'Agendado';
 
     return {
+      tripId: String(t.id ?? ''),
       nome: p?.full_name ?? 'Sem nome',
       origem: shortAddr(t.origin_address || ''),
       destino: shortAddr(t.destination_address || ''),
@@ -456,33 +1174,101 @@ export async function fetchMotoristaTableRows(): Promise<MotoristaTableRow[]> {
 
 // ── Destinos ────────────────────────────────────────────────────────────
 
+function emptyDestinoTripCounts(): DestinoTripStatusCounts {
+  return { em_andamento: 0, agendadas: 0, concluidas: 0, canceladas: 0 };
+}
+
+function mapScheduledTripToDestinoBucket(status: string): keyof DestinoTripStatusCounts {
+  if (status === 'cancelled') return 'canceladas';
+  if (status === 'completed') return 'concluidas';
+  if (status === 'active') return 'em_andamento';
+  return 'agendadas';
+}
+
 export async function fetchDestinos(): Promise<DestinoListItem[]> {
   const { data, error } = await supabase
     .from('scheduled_trips')
-    .select('origin_address, destination_address, status, created_at')
+    .select('origin_address, destination_address, status, created_at, driver_id, departure_at')
     .order('created_at', { ascending: false })
     .limit(5000);
 
   if (error || !data) return [];
 
-  const routeMap = new Map<string, { count: number; firstDate: string; hasActive: boolean }>();
+  const driverIds = [...new Set((data as any[]).map((t) => t.driver_id).filter(Boolean))] as string[];
+  const partnerDriverIds = new Set<string>();
+  if (driverIds.length > 0) {
+    const { data: workers } = await (supabase as any)
+      .from('worker_profiles')
+      .select('id, subtype')
+      .in('id', driverIds);
+    (workers || []).forEach((w: any) => {
+      if (w.subtype === 'partner') partnerDriverIds.add(w.id);
+    });
+  }
+
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
+
+  type Agg = {
+    count: number;
+    firstDate: string;
+    hasActive: boolean;
+    tripStatusCounts: DestinoTripStatusCounts;
+    takeMeCount: number;
+    partnerCount: number;
+    hasPastDeparture: boolean;
+    hasFutureDeparture: boolean;
+  };
+
+  const routeMap = new Map<string, Agg>();
   for (const t of data as any[]) {
     const key = `${shortAddr(t.origin_address)}|||${shortAddr(t.destination_address)}`;
-    const entry = routeMap.get(key) ?? { count: 0, firstDate: t.created_at, hasActive: false };
+    const bucket = mapScheduledTripToDestinoBucket(String(t.status ?? ''));
+    const prev = routeMap.get(key);
+    const entry: Agg = prev ?? {
+      count: 0,
+      firstDate: t.created_at,
+      hasActive: false,
+      tripStatusCounts: emptyDestinoTripCounts(),
+      takeMeCount: 0,
+      partnerCount: 0,
+      hasPastDeparture: false,
+      hasFutureDeparture: false,
+    };
     entry.count++;
+    entry.tripStatusCounts[bucket]++;
     if (t.status === 'active') entry.hasActive = true;
-    if (t.created_at < entry.firstDate) entry.firstDate = t.created_at;
+    if (t.created_at && t.created_at < entry.firstDate) entry.firstDate = t.created_at;
+    const did = t.driver_id as string | null;
+    if (did && partnerDriverIds.has(did)) entry.partnerCount++;
+    else entry.takeMeCount++;
+    if (t.departure_at) {
+      const dep = new Date(t.departure_at);
+      if (!Number.isNaN(dep.getTime())) {
+        if (dep < startOfToday) entry.hasPastDeparture = true;
+        if (dep > endOfToday) entry.hasFutureDeparture = true;
+      }
+    }
     routeMap.set(key, entry);
   }
 
   return Array.from(routeMap.entries()).map(([key, val]) => {
     const [origem, destino] = key.split('|||');
+    const primeiraDataIso = localYmdFromIso(val.firstDate);
     return {
       origem,
       destino,
       totalAtividades: val.count,
       primeiraData: fmtDate(val.firstDate),
+      primeiraDataIso,
       ativo: val.hasActive,
+      tripStatusCounts: val.tripStatusCounts,
+      takeMeCount: val.takeMeCount,
+      partnerCount: val.partnerCount,
+      hasPastDeparture: val.hasPastDeparture,
+      hasFutureDeparture: val.hasFutureDeparture,
     };
   }).sort((a, b) => b.totalAtividades - a.totalAtividades);
 }
@@ -589,10 +1375,10 @@ export async function fetchPreparadorEditDetail(id: string): Promise<PreparadorE
       ? supabase.from('profiles').select('full_name, phone, cpf, city, state, avatar_url, rating').eq('id', row.preparer_id).maybeSingle()
       : Promise.resolve({ data: null } as const),
     row.preparer_id
-      ? supabase.from('worker_profiles').select('cpf, age, experience_years, bank_code, bank_agency, bank_account, pix_key, subtype').eq('id', row.preparer_id).maybeSingle()
+      ? sb.from('worker_profiles').select('cpf, age, experience_years, bank_code, bank_agency, bank_account, pix_key, subtype').eq('id', row.preparer_id).maybeSingle()
       : Promise.resolve({ data: null } as const),
     row.preparer_id
-      ? supabase.from('vehicles').select('id, year, model, plate, passenger_capacity').eq('worker_id', row.preparer_id).eq('is_active', true).order('created_at', { ascending: false })
+      ? sb.from('vehicles').select('id, year, model, plate, passenger_capacity').eq('worker_id', row.preparer_id).eq('is_active', true).order('created_at', { ascending: false })
       : Promise.resolve({ data: [] } as const),
   ]);
 
@@ -659,7 +1445,7 @@ export async function fetchPreparadorEditDetail(id: string): Promise<PreparadorE
 export async function fetchPreparadorCandidates(): Promise<PreparadorCandidate[]> {
   if (!isSupabaseConfigured) return [];
 
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from('worker_profiles')
     .select('id, subtype, profiles ( full_name, avatar_url, rating )')
     .in('subtype', ['excursions', 'shipments'])
@@ -688,7 +1474,7 @@ export async function fetchPreparadorCandidates(): Promise<PreparadorCandidate[]
 export async function fetchExcursionStatusHistory(excursionId: string): Promise<ExcursionStatusHistoryRow[]> {
   if (!isSupabaseConfigured) return [];
 
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from('status_history')
     .select('status, changed_at')
     .eq('entity_type', 'excursion')
@@ -736,7 +1522,8 @@ export async function saveWorkerProfileFields(
     pix_key?: string | null;
   },
 ): Promise<{ error: string | null }> {
-  const { error } = await (supabase.from('worker_profiles') as any)
+  const { error } = await sb
+    .from('worker_profiles')
     .update({ ...fields, updated_at: new Date().toISOString() })
     .eq('id', workerId);
   return { error: error ? (error as Error).message : null };
@@ -746,7 +1533,7 @@ export async function saveVehicleFields(
   vehicleId: string,
   fields: { year?: number | null; model?: string | null; plate?: string | null },
 ): Promise<{ error: string | null }> {
-  const { error } = await (supabase.from('vehicles') as any).update(fields).eq('id', vehicleId);
+  const { error } = await sb.from('vehicles').update(fields).eq('id', vehicleId);
   return { error: error ? (error as Error).message : null };
 }
 
@@ -766,7 +1553,7 @@ export async function updateWorkerStatus(
     updated_at: new Date().toISOString(),
   };
   if (opts?.rejection_reason) updateFields.rejection_reason = opts.rejection_reason;
-  const { error } = await (supabase.from('worker_profiles') as any).update(updateFields).eq('id', workerId);
+  const { error } = await sb.from('worker_profiles').update(updateFields).eq('id', workerId);
   return { error: error ? (error as Error).message : null };
 }
 
@@ -782,7 +1569,7 @@ export async function updateVehicleStatus(
     updated_at: new Date().toISOString(),
   };
   if (opts?.rejection_reason) updateFields.rejection_reason = opts.rejection_reason;
-  const { error } = await (supabase.from('vehicles') as any).update(updateFields).eq('id', vehicleId);
+  const { error } = await sb.from('vehicles').update(updateFields).eq('id', vehicleId);
   return { error: error ? (error as Error).message : null };
 }
 
@@ -875,7 +1662,7 @@ export async function updateExcursionStatus(
 
 export async function fetchTakemeRoutes(): Promise<any[]> {
   if (!isSupabaseConfigured) return [];
-  const { data } = await supabase
+  const { data } = await sb
     .from('takeme_routes')
     .select('*')
     .order('created_at', { ascending: false });
@@ -888,7 +1675,7 @@ export async function createTakemeRoute(route: {
   price_per_person_cents: number;
 }): Promise<{ error: string | null }> {
   if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
-  const { error } = await (supabase.from('takeme_routes') as any).insert(route);
+  const { error } = await sb.from('takeme_routes').insert(route);
   return { error: error ? (error as Error).message : null };
 }
 
@@ -897,13 +1684,13 @@ export async function updateTakemeRoute(
   fields: { origin_address?: string; destination_address?: string; price_per_person_cents?: number; is_active?: boolean },
 ): Promise<{ error: string | null }> {
   if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
-  const { error } = await (supabase.from('takeme_routes') as any).update({ ...fields, updated_at: new Date().toISOString() }).eq('id', id);
+  const { error } = await sb.from('takeme_routes').update({ ...fields, updated_at: new Date().toISOString() }).eq('id', id);
   return { error: error ? (error as Error).message : null };
 }
 
 export async function deleteTakemeRoute(id: string): Promise<{ error: string | null }> {
   if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
-  const { error } = await (supabase.from('takeme_routes') as any).delete().eq('id', id);
+  const { error } = await sb.from('takeme_routes').delete().eq('id', id);
   return { error: error ? (error as Error).message : null };
 }
 
@@ -941,7 +1728,7 @@ function mapAppliesTo(applies: string[]): string {
 }
 
 export async function fetchPromocoes(): Promise<PromocaoListItem[]> {
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from('promotions')
     .select('*')
     .order('created_at', { ascending: false });
@@ -992,7 +1779,7 @@ function mapEntityType(t: string): string {
 }
 
 export async function fetchPagamentos(): Promise<PagamentoListItem[]> {
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from('payouts')
     .select('id, worker_id, entity_type, entity_id, gross_amount_cents, worker_amount_cents, admin_amount_cents, status, paid_at, created_at')
     .order('created_at', { ascending: false })
@@ -1001,16 +1788,18 @@ export async function fetchPagamentos(): Promise<PagamentoListItem[]> {
   if (error || !data) return [];
 
   // Fetch worker names in bulk
-  const workerIds = [...new Set(data.map((p: any) => p.worker_id))];
-  const { data: workers } = await supabase
-    .from('profiles')
-    .select('id, full_name')
-    .in('id', workerIds);
-
+  const payoutRows = data as { worker_id: string }[];
+  const workerIds: string[] = [...new Set(payoutRows.map((p) => String(p.worker_id)).filter(Boolean))];
   const nameMap: Record<string, string> = {};
-  (workers || []).forEach((w: any) => { nameMap[w.id] = w.full_name || 'Sem nome'; });
+  if (workerIds.length > 0) {
+    const { data: workers } = await supabase
+      .from('profiles')
+      .select('id, full_name')
+      .in('id', workerIds);
+    (workers || []).forEach((w: any) => { nameMap[w.id] = w.full_name || 'Sem nome'; });
+  }
 
-  return data.map((p: any) => ({
+  return payoutRows.map((p: any) => ({
     id: p.id,
     workerName: nameMap[p.worker_id] || 'Sem nome',
     entityType: mapEntityType(p.entity_type),
@@ -1024,7 +1813,7 @@ export async function fetchPagamentos(): Promise<PagamentoListItem[]> {
 }
 
 export async function fetchPagamentoCounts(): Promise<PagamentoCounts> {
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from('payouts')
     .select('status, gross_amount_cents, admin_amount_cents');
 
@@ -1043,7 +1832,7 @@ export async function fetchPagamentoCounts(): Promise<PagamentoCounts> {
 // ── Pricing Routes ──────────────────────────────────────────────────
 
 export async function fetchPricingRoutes(roleType?: string): Promise<PricingRouteRow[]> {
-  let query = supabase
+  let query = sb
     .from('pricing_routes')
     .select('*')
     .order('created_at', { ascending: false });
@@ -1056,7 +1845,7 @@ export async function fetchPricingRoutes(roleType?: string): Promise<PricingRout
 }
 
 export async function fetchSurchargeCatalog(): Promise<SurchargeCatalogRow[]> {
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from('surcharge_catalog')
     .select('*')
     .eq('is_active', true)
@@ -1069,7 +1858,7 @@ export async function fetchSurchargeCatalog(): Promise<SurchargeCatalogRow[]> {
 // ── Payment Methods (read-only) ─────────────────────────────────────
 
 export async function fetchPassageiroPaymentMethods(userId: string): Promise<PaymentMethodRow[]> {
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from('payment_methods')
     .select('id, user_id, type, last_four, brand, holder_name, created_at')
     .eq('user_id', userId)
@@ -1082,33 +1871,13 @@ export async function fetchPassageiroPaymentMethods(userId: string): Promise<Pay
 // ── Passageiro Bookings (for detail screen) ─────────────────────────
 
 export async function fetchPassageiroBookings(userId: string): Promise<ViagemListItem[]> {
-  const { data, error } = await supabase
-    .from('bookings')
-    .select('id, user_id, origin_address, destination_address, status, created_at, scheduled_trip_id')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(50);
-
-  if (error || !data) return [];
-
-  return data.map((b: any) => ({
-    bookingId: b.id,
-    passageiro: '',
-    origem: shortAddr(b.origin_address),
-    destino: shortAddr(b.destination_address),
-    data: fmtDate(b.created_at),
-    embarque: '—',
-    chegada: '—',
-    status: mapViagemStatus(b.status as BookingDbStatus, 'active' as TripDbStatus),
-    tripId: b.scheduled_trip_id || '',
-    driverId: '',
-  }));
+  return fetchBookingsForPassengerUser(userId);
 }
 
 // ── Admin Users ─────────────────────────────────────────────────────
 
 export async function fetchAdminUsers(): Promise<AdminUserListItem[]> {
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from('worker_profiles')
     .select('id, role, subtype, status, created_at')
     .eq('role', 'admin');
@@ -1211,7 +1980,7 @@ export type BaseListItem = {
 
 export async function fetchBases(): Promise<BaseListItem[]> {
   if (!isSupabaseConfigured) return [];
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from('bases')
     .select('id, name, address, city, state, lat, lng, is_active, created_at')
     .order('created_at', { ascending: false });
@@ -1241,7 +2010,7 @@ export type CreateBaseInput = {
 
 export async function createBase(input: CreateBaseInput): Promise<BaseListItem | null> {
   if (!isSupabaseConfigured) return null;
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from('bases')
     .insert({
       name: input.name,

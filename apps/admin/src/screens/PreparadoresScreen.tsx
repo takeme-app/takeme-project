@@ -338,6 +338,7 @@ export default function PreparadoresScreen() {
     React.createElement('button', {
       type: 'button',
       onClick: abrirFiltroPagina,
+      'data-testid': 'preparadores-open-page-filter',
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#f1f1f1', border: 'none', borderRadius: 999,
@@ -422,6 +423,7 @@ export default function PreparadoresScreen() {
     React.createElement('button', {
       type: 'button',
       onClick: abrirFiltroTabela,
+      'data-testid': 'preparadores-open-table-filter',
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -482,6 +484,7 @@ export default function PreparadoresScreen() {
     const st = statusStyles[row.status];
     return React.createElement('div', {
       key: row.id || `${row.nome}-${idx}`,
+      'data-testid': 'preparador-table-row',
       style: {
         display: 'flex',
         minHeight: 64,

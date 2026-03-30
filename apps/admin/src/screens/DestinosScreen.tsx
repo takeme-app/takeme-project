@@ -2,7 +2,7 @@
  * DestinosScreen — Lista de destinos conforme Figma 849-21654.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
@@ -119,7 +119,37 @@ export default function DestinosScreen() {
     return () => { cancelled = true; };
   }, []);
 
-  const tableRows: DestinoRow[] = destinosData.map((d) => ({
+  const filteredDestinosData = useMemo(() => {
+    return destinosData.filter((d) => {
+      const q = search.trim().toLowerCase();
+      if (q && !`${d.origem} ${d.destino}`.toLowerCase().includes(q)) return false;
+      if (estadoSelected !== 'Todos os estados') {
+        const u = estadoSelected.toLowerCase();
+        if (!d.origem.toLowerCase().includes(u) && !d.destino.toLowerCase().includes(u)) return false;
+      }
+      if (d.tripStatusCounts[filtroStatusViagem] === 0) return false;
+      if (d.tripStatusCounts[tabelaFiltroStatusViagem] === 0) return false;
+      if (filtroCategoria === 'take_me' && d.takeMeCount === 0) return false;
+      if (filtroCategoria === 'motorista_parceiro' && d.partnerCount === 0) return false;
+      if (tabelaFiltroCategoria === 'take_me' && d.takeMeCount === 0) return false;
+      if (tabelaFiltroCategoria === 'motorista_parceiro' && d.partnerCount === 0) return false;
+      if (filtroDatasIncluidas === 'passadas' && !d.hasPastDeparture) return false;
+      if (filtroDatasIncluidas === 'futuras' && !d.hasFutureDeparture) return false;
+      const o = tabelaFiltroOrigem.trim().toLowerCase();
+      if (o && !d.origem.toLowerCase().includes(o)) return false;
+      const dest = tabelaFiltroDestino.trim().toLowerCase();
+      if (dest && !d.destino.toLowerCase().includes(dest)) return false;
+      const di = tabelaFiltroDataInicial.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(di) && d.primeiraDataIso && d.primeiraDataIso < di) return false;
+      if (di && !/^\d{4}-\d{2}-\d{2}$/.test(di) && !d.primeiraData.toLowerCase().includes(di.toLowerCase())) return false;
+      return true;
+    });
+  }, [
+    destinosData, search, estadoSelected, filtroStatusViagem, filtroCategoria, filtroDatasIncluidas,
+    tabelaFiltroOrigem, tabelaFiltroDestino, tabelaFiltroStatusViagem, tabelaFiltroCategoria, tabelaFiltroDataInicial,
+  ]);
+
+  const tableRows: DestinoRow[] = filteredDestinosData.map((d) => ({
     origem: d.origem,
     destino: d.destino,
     totalAtividades: d.totalAtividades,
@@ -128,10 +158,10 @@ export default function DestinosScreen() {
   }));
 
   const metricsRow1 = [
-    { title: 'Total de Destinos', value: String(destinosData.length), pct: '', pctColor: '', desc: '' },
+    { title: 'Total de Destinos', value: String(filteredDestinosData.length), pct: '', pctColor: '', desc: '' },
   ];
 
-  const barData = destinosData.slice(0, 5).map((d) => ({ label: d.destino.split(' - ')[0] ?? d.destino, value: d.totalAtividades }));
+  const barData = filteredDestinosData.slice(0, 5).map((d) => ({ label: d.destino.split(' - ')[0] ?? d.destino, value: d.totalAtividades }));
   const barMax = barData.reduce((m, b) => Math.max(m, b.value), 1);
 
   // ── Search row ────────────────────────────────────────────────────────
@@ -195,6 +225,7 @@ export default function DestinosScreen() {
     React.createElement('button', {
       type: 'button',
       onClick: () => setFiltroPaginaOpen(true),
+      'data-testid': 'destinos-open-page-filter',
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#f1f1f1', border: 'none', borderRadius: 999,
@@ -254,6 +285,7 @@ export default function DestinosScreen() {
     React.createElement('button', {
       type: 'button',
       onClick: () => setFiltroTabelaOpen(true),
+      'data-testid': 'destinos-open-table-filter',
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 40, padding: '8px 24px',
         background: '#fff', border: 'none', borderRadius: 999, cursor: 'pointer',
@@ -272,10 +304,12 @@ export default function DestinosScreen() {
       style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 8px', display: 'flex', alignItems: 'center', height: '100%' },
     }, c.label)));
 
-  const tableRowEls = tableRows.map((row, idx) => {
+  const tableRowEls = tableRows.map((row) => {
     const st = statusStyles[row.status];
+    const rowKey = `${row.origem}|||${row.destino}`;
     return React.createElement('div', {
-      key: idx,
+      key: rowKey,
+      'data-testid': 'destino-table-row',
       style: {
         display: 'flex', height: 64, alignItems: 'center', padding: '0 16px',
         borderBottom: '1px solid #d9d9d9', background: '#f6f6f6',
@@ -482,6 +516,9 @@ export default function DestinosScreen() {
       display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1001, padding: 24,
     },
     onClick: () => setFiltroPaginaOpen(false),
+    role: 'dialog' as const,
+    'aria-modal': true,
+    'aria-labelledby': 'destinos-filtro-pagina-titulo',
   },
     React.createElement('div', {
       style: {
@@ -498,7 +535,7 @@ export default function DestinosScreen() {
         },
       },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '0 16px', boxSizing: 'border-box' as const } },
-          React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro'),
+          React.createElement('h2', { id: 'destinos-filtro-pagina-titulo', style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro'),
           React.createElement('button', {
             type: 'button',
             onClick: () => setFiltroPaginaOpen(false),
@@ -557,6 +594,9 @@ export default function DestinosScreen() {
       display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1002, padding: 24,
     },
     onClick: () => setFiltroTabelaOpen(false),
+    role: 'dialog' as const,
+    'aria-modal': true,
+    'aria-labelledby': 'destinos-filtro-tabela-titulo',
   },
     React.createElement('div', {
       style: {
@@ -573,7 +613,7 @@ export default function DestinosScreen() {
         },
       },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '0 16px', boxSizing: 'border-box' as const } },
-          React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro da tabela'),
+          React.createElement('h2', { id: 'destinos-filtro-tabela-titulo', style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro da tabela'),
           React.createElement('button', {
             type: 'button',
             onClick: () => setFiltroTabelaOpen(false),

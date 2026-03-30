@@ -1,20 +1,24 @@
 /**
- * HistoricoViagensScreen — Histórico completo de viagens (Figma 831-11465).
+ * HistoricoViagensScreen — Histórico de viagens (dados Supabase).
  * React.createElement() only.
  */
-import React, { useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { webStyles, searchIconSvg, filterIconSvg } from '../styles/webStyles';
+import { fetchViagens, fetchBookingsForDriver, formatCurrencyBRL } from '../data/queries';
+import type { ViagemListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
-const metrics = [
-  { title: 'Viagens totais', value: '8', icon: 'list' },
-  { title: 'Viagens concluídas', value: '3', icon: 'check' },
-  { title: 'Viagens agendadas', value: '2', icon: 'calendar' },
-  { title: 'Viagens em andamento', value: '2', icon: 'send' },
-  { title: 'Viagens canceladas', value: '1', icon: 'x' },
-];
+function viagemStatusLabel(s: ViagemListItem['status']): string {
+  switch (s) {
+    case 'concluído': return 'Concluído';
+    case 'cancelado': return 'Cancelado';
+    case 'agendado': return 'Agendado';
+    case 'em_andamento': return 'Em andamento';
+    default: return 'Agendado';
+  }
+}
 
 const iconSvg = (type: string) => {
   const s = { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } as React.CSSProperties };
@@ -29,17 +33,17 @@ const iconSvg = (type: string) => {
   }
 };
 
-type TripRow = { id: string; rota: string; data: string; horarios: string; passageiros: number; bagageiro: string; preco: string; gastos: string; status: string };
-
-const trips: TripRow[] = [
-  { id: '#23201', rota: 'São Paulo → Rio de Janeiro', data: '14/01/2025', horarios: '08:00 → 14:30', passageiros: 8, bagageiro: '75%', preco: 'R$ 1.250,00', gastos: 'R$ 120,50', status: 'Cancelado' },
-  { id: '#23202', rota: 'Bahia → Rio de Janeiro', data: '14/01/2025', horarios: '08:00 → 14:30', passageiros: 3, bagageiro: '35%', preco: 'R$ 990,00', gastos: 'R$ 120,50', status: 'Agendado' },
-  { id: '#23203', rota: 'Recife → Curitiba', data: '14/01/2025', horarios: '08:00 → 14:30', passageiros: 3, bagageiro: '35%', preco: 'R$ 990,00', gastos: 'R$ 120,50', status: 'Agendado' },
-  { id: '#23204', rota: 'São Paulo → Recife', data: '14/01/2025', horarios: '08:00 → 14:30', passageiros: 6, bagageiro: '65%', preco: 'R$ 1.140,00', gastos: 'R$ 120,50', status: 'Em andamento' },
-  { id: '#23205', rota: 'São Paulo → Minas', data: '14/01/2025', horarios: '08:00 → 14:30', passageiros: 5, bagageiro: '70%', preco: 'R$ 1.250,00', gastos: 'R$ 120,50', status: 'Em andamento' },
-  { id: '#23206', rota: 'Rio de Janeiro → Curitiba', data: '14/01/2025', horarios: '08:00 → 14:30', passageiros: 7, bagageiro: '65%', preco: 'R$ 1.240,00', gastos: 'R$ 120,50', status: 'Concluído' },
-  { id: '#23207', rota: 'Porto Alegre → Rio de Janeiro', data: '14/01/2025', horarios: '08:00 → 14:30', passageiros: 9, bagageiro: '80%', preco: 'R$ 1.550,00', gastos: 'R$ 120,50', status: 'Concluído' },
-];
+type TripRow = {
+  id: string;
+  rota: string;
+  data: string;
+  horarios: string;
+  passageiros: number;
+  bagageiro: string;
+  preco: string;
+  gastos: string;
+  status: string;
+};
 
 const statusStyle: Record<string, { bg: string; color: string }> = {
   'Cancelado': { bg: '#eeafaa', color: '#551611' },
@@ -60,9 +64,40 @@ const cols = [
   { label: 'Status', flex: '0 0 120px' },
 ];
 
+const MONTH_INDEX: Record<string, number> = {
+  'Janeiro': 0, 'Fevereiro': 1, 'Março': 2, 'Abril': 3, 'Maio': 4, 'Junho': 5,
+  'Julho': 6, 'Agosto': 7, 'Setembro': 8, 'Outubro': 9, 'Novembro': 10, 'Dezembro': 11,
+};
+
+const FILTER_KEY: Record<string, ViagemListItem['status']> = {
+  'Em andamento': 'em_andamento',
+  'Agendadas': 'agendado',
+  'Concluídas': 'concluído',
+  'Canceladas': 'cancelado',
+};
+
+function itemsToRows(items: ViagemListItem[]): TripRow[] {
+  return items.map((v) => ({
+    id: `#${String(v.bookingId).slice(0, 8)}`,
+    rota: `${v.origem} → ${v.destino}`,
+    data: v.data,
+    horarios: `${v.embarque} → ${v.chegada}`,
+    passageiros: v.passengerCount,
+    bagageiro: v.trunkOccupancyPct > 0 ? `${v.trunkOccupancyPct}%` : '—',
+    preco: formatCurrencyBRL(v.amountCents),
+    gastos: '—',
+    status: viagemStatusLabel(v.status),
+  }));
+}
+
 export default function HistoricoViagensScreen() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { id: routeBookingId, mid: motoristaId } = useParams<{ id?: string; mid?: string }>();
+  const [items, setItems] = useState<ViagemListItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+
   const [search, setSearch] = useState('');
   const [filtroOpen, setFiltroOpen] = useState(false);
   const [filtroDataInicio, setFiltroDataInicio] = useState('01 de setembro');
@@ -70,6 +105,85 @@ export default function HistoricoViagensScreen() {
   const [mesesOpen, setMesesOpen] = useState(false);
   const [mesSelected, setMesSelected] = useState('Todos os meses');
   const [filtroStatus, setFiltroStatus] = useState('Em andamento');
+
+  useEffect(() => {
+    let cancel = false;
+    setLoading(true);
+    setLoadErr(null);
+    const p = motoristaId
+      ? fetchBookingsForDriver(motoristaId)
+      : fetchViagens();
+    p.then((list) => {
+      if (cancel) return;
+      setItems(list);
+      setLoading(false);
+    }).catch(() => {
+      if (cancel) return;
+      setLoadErr('Não foi possível carregar as viagens.');
+      setItems([]);
+      setLoading(false);
+    });
+    return () => { cancel = true; };
+  }, [motoristaId]);
+
+  const filteredItems = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const wantStatus = FILTER_KEY[filtroStatus];
+    const monthIdx = mesSelected !== 'Todos os meses' ? MONTH_INDEX[mesSelected] : null;
+
+    return items.filter((v) => {
+      if (wantStatus && v.status !== wantStatus) return false;
+      if (monthIdx != null) {
+        const d = new Date(v.departureAtIso);
+        if (Number.isNaN(d.getTime()) || d.getMonth() !== monthIdx) return false;
+      }
+      if (q) {
+        const hay = `${v.origem} ${v.destino} ${v.passageiro}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [items, search, filtroStatus, mesSelected]);
+
+  const trips = useMemo(() => itemsToRows(filteredItems), [filteredItems]);
+
+  const metrics = useMemo(() => {
+    const total = items.length;
+    const concluidas = items.filter((v) => v.status === 'concluído').length;
+    const agendadas = items.filter((v) => v.status === 'agendado').length;
+    const andamento = items.filter((v) => v.status === 'em_andamento').length;
+    const canceladas = items.filter((v) => v.status === 'cancelado').length;
+    return [
+      { title: 'Viagens totais', value: String(total), icon: 'list' },
+      { title: 'Viagens concluídas', value: String(concluidas), icon: 'check' },
+      { title: 'Viagens agendadas', value: String(agendadas), icon: 'calendar' },
+      { title: 'Viagens em andamento', value: String(andamento), icon: 'send' },
+      { title: 'Viagens canceladas', value: String(canceladas), icon: 'x' },
+    ];
+  }, [items]);
+
+  const donutData = useMemo(() => {
+    const total = items.length;
+    if (!total) {
+      return [
+        { label: 'Sem dados', pct: 100, color: '#e2e2e2' },
+      ];
+    }
+    const concluidas = items.filter((v) => v.status === 'concluído').length;
+    const agendadas = items.filter((v) => v.status === 'agendado').length;
+    const andamento = items.filter((v) => v.status === 'em_andamento').length;
+    const canceladas = items.filter((v) => v.status === 'cancelado').length;
+    const pct = (n: number) => Math.round((n / total) * 100);
+    let d = [
+      { label: 'Concluídas', pct: pct(concluidas), color: '#22c55e' },
+      { label: 'Agendadas', pct: pct(agendadas), color: '#4A90D9' },
+      { label: 'Em andamento', pct: pct(andamento), color: '#cba04b' },
+      { label: 'Canceladas', pct: pct(canceladas), color: '#b53838' },
+    ];
+    const sum = d.reduce((a, x) => a + x.pct, 0);
+    if (sum !== 100 && d[0]) d[0].pct += 100 - sum;
+    return d;
+  }, [items]);
 
   const fromLabel = location.pathname.startsWith('/motoristas') ? 'Motoristas'
     : location.pathname.startsWith('/passageiros') ? 'Passageiros'
@@ -157,12 +271,6 @@ export default function HistoricoViagensScreen() {
         React.createElement('span', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', ...font } }, m.value))));
 
   // ── Donut chart ─────────────────────────────────────────────────────
-  const donutData = [
-    { label: 'Concluídas', pct: 37, color: '#22c55e' },
-    { label: 'Agendadas', pct: 25, color: '#4A90D9' },
-    { label: 'Em andamento', pct: 25, color: '#cba04b' },
-    { label: 'Canceladas', pct: 13, color: '#b53838' },
-  ];
   let cumPct = 0;
   const gradStops = donutData.map((d) => {
     const start = cumPct;
@@ -181,7 +289,7 @@ export default function HistoricoViagensScreen() {
         ...donutData.map((d) =>
           React.createElement('div', { key: d.label, style: { display: 'flex', alignItems: 'center', gap: 8 } },
             React.createElement('div', { style: { width: 14, height: 14, borderRadius: '50%', background: d.color } }),
-            React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: d.color, ...font } }, d.label))))));
+            React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: d.color, ...font } }, `${d.label} (${d.pct}%)`))))));
 
   // ── Table ───────────────────────────────────────────────────────────
   const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 13, color: '#0d0d0d', ...font, padding: '0 6px' };
@@ -220,7 +328,13 @@ export default function HistoricoViagensScreen() {
       React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Lista de viagens')),
     React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } },
       tableHeader,
-      ...tableRows));
+      loading
+        ? React.createElement('div', { style: { padding: 24, ...font, color: '#767676' } }, 'Carregando…')
+        : loadErr
+          ? React.createElement('div', { style: { padding: 24, color: '#b53838', ...font } }, loadErr)
+          : trips.length === 0
+            ? React.createElement('div', { style: { padding: 24, color: '#767676', ...font } }, 'Nenhuma viagem neste filtro.')
+            : React.createElement(React.Fragment, null, ...tableRows)));
 
   // ── Filtro modal ─────────────────────────────────────────────────────
   const calIconSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
@@ -237,7 +351,6 @@ export default function HistoricoViagensScreen() {
       style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)' },
       onClick: (e: React.MouseEvent) => e.stopPropagation(),
     },
-      // Header
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
         React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro'),
         React.createElement('button', {
@@ -246,7 +359,6 @@ export default function HistoricoViagensScreen() {
         }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
           React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
       React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
-      // Data da atividade
       React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Data da atividade'),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
         React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Data inicial'),
@@ -258,7 +370,6 @@ export default function HistoricoViagensScreen() {
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px' } },
           calIconSvg,
           React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, filtroDataFim))),
-      // Status da viagem
       React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Status da viagem'),
       React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
         ...statusChips.map((s) =>
@@ -272,7 +383,6 @@ export default function HistoricoViagensScreen() {
               fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
             },
           }, s))),
-      // Buttons
       React.createElement('button', {
         type: 'button', onClick: () => setFiltroOpen(false),
         style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
@@ -282,7 +392,12 @@ export default function HistoricoViagensScreen() {
         style: { height: 40, background: 'none', border: 'none', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
       }, 'Voltar'))) : null;
 
-  return React.createElement(React.Fragment, null,
+  const ctxNote = routeBookingId
+    ? React.createElement('p', { style: { fontSize: 12, color: '#767676', margin: '0 0 8px', ...font } }, `Contexto: reserva ${routeBookingId.slice(0, 8)}…`)
+    : null;
+
+  return React.createElement('div', { style: { ...webStyles.detailPage, display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+    ctxNote,
     breadcrumb,
     React.createElement('button', {
       type: 'button', onClick: () => navigate(-1),

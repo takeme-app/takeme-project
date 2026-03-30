@@ -93,7 +93,68 @@ export interface ViagemListItem {
   status: 'concluído' | 'cancelado' | 'agendado' | 'em_andamento';
   tripId: string;
   driverId: string;
+  /** ISO 8601 — filtro por data / período */
+  departureAtIso: string;
+  /** Nome do motorista (profiles) */
+  motoristaNome: string;
+  /** take_me = frota; motorista = parceiro (worker_profiles.subtype === partner) */
+  motoristaCategoria: 'take_me' | 'motorista';
+  /** Status bruto em `bookings.status` (ações admin) */
+  bookingDbStatus: string;
+  passengerCount: number;
+  amountCents: number;
+  /** De `scheduled_trips.trunk_occupancy_pct`; 0 se ausente */
+  trunkOccupancyPct: number;
 }
+
+/** Detalhe admin de uma reserva (viagem) — origem/destino completos e metadados. */
+export interface BookingDetailForAdmin {
+  listItem: ViagemListItem;
+  originFull: string;
+  destinationFull: string;
+  amountCents: number;
+  passengerCount: number;
+  bagsCount: number;
+  passengerData: Array<{ name?: string; cpf?: string; bags?: number }>;
+  userId: string;
+  clientPhone: string | null;
+  trunkOccupancyPct: number;
+}
+
+/** Encomenda para ecrã de edição admin (shipment ou envio de dependente). */
+export type EncomendaEditDetail =
+  | {
+      kind: 'shipment';
+      id: string;
+      originAddress: string;
+      destinationAddress: string;
+      recipientName: string;
+      recipientPhone: string;
+      recipientEmail: string;
+      packageSize: string;
+      amountCents: number;
+      status: string;
+      instructions: string | null;
+      whenOption: string;
+      createdAt: string;
+      scheduledAt: string | null;
+    }
+  | {
+      kind: 'dependent_shipment';
+      id: string;
+      originAddress: string;
+      destinationAddress: string;
+      fullName: string;
+      contactPhone: string;
+      receiverName: string | null;
+      amountCents: number;
+      status: string;
+      instructions: string | null;
+      whenOption: string;
+      createdAt: string;
+      bagsCount: number;
+      scheduledAt: string | null;
+    };
 
 export interface PassageiroListItem {
   id: string;
@@ -116,6 +177,8 @@ export interface EncomendaListItem {
   status: 'Cancelado' | 'Concluído' | 'Agendado' | 'Em andamento';
   amountCents: number;
   packageSize?: string;
+  /** ISO 8601 — filtros no Início */
+  createdAtIso: string;
 }
 
 export interface MotoristaListItem {
@@ -128,12 +191,27 @@ export interface MotoristaListItem {
   rating: number | null;
 }
 
+/** Contagens por bucket de UI (derivadas de `scheduled_trips.status` por viagem da rota). */
+export type DestinoTripStatusCounts = {
+  em_andamento: number;
+  agendadas: number;
+  concluidas: number;
+  canceladas: number;
+};
+
 export interface DestinoListItem {
   origem: string;
   destino: string;
   totalAtividades: number;
   primeiraData: string;
+  /** `YYYY-MM-DD` da primeira `created_at` da rota (filtros de data). */
+  primeiraDataIso: string;
   ativo: boolean;
+  tripStatusCounts: DestinoTripStatusCounts;
+  takeMeCount: number;
+  partnerCount: number;
+  hasPastDeparture: boolean;
+  hasFutureDeparture: boolean;
 }
 
 export interface PreparadorListItem {

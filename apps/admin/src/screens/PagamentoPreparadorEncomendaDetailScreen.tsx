@@ -5,6 +5,14 @@
  */
 import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import {
+  fetchPreparadores,
+  findPreparadorEncomendaIdBySlug,
+  fetchPreparerEncPaymentHeader,
+  fetchPricingRoutes,
+  type PreparerEncPaymentHeader,
+} from '../data/queries';
+import type { PricingRouteRow } from '../data/types';
 import { webStyles } from '../styles/webStyles';
 import { PAGAMENTOS_GESTAO_PREPARADORES_HREF, PAGAMENTOS_CRIAR_TRECHO_PREP_ENCOMENDAS_HREF } from '../constants/pagamentosGestaoNav';
 import EditarFormaPagamentoTrechoModal from '../components/EditarFormaPagamentoTrechoModal';
@@ -13,6 +21,7 @@ import EditarTabelaTrechoModal, { TrechoData } from '../components/EditarTabelaT
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
 type TrechoPrepRow = {
+  pricingRouteId: string;
   origem: string;
   destino: string;
   valor: string;
@@ -25,71 +34,6 @@ type TrechoPrepRow = {
   pagamento: string;
 };
 
-const TRECHOS_EVERTON: TrechoPrepRow[] = [
-  {
-    origem: 'São Paulo - SP',
-    destino: 'Campinas - SP',
-    valor: 'R$ 250,00',
-    idaLinha1: '15/02/2025, ',
-    idaLinha2: '08:00',
-    retLinha1: '15/02/2025, ',
-    retLinha2: '18:00',
-    valorKm: 'R$ 3,20',
-    pctAdmin: '5%',
-    pagamento: 'Pix,\nDebito',
-  },
-  {
-    origem: 'Campinas - SP',
-    destino: 'Brasília - DF',
-    valor: 'R$ 380,00',
-    idaLinha1: '15/02/2025, ',
-    idaLinha2: '08:00',
-    retLinha1: '15/02/2025, ',
-    retLinha2: '18:00',
-    valorKm: 'R$ 2,90',
-    pctAdmin: '6%',
-    pagamento: 'Pix,\nCrédito',
-  },
-  {
-    origem: 'Brasília - DF',
-    destino: 'Goiânia - GO',
-    valor: 'R$ 320,00',
-    idaLinha1: '15/02/2025, ',
-    idaLinha2: '08:00',
-    retLinha1: '15/02/2025, ',
-    retLinha2: '18:00',
-    valorKm: 'R$ 2,90',
-    pctAdmin: '6%',
-    pagamento: 'Pix,\nCrédito',
-  },
-  {
-    origem: 'Campinas - SP',
-    destino: 'Goiânia - GO',
-    valor: 'R$ 345,00',
-    idaLinha1: '15/02/2025, ',
-    idaLinha2: '08:00',
-    retLinha1: '15/02/2025, ',
-    retLinha2: '18:00',
-    valorKm: 'R$ 3,25',
-    pctAdmin: '5%',
-    pagamento: 'Pix',
-  },
-  {
-    origem: 'Curitiba - PR',
-    destino: 'Porto Alegre - RS',
-    valor: 'R$ 720,00',
-    idaLinha1: '15/02/2025, ',
-    idaLinha2: '08:00',
-    retLinha1: '15/02/2025, ',
-    retLinha2: '18:00',
-    valorKm: 'R$ 2,80',
-    pctAdmin: '5%',
-    pagamento: 'Pix,\nDebito',
-  },
-];
-
-const TRECHOS_GENERIC = TRECHOS_EVERTON.slice(0, 3);
-
 type PrepDetail = {
   nome: string;
   rating: number;
@@ -97,22 +41,29 @@ type PrepDetail = {
   trechos: TrechoPrepRow[];
 };
 
-const DETAIL_BY_SLUG: Record<string, PrepDetail> = {
-  'everton-pereira': {
-    nome: 'Everton Pereira',
-    rating: 4.2,
-    pixChave: 'everton.pereira@gmail.com',
-    trechos: TRECHOS_EVERTON,
-  },
-};
-
-const NOME_BY_SLUG: Record<string, string> = {
-  'jorge-silva': 'Jorge Silva',
-  'joao-porto': 'João Porto',
-  'carlos-magno': 'Carlos Magno',
-  'eduardo-silva': 'Eduardo Silva',
-  'danilo-santos': 'Danilo Santos',
-};
+function pricingToTrechoPrepRow(r: PricingRouteRow): TrechoPrepRow {
+  const fmtMoney = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`;
+  const pay = (r.accepted_payment_methods || []).map((m) =>
+    m === 'pix' ? 'Pix' : m === 'credit_card' ? 'Crédito' : m === 'debit_card' ? 'Débito' : String(m),
+  );
+  const pagamento = pay.join(',\n') || '—';
+  const created = r.created_at ? new Date(r.created_at) : null;
+  const idaLinha1 = created ? `${created.toLocaleDateString('pt-BR')}, ` : '—, ';
+  const idaLinha2 = created ? created.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—';
+  return {
+    pricingRouteId: r.id,
+    origem: (r.origin_address || '—').slice(0, 120),
+    destino: (r.destination_address || '—').slice(0, 120),
+    valor: fmtMoney(r.price_cents),
+    idaLinha1,
+    idaLinha2,
+    retLinha1: '—',
+    retLinha2: '—',
+    valorKm: r.pricing_mode === 'per_km' ? fmtMoney(r.price_cents) : '—',
+    pctAdmin: `${r.admin_pct ?? 0}%`,
+    pagamento,
+  };
+}
 
 const arrowLeftSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M19 12H5M12 19l-7-7 7-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
@@ -165,22 +116,6 @@ const colTrecho = [
   { label: 'Editar/Excluir', w: 96, key: 'a' as const, actions: true },
 ];
 
-function resolveDetail(slug: string | undefined): PrepDetail {
-  if (!slug) {
-    return { nome: 'Preparador', rating: 0, pixChave: '—', trechos: TRECHOS_GENERIC };
-  }
-  const fixed = DETAIL_BY_SLUG[slug];
-  if (fixed) return fixed;
-  const nome = NOME_BY_SLUG[slug] ?? slug.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
-  const local = nome.toLowerCase().replace(/\s+/g, '.');
-  return {
-    nome,
-    rating: 4.2,
-    pixChave: `${local}@email.com`,
-    trechos: TRECHOS_GENERIC,
-  };
-}
-
 const stickyFirstHeader: React.CSSProperties = {
   position: 'sticky',
   left: 0,
@@ -200,6 +135,51 @@ const stickyFirstCell: React.CSSProperties = {
 export default function PagamentoPreparadorEncomendaDetailScreen() {
   const navigate = useNavigate();
   const { slug } = useParams<{ slug: string }>();
+  const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
+  const [header, setHeader] = useState<PreparerEncPaymentHeader | null>(null);
+  const [pricingRoutes, setPricingRoutes] = useState<PricingRouteRow[]>([]);
+  const [trechos, setTrechos] = useState<TrechoPrepRow[]>([]);
+
+  useEffect(() => {
+    let cancel = false;
+    setLoading(true);
+    setNotFound(false);
+    (async () => {
+      const list = await fetchPreparadores();
+      if (cancel) return;
+      const id = slug ? findPreparadorEncomendaIdBySlug(slug, list) : null;
+      if (!id) {
+        setNotFound(true);
+        setHeader(null);
+        setPricingRoutes([]);
+        setTrechos([]);
+        setLoading(false);
+        return;
+      }
+      const [h, routes] = await Promise.all([
+        fetchPreparerEncPaymentHeader(id),
+        fetchPricingRoutes('preparer_shipments'),
+      ]);
+      if (cancel) return;
+      setHeader(h);
+      setPricingRoutes(routes);
+      setTrechos(routes.map(pricingToTrechoPrepRow));
+      setLoading(false);
+    })();
+    return () => { cancel = true; };
+  }, [slug]);
+
+  const detail: PrepDetail = useMemo(() => ({
+    nome: header?.nome ?? (slug ? slug.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ') : 'Preparador'),
+    rating: header?.rating ?? 0,
+    pixChave: header?.pixChave ?? '—',
+    trechos,
+  }), [header, trechos, slug]);
+
+  const initial = detail.nome.charAt(0);
+  const avatarBg = avatarColors[initial] || '#999';
+
   const [editPagamentoOpen, setEditPagamentoOpen] = useState(false);
   const [editTrechoOpen, setEditTrechoOpen] = useState(false);
   const [editTrechoData, setEditTrechoData] = useState<TrechoData | null>(null);
@@ -228,15 +208,11 @@ export default function PagamentoPreparadorEncomendaDetailScreen() {
     setConfirmRemoveOpen(true);
   }, []);
   const confirmarRemove = useCallback(() => {
-    // TODO: integrar com backend
     setConfirmRemoveOpen(false);
   }, []);
   const [isCompactTable, setIsCompactTable] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia(`(max-width: ${TABLE_COMPACT_MAX_PX}px)`).matches);
   const fecharEditPagamento = useCallback(() => setEditPagamentoOpen(false), []);
-  const detail = useMemo(() => resolveDetail(slug), [slug]);
-  const initial = detail.nome.charAt(0);
-  const avatarBg = avatarColors[initial] || '#999';
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -246,6 +222,19 @@ export default function PagamentoPreparadorEncomendaDetailScreen() {
     mq.addEventListener('change', sync);
     return () => mq.removeEventListener('change', sync);
   }, []);
+
+  if (loading) {
+    return React.createElement('div', { style: { padding: 40, ...font } }, 'Carregando…');
+  }
+  if (notFound) {
+    return React.createElement('div', { style: { padding: 40, display: 'flex', flexDirection: 'column' as const, gap: 16, ...font } },
+      React.createElement('p', { style: { margin: 0 } }, 'Preparador não encontrado para este URL.'),
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => navigate(PAGAMENTOS_GESTAO_PREPARADORES_HREF),
+        style: { alignSelf: 'flex-start', cursor: 'pointer', padding: '8px 16px' },
+      }, 'Voltar à gestão'));
+  }
 
   const headerCell = (text: string, w: number, opts?: { multiline?: boolean; alignEnd?: boolean; stickyStart?: boolean }) =>
     React.createElement('div', {
@@ -656,7 +645,19 @@ export default function PagamentoPreparadorEncomendaDetailScreen() {
       pageTop,
       profileCard,
       tableSection),
-    React.createElement(EditarFormaPagamentoTrechoModal, { open: editPagamentoOpen, onClose: fecharEditPagamento }),
+    React.createElement(EditarFormaPagamentoTrechoModal, {
+      open: editPagamentoOpen,
+      onClose: fecharEditPagamento,
+      pricingRouteId: pricingRoutes[0]?.id ?? null,
+      initialAcceptedPaymentMethods: pricingRoutes[0]?.accepted_payment_methods,
+      onSaved: () => {
+        if (!slug) return;
+        void fetchPricingRoutes('preparer_shipments').then((routes) => {
+          setPricingRoutes(routes);
+          setTrechos(routes.map(pricingToTrechoPrepRow));
+        });
+      },
+    }),
     React.createElement(EditarTabelaTrechoModal, { open: editTrechoOpen, onClose: fecharEditTrecho, trecho: editTrechoData }),
     confirmRemoveOpen
       ? React.createElement('div', {

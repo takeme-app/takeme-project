@@ -86,12 +86,6 @@ const chipFiltro = (label: string, selecionado: boolean, onClick: () => void) =>
     },
   }, label);
 
-// metrics2 (Adesão) requires analytics not yet available — keep as mock
-const metrics2 = [
-  { title: 'Adesão Motoristas', value: '68%', pct: '+5%', desc: 'vs mês anterior' },
-  { title: 'Adesão Preparadores', value: '72%', pct: '+7%', desc: 'vs mês anterior' },
-];
-
 const tableCols = [
   { label: 'Nome da Promoção', flex: '1 1 25%', minWidth: 180 },
   { label: 'Data de Início', flex: '0 0 130px', minWidth: 130 },
@@ -100,14 +94,6 @@ const tableCols = [
   { label: 'Status', flex: '0 0 90px', minWidth: 90 },
 ];
 
-// ── Chart data (4 days × 3 lines) ──────────────────────────────────────
-const chartData = {
-  labels: ['Dia 1', 'Dia 2', 'Dia 3', 'Dia 4'],
-  motoristas: [30, 58, 35, 40],
-  preparadores: [25, 54, 30, 28],
-  passageiros: [5, 46, 22, 20],
-};
-
 // ── Styles ──────────────────────────────────────────────────────────────
 const s = {
   metricCard: {
@@ -115,53 +101,7 @@ const s = {
     padding: '16px 20px', display: 'flex', flexDirection: 'column' as const, gap: 8,
     boxSizing: 'border-box' as const,
   } as React.CSSProperties,
-  chartCard: {
-    width: '100%', background: '#f6f6f6', borderRadius: 16, padding: 24,
-    display: 'flex', flexDirection: 'column' as const, gap: 16, boxSizing: 'border-box' as const,
-  } as React.CSSProperties,
 };
-
-// ── SVG line chart ──────────────────────────────────────────────────────
-function buildLineChart() {
-  const W = 700, H = 200, padL = 40, padR = 20, padT = 10, padB = 30;
-  const chartW = W - padL - padR;
-  const chartH = H - padT - padB;
-  const maxVal = 80;
-  const xStep = chartW / (chartData.labels.length - 1);
-
-  const toX = (i: number) => padL + i * xStep;
-  const toY = (v: number) => padT + chartH - (v / maxVal) * chartH;
-
-  const makePath = (values: number[]) =>
-    values.map((v, i) => `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
-
-  const gridLines: React.ReactElement[] = [];
-  for (let pct = 0; pct <= 80; pct += 20) {
-    const y = toY(pct);
-    gridLines.push(
-      React.createElement('line', { key: `g${pct}`, x1: padL, x2: W - padR, y1: y, y2: y, stroke: '#e2e2e2', strokeWidth: 1 }),
-      React.createElement('text', { key: `t${pct}`, x: padL - 6, y: y + 4, textAnchor: 'end', fontSize: 11, fill: '#767676', ...font }, `${pct}%`),
-    );
-  }
-
-  const xLabels = chartData.labels.map((l, i) =>
-    React.createElement('text', { key: `xl${i}`, x: toX(i), y: H - 4, textAnchor: 'middle', fontSize: 11, fill: '#767676', ...font }, l));
-
-  const lines = [
-    { values: chartData.motoristas, color: '#767676' },
-    { values: chartData.preparadores, color: '#22c55e' },
-    { values: chartData.passageiros, color: '#b53838' },
-  ];
-
-  const pathEls = lines.map((l, li) => [
-    React.createElement('path', { key: `p${li}`, d: makePath(l.values), fill: 'none', stroke: l.color, strokeWidth: 2 }),
-    ...l.values.map((v, i) =>
-      React.createElement('circle', { key: `c${li}-${i}`, cx: toX(i), cy: toY(v), r: 4, fill: '#fff', stroke: l.color, strokeWidth: 2 })),
-  ]).flat();
-
-  return React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, style: { width: '100%', maxWidth: W, height: 'auto' } },
-    ...gridLines, ...xLabels, ...pathEls);
-}
 
 // ── Component ───────────────────────────────────────────────────────────
 export default function PromocoesScreen() {
@@ -232,9 +172,9 @@ export default function PromocoesScreen() {
   }, [filtroModalOpen, fecharFiltroModal]);
 
   const metrics1 = [
-    { title: 'Total de Promoções', value: String(promoCounts.total), pct: '+12%', desc: 'vs mês anterior' },
-    { title: 'Promoções Ativas', value: String(promoCounts.ativas), pct: '+8%', desc: 'vs mês anterior' },
-    { title: 'Promoções Inativas', value: String(promoCounts.inativas), pct: '-3%', desc: 'vs mês anterior', negative: true },
+    { title: 'Total de Promoções', value: String(promoCounts.total), pct: '', desc: '' },
+    { title: 'Promoções Ativas', value: String(promoCounts.ativas), pct: '', desc: '' },
+    { title: 'Promoções Inativas', value: String(promoCounts.inativas), pct: '', desc: '', negative: true },
   ];
 
   const filteredRows = useMemo(() => {
@@ -411,6 +351,7 @@ export default function PromocoesScreen() {
     React.createElement('button', {
       type: 'button',
       onClick: abrirFiltroModal,
+      'data-testid': 'promocoes-open-table-filter',
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#f1f1f1', border: 'none', borderRadius: 999,
@@ -442,34 +383,6 @@ export default function PromocoesScreen() {
           React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, m.desc)),
         React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, m.value))));
 
-  // ── Metrics row 2 ─────────────────────────────────────────────────────
-  const metricCards2 = React.createElement('div', {
-    style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
-  },
-    ...metrics2.map((m) =>
-      React.createElement('div', { key: m.title, style: s.metricCard },
-        React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, m.title),
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
-          React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, m.pct),
-          React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, m.desc)),
-        React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, m.value))));
-
-  // ── Chart section ─────────────────────────────────────────────────────
-  const chartSection = React.createElement('div', { style: s.chartCard },
-    React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Crescimento de Adesão - Mês Atual'),
-    buildLineChart(),
-    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 24, marginTop: 8 } },
-      ...([
-        { label: 'Motoristas', color: '#767676' },
-        { label: 'Preparadores', color: '#22c55e' },
-        { label: 'Passageiros', color: '#b53838' },
-      ].map((l) =>
-        React.createElement('div', { key: l.label, style: { display: 'flex', alignItems: 'center', gap: 6 } },
-          React.createElement('svg', { width: 20, height: 12, viewBox: '0 0 20 12' },
-            React.createElement('line', { x1: 0, y1: 6, x2: 20, y2: 6, stroke: l.color, strokeWidth: 2 }),
-            React.createElement('circle', { cx: 10, cy: 6, r: 3, fill: '#fff', stroke: l.color, strokeWidth: 2 })),
-          React.createElement('span', { style: { fontSize: 13, color: l.color, fontWeight: 500, ...font } }, l.label))))));
-
   // ── Table ─────────────────────────────────────────────────────────────
   const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 6px' };
 
@@ -497,11 +410,12 @@ export default function PromocoesScreen() {
       style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 6px', display: 'flex', alignItems: 'center', height: '100%' },
     }, c.label)));
 
-  const tableRowEls = filteredRows.map((row, idx) => {
+  const tableRowEls = filteredRows.map((row) => {
     const statusBg = row.status === 'Ativo' ? '#b0e8d1' : '#eeafaa';
     const statusColor = row.status === 'Ativo' ? '#174f38' : '#551611';
     return React.createElement('div', {
-      key: idx,
+      key: row.id,
+      'data-testid': 'promocao-table-row',
       style: {
         display: 'flex', minHeight: 56, alignItems: 'center', padding: '8px 16px',
         borderBottom: '1px solid #d9d9d9', background: '#f6f6f6',
@@ -540,5 +454,5 @@ export default function PromocoesScreen() {
     : null;
 
   return React.createElement(React.Fragment, null,
-    title, searchRow, metricCards1, metricCards2, chartSection, emptyMsg || tableSection, filtroTabelaModal);
+    title, searchRow, metricCards1, emptyMsg || tableSection, filtroTabelaModal);
 }

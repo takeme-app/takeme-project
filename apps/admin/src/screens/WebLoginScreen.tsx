@@ -53,7 +53,7 @@ export default function WebLoginScreen() {
         React.createElement('div', { style: webStyles.logoPlaceholderText },
           React.createElement('span', { style: webStyles.logoPlaceholderTake }, 'Take '),
           React.createElement('span', { style: webStyles.logoPlaceholderMe }, 'Me')));
-  return React.createElement('div', { style: webStyles._25login, className: 'figma-login' },
+  return React.createElement('div', { style: webStyles._25login, className: 'figma-login', 'data-testid': 'web-login-screen' },
     React.createElement('div', { style: webStyles.login },
       React.createElement('style', { dangerouslySetInnerHTML: { __html: 'html, body, #root { margin: 0; padding: 0; width: 100%; min-height: 100vh; height: 100%; box-sizing: border-box; }.figma-login { width: 100% !important; min-height: 100vh !important; }.figma-login input::placeholder { color: #767676; }.figma-login .admin-cta { width: 100%; min-width: 0; max-width: 100%; align-items: center; align-self: center; }.figma-login .admin-cta button,.figma-login button { min-height: 44px; box-sizing: border-box; }.figma-login .admin-cta button { width: 100%; } @media (max-width: 480px) { .figma-login .admin-cta { max-width: none; padding: 0 4px; }.figma-login .admin-cta button,.figma-login button { padding: 14px 12px; font-size: 15px; } }' } }),
       React.createElement('div', { style: webStyles.content },

@@ -3,7 +3,7 @@
  * Uses React.createElement() calls (NOT JSX).
  * Does NOT include header/navbar (that's in Layout).
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import React from 'react';
 import {
   webStyles,
@@ -15,20 +15,40 @@ import {
   calendarIconSvg,
   closeIconSvg,
 } from '../styles/webStyles';
-import { fetchHomeCounts, fetchPagamentoCounts, type HomeCounts, type PagamentoCounts } from '../data/queries';
+import {
+  fetchHomeCounts,
+  fetchPagamentoCounts,
+  fetchViagens,
+  fetchEncomendas,
+  filterViagemListItem,
+  filterEncomendaForHome,
+  viagemCountsFromItems,
+  encomendaCountsFromItems,
+  fetchApprovedTripExpensesCents,
+  type HomeCounts,
+  type ViagemListFilter,
+} from '../data/queries';
+import type { PagamentoCounts } from '../data/types';
 
 export default function HomeScreen() {
   const [homeSubTab, setHomeSubTab] = useState<'viagens' | 'encomendas'>('viagens');
   const [homeCounts, setHomeCounts] = useState<HomeCounts | null>(null);
   const [pagCounts, setPagCounts] = useState<PagamentoCounts | null>(null);
+  const [approvedExpenseCents, setApprovedExpenseCents] = useState(0);
+  const [homeSearch, setHomeSearch] = useState('');
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([fetchHomeCounts(), fetchPagamentoCounts()]).then(([hc, pc]) => {
-      if (!cancelled) { setHomeCounts(hc); setPagCounts(pc); }
+    Promise.all([fetchHomeCounts(), fetchPagamentoCounts(), fetchApprovedTripExpensesCents()]).then(([hc, pc, exp]) => {
+      if (!cancelled) {
+        setHomeCounts(hc);
+        setPagCounts(pc);
+        setApprovedExpenseCents(exp.totalCents);
+      }
     });
     return () => { cancelled = true; };
   }, []);
+
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [filterDateInicio, setFilterDateInicio] = useState('');
   const [filterDateFim, setFilterDateFim] = useState('');
@@ -36,6 +56,37 @@ export default function HomeScreen() {
   const [filterCategoria, setFilterCategoria] = useState<Set<'take_me' | 'motorista'>>(new Set(['take_me']));
   const [takeMeDropdownOpen, setTakeMeDropdownOpen] = useState(false);
   const [takeMeSelectedOption, setTakeMeSelectedOption] = useState<'Take Me' | 'Motorista parceiro'>('Take Me');
+
+  const homeCategoriaToFilter = (set: Set<'take_me' | 'motorista'>): ViagemListFilter['categoria'] => {
+    const hasT = set.has('take_me');
+    const hasM = set.has('motorista');
+    if (hasT && hasM) return 'todos';
+    if (hasT) return 'take_me';
+    if (hasM) return 'motorista';
+    return 'todos';
+  };
+
+  const aplicarFiltroHome = useCallback(async () => {
+    const [viagens, encomendas] = await Promise.all([fetchViagens(), fetchEncomendas()]);
+    const cat = homeCategoriaToFilter(filterCategoria);
+    const vf: ViagemListFilter = {
+      status: filterStatus,
+      categoria: cat,
+      nomeNeedle: homeSearch.trim(),
+      origemNeedle: '',
+      tableDateYmd: '',
+      periodoInicioYmd: filterDateInicio,
+      periodoFimYmd: filterDateFim,
+      datasIncluidas: 'passadas_e_futuras',
+    };
+    const vFil = viagens.filter((v) => filterViagemListItem(v, vf));
+    const eFil = encomendas.filter((e) => filterEncomendaForHome(e, filterStatus, filterDateInicio, filterDateFim));
+    setHomeCounts({
+      viagens: viagemCountsFromItems(vFil),
+      encomendas: encomendaCountsFromItems(eFil),
+    });
+    setFilterModalOpen(false);
+  }, [filterCategoria, filterDateFim, filterDateInicio, filterStatus, homeSearch]);
 
   const isEncomendas = homeSubTab === 'encomendas';
   const subTabsSection = React.createElement('div', { style: webStyles.subTabsWrap },
@@ -55,7 +106,14 @@ export default function HomeScreen() {
     React.createElement('div', { style: webStyles.searchInputWrap },
       React.createElement('div', { style: webStyles.searchInputInner },
         React.createElement('span', { style: webStyles.searchIcon }, searchIconSvg),
-        React.createElement('input', { type: 'search', placeholder: 'Buscar', style: webStyles.searchInput, 'aria-label': 'Buscar' }))),
+        React.createElement('input', {
+          type: 'search',
+          value: homeSearch,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setHomeSearch(e.target.value),
+          placeholder: 'Buscar (aplique o filtro para refletir nos cartões)',
+          style: webStyles.searchInput,
+          'aria-label': 'Buscar',
+        }))),
     React.createElement('div', { style: webStyles.filterGroup },
       ...(isEncomendas ? [] : [
         React.createElement('div', { key: 'takeme-wrap', style: webStyles.dropdownWrap },
@@ -63,34 +121,38 @@ export default function HomeScreen() {
           takeMeDropdownOpen ? React.createElement(React.Fragment, { key: 'takeme-dd' },
             React.createElement('div', { key: 'overlay', style: webStyles.dropdownOverlay, onClick: () => setTakeMeDropdownOpen(false), 'aria-hidden': true }),
             React.createElement('div', { key: 'popover', style: webStyles.dropdownPopover, role: 'menu' },
-              React.createElement('button', { type: 'button', style: webStyles.dropdownOption, role: 'menuitem', onClick: () => { setTakeMeSelectedOption('Take Me'); setTakeMeDropdownOpen(false); } }, 'Take Me'),
-              React.createElement('button', { type: 'button', style: webStyles.dropdownOption, role: 'menuitem', onClick: () => { setTakeMeSelectedOption('Motorista parceiro'); setTakeMeDropdownOpen(false); } }, 'Motorista parceiro'))) : null),
+              React.createElement('button', { type: 'button', style: webStyles.dropdownOption, role: 'menuitem', onClick: () => { setTakeMeSelectedOption('Take Me'); setFilterCategoria(new Set(['take_me'])); setTakeMeDropdownOpen(false); } }, 'Take Me'),
+              React.createElement('button', { type: 'button', style: webStyles.dropdownOption, role: 'menuitem', onClick: () => { setTakeMeSelectedOption('Motorista parceiro'); setFilterCategoria(new Set(['motorista'])); setTakeMeDropdownOpen(false); } }, 'Motorista parceiro'))) : null),
       ]),
-      React.createElement('button', { key: 'filtro', type: 'button', style: webStyles.filterBtn, onClick: () => setFilterModalOpen(true) }, React.createElement('span', null, filterIconSvg), 'Filtro')));
+      React.createElement('button', {
+        key: 'filtro', type: 'button', 'data-testid': 'home-open-filter',
+        'aria-label': 'Abrir filtro do Início', style: webStyles.filterBtn, onClick: () => setFilterModalOpen(true),
+      }, React.createElement('span', null, filterIconSvg), 'Filtro')));
 
+  const fmtExpenseBRL = (c: number) => `R$ ${(c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const expenseCardEl = React.createElement('div', { style: webStyles.expenseCard },
     React.createElement('div', { style: webStyles.expenseCardIcon }, infoIconSvg),
     React.createElement('div', { style: webStyles.expenseCardBody },
       React.createElement('p', { style: webStyles.expenseCardTitle }, 'Despesas aprovadas pelo backoffice'),
-      React.createElement('p', { style: webStyles.expenseCardDesc }, 'Sumarização baseada na data da entidade de despesas das viagens e somente com status aprovado.'),
+      React.createElement('p', { style: webStyles.expenseCardDesc }, 'Soma de payouts com status pago (amostra até 5000 linhas; tipos booking, shipment, dependent_shipment, excursion).'),
       React.createElement('p', { style: webStyles.expenseCardLabel }, 'Total de despesas aprovadas no período'),
-      React.createElement('p', { style: webStyles.expenseCardValue }, 'R$ 16.550,00'),
+      React.createElement('p', { style: webStyles.expenseCardValue }, fmtExpenseBRL(approvedExpenseCents)),
       React.createElement('button', { type: 'button', style: webStyles.expenseCardLink }, 'Ver detalhes em Pagamentos', React.createElement('span', null, arrowForwardSvg))));
 
   const vc = homeCounts?.viagens;
   const ec = homeCounts?.encomendas;
   const statCardsData = isEncomendas
     ? [
-        { title: 'Entregas em andamento', value: String(ec?.emAndamento ?? '—'), change: '', positive: true },
-        { title: 'Agendadas', value: String(ec?.agendadas ?? '—'), change: '', positive: true },
-        { title: 'Concluídas', value: String(ec?.concluidas ?? '—'), change: '', positive: true },
-        { title: 'Canceladas', value: String(ec?.canceladas ?? '—'), change: '', positive: false },
+        { title: 'Entregas em andamento', value: String(ec?.emAndamento ?? '—'), change: '', positive: true, testId: 'home-stat-encomendas-em-andamento' as const },
+        { title: 'Agendadas', value: String(ec?.agendadas ?? '—'), change: '', positive: true, testId: 'home-stat-encomendas-agendadas' as const },
+        { title: 'Concluídas', value: String(ec?.concluidas ?? '—'), change: '', positive: true, testId: 'home-stat-encomendas-concluidas' as const },
+        { title: 'Canceladas', value: String(ec?.canceladas ?? '—'), change: '', positive: false, testId: 'home-stat-encomendas-canceladas' as const },
       ]
     : [
-        { title: 'Viagens em andamento', value: String(vc?.emAndamento ?? '—'), change: '', positive: true },
-        { title: 'Agendadas', value: String(vc?.agendadas ?? '—'), change: '', positive: true },
-        { title: 'Concluídas', value: String(vc?.concluidas ?? '—'), change: '', positive: true },
-        { title: 'Canceladas', value: String(vc?.canceladas ?? '—'), change: '', positive: false },
+        { title: 'Viagens em andamento', value: String(vc?.emAndamento ?? '—'), change: '', positive: true, testId: 'home-stat-viagens-em-andamento' as const },
+        { title: 'Agendadas', value: String(vc?.agendadas ?? '—'), change: '', positive: true, testId: 'home-stat-viagens-agendadas' as const },
+        { title: 'Concluídas', value: String(vc?.concluidas ?? '—'), change: '', positive: true, testId: 'home-stat-viagens-concluidas' as const },
+        { title: 'Canceladas', value: String(vc?.canceladas ?? '—'), change: '', positive: false, testId: 'home-stat-viagens-canceladas' as const },
       ];
   const statCards = statCardsData.map((s) =>
     React.createElement('div', { key: s.title, style: webStyles.statCard },
@@ -98,10 +160,10 @@ export default function HomeScreen() {
         React.createElement('span', { style: webStyles.statCardTitle }, s.title),
         React.createElement('span', { style: { opacity: 0 } }, '○')),
       React.createElement('span', { style: { ...webStyles.statCardChange, ...(s.positive ? webStyles.statCardChangePos : webStyles.statCardChangeNeg) } }, s.change),
-      React.createElement('span', { style: webStyles.statCardValue }, s.value)));
+      React.createElement('span', { style: webStyles.statCardValue, 'data-testid': s.testId }, s.value)));
 
   const chartTitle = isEncomendas ? 'Distribuição de valores das encomendas concluídas' : 'Distribuição de receitas';
-  const chartDesc = isEncomendas ? 'Distribuição de valores das encomendas concluídas no período filtrado.' : 'A receita total inclui todas as viagens concluídas no período filtrado.';
+  const chartDesc = 'Valores consolidados de payouts no projeto (não filtrados pelo modal; os cartões acima refletem o filtro aplicado).';
   // Real chart data from payouts
   const grossCents = (pagCounts?.pagamentosPrevistos ?? 0) + (pagCounts?.pagamentosFeitos ?? 0);
   const adminCents = pagCounts?.lucro ?? 0;
@@ -151,19 +213,20 @@ export default function HomeScreen() {
   const filterModalInicioContent = React.createElement('div', { style: { ...webStyles.modalBoxInicio, maxWidth: 560 }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
     React.createElement('div', { style: webStyles.modalHeader },
       React.createElement('div', { style: webStyles.modalHeaderRowInicio },
-        React.createElement('h2', { style: webStyles.modalTitleCentered }, 'Filtro'))),
+        React.createElement('h2', { id: 'home-filtro-modal-titulo', style: webStyles.modalTitleCentered }, 'Filtro'))),
     React.createElement('div', { style: webStyles.modalSection },
       React.createElement('h3', { style: webStyles.modalSectionTitle }, 'Data da atividade'),
+      React.createElement('p', { style: { fontSize: 12, color: '#767676', margin: '0 0 8px 0', lineHeight: 1.5 } }, 'Formato ISO (YYYY-MM-DD). Vazio = sem limite nesse extremo.'),
       React.createElement('div', { style: webStyles.modalDateField },
         React.createElement('label', { style: webStyles.modalDateLabel }, 'Data inicial'),
         React.createElement('div', { style: webStyles.modalDateInputWrap },
           React.createElement('span', { style: webStyles.modalDateIcon }, calendarIconSvg),
-          React.createElement('input', { type: 'text', placeholder: 'dd/mm/aaaa', value: filterDateInicio, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFilterDateInicio(e.target.value), style: webStyles.modalDateInput, 'aria-label': 'Data inicial' }))),
+          React.createElement('input', { type: 'date', value: filterDateInicio, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFilterDateInicio(e.target.value), style: webStyles.modalDateInput, 'aria-label': 'Data inicial' }))),
       React.createElement('div', { style: { ...webStyles.modalDateField, marginTop: 8 } },
         React.createElement('label', { style: webStyles.modalDateLabel }, 'Data final'),
         React.createElement('div', { style: webStyles.modalDateInputWrap },
           React.createElement('span', { style: webStyles.modalDateIcon }, calendarIconSvg),
-          React.createElement('input', { type: 'text', placeholder: 'dd/mm/aaaa', value: filterDateFim, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFilterDateFim(e.target.value), style: webStyles.modalDateInput, 'aria-label': 'Data final' })))),
+          React.createElement('input', { type: 'date', value: filterDateFim, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFilterDateFim(e.target.value), style: webStyles.modalDateInput, 'aria-label': 'Data final' })))),
     React.createElement('div', { style: webStyles.modalSectionGap12 },
       React.createElement('h3', { style: webStyles.modalSectionTitle }, 'Status da viagem'),
       React.createElement('div', { style: webStyles.modalChips }, ...statusOptions.map((opt) =>
@@ -173,10 +236,10 @@ export default function HomeScreen() {
       React.createElement('div', { style: webStyles.modalChips }, ...categoriaOptionsInicio.map((opt) =>
         React.createElement('button', { key: opt.id, type: 'button', style: { ...webStyles.modalChip, ...(filterCategoria.has(opt.id) ? webStyles.modalChipActive : webStyles.modalChipInactive) } as React.CSSProperties, onClick: () => toggleCategoria(opt.id) }, opt.label))),
     React.createElement('div', { style: webStyles.modalButtonWrap },
-      React.createElement('button', { type: 'button', style: webStyles.modalApplyBtn, onClick: () => setFilterModalOpen(false) }, 'Aplicar filtro'))));
+      React.createElement('button', { type: 'button', style: webStyles.modalApplyBtn, onClick: () => { void aplicarFiltroHome(); } }, 'Aplicar filtro'))));
 
   const filterModalEl = filterModalOpen
-    ? React.createElement('div', { style: webStyles.modalOverlay, onClick: () => setFilterModalOpen(false), role: 'dialog', 'aria-modal': true, 'aria-label': 'Filtro' }, filterModalInicioContent)
+    ? React.createElement('div', { style: webStyles.modalOverlay, onClick: () => setFilterModalOpen(false), role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'home-filtro-modal-titulo' }, filterModalInicioContent)
     : null;
 
   return React.createElement(React.Fragment, null,
