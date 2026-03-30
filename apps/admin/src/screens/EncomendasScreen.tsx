@@ -1,29 +1,41 @@
 /**
  * EncomendasScreen — Lista de encomendas conforme Figma 849-37135.
  * Uses React.createElement() calls (NOT JSX).
+ * Counts calculados via useMemo sobre filteredEncomendasData (refletem filtros do modal).
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
-import { fetchEncomendas, fetchEncomendaCounts, updateShipmentStatus, updateDependentShipmentStatus, type EncomendaCounts } from '../data/queries';
+import {
+  fetchEncomendas,
+  updateShipmentStatus,
+  updateDependentShipmentStatus,
+} from '../data/queries';
 import type { EncomendaListItem } from '../data/types';
 
+const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } = require('recharts');
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
-// SVG icons
+// ── SVG icons ──────────────────────────────────────────────────────────────
 const eyeActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
   React.createElement('circle', { cx: 12, cy: 12, r: 3, stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+
 const pencilActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
   React.createElement('path', { d: 'M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+
 const chevronDownSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 
+const closeSmSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+  React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
+
+// ── Types ──────────────────────────────────────────────────────────────────
 type EncomendaRow = {
   id: string;
   tipo: EncomendaListItem['tipo'];
@@ -37,6 +49,7 @@ type EncomendaRow = {
   rawStatus: string;
 };
 
+// ── Constants ──────────────────────────────────────────────────────────────
 const tableCols = [
   { label: 'Destino', flex: '1 1 14%', minWidth: 120 },
   { label: 'Origem', flex: '1 1 14%', minWidth: 120 },
@@ -55,42 +68,35 @@ const statusStyles: Record<string, { bg: string; color: string }> = {
   'Em andamento': { bg: '#fee59a', color: '#654c01' },
 };
 
-/** Filtro por rótulo dos chips (página ou tabela) — alinhado ao `status` mapeado da API. */
-function encomendaRowMatchesStatusLabel(
-  rowStatus: EncomendaRow['status'],
-  filtroLabel: string,
-): boolean {
-  if (!filtroLabel || filtroLabel === 'Todos') return true;
-  const statusLower = rowStatus.toLowerCase();
-  const filtroLower = filtroLabel.toLowerCase();
-  if (filtroLower === 'em andamento' && !statusLower.includes('andamento') && !statusLower.includes('progress')) return false;
-  if (filtroLower === 'agendadas' && !statusLower.includes('agendad') && !statusLower.includes('confirmed')) return false;
-  if (filtroLower === 'concluídas' && !statusLower.includes('conclu') && !statusLower.includes('delivered')) return false;
-  if (filtroLower === 'canceladas' && !statusLower.includes('cancel')) return false;
-  return true;
+const UF_NOMES = ['Todos os estados', 'Acre', 'Alagoas', 'Amapá', 'Amazonas', 'Bahia', 'Ceará', 'Distrito Federal', 'Espírito Santo', 'Goiás', 'Maranhão', 'Mato Grosso', 'Mato Grosso do Sul', 'Minas Gerais', 'Pará', 'Paraíba', 'Paraná', 'Pernambuco', 'Piauí', 'Rio de Janeiro', 'Rio Grande do Norte', 'Rio Grande do Sul', 'Rondônia', 'Roraima', 'Santa Catarina', 'São Paulo', 'Sergipe', 'Tocantins'];
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+const pkgLabel = (ps?: string) => {
+  const p = (ps || '').toLowerCase();
+  if (p === 'small' || p.includes('pequ')) return 'Pequeno';
+  if (p === 'medium' || p.includes('medio') || p.includes('médio')) return 'Médio';
+  if (p === 'large' || p === 'xl' || p.includes('grand')) return 'Grande';
+  return ps || '—';
+};
+
+const fmtBRL = (cents: number) =>
+  cents > 0 ? `R$ ${(cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
+
+function toEncomendaRow(e: EncomendaListItem): EncomendaRow {
+  return {
+    id: e.id,
+    tipo: e.tipo,
+    destino: e.destino,
+    origem: e.origem,
+    remetente: e.remetente,
+    data: e.data,
+    tamanho: pkgLabel(e.packageSize),
+    valor: fmtBRL(e.amountCents),
+    status: e.status,
+    rawStatus: String((e as { rawStatus?: string }).rawStatus ?? ''),
+  };
 }
 
-/** Chips do modal da tabela (Pequeno / Medio / Grande) ↔ `package_size` em shipments. */
-function encomendaItemMatchesTipoTable(
-  item: EncomendaListItem | undefined,
-  tblTipo: string,
-): boolean {
-  if (tblTipo === 'Todos') return true;
-  const pkg = (item?.packageSize || '').toLowerCase().trim();
-  const t = tblTipo.toLowerCase();
-  if (t === 'pequeno') {
-    return pkg.includes('small') || pkg.includes('pequen') || pkg === 's' || pkg === 'pequena';
-  }
-  if (t === 'medio') {
-    return pkg.includes('medium') || pkg.includes('medio') || pkg.includes('médio') || pkg === 'm';
-  }
-  if (t === 'grande') {
-    return pkg.includes('large') || pkg.includes('grand') || pkg === 'l' || pkg === 'xl';
-  }
-  return true;
-}
-
-/** Data local `YYYY-MM-DD` a partir de ISO. */
 function isoDatePartLocal(iso: string): string {
   if (!iso) return '';
   const d = new Date(iso);
@@ -101,69 +107,10 @@ function isoDatePartLocal(iso: string): string {
   return `${y}-${m}-${day}`;
 }
 
-/** Hora local `HH:mm` a partir de ISO. */
-function isoTimeHHmmLocal(iso: string): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-/** "9:00" → "09:00"; null se inválido. */
-function parseHHmm(needle: string): string | null {
-  const t = needle.trim();
-  if (!t) return null;
-  const m = t.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  const h = Number(m[1]);
-  const min = Number(m[2]);
-  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
-  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
-}
-
-/**
- * Filtros extra do modal da tabela. Opção A do plano: colunas Embarque/Chegada são "—";
- * horários filtram pela hora local de `createdAtIso` (heurística até haver campos reais).
- */
-function encomendaExtrasMatch(
-  item: EncomendaListItem | undefined,
-  opts: {
-    tblDataInicial: string;
-    tblCodigo: string;
-    tblDestinatario: string;
-  },
-): boolean {
-  if (!item) return false;
-  const di = opts.tblDataInicial.trim();
-  if (di) {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(di)) {
-      const rowDay = isoDatePartLocal(item.createdAtIso);
-      if (!rowDay || rowDay < di) return false;
-    } else {
-      const blob = `${item.data} ${item.createdAtIso}`.toLowerCase();
-      if (!blob.includes(di.toLowerCase())) return false;
-    }
-  }
-  const cod = opts.tblCodigo.replace(/^#/, '').replace(/\s/g, '').toLowerCase();
-  if (cod && !item.id.toLowerCase().includes(cod)) return false;
-  const dest = opts.tblDestinatario.trim().toLowerCase();
-  if (dest && !item.remetente.toLowerCase().includes(dest)) return false;
-  return true;
-}
-
-// ── Styles ──────────────────────────────────────────────────────────────
+// ── Local styles ───────────────────────────────────────────────────────────
 const s = {
-  metricCard: {
-    flex: '1 1 0', minWidth: 180, background: '#f6f6f6', borderRadius: 16,
-    padding: '16px 20px', display: 'flex', flexDirection: 'column' as const, gap: 8,
-    boxSizing: 'border-box' as const,
-  } as React.CSSProperties,
-  metricTitle: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } as React.CSSProperties,
-  metricValue: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font, display: 'inline' } as React.CSSProperties,
-  metricSuffix: { fontSize: 14, fontWeight: 400, color: '#767676', ...font } as React.CSSProperties,
-  pctRow: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } as React.CSSProperties,
   progressCol: {
-    flex: '1 1 calc(33.3% - 16px)', minWidth: 260, background: '#f6f6f6', borderRadius: 16,
+    flex: '1 1 calc(50% - 12px)', minWidth: 260, background: '#f6f6f6', borderRadius: 16,
     padding: 20, display: 'flex', flexDirection: 'column' as const, gap: 16,
     boxSizing: 'border-box' as const,
   } as React.CSSProperties,
@@ -175,134 +122,268 @@ const s = {
   progressPct: { fontSize: 12, fontWeight: 600, color: '#0d0d0d', marginTop: 2, ...font } as React.CSSProperties,
 };
 
-const UF_NOMES = ['Todos os estados', 'Acre', 'Alagoas', 'Amapá', 'Amazonas', 'Bahia', 'Ceará', 'Distrito Federal', 'Espírito Santo', 'Goiás', 'Maranhão', 'Mato Grosso', 'Mato Grosso do Sul', 'Minas Gerais', 'Pará', 'Paraíba', 'Paraná', 'Pernambuco', 'Piauí', 'Rio de Janeiro', 'Rio Grande do Norte', 'Rio Grande do Sul', 'Rondônia', 'Roraima', 'Santa Catarina', 'São Paulo', 'Sergipe', 'Tocantins'];
-
+// ── Component ──────────────────────────────────────────────────────────────
 export default function EncomendasScreen() {
   const navigate = useNavigate();
+
+  // ── Raw data ─────────────────────────────────────────────────────────────
+  const [allEncomendasData, setAllEncomendasData] = useState<EncomendaListItem[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
   const [search, setSearch] = useState('');
+
+  // ── Estado do dropdown de estados ────────────────────────────────────────
   const [estadosOpen, setEstadosOpen] = useState(false);
   const [estadoSel, setEstadoSel] = useState('Todos os estados');
-  // Filtro modal state
+
+  // ── Filtro modal página ───────────────────────────────────────────────────
   const [filtroOpen, setFiltroOpen] = useState(false);
   const [filtroDataIni, setFiltroDataIni] = useState('');
   const [filtroDataFim, setFiltroDataFim] = useState('');
-  const [filtroDatas, setFiltroDatas] = useState<'passadas' | 'ambas' | 'futuras' | null>(null);
-  const [filtroStatus, setFiltroStatus] = useState('Em andamento');
-  const [filtroCategoria, setFiltroCategoria] = useState('Take Me');
-  // Table filter modal state
+  const [filtroStatus, setFiltroStatus] = useState<'todos' | 'Em andamento' | 'Agendado' | 'Concluído' | 'Cancelado'>('todos');
+  const [filtroCategoria, setFiltroCategoria] = useState<'todos' | 'shipment' | 'dependent_shipment'>('todos');
+
+  // ── Filtro modal tabela ───────────────────────────────────────────────────
   const [tblFiltroOpen, setTblFiltroOpen] = useState(false);
   const [tblOrigem, setTblOrigem] = useState('');
   const [tblDestino, setTblDestino] = useState('');
-  const [tblDataInicial, setTblDataInicial] = useState('');
   const [tblRemetente, setTblRemetente] = useState('');
   const [tblDestinatario, setTblDestinatario] = useState('');
   const [tblCodigo, setTblCodigo] = useState('');
-  const [tblStatusEncomenda, setTblStatusEncomenda] = useState('Em andamento');
+  const [tblDataInicial, setTblDataInicial] = useState('');
+  const [tblStatusEncomenda, setTblStatusEncomenda] = useState<'todos' | 'Em andamento' | 'Agendado' | 'Concluído' | 'Cancelado'>('todos');
   const [tblTipoEncomenda, setTblTipoEncomenda] = useState('Todos');
 
-  // ── Real data from Supabase ─────────────────────────────────────────
-  const [encomendasData, setEncomendasData] = useState<EncomendaListItem[]>([]);
-  const [eCounts, setECounts] = useState<EncomendaCounts>({ total: 0, concluidas: 0, emAndamento: 0, agendadas: 0, canceladas: 0 });
-  const [dataLoading, setDataLoading] = useState(true);
-
+  // ── Load data ─────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      const [items, c] = await Promise.all([fetchEncomendas(), fetchEncomendaCounts()]);
-      if (!cancelled) { setEncomendasData(items); setECounts(c); setDataLoading(false); }
-    })();
+    fetchEncomendas().then((items) => {
+      if (!cancelled) { setAllEncomendasData(items); setDataLoading(false); }
+    });
     return () => { cancelled = true; };
   }, []);
 
-  const pkgLabel = (ps?: string) => {
-    const p = (ps || '').toLowerCase();
-    if (p === 'small' || p.includes('pequ')) return 'Pequeno';
-    if (p === 'medium' || p.includes('medio') || p.includes('médio')) return 'Médio';
-    if (p === 'large' || p === 'xl' || p.includes('grand')) return 'Grande';
-    return ps || '—';
+  // ── Filtered data (página) → base para KPIs e gráfico ───────────────────
+  const filteredEncomendasData = useMemo(() => {
+    return allEncomendasData.filter((e) => {
+      if (filtroStatus !== 'todos' && e.status !== filtroStatus) return false;
+      if (filtroCategoria !== 'todos' && e.tipo !== filtroCategoria) return false;
+      if (filtroDataIni && e.createdAtIso) {
+        const day = isoDatePartLocal(e.createdAtIso);
+        if (day && day < filtroDataIni) return false;
+      }
+      if (filtroDataFim && e.createdAtIso) {
+        const day = isoDatePartLocal(e.createdAtIso);
+        if (day && day > filtroDataFim) return false;
+      }
+      return true;
+    });
+  }, [allEncomendasData, filtroStatus, filtroCategoria, filtroDataIni, filtroDataFim]);
+
+  // ── Counts (derivados de filteredEncomendasData) ─────────────────────────
+  const counts = useMemo(() => ({
+    total: filteredEncomendasData.length,
+    emAndamento: filteredEncomendasData.filter((e) => e.status === 'Em andamento').length,
+    agendadas: filteredEncomendasData.filter((e) => e.status === 'Agendado').length,
+    concluidas: filteredEncomendasData.filter((e) => e.status === 'Concluído').length,
+    canceladas: filteredEncomendasData.filter((e) => e.status === 'Cancelado').length,
+  }), [filteredEncomendasData]);
+
+  // ── Table rows (filtros de tabela sobre filteredEncomendasData) ───────────
+  const tableRows = useMemo((): EncomendaRow[] => {
+    return filteredEncomendasData.filter((e) => {
+      // busca global
+      const q = search.trim().toLowerCase();
+      if (q && !`${e.origem} ${e.destino} ${e.remetente}`.toLowerCase().includes(q)) return false;
+      // filtros tabela
+      if (tblOrigem && !e.origem.toLowerCase().includes(tblOrigem.toLowerCase())) return false;
+      if (tblDestino && !e.destino.toLowerCase().includes(tblDestino.toLowerCase())) return false;
+      if (tblRemetente && !e.remetente.toLowerCase().includes(tblRemetente.toLowerCase())) return false;
+      if (tblStatusEncomenda !== 'todos' && e.status !== tblStatusEncomenda) return false;
+      if (tblTipoEncomenda !== 'Todos') {
+        const pkg = (e.packageSize || '').toLowerCase();
+        if (tblTipoEncomenda === 'Pequeno' && !['small', 'pequeño', 'pequ', 'pequen', 'pequena'].some((v) => pkg.includes(v))) return false;
+        if (tblTipoEncomenda === 'Medio' && !['medium', 'medio', 'médio'].some((v) => pkg.includes(v))) return false;
+        if (tblTipoEncomenda === 'Grande' && !['large', 'xl', 'grand'].some((v) => pkg.includes(v))) return false;
+      }
+      if (tblCodigo) {
+        const cod = tblCodigo.replace(/^#/, '').trim().toLowerCase();
+        if (!e.id.toLowerCase().includes(cod)) return false;
+      }
+      if (tblDestinatario && !e.remetente.toLowerCase().includes(tblDestinatario.toLowerCase())) return false;
+      if (tblDataInicial && e.createdAtIso) {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(tblDataInicial)) {
+          const day = isoDatePartLocal(e.createdAtIso);
+          if (day && day < tblDataInicial) return false;
+        }
+      }
+      return true;
+    }).map((e) => toEncomendaRow(e));
+  }, [filteredEncomendasData, search, tblOrigem, tblDestino, tblRemetente, tblStatusEncomenda, tblTipoEncomenda, tblCodigo, tblDestinatario, tblDataInicial]);
+
+  // ── Top destinos/origens (sobre filteredEncomendasData) ──────────────────
+  const { topDestinos, topOrigens } = useMemo(() => {
+    const destMap = new Map<string, number>();
+    const origMap = new Map<string, number>();
+    for (const e of filteredEncomendasData) {
+      destMap.set(e.destino, (destMap.get(e.destino) ?? 0) + 1);
+      origMap.set(e.origem, (origMap.get(e.origem) ?? 0) + 1);
+    }
+    const total = filteredEncomendasData.length || 1;
+    const td = Array.from(destMap.entries())
+      .sort((a, b) => b[1] - a[1]).slice(0, 5)
+      .map(([label, count]) => ({ label, pct: Math.round((count / total) * 100), count: `${count} entregas` }));
+    const to = Array.from(origMap.entries())
+      .sort((a, b) => b[1] - a[1]).slice(0, 5)
+      .map(([label, count]) => ({ label, pct: Math.round((count / total) * 100), count: `${count} entregas` }));
+    return { topDestinos: td, topOrigens: to };
+  }, [filteredEncomendasData]);
+
+  // ── Pie chart data ────────────────────────────────────────────────────────
+  const pieData = useMemo(() => {
+    const raw = [
+      { name: 'Em andamento', value: counts.emAndamento, color: '#cba04b' },
+      { name: 'Agendadas', value: counts.agendadas, color: '#016df9' },
+      { name: 'Concluídas', value: counts.concluidas, color: '#0d8344' },
+      { name: 'Canceladas', value: counts.canceladas, color: '#d64545' },
+    ].filter((d) => d.value > 0);
+    if (raw.length === 0) return [{ name: 'Sem dados', value: 1, color: '#e2e2e2' }];
+    return raw;
+  }, [counts]);
+
+  // ── Refetch after action ──────────────────────────────────────────────────
+  const refetch = async () => {
+    const items = await fetchEncomendas();
+    setAllEncomendasData(items);
   };
-  const fmtBRL = (cents: number) =>
-    cents > 0
-      ? `R$ ${(cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-      : '—';
 
-  const tableRowsAll: EncomendaRow[] = encomendasData.map((e) => ({
-    id: e.id,
-    tipo: e.tipo,
-    destino: e.destino,
-    origem: e.origem,
-    remetente: e.remetente,
-    data: e.data,
-    tamanho: pkgLabel(e.packageSize),
-    valor: fmtBRL(e.amountCents),
-    status: e.status,
-    rawStatus: String((e as { rawStatus?: string }).rawStatus ?? ''),
-  }));
+  // ── Chip helpers ──────────────────────────────────────────────────────────
+  const fChip = (label: string, active: boolean, onClick: () => void) =>
+    React.createElement('button', {
+      type: 'button', key: label, onClick,
+      style: {
+        padding: '6px 16px', borderRadius: 999, border: 'none', cursor: 'pointer',
+        fontSize: 13, fontWeight: 600, ...font,
+        background: active ? '#0d0d0d' : '#f1f1f1',
+        color: active ? '#fff' : '#0d0d0d',
+      },
+    }, label);
 
-  // Apply filters
-  const tableRows = tableRowsAll.filter((row) => {
-    const q = search.trim().toLowerCase();
-    if (q) {
-      const blob = `${row.origem} ${row.destino} ${row.remetente}`.toLowerCase();
-      if (!blob.includes(q)) return false;
-    }
-    const o = tblOrigem.trim().toLowerCase();
-    if (o && !row.origem.toLowerCase().includes(o)) return false;
-    const d = tblDestino.trim().toLowerCase();
-    if (d && !row.destino.toLowerCase().includes(d)) return false;
-    const rem = tblRemetente.trim().toLowerCase();
-    if (rem && !row.remetente.toLowerCase().includes(rem)) return false;
-    if (!encomendaRowMatchesStatusLabel(row.status, tblStatusEncomenda)) return false;
-    if (tblTipoEncomenda !== 'Todos') {
-      const item = encomendasData.find((x) => x.id === row.id);
-      if (!encomendaItemMatchesTipoTable(item, tblTipoEncomenda)) return false;
-    }
-    const item = encomendasData.find((x) => x.id === row.id);
-    if (
-      !encomendaExtrasMatch(item, {
-        tblDataInicial,
-        tblCodigo,
-        tblDestinatario,
-      })
-    ) {
-      return false;
-    }
-    return true;
-  });
+  const tblField = (label: string, placeholder: string, value: string, onChange: (v: string) => void) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, label),
+      React.createElement('input', {
+        type: 'text', value, placeholder,
+        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+        style: { height: 44, borderRadius: 8, background: '#f1f1f1', border: 'none', padding: '0 16px', fontSize: 14, color: '#0d0d0d', outline: 'none', ...font },
+      }));
 
-  const metricsRow1 = [
-    { title: 'Total de Entregas', value: String(eCounts.total), pct: '', pctColor: '', desc: '' },
-    { title: 'Entregas Concluídas', value: String(eCounts.concluidas), pct: '', pctColor: '', desc: '' },
-    { title: 'Em Andamento', value: String(eCounts.emAndamento), pct: '', pctColor: '', desc: '' },
-  ];
-  const metricsRow2 = [
-    { title: 'Agendadas', value: String(eCounts.agendadas), pct: '', pctColor: '', desc: '' },
-    { title: 'Canceladas', value: String(eCounts.canceladas), pct: '', pctColor: '', desc: '' },
-  ];
+  const tblDateInput = (label: string, value: string, onChange: (v: string) => void) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, label),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, background: '#f1f1f1', borderRadius: 8, padding: '0 12px 0 16px', gap: 8 } },
+        React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+          React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
+        React.createElement('input', {
+          type: 'date', value,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+          'aria-label': label,
+          style: { flex: 1, minWidth: 0, height: 40, border: 'none', background: 'transparent', fontSize: 14, color: value ? '#0d0d0d' : '#767676', outline: 'none', ...font },
+        })));
 
-  const destMap = new Map<string, number>();
-  const origMap = new Map<string, number>();
-  for (const e of encomendasData) {
-    destMap.set(e.destino, (destMap.get(e.destino) ?? 0) + 1);
-    origMap.set(e.origem, (origMap.get(e.origem) ?? 0) + 1);
+  // ── Loading state ─────────────────────────────────────────────────────────
+  if (dataLoading) {
+    return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
+      React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando encomendas...'));
   }
-  const topDestinos = Array.from(destMap.entries())
-    .sort((a, b) => b[1] - a[1]).slice(0, 10)
-    .map(([label, count]) => ({ label, pct: encomendasData.length ? Math.round((count / encomendasData.length) * 100) : 0, count: `${count} entregas` }));
-  const topOrigens = Array.from(origMap.entries())
-    .sort((a, b) => b[1] - a[1]).slice(0, 10)
-    .map(([label, count]) => ({ label, pct: encomendasData.length ? Math.round((count / encomendasData.length) * 100) : 0, count: `${count} entregas` }));
 
-  const sizeMap = new Map<string, number>();
-  for (const e of encomendasData) { if (e.packageSize) sizeMap.set(e.packageSize, (sizeMap.get(e.packageSize) ?? 0) + 1); }
-  const sizeTotal = Array.from(sizeMap.values()).reduce((a, b) => a + b, 0) || 1;
-  const tipoEncomenda = Array.from(sizeMap.entries()).map(([label, count]) => ({
-    label: label.charAt(0).toUpperCase() + label.slice(1),
-    pct: Math.round((count / sizeTotal) * 100),
-    count: `${count} entregas`,
-  }));
+  // ── KPI cards ─────────────────────────────────────────────────────────────
+  const kpiCards = [
+    { title: 'Total de Entregas', value: counts.total },
+    { title: 'Entregas Concluídas', value: counts.concluidas },
+    { title: 'Em Andamento', value: counts.emAndamento },
+    { title: 'Agendadas', value: counts.agendadas },
+    { title: 'Canceladas', value: counts.canceladas },
+  ].map(({ title, value }) =>
+    React.createElement('div', { key: title, style: webStyles.statCard },
+      React.createElement('div', { style: webStyles.statCardHeader },
+        React.createElement('span', { style: webStyles.statCardTitle }, title)),
+      React.createElement('span', { style: webStyles.statCardValue }, String(value))));
 
-  // ── Search row ────────────────────────────────────────────────────────
+  const kpiRow = React.createElement('div', { style: webStyles.statCardsRow }, ...kpiCards);
+
+  // ── PieChart section ──────────────────────────────────────────────────────
+  const totalForPct = counts.total || 1;
+  const dot = (bg: string): React.CSSProperties => ({ width: 16, height: 16, borderRadius: 999, background: bg, flexShrink: 0 });
+  const legendText: React.CSSProperties = { fontSize: 15, fontWeight: 400, color: '#0d0d0d', ...font };
+
+  const customTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { name: string; value: number; color: string } }> }) => {
+    if (!active || !payload?.[0]) return null;
+    const d = payload[0].payload;
+    const pct = counts.total > 0 ? Math.round((d.value / counts.total) * 100) : 0;
+    return React.createElement('div', {
+      style: { background: '#0d0d0d', color: '#fff', padding: '10px 16px', borderRadius: 10, fontSize: 14, fontWeight: 600, ...font, boxShadow: '0 4px 16px rgba(0,0,0,0.25)' },
+    }, `${d.name}: ${pct}% (${d.value})`);
+  };
+
+  const pieSection = React.createElement('div', {
+    style: { display: 'flex', flexDirection: 'column' as const, gap: 24, padding: 24, borderRadius: 16, background: '#f6f6f6', width: '100%', boxSizing: 'border-box' as const },
+  },
+    React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Distribuição por status'),
+    React.createElement('div', {
+      style: { display: 'flex', gap: 48, alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' as const },
+    },
+      // Chart
+      React.createElement('div', { style: { width: 280, height: 280, flexShrink: 0 } },
+        React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
+          React.createElement(PieChart, null,
+            React.createElement(Pie, {
+              data: pieData, cx: '50%', cy: '50%',
+              innerRadius: 0, outerRadius: 120,
+              dataKey: 'value',
+              stroke: '#f6f6f6', strokeWidth: 2,
+              animationBegin: 0, animationDuration: 800,
+            },
+              ...pieData.map((entry: { name: string; value: number; color: string }, idx: number) =>
+                React.createElement(Cell, { key: `cell-${idx}`, fill: entry.color }))),
+            React.createElement(Tooltip, { content: customTooltip })))),
+      // Legend
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 32 } },
+        React.createElement('p', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } },
+          `Total: ${counts.total} entregas`),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, maxWidth: 300 } },
+          ...([
+            { name: 'Em andamento', value: counts.emAndamento, color: '#cba04b' },
+            { name: 'Agendadas', value: counts.agendadas, color: '#016df9' },
+            { name: 'Concluídas', value: counts.concluidas, color: '#0d8344' },
+            { name: 'Canceladas', value: counts.canceladas, color: '#d64545' },
+          ].map(({ name, value, color }) => {
+            const pct = Math.round((value / totalForPct) * 100);
+            return React.createElement('div', { key: name, style: { display: 'flex', gap: 10, alignItems: 'center' } },
+              React.createElement('div', { style: dot(color) }),
+              React.createElement('span', { style: legendText }, `${pct}% ${name} (${value})`));
+          }))))));
+
+  // ── Progress bar section (Top destinos/origens) ───────────────────────────
+  const renderProgressCol = (title: string, items: { label: string; pct: number; count: string }[], barColor: string) =>
+    React.createElement('div', { style: s.progressCol },
+      React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, title),
+      ...items.map((item) =>
+        React.createElement('div', { key: item.label, style: s.progressItem },
+          React.createElement('div', { style: s.progressLabelRow },
+            React.createElement('span', { style: s.progressLabel }, item.label),
+            React.createElement('span', { style: s.progressCount }, item.count)),
+          React.createElement('div', { style: s.progressBarBg },
+            React.createElement('div', { style: { width: `${item.pct}%`, height: '100%', background: barColor, borderRadius: 4 } })),
+          React.createElement('span', { style: s.progressPct }, `${item.pct}%`))));
+
+  const topSection = React.createElement('div', {
+    style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
+  },
+    renderProgressCol('Top 5 destinos mais frequentes', topDestinos, '#0d0d0d'),
+    renderProgressCol('Top 5 locais de origem', topOrigens, '#cba04b'));
+
+  // ── Search row ────────────────────────────────────────────────────────────
   const searchRow = React.createElement('div', {
     style: { display: 'flex', alignItems: 'center', gap: 12, width: '100%', flexWrap: 'wrap' as const },
   },
@@ -314,10 +395,11 @@ export default function EncomendasScreen() {
     },
       searchIconSvg,
       React.createElement('input', {
-        type: 'text', value: search, placeholder: 'Buscar motorista, destino ou origem...',
+        type: 'text', value: search, placeholder: 'Buscar remetente, destino ou origem...',
         onChange: (e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value),
         style: { flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 14, color: '#0d0d0d', ...font },
       })),
+    // Estado dropdown
     React.createElement('div', { style: { position: 'relative' as const } },
       React.createElement('button', {
         type: 'button',
@@ -347,6 +429,7 @@ export default function EncomendasScreen() {
               color: estadoSel === uf ? '#0d0d0d' : '#767676', cursor: 'pointer', textAlign: 'left' as const, ...font,
             },
           }, uf))) : null),
+    // Filtro modal página
     React.createElement('button', {
       type: 'button',
       onClick: () => setFiltroOpen(true),
@@ -355,44 +438,9 @@ export default function EncomendasScreen() {
         background: '#f1f1f1', border: 'none', borderRadius: 999,
         fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const,
       },
-    }, filterIconSvg, 'Filtro'));
+    }, filterIconSvg, 'Filtros'));
 
-  // ── Metric card helper ────────────────────────────────────────────────
-  const renderMetric = (m: { title: string; value: string; pct?: string; pctColor?: string; desc?: string; suffix?: string }) =>
-    React.createElement('div', { key: m.title, style: s.metricCard },
-      React.createElement('p', { style: s.metricTitle }, m.title),
-      m.pct ? React.createElement('div', { style: s.pctRow },
-        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: m.pctColor, ...font } }, m.pct),
-        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, m.desc)) : null,
-      React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4, marginTop: m.pct ? 0 : 16 } },
-        React.createElement('span', { style: s.metricValue }, m.value),
-        m.suffix ? React.createElement('span', { style: s.metricSuffix }, m.suffix) : null));
-
-  const metricRow = (items: typeof metricsRow1) =>
-    React.createElement('div', { style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const } },
-      ...items.map(renderMetric));
-
-  // ── Progress bar section helper ───────────────────────────────────────
-  const renderProgressCol = (title: string, items: { label: string; pct: number; count: string }[], barColor: string) =>
-    React.createElement('div', { style: s.progressCol },
-      React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, title),
-      ...items.map((item) =>
-        React.createElement('div', { key: item.label, style: s.progressItem },
-          React.createElement('div', { style: s.progressLabelRow },
-            React.createElement('span', { style: s.progressLabel }, item.label),
-            React.createElement('span', { style: s.progressCount }, item.count)),
-          React.createElement('div', { style: s.progressBarBg },
-            React.createElement('div', { style: { width: `${item.pct}%`, height: '100%', background: barColor, borderRadius: 4 } })),
-          React.createElement('span', { style: s.progressPct }, `${item.pct}%`))));
-
-  const progressSection = React.createElement('div', {
-    style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
-  },
-    renderProgressCol('Tipo de Encomenda', tipoEncomenda, '#cba04b'),
-    renderProgressCol('Top 10 destinos mais frequentes', topDestinos, '#0d0d0d'),
-    renderProgressCol('Top 10 locais de origem', topOrigens, '#cba04b'));
-
-  // ── Table section ─────────────────────────────────────────────────────
+  // ── Table section ─────────────────────────────────────────────────────────
   const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 8px' };
 
   const tableToolbar = React.createElement('div', {
@@ -425,8 +473,8 @@ export default function EncomendasScreen() {
     }, c.label)));
 
   const tableRowEls = tableRows.map((row) => {
-    const st = statusStyles[row.status];
-    const item = encomendasData.find((x) => x.id === row.id);
+    const st = statusStyles[row.status] ?? { bg: '#e2e2e2', color: '#555' };
+    const item = allEncomendasData.find((x) => x.id === row.id);
     return React.createElement('div', {
       key: row.id,
       'data-testid': 'encomenda-table-row',
@@ -466,8 +514,7 @@ export default function EncomendasScreen() {
             if (item && confirm('Confirmar esta encomenda?')) {
               if (item.tipo === 'dependent_shipment') await updateDependentShipmentStatus(item.id, 'confirmed');
               else await updateShipmentStatus(item.id, 'confirmed');
-              const [items, c] = await Promise.all([fetchEncomendas(), fetchEncomendaCounts()]);
-              setEncomendasData(items); setECounts(c);
+              await refetch();
             }
           },
         }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
@@ -478,8 +525,7 @@ export default function EncomendasScreen() {
             if (item && confirm('Cancelar esta encomenda?')) {
               if (item.tipo === 'dependent_shipment') await updateDependentShipmentStatus(item.id, 'cancelled');
               else await updateShipmentStatus(item.id, 'cancelled');
-              const [items, c] = await Promise.all([fetchEncomendas(), fetchEncomendaCounts()]);
-              setEncomendasData(items); setECounts(c);
+              await refetch();
             }
           },
         }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
@@ -495,38 +541,14 @@ export default function EncomendasScreen() {
         tableHeader,
         ...tableRowEls)));
 
-  if (dataLoading) {
-    return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
-      React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando encomendas...'));
-  }
-
-  // ── Filtro modal (Figma 849-38738) ────────────────────────────────────
-  const filtroRadio = (label: string, val: 'passadas' | 'ambas' | 'futuras') =>
-    React.createElement('button', {
-      type: 'button', onClick: () => setFiltroDatas(filtroDatas === val ? null : val),
-      style: { display: 'flex', alignItems: 'center', gap: 12, background: 'none', border: 'none', cursor: 'pointer', padding: '10px 0', width: '100%' },
-    },
-      React.createElement('div', {
-        style: { width: 20, height: 20, borderRadius: '50%', border: `2px solid ${filtroDatas === val ? '#0d0d0d' : '#c4c4c4'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-      }, filtroDatas === val ? React.createElement('div', { style: { width: 10, height: 10, borderRadius: '50%', background: '#0d0d0d' } }) : null),
-      React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, label));
-
-  const filtroPill = (label: string, active: boolean, onClick: () => void) =>
-    React.createElement('button', {
-      type: 'button', onClick,
-      style: {
-        height: 40, padding: '0 16px', borderRadius: 90, border: 'none', cursor: 'pointer',
-        background: active ? '#0d0d0d' : '#f1f1f1', color: active ? '#fff' : '#0d0d0d',
-        fontSize: 14, fontWeight: 500, ...font, whiteSpace: 'nowrap' as const,
-      },
-    }, label);
-
+  // ── Modal filtro página ───────────────────────────────────────────────────
   const filtroModal = filtroOpen ? React.createElement('div', {
-    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+    role: 'dialog', 'aria-modal': true,
+    style: { position: 'fixed' as const, inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', padding: 24, background: 'rgba(0,0,0,0.18)' },
     onClick: () => setFiltroOpen(false),
   },
     React.createElement('div', {
-      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)', maxHeight: '90vh', overflowY: 'auto' as const },
+      style: { background: '#fff', borderRadius: 20, padding: 24, width: 360, maxHeight: '90vh', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 8px 40px rgba(0,0,0,0.18)' },
       onClick: (e: React.MouseEvent) => e.stopPropagation(),
     },
       // Header
@@ -535,98 +557,66 @@ export default function EncomendasScreen() {
         React.createElement('button', {
           type: 'button', onClick: () => setFiltroOpen(false),
           style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
-          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+        }, closeSmSvg)),
       React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
-      // Data da atividade
-      React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Data da atividade'),
-      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Data inicial'),
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, background: '#f1f1f1', borderRadius: 8, padding: '0 16px', gap: 8 } },
-          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
-            React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
-            React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
-          React.createElement('span', { style: { fontSize: 14, color: filtroDataIni ? '#0d0d0d' : '#767676', ...font } }, filtroDataIni || '01 de setembro'))),
-      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Data final'),
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, background: '#f1f1f1', borderRadius: 8, padding: '0 16px', gap: 8 } },
-          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
-            React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
-            React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
-          React.createElement('span', { style: { fontSize: 14, color: filtroDataFim ? '#0d0d0d' : '#767676', ...font } }, filtroDataFim || '31 de setembro'))),
-      // Datas incluídas
-      React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Datas incluídas'),
-      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const } },
-        filtroRadio('Somente passadas', 'passadas'),
-        filtroRadio('Passadas e futuras', 'ambas'),
-        filtroRadio('Somente futuras', 'futuras')),
-      // Status da viagem
-      React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Status da viagem'),
+      // Data
+      React.createElement('h3', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Data da atividade'),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Data inicial'),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, background: '#f1f1f1', borderRadius: 8, padding: '0 12px 0 16px', gap: 8 } },
+            React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+              React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+              React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
+            React.createElement('input', {
+              type: 'date', value: filtroDataIni,
+              onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFiltroDataIni(e.target.value),
+              'aria-label': 'Data inicial',
+              style: { flex: 1, minWidth: 0, height: 40, border: 'none', background: 'transparent', fontSize: 14, color: filtroDataIni ? '#0d0d0d' : '#767676', outline: 'none', ...font },
+            }))),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Data final'),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, background: '#f1f1f1', borderRadius: 8, padding: '0 12px 0 16px', gap: 8 } },
+            React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+              React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+              React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
+            React.createElement('input', {
+              type: 'date', value: filtroDataFim,
+              onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFiltroDataFim(e.target.value),
+              'aria-label': 'Data final',
+              style: { flex: 1, minWidth: 0, height: 40, border: 'none', background: 'transparent', fontSize: 14, color: filtroDataFim ? '#0d0d0d' : '#767676', outline: 'none', ...font },
+            })))),
+      // Status
+      React.createElement('h3', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Status da encomenda'),
       React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
-        ...['Em andamento', 'Agendadas', 'Concluídas', 'Canceladas'].map((st) => filtroPill(st, filtroStatus === st, () => setFiltroStatus(st)))),
+        ...(['todos', 'Em andamento', 'Agendado', 'Concluído', 'Cancelado'] as const).map((st) =>
+          fChip(st === 'todos' ? 'Todos' : st, filtroStatus === st, () => setFiltroStatus(st)))),
       // Categoria
-      React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Categoria'),
+      React.createElement('h3', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Categoria'),
       React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
-        ...['Todos', 'Take Me', 'Motorista parceiro'].map((cat) => filtroPill(cat, filtroCategoria === cat, () => setFiltroCategoria(cat)))),
+        fChip('Todos', filtroCategoria === 'todos', () => setFiltroCategoria('todos')),
+        fChip('Entregas', filtroCategoria === 'shipment', () => setFiltroCategoria('shipment')),
+        fChip('Bagagens', filtroCategoria === 'dependent_shipment', () => setFiltroCategoria('dependent_shipment'))),
       // Buttons
-      React.createElement('button', {
-        type: 'button',
-        onClick: () => {
-          setTblStatusEncomenda(filtroStatus);
-          setFiltroOpen(false);
-        },
-        style: { width: '100%', height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', boxSizing: 'border-box' as const, flexShrink: 0, ...font },
-      }, 'Aplicar filtro'),
-      React.createElement('button', {
-        type: 'button', onClick: () => setFiltroOpen(false),
-        style: { height: 40, background: 'none', border: 'none', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
-      }, 'Voltar'))) : null;
+      React.createElement('div', { style: { display: 'flex', gap: 12, marginTop: 4 } },
+        React.createElement('button', {
+          type: 'button', onClick: () => setFiltroOpen(false),
+          style: { flex: 1, height: 44, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font },
+        }, 'Aplicar filtro'),
+        React.createElement('button', {
+          type: 'button',
+          onClick: () => { setFiltroStatus('todos'); setFiltroCategoria('todos'); setFiltroDataIni(''); setFiltroDataFim(''); },
+          style: { flex: 1, height: 44, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font },
+        }, 'Resetar filtros')))) : null;
 
-  // ── Table filter modal (Figma 1252-39455) ────────────────────────────
-  const tblField = (label: string, placeholder: string, value: string, onChange: (v: string) => void) =>
-    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
-      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, label),
-      React.createElement('input', {
-        type: 'text', value, placeholder,
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
-        style: { height: 44, borderRadius: 8, background: '#f1f1f1', border: 'none', padding: '0 16px', fontSize: 14, color: '#0d0d0d', outline: 'none', ...font },
-      }));
-
-  const tblDateInput = (label: string, value: string, onChange: (v: string) => void) =>
-    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
-      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, label),
-      React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, background: '#f1f1f1', borderRadius: 8, padding: '0 12px 0 16px', gap: 8 } },
-        React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
-          React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
-          React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
-        React.createElement('input', {
-          type: 'date',
-          value,
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
-          'data-testid': 'encomendas-tbl-filter-data-inicial',
-          'aria-label': 'Data inicial',
-          style: { flex: 1, minWidth: 0, height: 40, border: 'none', background: 'transparent', fontSize: 14, color: value ? '#0d0d0d' : '#767676', outline: 'none', ...font },
-        })));
-
-  const tblPill = (label: string, active: boolean, onClick: () => void) =>
-    React.createElement('button', {
-      type: 'button', onClick,
-      style: {
-        height: 40, padding: '0 16px', borderRadius: 90, border: 'none', cursor: 'pointer',
-        background: active ? '#0d0d0d' : '#f1f1f1', color: active ? '#fff' : '#0d0d0d',
-        fontSize: 14, fontWeight: 500, ...font, whiteSpace: 'nowrap' as const,
-      },
-    }, label);
-
+  // ── Modal filtro tabela ───────────────────────────────────────────────────
   const tblFiltroModal = tblFiltroOpen ? React.createElement('div', {
-    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+    role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'encomendas-filtro-tabela-titulo',
+    style: { position: 'fixed' as const, inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', padding: 24, background: 'rgba(0,0,0,0.18)' },
     onClick: () => setTblFiltroOpen(false),
-    role: 'dialog' as const,
-    'aria-modal': true,
-    'aria-labelledby': 'encomendas-filtro-tabela-titulo',
   },
     React.createElement('div', {
-      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, padding: '28px 32px 32px', display: 'flex', flexDirection: 'column' as const, gap: 16, boxShadow: '0 20px 60px rgba(0,0,0,.15)', maxHeight: '90vh', overflowY: 'auto' as const },
+      style: { background: '#fff', borderRadius: 20, padding: 24, width: 400, maxHeight: '90vh', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, gap: 16, boxShadow: '0 8px 40px rgba(0,0,0,0.18)' },
       onClick: (e: React.MouseEvent) => e.stopPropagation(),
     },
       // Header
@@ -635,45 +625,44 @@ export default function EncomendasScreen() {
         React.createElement('button', {
           type: 'button', onClick: () => setTblFiltroOpen(false),
           style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
-          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+        }, closeSmSvg)),
       React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
       // Fields
       tblField('Origem', 'Ex: São Paulo, SP', tblOrigem, setTblOrigem),
-      tblField('Destino', 'Ex: São Luis, SP', tblDestino, setTblDestino),
+      tblField('Destino', 'Ex: São Luís, MA', tblDestino, setTblDestino),
       tblDateInput('Data inicial', tblDataInicial, setTblDataInicial),
       tblField('Remetente', 'Ex: Nome do remetente', tblRemetente, setTblRemetente),
       tblField('Destinatário', 'Ex: Nome do destinatário', tblDestinatario, setTblDestinatario),
       tblField('Código da encomenda', 'Ex: #3421341342', tblCodigo, setTblCodigo),
-      // Status da encomenda
-      React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Status da encomenda'),
+      // Status
+      React.createElement('h3', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Status da encomenda'),
       React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
-        ...['Em andamento', 'Agendadas', 'Concluídas', 'Canceladas'].map((st) => tblPill(st, tblStatusEncomenda === st, () => setTblStatusEncomenda(st)))),
+        ...(['todos', 'Em andamento', 'Agendado', 'Concluído', 'Cancelado'] as const).map((st) =>
+          fChip(st === 'todos' ? 'Todos' : st, tblStatusEncomenda === st, () => setTblStatusEncomenda(st)))),
       // Tipo de encomenda
-      React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Tipo de encomenda'),
+      React.createElement('h3', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Tipo de encomenda'),
       React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
-        ...['Todos', 'Pequeno', 'Medio', 'Grande'].map((t) => tblPill(t, tblTipoEncomenda === t, () => setTblTipoEncomenda(t)))),
+        ...['Todos', 'Pequeno', 'Medio', 'Grande'].map((t) =>
+          fChip(t, tblTipoEncomenda === t, () => setTblTipoEncomenda(t)))),
       // Buttons
-      React.createElement('button', {
-        type: 'button',
-        onClick: () => {
-          setFiltroStatus(tblStatusEncomenda);
-          setTblFiltroOpen(false);
-        },
-        style: { width: '100%', height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', boxSizing: 'border-box' as const, flexShrink: 0, ...font },
-      }, 'Aplicar filtro'),
-      React.createElement('button', {
-        type: 'button', onClick: () => setTblFiltroOpen(false),
-        style: { height: 40, background: 'none', border: 'none', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
-      }, 'Voltar'))) : null;
+      React.createElement('div', { style: { display: 'flex', gap: 12, marginTop: 4 } },
+        React.createElement('button', {
+          type: 'button', onClick: () => setTblFiltroOpen(false),
+          style: { flex: 1, height: 44, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font },
+        }, 'Aplicar filtro'),
+        React.createElement('button', {
+          type: 'button',
+          onClick: () => { setTblOrigem(''); setTblDestino(''); setTblRemetente(''); setTblDestinatario(''); setTblCodigo(''); setTblDataInicial(''); setTblStatusEncomenda('todos'); setTblTipoEncomenda('Todos'); },
+          style: { flex: 1, height: 44, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font },
+        }, 'Resetar filtros')))) : null;
 
-  // ── Render ─────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Encomendas'),
+    kpiRow,
+    pieSection,
+    topSection,
     searchRow,
-    metricRow(metricsRow1),
-    metricRow(metricsRow2),
-    progressSection,
     tableSection,
     filtroModal,
     tblFiltroModal);

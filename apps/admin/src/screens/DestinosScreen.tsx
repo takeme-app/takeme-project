@@ -10,22 +10,46 @@ import {
   filterIconSvg,
   calendarIconSvg,
 } from '../styles/webStyles';
-import { fetchDestinos, fetchTakemeRoutes, createTakemeRoute, updateTakemeRoute, deleteTakemeRoute } from '../data/queries';
+import { fetchDestinos, fetchTakemeRoutes, createTakemeRoute, updateTakemeRoute } from '../data/queries';
 import type { DestinoListItem } from '../data/types';
 
+const { BarChart, Bar, XAxis, YAxis, Tooltip: RechTooltip, ResponsiveContainer } = require('recharts');
+
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
+
+// ── Helper components ─────────────────────────────────────────────────────────
+
+const fChip = (label: string, active: boolean, onClick: () => void) =>
+  React.createElement('button', {
+    type: 'button', key: label, onClick,
+    style: {
+      padding: '6px 16px', borderRadius: 999, border: 'none', cursor: 'pointer',
+      fontSize: 13, fontWeight: 600, ...font,
+      background: active ? '#0d0d0d' : '#f1f1f1',
+      color: active ? '#fff' : '#0d0d0d',
+      height: 40, whiteSpace: 'nowrap' as const,
+    },
+  }, label);
 
 // SVG icons
 const eyeActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
   React.createElement('circle', { cx: 12, cy: 12, r: 3, stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+
 const pencilActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
   React.createElement('path', { d: 'M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+
 const plusSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M12 5v14M5 12h14', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+
 const chevronDownSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+
+const closeSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 type DestinoRow = {
   origem: string;
@@ -34,6 +58,12 @@ type DestinoRow = {
   dataCriacao: string;
   status: 'Ativo' | 'Inativo';
 };
+
+type FiltroDatasIncluidas = 'passadas' | 'ambas' | 'futuras' | null;
+type FiltroStatusViagem = 'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas';
+type FiltroCategoria = 'todos' | 'take_me' | 'motorista_parceiro';
+
+// ── Table config ──────────────────────────────────────────────────────────────
 
 const tableCols = [
   { label: 'Origem', flex: '1 1 16%', minWidth: 130 },
@@ -46,78 +76,86 @@ const tableCols = [
 
 const statusStyles: Record<string, { bg: string; color: string }> = {
   'Ativo': { bg: '#22c55e', color: '#fff' },
-  'Inativo': { bg: '#b53838', color: '#fff' },
+  'Inativo': { bg: '#ef4444', color: '#fff' },
 };
 
-// ── Styles ──────────────────────────────────────────────────────────────
+// ── Styles ────────────────────────────────────────────────────────────────────
+
 const s = {
   metricCard: {
-    flex: '1 1 0', minWidth: 180, background: '#f6f6f6', borderRadius: 16,
+    flex: '1 1 0', minWidth: 160, background: '#f6f6f6', borderRadius: 16,
     padding: '16px 20px', display: 'flex', flexDirection: 'column' as const, gap: 8,
     boxSizing: 'border-box' as const,
   } as React.CSSProperties,
   metricTitle: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } as React.CSSProperties,
-  metricValue: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font, display: 'inline' } as React.CSSProperties,
-  metricSuffix: { fontSize: 14, fontWeight: 400, color: '#767676', ...font } as React.CSSProperties,
-  pctRow: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } as React.CSSProperties,
+  metricValue: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } as React.CSSProperties,
   chartCard: {
     width: '100%', background: '#f6f6f6', borderRadius: 16, padding: 24,
     display: 'flex', flexDirection: 'column' as const, gap: 16, boxSizing: 'border-box' as const,
   } as React.CSSProperties,
-  barRow: { display: 'flex', alignItems: 'flex-end', gap: 16, justifyContent: 'center', height: 160 } as React.CSSProperties,
-  barItem: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 8 } as React.CSSProperties,
 };
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function DestinosScreen() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const [estadosDropdownOpen, setEstadosDropdownOpen] = useState(false);
+  const [estadoSelected, setEstadoSelected] = useState('Todos os estados');
+
+  // Criar rota modal
   const [criarRotaOpen, setCriarRotaOpen] = useState(false);
   const [crEstadoOrigem, setCrEstadoOrigem] = useState('');
   const [crCidadeOrigem, setCrCidadeOrigem] = useState('');
   const [crEstadoDestino, setCrEstadoDestino] = useState('');
   const [crCidadeDestino, setCrCidadeDestino] = useState('');
   const [crRotaAtiva, setCrRotaAtiva] = useState(true);
-  const [estadosDropdownOpen, setEstadosDropdownOpen] = useState(false);
-  const [estadoSelected, setEstadoSelected] = useState('Todos os estados');
+
   // Visualizar destino modal
   const [vizDestinoOpen, setVizDestinoOpen] = useState(false);
   const [vizDestino, setVizDestino] = useState<DestinoRow | null>(null);
-  // Editar rota modal
-  const [editarRotaOpen, setEditarRotaOpen] = useState(false);
-  const [edEstadoOrigem, setEdEstadoOrigem] = useState('Maranhão');
-  const [edCidadeOrigem, setEdCidadeOrigem] = useState('Viana');
-  const [edEstadoDestino, setEdEstadoDestino] = useState('Maranhão');
-  const [edCidadeDestino, setEdCidadeDestino] = useState('São Luís');
-  const [edRotaAtiva, setEdRotaAtiva] = useState(true);
 
+  // Editar rota modal — inclui edRotaOrigem/edRotaDestino para identificar a rota
+  const [editarRotaOpen, setEditarRotaOpen] = useState(false);
+  const [edEstadoOrigem, setEdEstadoOrigem] = useState('');
+  const [edCidadeOrigem, setEdCidadeOrigem] = useState('');
+  const [edEstadoDestino, setEdEstadoDestino] = useState('');
+  const [edCidadeDestino, setEdCidadeDestino] = useState('');
+  const [edRotaAtiva, setEdRotaAtiva] = useState(true);
+  const [edRotaOrigemOriginal, setEdRotaOrigemOriginal] = useState('');
+  const [edRotaDestinoOriginal, setEdRotaDestinoOriginal] = useState('');
+
+  // Filtro da página
   const [filtroPaginaOpen, setFiltroPaginaOpen] = useState(false);
   const [filtroDataInicial, setFiltroDataInicial] = useState('');
   const [filtroDataFinal, setFiltroDataFinal] = useState('');
-  type FiltroDatasIncluidas = 'passadas' | 'ambas' | 'futuras' | null;
   const [filtroDatasIncluidas, setFiltroDatasIncluidas] = useState<FiltroDatasIncluidas>(null);
-  type FiltroStatusViagem = 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas';
-  const [filtroStatusViagem, setFiltroStatusViagem] = useState<FiltroStatusViagem>('em_andamento');
-  type FiltroCategoria = 'todos' | 'take_me' | 'motorista_parceiro';
-  const [filtroCategoria, setFiltroCategoria] = useState<FiltroCategoria>('take_me');
+  const [filtroStatusViagem, setFiltroStatusViagem] = useState<FiltroStatusViagem>('todos');
+  const [filtroCategoria, setFiltroCategoria] = useState<FiltroCategoria>('todos');
 
+  // Filtro da tabela
   const [filtroTabelaOpen, setFiltroTabelaOpen] = useState(false);
   const [tabelaFiltroOrigem, setTabelaFiltroOrigem] = useState('');
   const [tabelaFiltroDestino, setTabelaFiltroDestino] = useState('');
   const [tabelaFiltroHoraEmbarque, setTabelaFiltroHoraEmbarque] = useState('');
   const [tabelaFiltroHoraChegada, setTabelaFiltroHoraChegada] = useState('');
   const [tabelaFiltroDataInicial, setTabelaFiltroDataInicial] = useState('');
-  const [tabelaFiltroStatusViagem, setTabelaFiltroStatusViagem] = useState<FiltroStatusViagem>('em_andamento');
-  const [tabelaFiltroCategoria, setTabelaFiltroCategoria] = useState<FiltroCategoria>('take_me');
+  const [tabelaFiltroStatusViagem, setTabelaFiltroStatusViagem] = useState<FiltroStatusViagem>('todos');
+  const [tabelaFiltroCategoria, setTabelaFiltroCategoria] = useState<FiltroCategoria>('todos');
 
-  // ── Real data from Supabase ─────────────────────────────────────────
+  // Data
   const [destinosData, setDestinosData] = useState<DestinoListItem[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    fetchDestinos().then((items) => { if (!cancelled) { setDestinosData(items); setDataLoading(false); } });
+    fetchDestinos().then((items) => {
+      if (!cancelled) { setDestinosData(items); setDataLoading(false); }
+    });
     return () => { cancelled = true; };
   }, []);
+
+  // ── Filtered data ─────────────────────────────────────────────────────────
 
   const filteredDestinosData = useMemo(() => {
     return destinosData.filter((d) => {
@@ -127,25 +165,35 @@ export default function DestinosScreen() {
         const u = estadoSelected.toLowerCase();
         if (!d.origem.toLowerCase().includes(u) && !d.destino.toLowerCase().includes(u)) return false;
       }
-      if (d.tripStatusCounts[filtroStatusViagem] === 0) return false;
-      if (d.tripStatusCounts[tabelaFiltroStatusViagem] === 0) return false;
+      // Status: só filtra se não for 'todos'
+      if (filtroStatusViagem !== 'todos' && d.tripStatusCounts[filtroStatusViagem] === 0) return false;
+      if (tabelaFiltroStatusViagem !== 'todos' && d.tripStatusCounts[tabelaFiltroStatusViagem] === 0) return false;
+      // Categoria
       if (filtroCategoria === 'take_me' && d.takeMeCount === 0) return false;
       if (filtroCategoria === 'motorista_parceiro' && d.partnerCount === 0) return false;
       if (tabelaFiltroCategoria === 'take_me' && d.takeMeCount === 0) return false;
       if (tabelaFiltroCategoria === 'motorista_parceiro' && d.partnerCount === 0) return false;
+      // Datas incluídas
       if (filtroDatasIncluidas === 'passadas' && !d.hasPastDeparture) return false;
       if (filtroDatasIncluidas === 'futuras' && !d.hasFutureDeparture) return false;
+      // Tabela origem/destino
       const o = tabelaFiltroOrigem.trim().toLowerCase();
       if (o && !d.origem.toLowerCase().includes(o)) return false;
       const dest = tabelaFiltroDestino.trim().toLowerCase();
       if (dest && !d.destino.toLowerCase().includes(dest)) return false;
+      // Data inicial (página)
+      if (filtroDataInicial) {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(filtroDataInicial) && d.primeiraDataIso && d.primeiraDataIso < filtroDataInicial) return false;
+      }
+      // Data inicial (tabela)
       const di = tabelaFiltroDataInicial.trim();
       if (/^\d{4}-\d{2}-\d{2}$/.test(di) && d.primeiraDataIso && d.primeiraDataIso < di) return false;
       if (di && !/^\d{4}-\d{2}-\d{2}$/.test(di) && !d.primeiraData.toLowerCase().includes(di.toLowerCase())) return false;
       return true;
     });
   }, [
-    destinosData, search, estadoSelected, filtroStatusViagem, filtroCategoria, filtroDatasIncluidas,
+    destinosData, search, estadoSelected,
+    filtroStatusViagem, filtroCategoria, filtroDatasIncluidas, filtroDataInicial, filtroDataFinal,
     tabelaFiltroOrigem, tabelaFiltroDestino, tabelaFiltroStatusViagem, tabelaFiltroCategoria, tabelaFiltroDataInicial,
   ]);
 
@@ -157,18 +205,170 @@ export default function DestinosScreen() {
     status: d.ativo ? 'Ativo' as const : 'Inativo' as const,
   }));
 
-  const metricsRow1 = [
-    { title: 'Total de Destinos', value: String(filteredDestinosData.length), pct: '', pctColor: '', desc: '' },
+  // ── KPI cards ─────────────────────────────────────────────────────────────
+
+  const kpiCards = [
+    { title: 'Total de Rotas', value: filteredDestinosData.length, testId: 'destinos-total' },
+    { title: 'Rotas Take Me', value: filteredDestinosData.filter(d => d.takeMeCount > 0).length, testId: 'destinos-takeme' },
+    { title: 'Rotas Parceiros', value: filteredDestinosData.filter(d => d.partnerCount > 0).length, testId: 'destinos-parceiros' },
+    { title: 'Com saídas futuras', value: filteredDestinosData.filter(d => d.hasFutureDeparture).length, testId: 'destinos-futuras' },
   ];
 
-  const barData = filteredDestinosData.slice(0, 5).map((d) => ({ label: d.destino.split(' - ')[0] ?? d.destino, value: d.totalAtividades }));
-  const barMax = barData.reduce((m, b) => Math.max(m, b.value), 1);
+  // ── Bar chart data ────────────────────────────────────────────────────────
 
-  // ── Search row ────────────────────────────────────────────────────────
+  const barData = filteredDestinosData.slice(0, 8).map((d) => ({
+    name: `${d.origem.split(',')[0] ?? d.origem.split(' - ')[0] ?? d.origem} → ${d.destino.split(',')[0] ?? d.destino.split(' - ')[0] ?? d.destino}`,
+    viagens: d.totalAtividades,
+  }));
+
+  const barTooltipContent = ({ active, payload, label }: any) => {
+    if (!active || !payload?.[0]) return null;
+    return React.createElement('div', {
+      style: {
+        background: '#0d0d0d', color: '#fff', padding: '10px 16px',
+        borderRadius: 10, fontSize: 13, fontWeight: 600, ...font,
+      },
+    }, `${label}: ${payload[0].value} viagens`);
+  };
+
+  // ── Editar rota — salvar ──────────────────────────────────────────────────
+
+  const handleSalvarEditar = async () => {
+    const newOrigin = `${edCidadeOrigem}${edEstadoOrigem ? ' - ' + edEstadoOrigem : ''}`.trim();
+    const newDest = `${edCidadeDestino}${edEstadoDestino ? ' - ' + edEstadoDestino : ''}`.trim();
+    // Buscar a rota correspondente em takeme_routes pelo par original origem/destino
+    const routes = await fetchTakemeRoutes();
+    const match = routes.find(
+      (r: any) =>
+        r.origin_address === edRotaOrigemOriginal &&
+        r.destination_address === edRotaDestinoOriginal,
+    );
+    if (match) {
+      await updateTakemeRoute(match.id, {
+        origin_address: newOrigin || edRotaOrigemOriginal,
+        destination_address: newDest || edRotaDestinoOriginal,
+        is_active: edRotaAtiva,
+      });
+    }
+    setEditarRotaOpen(false);
+    fetchDestinos().then(setDestinosData);
+  };
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  const selectField = (label: string, placeholder: string, value: string, onChange: (v: string) => void) =>
+    React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column' as const, gap: 4, minWidth: 180 } },
+      React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
+      React.createElement('div', {
+        style: {
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', cursor: 'pointer',
+        },
+      },
+        React.createElement('span', { style: { fontSize: 14, color: value ? '#0d0d0d' : '#999', ...font } }, value || placeholder),
+        React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+          React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))));
+
+  const filtroRadioCircle = (selected: boolean) =>
+    React.createElement('div', {
+      style: {
+        width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+        border: `2px solid ${selected ? '#0d0d0d' : '#c4c4c4'}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      },
+    }, selected ? React.createElement('div', { style: { width: 10, height: 10, borderRadius: '50%', background: '#0d0d0d' } }) : null);
+
+  const filtroDateField = (subLabel: string, value: string, placeholder: string, setValue: (v: string) => void) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, subLabel),
+      React.createElement('div', {
+        style: {
+          display: 'flex', alignItems: 'center', height: 44, background: '#f1f1f1',
+          borderRadius: 8, paddingLeft: 16, position: 'relative' as const, width: '100%', boxSizing: 'border-box' as const,
+        },
+      },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', flexShrink: 0 } }, calendarIconSvg),
+        React.createElement('div', { style: { flex: 1, position: 'relative' as const, minWidth: 0, paddingLeft: 16, height: '100%', display: 'flex', alignItems: 'center' } },
+          !value ? React.createElement('span', {
+            style: {
+              position: 'absolute' as const, left: 16, top: '50%', transform: 'translateY(-50%)',
+              fontSize: 16, color: '#767676', ...font, pointerEvents: 'none' as const,
+            },
+          }, placeholder) : null,
+          React.createElement('input', {
+            type: 'date', value,
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setValue(e.target.value),
+            style: {
+              width: '100%', height: '100%', border: 'none', outline: 'none', background: 'transparent',
+              fontSize: 16, color: value ? '#0d0d0d' : 'transparent', ...font,
+              position: 'relative' as const, zIndex: 1,
+            },
+          }))));
+
+  const filtroTextField = (subLabel: string, value: string, placeholder: string, setValue: (v: string) => void) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
+      React.createElement('div', { style: { minHeight: 40, display: 'flex', alignItems: 'center' } },
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, subLabel)),
+      React.createElement('input', {
+        type: 'text', value, placeholder,
+        onChange: (e: React.ChangeEvent<HTMLInputElement>) => setValue(e.target.value),
+        style: {
+          width: '100%', height: 44, boxSizing: 'border-box' as const,
+          background: '#f1f1f1', border: 'none', borderRadius: 8,
+          padding: '0 16px', fontSize: 16, color: '#0d0d0d', ...font,
+        },
+      }));
+
+  const filtroRadioRow = (optLabel: string, optValue: NonNullable<FiltroDatasIncluidas>) =>
+    React.createElement('button', {
+      type: 'button',
+      onClick: () => setFiltroDatasIncluidas(filtroDatasIncluidas === optValue ? null : optValue),
+      style: {
+        display: 'flex', alignItems: 'center', gap: 12, width: '100%',
+        background: 'none', border: 'none', cursor: 'pointer', padding: '10px 12px 10px 0',
+        borderRadius: 6, textAlign: 'left' as const,
+      },
+    }, filtroRadioCircle(filtroDatasIncluidas === optValue),
+    React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, optLabel));
+
+  const filtroSectionTitle = (t: string) =>
+    React.createElement('p', {
+      style: {
+        fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
+      },
+    }, t);
+
+  const modalCloseBtn = (onClose: () => void) =>
+    React.createElement('button', {
+      type: 'button', onClick: onClose,
+      style: {
+        width: 48, height: 48, borderRadius: '50%', background: '#f1f1f1', border: 'none',
+        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      },
+      'aria-label': 'Fechar',
+    }, closeSvg);
+
+  const toggleSwitchEl = (active: boolean, onToggle: () => void) =>
+    React.createElement('div', {
+      onClick: onToggle,
+      style: {
+        width: 48, height: 28, borderRadius: 14, background: active ? '#0d0d0d' : '#d9d9d9',
+        position: 'relative' as const, cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0,
+      },
+    },
+      React.createElement('div', {
+        style: {
+          width: 22, height: 22, borderRadius: '50%', background: '#fff',
+          position: 'absolute' as const, top: 3, left: active ? 23 : 3, transition: 'left 0.2s',
+        },
+      }));
+
+  // ── Search row ────────────────────────────────────────────────────────────
+
   const searchRow = React.createElement('div', {
     style: { display: 'flex', alignItems: 'center', gap: 12, width: '100%', flexWrap: 'wrap' as const },
   },
-    // Search input
     React.createElement('div', {
       style: {
         flex: '1 1 250px', display: 'flex', alignItems: 'center', gap: 8,
@@ -181,21 +381,17 @@ export default function DestinosScreen() {
         onChange: (e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value),
         style: { flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 14, color: '#0d0d0d', ...font },
       })),
-    // + Nova rota button
     React.createElement('button', {
-      type: 'button',
-      onClick: () => setCriarRotaOpen(true),
+      type: 'button', onClick: () => setCriarRotaOpen(true),
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999,
         fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const,
       },
     }, plusSvg, 'Nova rota'),
-    // Todos os estados dropdown (wrapped in relative container)
     React.createElement('div', { style: { position: 'relative' as const } },
       React.createElement('button', {
-        type: 'button',
-        onClick: () => setEstadosDropdownOpen(!estadosDropdownOpen),
+        type: 'button', onClick: () => setEstadosDropdownOpen(!estadosDropdownOpen),
         style: {
           display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 16px',
           background: '#fff', border: '1px solid #e2e2e2', borderRadius: 999,
@@ -221,10 +417,8 @@ export default function DestinosScreen() {
               color: estadoSelected === uf ? '#0d0d0d' : '#767676', cursor: 'pointer', textAlign: 'left' as const, ...font,
             },
           }, uf))) : null),
-    // Filtro button
     React.createElement('button', {
-      type: 'button',
-      onClick: () => setFiltroPaginaOpen(true),
+      type: 'button', onClick: () => setFiltroPaginaOpen(true),
       'data-testid': 'destinos-open-page-filter',
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
@@ -233,46 +427,52 @@ export default function DestinosScreen() {
       },
     }, filterIconSvg, 'Filtro'));
 
-  // ── Metric cards helper ───────────────────────────────────────────────
-  const renderMetric = (m: typeof metricsRow1[0]) =>
-    React.createElement('div', { key: m.title, style: s.metricCard },
-      React.createElement('p', { style: s.metricTitle }, m.title),
-      m.pct ? React.createElement('div', { style: s.pctRow },
-        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: m.pctColor, ...font } }, m.pct),
-        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, m.desc)) : null,
-      React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4, marginTop: m.pct ? 0 : 16 } },
-        React.createElement('span', { style: s.metricValue }, m.value),
-        (m as any).suffix ? React.createElement('span', { style: s.metricSuffix }, (m as any).suffix) : null));
+  // ── KPI row ────────────────────────────────────────────────────────────────
 
-  const metricCardsRow1 = React.createElement('div', {
-    style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
-  }, ...metricsRow1.map(renderMetric));
+  const kpiRow = React.createElement('div', {
+    style: { display: 'flex', gap: 20, width: '100%', flexWrap: 'wrap' as const },
+  },
+    ...kpiCards.map((card) =>
+      React.createElement('div', { key: card.title, style: s.metricCard, 'data-testid': card.testId },
+        React.createElement('p', { style: s.metricTitle }, card.title),
+        React.createElement('p', { style: { ...s.metricValue, marginTop: 8 } }, String(card.value)))));
 
-  // ── Bar chart helper ──────────────────────────────────────────────────
-  const renderBarChart = (title: string, subtitle: string, color: string) =>
-    React.createElement('div', { style: s.chartCard },
-      React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, title),
-      React.createElement('p', { style: { fontSize: 14, fontWeight: 400, color: '#767676', margin: 0, ...font } }, subtitle),
-      React.createElement('div', { style: s.barRow },
-        ...barData.map((d) => {
-          const h = (d.value / barMax) * 140;
-          return React.createElement('div', { key: d.label, style: s.barItem },
-            React.createElement('div', {
-              style: {
-                width: 56, height: h, background: color, borderRadius: '8px 8px 0 0',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' as const,
-              },
-            },
-              React.createElement('span', {
-                style: { fontSize: 11, fontWeight: 700, color: '#fff', ...font, textAlign: 'center' as const, lineHeight: 1.2 },
-              }, `${d.value}\nviagens`)),
-            React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: '#0d0d0d', ...font, textAlign: 'center' as const } }, d.label));
-        })));
+  // ── Bar chart ─────────────────────────────────────────────────────────────
 
-  const origensChart = renderBarChart('Top 10 Principais Origens', 'Destinos mais procurados no período selecionado', '#0d0d0d');
-  const destinosChart = renderBarChart('Top 5 Principais Destinos', 'Destinos mais procurados no período selecionado', '#cba04b');
+  const chartCard = React.createElement('div', { style: s.chartCard },
+    React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Top 8 Rotas por Atividades'),
+    React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Rotas com maior número de viagens no período filtrado'),
+    React.createElement('div', { style: { width: '100%', height: 320 } },
+      React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
+        React.createElement(BarChart, {
+          data: barData,
+          layout: 'vertical',
+          margin: { left: 20, right: 20, top: 8, bottom: 8 },
+        },
+          React.createElement(XAxis, {
+            type: 'number',
+            tick: { fontSize: 12, fontFamily: 'Inter, sans-serif' },
+            axisLine: false,
+            tickLine: false,
+          }),
+          React.createElement(YAxis, {
+            type: 'category',
+            dataKey: 'name',
+            tick: { fontSize: 11, fontFamily: 'Inter, sans-serif' },
+            width: 160,
+            axisLine: false,
+            tickLine: false,
+          }),
+          React.createElement(RechTooltip, { content: barTooltipContent }),
+          React.createElement(Bar, {
+            dataKey: 'viagens',
+            fill: '#0d0d0d',
+            radius: [0, 6, 6, 0],
+            maxBarSize: 32,
+          })))));
 
-  // ── Table section ─────────────────────────────────────────────────────
+  // ── Table section ─────────────────────────────────────────────────────────
+
   const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 8px' };
 
   const tableToolbar = React.createElement('div', {
@@ -283,8 +483,7 @@ export default function DestinosScreen() {
   },
     React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font } }, 'Lista de destinos'),
     React.createElement('button', {
-      type: 'button',
-      onClick: () => setFiltroTabelaOpen(true),
+      type: 'button', onClick: () => setFiltroTabelaOpen(true),
       'data-testid': 'destinos-open-table-filter',
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 40, padding: '8px 24px',
@@ -330,8 +529,25 @@ export default function DestinosScreen() {
       React.createElement('div', {
         style: { flex: tableCols[5].flex, minWidth: tableCols[5].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
       },
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar', onClick: () => { setVizDestino(row); setVizDestinoOpen(true); } }, eyeActionSvg),
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => { setEdEstadoOrigem(row.origem.split(' - ')[1] || row.origem); setEdCidadeOrigem(row.origem.split(' - ')[0] || row.origem); setEdEstadoDestino(row.destino.split(' - ')[1] || row.destino); setEdCidadeDestino(row.destino.split(' - ')[0] || row.destino); setEditarRotaOpen(true); } }, pencilActionSvg)));
+        React.createElement('button', {
+          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar',
+          onClick: () => { setVizDestino(row); setVizDestinoOpen(true); },
+        }, eyeActionSvg),
+        React.createElement('button', {
+          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
+          onClick: () => {
+            const origemParts = row.origem.split(' - ');
+            const destParts = row.destino.split(' - ');
+            setEdCidadeOrigem(origemParts[0] ?? row.origem);
+            setEdEstadoOrigem(origemParts[1] ?? '');
+            setEdCidadeDestino(destParts[0] ?? row.destino);
+            setEdEstadoDestino(destParts[1] ?? '');
+            setEdRotaAtiva(row.status === 'Ativo');
+            setEdRotaOrigemOriginal(row.origem);
+            setEdRotaDestinoOriginal(row.destino);
+            setEditarRotaOpen(true);
+          },
+        }, pencilActionSvg)));
   });
 
   const tableSection = React.createElement('div', {
@@ -343,36 +559,7 @@ export default function DestinosScreen() {
         tableHeader,
         ...tableRowEls)));
 
-  if (dataLoading) {
-    return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
-      React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando destinos...'));
-  }
-
-  // ── Criar rota modal ───────────────────────────────────────────────────
-  const selectField = (label: string, placeholder: string, value: string, onChange: (v: string) => void) =>
-    React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column' as const, gap: 4, minWidth: 180 } },
-      React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
-      React.createElement('div', {
-        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', cursor: 'pointer' },
-      },
-        React.createElement('span', { style: { fontSize: 14, color: value ? '#0d0d0d' : '#999', ...font } }, value || placeholder),
-        React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-          React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))));
-
-  const toggleSvg = (active: boolean) =>
-    React.createElement('div', {
-      onClick: () => setCrRotaAtiva(!crRotaAtiva),
-      style: {
-        width: 48, height: 28, borderRadius: 14, background: active ? '#0d0d0d' : '#d9d9d9',
-        position: 'relative' as const, cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0,
-      },
-    },
-      React.createElement('div', {
-        style: {
-          width: 22, height: 22, borderRadius: '50%', background: '#fff',
-          position: 'absolute' as const, top: 3, left: active ? 23 : 3, transition: 'left 0.2s',
-        },
-      }));
+  // ── Criar rota modal ──────────────────────────────────────────────────────
 
   const criarRotaModal = criarRotaOpen ? React.createElement('div', {
     style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
@@ -382,36 +569,30 @@ export default function DestinosScreen() {
       style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 540, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)' },
       onClick: (e: React.MouseEvent) => e.stopPropagation(),
     },
-      // Header
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
         React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Criar rota'),
         React.createElement('button', {
           type: 'button', onClick: () => setCriarRotaOpen(false),
           style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
-          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+        }, closeSvg)),
       React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
-      // Origem
       React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
         selectField('Estado da origem', 'Selecione um estado', crEstadoOrigem, setCrEstadoOrigem),
         selectField('Cidade de origem', 'Selecione uma cidade', crCidadeOrigem, setCrCidadeOrigem)),
-      // Destino
       React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
         selectField('Estado do destino', 'Selecione um estado', crEstadoDestino, setCrEstadoDestino),
         selectField('Cidade de destino', 'Selecione uma cidade', crCidadeDestino, setCrCidadeDestino)),
-      // Manter rota ativa
       React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 } },
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
           React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Manter rota ativa'),
           React.createElement('span', { style: { fontSize: 12, color: '#767676', lineHeight: 1.5, ...font } }, 'Ao manter a rota ativa, você garante que ela seja exibida e possa ser utilizada por todos os usuários da plataforma.')),
-        toggleSvg(crRotaAtiva)),
-      // Buttons
+        toggleSwitchEl(crRotaAtiva, () => setCrRotaAtiva(!crRotaAtiva))),
       React.createElement('button', {
         type: 'button',
         onClick: async () => {
-          const origin = `${crCidadeOrigem}${crEstadoOrigem ? ' - ' + crEstadoOrigem : ''}`;
-          const dest = `${crCidadeDestino}${crEstadoDestino ? ' - ' + crEstadoDestino : ''}`;
-          if (origin.trim() && dest.trim()) {
+          const origin = `${crCidadeOrigem}${crEstadoOrigem ? ' - ' + crEstadoOrigem : ''}`.trim();
+          const dest = `${crCidadeDestino}${crEstadoDestino ? ' - ' + crEstadoDestino : ''}`.trim();
+          if (origin && dest) {
             await createTakemeRoute({ origin_address: origin, destination_address: dest, price_per_person_cents: 0 });
             const items = await fetchDestinos();
             setDestinosData(items);
@@ -425,90 +606,87 @@ export default function DestinosScreen() {
         style: { height: 40, background: 'none', border: 'none', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
       }, 'Cancelar'))) : null;
 
-  // ── Filtro modal (Figma 849-22542) ─────────────────────────────────────
-  const filtroRadioCircle = (selected: boolean) =>
+  // ── Editar rota modal ─────────────────────────────────────────────────────
+
+  const editarRotaModal = editarRotaOpen ? React.createElement('div', {
+    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+    onClick: () => setEditarRotaOpen(false),
+  },
     React.createElement('div', {
-      style: {
-        width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
-        border: `2px solid ${selected ? '#0d0d0d' : '#c4c4c4'}`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      },
-    }, selected ? React.createElement('div', { style: { width: 10, height: 10, borderRadius: '50%', background: '#0d0d0d' } }) : null);
+      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 540, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)' },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Editar rota'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setEditarRotaOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, closeSvg)),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+        selectField('Estado da origem', 'Selecione', edEstadoOrigem, setEdEstadoOrigem),
+        selectField('Cidade de origem', 'Selecione', edCidadeOrigem, setEdCidadeOrigem)),
+      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+        selectField('Estado do destino', 'Selecione', edEstadoDestino, setEdEstadoDestino),
+        selectField('Cidade de destino', 'Selecione', edCidadeDestino, setEdCidadeDestino)),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 } },
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+          React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Manter rota ativa'),
+          React.createElement('span', { style: { fontSize: 12, color: '#767676', lineHeight: 1.5, ...font } }, 'Ao manter a rota ativa, você garante que ela seja exibida e possa ser utilizada por todos os usuários da plataforma.')),
+        toggleSwitchEl(edRotaAtiva, () => setEdRotaAtiva(!edRotaAtiva))),
+      React.createElement('button', {
+        type: 'button', onClick: handleSalvarEditar,
+        style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+      }, 'Salvar'),
+      React.createElement('button', {
+        type: 'button', onClick: () => setEditarRotaOpen(false),
+        style: { height: 40, background: 'none', border: 'none', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
+      }, 'Cancelar'))) : null;
 
-  const filtroDateField = (subLabel: string, value: string, placeholder: string, setValue: (v: string) => void) =>
-    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
-      React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, subLabel),
-      React.createElement('div', {
-        style: {
-          display: 'flex', alignItems: 'center', height: 44, background: '#f1f1f1',
-          borderRadius: 8, paddingLeft: 16, position: 'relative' as const, width: '100%', boxSizing: 'border-box' as const,
-        },
-      },
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', flexShrink: 0 } }, calendarIconSvg),
-        React.createElement('div', { style: { flex: 1, position: 'relative' as const, minWidth: 0, paddingLeft: 16, height: '100%', display: 'flex', alignItems: 'center' } },
-          !value ? React.createElement('span', {
-            style: {
-              position: 'absolute' as const, left: 16, top: '50%', transform: 'translateY(-50%)',
-              fontSize: 16, color: '#767676', ...font, pointerEvents: 'none' as const,
-            },
-          }, placeholder) : null,
-          React.createElement('input', {
-            type: 'date',
-            value,
-            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setValue(e.target.value),
-            style: {
-              width: '100%', height: '100%', border: 'none', outline: 'none', background: 'transparent',
-              fontSize: 16, color: value ? '#0d0d0d' : 'transparent', ...font,
-              position: 'relative' as const, zIndex: 1,
-            },
-          }))));
+  // ── Visualizar destino modal ──────────────────────────────────────────────
 
-  const filtroTextField = (subLabel: string, value: string, placeholder: string, setValue: (v: string) => void) =>
-    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
-      React.createElement('div', { style: { minHeight: 40, display: 'flex', alignItems: 'center' } },
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, subLabel)),
-      React.createElement('input', {
-        type: 'text',
-        value,
-        placeholder,
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => setValue(e.target.value),
-        style: {
-          width: '100%', height: 44, boxSizing: 'border-box' as const,
-          background: '#f1f1f1', border: 'none', borderRadius: 8,
-          padding: '0 16px', fontSize: 16, color: '#0d0d0d', ...font,
-        },
-      }));
+  const vizReadField = (label: string, value: string) =>
+    React.createElement('div', { style: { flex: '1 1 0', minWidth: 180, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+      React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, label),
+      React.createElement('div', { style: { height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } }, value));
 
-  const filtroPill = (label: string, selected: boolean, onSelect: () => void) =>
-    React.createElement('button', {
-      type: 'button',
-      onClick: onSelect,
-      style: {
-        height: 40, padding: '0 16px', borderRadius: 90, border: 'none', cursor: 'pointer',
-        background: selected ? '#0d0d0d' : '#f1f1f1',
-        color: selected ? '#fff' : '#0d0d0d',
-        fontSize: 14, fontWeight: 500, ...font, whiteSpace: 'nowrap' as const,
-      },
-    }, label);
+  const vizDestinoModal = vizDestinoOpen && vizDestino ? React.createElement('div', {
+    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+    onClick: () => setVizDestinoOpen(false),
+  },
+    React.createElement('div', {
+      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 540, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)' },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Detalhes do destino'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setVizDestinoOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, closeSvg)),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+        vizReadField('Origem', vizDestino.origem),
+        vizReadField('Destino', vizDestino.destino)),
+      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+        vizReadField('Total de atividades', String(vizDestino.totalAtividades)),
+        vizReadField('Data de criação', vizDestino.dataCriacao)),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Status:'),
+        React.createElement('span', {
+          style: {
+            display: 'inline-block', padding: '4px 14px', borderRadius: 999,
+            fontSize: 13, fontWeight: 700,
+            background: statusStyles[vizDestino.status].bg,
+            color: statusStyles[vizDestino.status].color, ...font,
+          },
+        }, vizDestino.status)),
+      React.createElement('button', {
+        type: 'button', onClick: () => setVizDestinoOpen(false),
+        style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+      }, 'Fechar'))) : null;
 
-  const filtroRadioRow = (optLabel: string, optValue: NonNullable<FiltroDatasIncluidas>) =>
-    React.createElement('button', {
-      type: 'button',
-      onClick: () => setFiltroDatasIncluidas(filtroDatasIncluidas === optValue ? null : optValue),
-      style: {
-        display: 'flex', alignItems: 'center', gap: 12, width: '100%',
-        background: 'none', border: 'none', cursor: 'pointer', padding: '10px 12px 10px 0',
-        borderRadius: 6, textAlign: 'left' as const,
-      },
-    }, filtroRadioCircle(filtroDatasIncluidas === optValue), React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, optLabel));
-
-  const filtroSectionTitle = (t: string) =>
-    React.createElement('p', {
-      style: {
-        fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
-      },
-    }, t);
+  // ── Filtro da página modal ────────────────────────────────────────────────
 
   const filtroModal = filtroPaginaOpen ? React.createElement('div', {
     style: {
@@ -536,16 +714,7 @@ export default function DestinosScreen() {
       },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '0 16px', boxSizing: 'border-box' as const } },
           React.createElement('h2', { id: 'destinos-filtro-pagina-titulo', style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro'),
-          React.createElement('button', {
-            type: 'button',
-            onClick: () => setFiltroPaginaOpen(false),
-            style: {
-              width: 48, height: 48, borderRadius: '50%', background: '#f1f1f1', border: 'none',
-              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-            },
-            'aria-label': 'Fechar',
-          }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-            React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
+          modalCloseBtn(() => setFiltroPaginaOpen(false)))),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, padding: '0 24px', width: '100%', boxSizing: 'border-box' as const } },
         filtroSectionTitle('Data da atividade'),
         filtroDateField('Data inicial', filtroDataInicial, '01 de setembro', setFiltroDataInicial),
@@ -558,36 +727,43 @@ export default function DestinosScreen() {
           filtroRadioRow('Somente futuras', 'futuras'))),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, padding: '0 24px', width: '100%', boxSizing: 'border-box' as const } },
         filtroSectionTitle('Status da viagem'),
-        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
-          filtroPill('Em andamento', filtroStatusViagem === 'em_andamento', () => setFiltroStatusViagem('em_andamento')),
-          filtroPill('Agendadas', filtroStatusViagem === 'agendadas', () => setFiltroStatusViagem('agendadas')),
-          filtroPill('Concluídas', filtroStatusViagem === 'concluidas', () => setFiltroStatusViagem('concluidas')),
-          filtroPill('Canceladas', filtroStatusViagem === 'canceladas', () => setFiltroStatusViagem('canceladas')))),
+        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 10, alignItems: 'center' } },
+          fChip('Todos', filtroStatusViagem === 'todos', () => setFiltroStatusViagem('todos')),
+          fChip('Em andamento', filtroStatusViagem === 'em_andamento', () => setFiltroStatusViagem('em_andamento')),
+          fChip('Agendadas', filtroStatusViagem === 'agendadas', () => setFiltroStatusViagem('agendadas')),
+          fChip('Concluídas', filtroStatusViagem === 'concluidas', () => setFiltroStatusViagem('concluidas')),
+          fChip('Canceladas', filtroStatusViagem === 'canceladas', () => setFiltroStatusViagem('canceladas')))),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, padding: '0 24px', width: '100%', boxSizing: 'border-box' as const } },
         filtroSectionTitle('Categoria'),
-        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
-          filtroPill('Todos', filtroCategoria === 'todos', () => setFiltroCategoria('todos')),
-          filtroPill('Take Me', filtroCategoria === 'take_me', () => setFiltroCategoria('take_me')),
-          filtroPill('Motorista parceiro', filtroCategoria === 'motorista_parceiro', () => setFiltroCategoria('motorista_parceiro')))),
+        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 10, alignItems: 'center' } },
+          fChip('Todos', filtroCategoria === 'todos', () => setFiltroCategoria('todos')),
+          fChip('Take Me', filtroCategoria === 'take_me', () => setFiltroCategoria('take_me')),
+          fChip('Motorista parceiro', filtroCategoria === 'motorista_parceiro', () => setFiltroCategoria('motorista_parceiro')))),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 24px', width: '100%', boxSizing: 'border-box' as const } },
         React.createElement('button', {
           type: 'button',
-          onClick: () => setFiltroPaginaOpen(false),
+          onClick: () => {
+            setFiltroDataInicial('');
+            setFiltroDataFinal('');
+            setFiltroDatasIncluidas(null);
+            setFiltroStatusViagem('todos');
+            setFiltroCategoria('todos');
+          },
+          style: {
+            width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'transparent',
+            color: '#b53838', fontSize: 16, fontWeight: 500, cursor: 'pointer', ...font,
+          },
+        }, 'Resetar filtros'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setFiltroPaginaOpen(false),
           style: {
             width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff',
             fontSize: 16, fontWeight: 500, cursor: 'pointer', ...font,
           },
-        }, 'Aplicar filtro'),
-        React.createElement('button', {
-          type: 'button',
-          onClick: () => setFiltroPaginaOpen(false),
-          style: {
-            width: '100%', height: 48, border: 'none', background: 'transparent', color: '#0d0d0d',
-            fontSize: 16, fontWeight: 500, cursor: 'pointer', ...font,
-          },
-        }, 'Voltar')))) : null;
+        }, 'Aplicar filtro')))) : null;
 
-  // ── Filtro da tabela modal (Figma 1224-22113) ───────────────────────────
+  // ── Filtro da tabela modal ────────────────────────────────────────────────
+
   const filtroTabelaModal = filtroTabelaOpen ? React.createElement('div', {
     style: {
       position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.5)',
@@ -614,165 +790,66 @@ export default function DestinosScreen() {
       },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '0 16px', boxSizing: 'border-box' as const } },
           React.createElement('h2', { id: 'destinos-filtro-tabela-titulo', style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro da tabela'),
-          React.createElement('button', {
-            type: 'button',
-            onClick: () => setFiltroTabelaOpen(false),
-            style: {
-              width: 48, height: 48, borderRadius: '50%', background: '#f1f1f1', border: 'none',
-              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-            },
-            'aria-label': 'Fechar',
-          }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-            React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
+          modalCloseBtn(() => setFiltroTabelaOpen(false)))),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, padding: '0 24px', width: '100%', boxSizing: 'border-box' as const } },
         filtroTextField('Origem', tabelaFiltroOrigem, 'Ex: São Paulo, SP', setTabelaFiltroOrigem),
-        filtroTextField('Destino', tabelaFiltroDestino, 'Ex: São Luis, SP', setTabelaFiltroDestino),
+        filtroTextField('Destino', tabelaFiltroDestino, 'Ex: São Luis, MA', setTabelaFiltroDestino),
         filtroTextField('Hora do embarque', tabelaFiltroHoraEmbarque, 'Ex: 09:00', setTabelaFiltroHoraEmbarque),
         filtroTextField('Hora de chegada', tabelaFiltroHoraChegada, 'Ex: 12:00', setTabelaFiltroHoraChegada),
         filtroDateField('Data inicial', tabelaFiltroDataInicial, '01 de setembro', setTabelaFiltroDataInicial)),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, padding: '0 24px', width: '100%', boxSizing: 'border-box' as const } },
         filtroSectionTitle('Status da viagem'),
-        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
-          filtroPill('Em andamento', tabelaFiltroStatusViagem === 'em_andamento', () => setTabelaFiltroStatusViagem('em_andamento')),
-          filtroPill('Agendadas', tabelaFiltroStatusViagem === 'agendadas', () => setTabelaFiltroStatusViagem('agendadas')),
-          filtroPill('Concluídas', tabelaFiltroStatusViagem === 'concluidas', () => setTabelaFiltroStatusViagem('concluidas')),
-          filtroPill('Canceladas', tabelaFiltroStatusViagem === 'canceladas', () => setTabelaFiltroStatusViagem('canceladas')))),
+        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 10, alignItems: 'center' } },
+          fChip('Todos', tabelaFiltroStatusViagem === 'todos', () => setTabelaFiltroStatusViagem('todos')),
+          fChip('Em andamento', tabelaFiltroStatusViagem === 'em_andamento', () => setTabelaFiltroStatusViagem('em_andamento')),
+          fChip('Agendadas', tabelaFiltroStatusViagem === 'agendadas', () => setTabelaFiltroStatusViagem('agendadas')),
+          fChip('Concluídas', tabelaFiltroStatusViagem === 'concluidas', () => setTabelaFiltroStatusViagem('concluidas')),
+          fChip('Canceladas', tabelaFiltroStatusViagem === 'canceladas', () => setTabelaFiltroStatusViagem('canceladas')))),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, padding: '0 24px', width: '100%', boxSizing: 'border-box' as const } },
         filtroSectionTitle('Categoria'),
-        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
-          filtroPill('Todos', tabelaFiltroCategoria === 'todos', () => setTabelaFiltroCategoria('todos')),
-          filtroPill('Take Me', tabelaFiltroCategoria === 'take_me', () => setTabelaFiltroCategoria('take_me')),
-          filtroPill('Motorista parceiro', tabelaFiltroCategoria === 'motorista_parceiro', () => setTabelaFiltroCategoria('motorista_parceiro')))),
+        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 10, alignItems: 'center' } },
+          fChip('Todos', tabelaFiltroCategoria === 'todos', () => setTabelaFiltroCategoria('todos')),
+          fChip('Take Me', tabelaFiltroCategoria === 'take_me', () => setTabelaFiltroCategoria('take_me')),
+          fChip('Motorista parceiro', tabelaFiltroCategoria === 'motorista_parceiro', () => setTabelaFiltroCategoria('motorista_parceiro')))),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 24px', width: '100%', boxSizing: 'border-box' as const } },
         React.createElement('button', {
           type: 'button',
-          onClick: () => setFiltroTabelaOpen(false),
+          onClick: () => {
+            setTabelaFiltroOrigem('');
+            setTabelaFiltroDestino('');
+            setTabelaFiltroHoraEmbarque('');
+            setTabelaFiltroHoraChegada('');
+            setTabelaFiltroDataInicial('');
+            setTabelaFiltroStatusViagem('todos');
+            setTabelaFiltroCategoria('todos');
+          },
+          style: {
+            width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'transparent',
+            color: '#b53838', fontSize: 16, fontWeight: 500, cursor: 'pointer', ...font,
+          },
+        }, 'Resetar filtros'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setFiltroTabelaOpen(false),
           style: {
             width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff',
             fontSize: 16, fontWeight: 500, cursor: 'pointer', ...font,
           },
-        }, 'Aplicar filtro'),
-        React.createElement('button', {
-          type: 'button',
-          onClick: () => setFiltroTabelaOpen(false),
-          style: {
-            width: '100%', height: 48, border: 'none', background: 'transparent', color: '#0d0d0d',
-            fontSize: 16, fontWeight: 500, cursor: 'pointer', ...font,
-          },
-        }, 'Voltar')))) : null;
+        }, 'Aplicar filtro')))) : null;
 
-  // ── Estados dropdown overlay (Figma shows months style) ─────────────────
-  // estadosDropdown is now inline within searchRow (position: relative wrapper)
+  // ── Loading state ─────────────────────────────────────────────────────────
 
-  // ── Render ─────────────────────────────────────────────────────────────
-  // ── Editar rota modal (Figma 1433-29359) ─────────────────────────────
-  const editToggleSvg = React.createElement('div', {
-    onClick: () => setEdRotaAtiva(!edRotaAtiva),
-    style: {
-      width: 48, height: 28, borderRadius: 14, background: edRotaAtiva ? '#0d0d0d' : '#d9d9d9',
-      position: 'relative' as const, cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0,
-    },
-  },
-    React.createElement('div', {
-      style: {
-        width: 22, height: 22, borderRadius: '50%', background: '#fff',
-        position: 'absolute' as const, top: 3, left: edRotaAtiva ? 23 : 3, transition: 'left 0.2s',
-      },
-    }));
+  if (dataLoading) {
+    return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
+      React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando destinos...'));
+  }
 
-  const editarRotaModal = editarRotaOpen ? React.createElement('div', {
-    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
-    onClick: () => setEditarRotaOpen(false),
-  },
-    React.createElement('div', {
-      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 540, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)' },
-      onClick: (e: React.MouseEvent) => e.stopPropagation(),
-    },
-      // Header
-      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Editar rota'),
-        React.createElement('button', {
-          type: 'button', onClick: () => setEditarRotaOpen(false),
-          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
-          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
-      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
-      // Origem
-      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-        selectField('Estado da origem', 'Selecione', edEstadoOrigem, setEdEstadoOrigem),
-        selectField('Cidade de origem', 'Selecione', edCidadeOrigem, setEdCidadeOrigem)),
-      // Destino
-      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-        selectField('Estado do destino', 'Selecione', edEstadoDestino, setEdEstadoDestino),
-        selectField('Cidade de destino', 'Selecione', edCidadeDestino, setEdCidadeDestino)),
-      // Manter rota ativa
-      React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 } },
-        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
-          React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Manter rota ativa'),
-          React.createElement('span', { style: { fontSize: 12, color: '#767676', lineHeight: 1.5, ...font } }, 'Ao manter a rota ativa, você garante que ela seja exibida e possa ser utilizada por todos os usuários da plataforma.')),
-        editToggleSvg),
-      // Buttons
-      React.createElement('button', {
-        type: 'button', onClick: () => setEditarRotaOpen(false),
-        style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
-      }, 'Salvar'),
-      React.createElement('button', {
-        type: 'button', onClick: () => setEditarRotaOpen(false),
-        style: { height: 40, background: 'none', border: 'none', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
-      }, 'Cancelar'))) : null;
-
-  // ── Visualizar destino modal ──────────────────────────────────────────
-  const vizReadField = (label: string, value: string) =>
-    React.createElement('div', { style: { flex: '1 1 0', minWidth: 180, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
-      React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, label),
-      React.createElement('div', { style: { height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } }, value));
-
-  const vizDestinoModal = vizDestinoOpen && vizDestino ? React.createElement('div', {
-    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
-    onClick: () => setVizDestinoOpen(false),
-  },
-    React.createElement('div', {
-      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 540, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)' },
-      onClick: (e: React.MouseEvent) => e.stopPropagation(),
-    },
-      // Header
-      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Detalhes do destino'),
-        React.createElement('button', {
-          type: 'button', onClick: () => setVizDestinoOpen(false),
-          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
-          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
-      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
-      // Fields
-      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-        vizReadField('Origem', vizDestino.origem),
-        vizReadField('Destino', vizDestino.destino)),
-      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-        vizReadField('Total de atividades', String(vizDestino.totalAtividades)),
-        vizReadField('Data de criação', vizDestino.dataCriacao)),
-      // Status
-      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Status:'),
-        React.createElement('span', {
-          style: {
-            display: 'inline-block', padding: '4px 14px', borderRadius: 999,
-            fontSize: 13, fontWeight: 700, background: statusStyles[vizDestino.status].bg,
-            color: statusStyles[vizDestino.status].color, ...font,
-          },
-        }, vizDestino.status)),
-      // Close button
-      React.createElement('button', {
-        type: 'button', onClick: () => setVizDestinoOpen(false),
-        style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
-      }, 'Fechar'))) : null;
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Destinos'),
     searchRow,
-    metricCardsRow1,
-    origensChart,
-    destinosChart,
+    kpiRow,
+    chartCard,
     tableSection,
     criarRotaModal,
     editarRotaModal,
