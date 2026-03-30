@@ -1,6 +1,6 @@
 # Take Me — PRD Completo do Admin Web
 
-> **Versao:** 2.2 | **Data:** 30/03/2026 | **Status:** Implementado
+> **Versao:** 2.3 | **Data:** 30/03/2026 | **Status:** Implementado
 > **Stack:** React 19 + React Router DOM 6 + Expo Web + Supabase + Mapbox GL + Google Maps (Places/Geocoding) + Recharts
 > **Repositorio:** monorepo `take_me/apps/admin`
 > **Rendering:** `React.createElement()` (sem JSX)
@@ -368,6 +368,7 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 | `status_history` | Auditoria: entity_type, entity_id, status, label, changed_by, changed_at |
 | `dependents` | Dependentes: full_name, age, document_url, status (pending/validated) |
 | `notifications` | Notificacoes: user_id, title, message, category, read_at |
+| `trip_stops` | Paradas ordenadas de uma viagem: scheduled_trip_id, stop_type (driver_origin/passenger_pickup/shipment_pickup/base_dropoff/trip_destination), entity_id, label, address, lat/lng, sequence_order, status (pending/arrived/completed/skipped) |
 
 ### 6.2 Views SQL
 
@@ -388,6 +389,9 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 | `admin_list_bookings(status, date_from, date_to, search, limit, offset)` | Listagem paginada de bookings com joins |
 | `admin_list_encomendas(status, date_from, date_to, search, limit, offset)` | Listagem paginada shipments + dependent_shipments |
 | `admin_top_encomenda_destinations(limit)` | Top destinos de encomendas |
+| `admin_approved_expenses_cents()` | Soma total de despesas aprovadas (payouts pagos) sem limite |
+| `nearest_active_base(lat, lng)` | Retorna base ativa mais proxima de um ponto (para encomendas via moto) |
+| `generate_trip_stops(trip_id)` | Gera paradas ordenadas por distancia (motorista → passageiros → encomendas → destino) |
 
 ### 6.4 Status Flows
 
@@ -404,6 +408,41 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 **Vehicle:** `pending -> approved / rejected`
 
 **Dependent:** `pending -> validated`
+
+### 6.5 Regras de Negocio de Viagens e Rotas Multi-Ponto
+
+**Como funciona uma viagem:**
+1. O **motorista** cria e planeja sua rota: Ponto A (bairro/cidade origem) → Ponto B (bairro/cidade destino)
+2. **Passageiros** compram passagem com seus proprios enderecos de embarque (diferentes do ponto A do motorista)
+3. O mapa exibe TODOS os pontos (motorista + passageiros + encomendas) **ordenados por distancia** da origem
+4. A rota e **recalculada automaticamente** quando o motorista e trocado
+
+**Tabela `trip_stops`:** Armazena as paradas ordenadas de cada viagem. Gerada automaticamente pela function `generate_trip_stops()` que:
+- Cria ponto 0 (driver_origin) com endereco do motorista
+- Adiciona passenger_pickup para cada booking, ordenados por distancia da origem
+- Adiciona shipment_pickup para cada encomenda vinculada
+- Cria ponto final (trip_destination)
+
+**Cenarios de Encomenda:**
+
+| Cenario | Tipo Motorista | Fluxo de Paradas |
+|---------|---------------|-----------------|
+| 1 | Moto / Preparador encomenda | Motorista → Cliente (pickup) → Base Take Me mais proxima (dropoff) → Entrega final pela base |
+| 2 | Carro Take Me / Parceiro | Motorista → Cliente (pickup) → Destino da encomenda (dropoff direto, sem base) |
+
+**Functions de apoio:**
+- `createShipmentTripViaBase(shipmentId, driverId)` — Cenario 1
+- `createShipmentTripDirect(shipmentId, driverId)` — Cenario 2
+- `linkShipmentToTrip(shipmentId, tripId)` — Vincula encomenda a viagem existente
+- `recalculateTripStops(tripId)` — Regenera stops (ex: apos trocar motorista)
+- `nearest_active_base(lat, lng)` — Retorna base mais proxima
+
+**MapView multi-ponto:** Suporta prop `waypoints: MapWaypoint[]` com markers numerados e coloridos por tipo:
+- Preto (#0d0d0d): Motorista
+- Azul (#3b82f6): Passageiro
+- Laranja (#f59e0b): Encomenda
+- Verde (#22c55e): Base
+- Vermelho (#ef4444): Destino
 
 ---
 
@@ -435,7 +474,7 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 
 | Componente | Descricao | Usado em |
 |------------|-----------|----------|
-| `MapView.tsx` | Mapbox GL (`mapbox-gl`): estatico (Static Images API, padding/letterbox) ou interativo (import dinamico); Directions v5 para polyline; props `currentPosition`, `connectPoints`, `directionsProfile`, `showFigmaMapChrome` | Viagens detalhe/edit, Encomendas edit |
+| `MapView.tsx` | Mapbox GL (`mapbox-gl`): estatico ou interativo; Directions v5 multi-waypoint (ate 25 pontos); props `origin`, `destination`, `waypoints: MapWaypoint[]` (markers numerados coloridos por tipo), `connectPoints`, `directionsProfile`, `currentPosition` | Viagens detalhe/edit, Encomendas edit |
 | `PlacesAddressInput.tsx` | Campo endereco com sugestoes **Google Places** (load async do JS API); sem chave, comporta-se como input texto simples | Viagem editar |
 | `useTripMapCoords` | Resolve `origin`/`destination` para o mapa: booking → `scheduled_trips` → **Google Geocoding** se necessario | Viagem detalhe, Viagem editar |
 | `googleGeocoding.ts` | `geocodeAddress()` — REST Geocoding API, `region=br` | Salvamento e hook de mapa |
@@ -445,6 +484,7 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 | `FileUpload.tsx` | Drag & drop de PDF/imagem para Supabase Storage (bucket chat-attachments) | ChatPanel |
 | `useRealtimeMessages` | Hook com subscription Realtime em `messages`, send, markAsRead | ChatPanel |
 | `usePlatformSettings` | Hook para ler/salvar configs em `platform_settings` | Configuracoes, Destinos |
+| `useTripStops` | Hook que busca/gera/ordena paradas de uma viagem (trip_stops). Retorna `stops`, `waypoints` (para MapView) e `regenerate()`. Gera automaticamente via `generate_trip_stops()` se nao existirem | Viagem detalhe, Viagem editar |
 | `Layout.tsx` | Navbar responsiva com tabs overflow | Todas as telas |
 | `ProtectedRoute.tsx` | Guard de autenticacao + verificacao admin | Router |
 | `EditarTabelaTrechoModal.tsx` | Modal para editar tabela de precos | Pagamentos gestao |
