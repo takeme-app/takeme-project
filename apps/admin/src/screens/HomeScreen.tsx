@@ -3,11 +3,10 @@
  * Uses React.createElement() calls (NOT JSX).
  * Does NOT include header/navbar (that's in Layout).
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import React from 'react';
 import {
   webStyles,
-  searchIconSvg,
   chevronDownSvg,
   filterIconSvg,
   infoIconSvg,
@@ -16,7 +15,6 @@ import {
   closeIconSvg,
 } from '../styles/webStyles';
 import {
-  fetchHomeCounts,
   fetchPagamentoCountsByCategory,
   fetchViagens,
   fetchEncomendas,
@@ -25,7 +23,6 @@ import {
   viagemCountsFromItems,
   encomendaCountsFromItems,
   fetchApprovedTripExpensesCents,
-  type HomeCounts,
   type ViagemListFilter,
   type PagamentoCountsByCategory,
 } from '../data/queries';
@@ -33,20 +30,30 @@ import type { PagamentoCounts } from '../data/types';
 
 export default function HomeScreen() {
   const [homeSubTab, setHomeSubTab] = useState<'viagens' | 'encomendas'>('viagens');
-  const [homeCounts, setHomeCounts] = useState<HomeCounts | null>(null);
   const [pagCounts, setPagCounts] = useState<PagamentoCounts | null>(null);
   const [pagByCategory, setPagByCategory] = useState<PagamentoCountsByCategory | null>(null);
   const [approvedExpenseCents, setApprovedExpenseCents] = useState(0);
-  const [homeSearch, setHomeSearch] = useState('');
+
+  // Dados carregados UMA vez — filtros aplicados localmente (instantâneo)
+  const [allViagens, setAllViagens] = useState<import('../data/types').ViagemListItem[]>([]);
+  const [allEncomendas, setAllEncomendas] = useState<import('../data/types').EncomendaListItem[]>([]);
+  const [dataLoaded, setDataLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([fetchHomeCounts(), fetchPagamentoCountsByCategory(), fetchApprovedTripExpensesCents()]).then(([hc, pbc, exp]) => {
+    Promise.all([
+      fetchViagens(),
+      fetchEncomendas(),
+      fetchPagamentoCountsByCategory(),
+      fetchApprovedTripExpensesCents(),
+    ]).then(([v, e, pbc, exp]) => {
       if (!cancelled) {
-        setHomeCounts(hc);
+        setAllViagens(v);
+        setAllEncomendas(e);
         setPagCounts(pbc.all);
         setPagByCategory(pbc);
         setApprovedExpenseCents(exp.totalCents);
+        setDataLoaded(true);
       }
     });
     return () => { cancelled = true; };
@@ -69,27 +76,32 @@ export default function HomeScreen() {
     return 'todos';
   };
 
-  const aplicarFiltroHome = useCallback(async () => {
-    const [viagens, encomendas] = await Promise.all([fetchViagens(), fetchEncomendas()]);
+  // Filtrar localmente — instantâneo, sem query ao Supabase
+  const homeCounts = useMemo(() => {
+    if (!dataLoaded) return null;
     const cat = homeCategoriaToFilter(filterCategoria);
     const vf: ViagemListFilter = {
       status: filterStatus,
       categoria: cat,
-      nomeNeedle: homeSearch.trim(),
+      nomeNeedle: '',
       origemNeedle: '',
       tableDateYmd: '',
       periodoInicioYmd: filterDateInicio,
       periodoFimYmd: filterDateFim,
       datasIncluidas: 'passadas_e_futuras',
     };
-    const vFil = viagens.filter((v) => filterViagemListItem(v, vf));
-    const eFil = encomendas.filter((e) => filterEncomendaForHome(e, filterStatus, filterDateInicio, filterDateFim));
-    setHomeCounts({
+    const vFil = allViagens.filter((v) => filterViagemListItem(v, vf));
+    const eFil = allEncomendas.filter((e) => filterEncomendaForHome(e, filterStatus, filterDateInicio, filterDateFim));
+    return {
       viagens: viagemCountsFromItems(vFil),
       encomendas: encomendaCountsFromItems(eFil),
-    });
+    };
+  }, [dataLoaded, allViagens, allEncomendas, filterCategoria, filterStatus, filterDateInicio, filterDateFim]);
+
+  const aplicarFiltroHome = useCallback(() => {
+    // Filtros já são aplicados via useMemo — só fechar o modal
     setFilterModalOpen(false);
-  }, [filterCategoria, filterDateFim, filterDateInicio, filterStatus, homeSearch]);
+  }, []);
 
   const isEncomendas = homeSubTab === 'encomendas';
   const subTabsSection = React.createElement('div', { style: webStyles.subTabsWrap },
