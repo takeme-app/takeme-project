@@ -113,8 +113,8 @@ export default function MotoristasScreen() {
   const [filtroDateInicio, setFiltroDateInicio] = useState('05 de setembro');
   const [filtroDateFim, setFiltroDateFim] = useState('30 de setembro');
   const [filtroDatasIncluidas, setFiltroDatasIncluidas] = useState<'passadas' | 'passadas_futuras' | 'futuras'>('passadas_futuras');
-  const [filtroStatus, setFiltroStatus] = useState<'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('em_andamento');
-  const [filtroCategoria, setFiltroCategoria] = useState<'todos' | 'take_me' | 'parceiro'>('take_me');
+  const [filtroStatus, setFiltroStatus] = useState<'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('todos');
+  const [filtroCategoria, setFiltroCategoria] = useState<'todos' | 'take_me' | 'parceiro'>('todos');
   // Table filter state
   const [tblFilterOpen, setTblFilterOpen] = useState(false);
   const [tblIdMotorista, setTblIdMotorista] = useState('');
@@ -565,6 +565,7 @@ export default function MotoristasScreen() {
       // Status da viagem
       React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Status da viagem'),
       React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        fChip('Todos', filtroStatus === 'todos', () => setFiltroStatus('todos')),
         fChip('Em andamento', filtroStatus === 'em_andamento', () => setFiltroStatus('em_andamento')),
         fChip('Agendadas', filtroStatus === 'agendadas', () => setFiltroStatus('agendadas')),
         fChip('Concluídas', filtroStatus === 'concluidas', () => setFiltroStatus('concluidas')),

@@ -31,8 +31,8 @@ type EncomendaRow = {
   origem: string;
   remetente: string;
   data: string;
-  embarque: string;
-  chegada: string;
+  tamanho: string;
+  valor: string;
   status: 'Cancelado' | 'Concluído' | 'Agendado' | 'Em andamento';
   rawStatus: string;
 };
@@ -42,8 +42,8 @@ const tableCols = [
   { label: 'Origem', flex: '1 1 14%', minWidth: 120 },
   { label: 'Remetente', flex: '1 1 12%', minWidth: 110 },
   { label: 'Data', flex: '0 0 100px', minWidth: 100 },
-  { label: 'Embarque', flex: '0 0 80px', minWidth: 80 },
-  { label: 'Chegada', flex: '0 0 72px', minWidth: 72 },
+  { label: 'Tamanho', flex: '0 0 90px', minWidth: 90 },
+  { label: 'Valor', flex: '0 0 100px', minWidth: 100 },
   { label: 'Status', flex: '0 0 130px', minWidth: 130 },
   { label: 'Visualizar/Editar', flex: '0 0 96px', minWidth: 96 },
 ];
@@ -131,9 +131,6 @@ function encomendaExtrasMatch(
     tblDataInicial: string;
     tblCodigo: string;
     tblDestinatario: string;
-    tblHoraEmbarque: string;
-    tblIntervaloChegada: string;
-    tblIntervaloEmbarque: string;
   },
 ): boolean {
   if (!item) return false;
@@ -151,17 +148,6 @@ function encomendaExtrasMatch(
   if (cod && !item.id.toLowerCase().includes(cod)) return false;
   const dest = opts.tblDestinatario.trim().toLowerCase();
   if (dest && !item.remetente.toLowerCase().includes(dest)) return false;
-  const emb = parseHHmm(opts.tblHoraEmbarque);
-  if (emb && isoTimeHHmmLocal(item.createdAtIso) !== emb) return false;
-  const matchInterval = (raw: string) => {
-    const s = raw.trim();
-    if (!s) return true;
-    const p = parseHHmm(s);
-    if (p) return isoTimeHHmmLocal(item.createdAtIso) === p;
-    return item.createdAtIso.toLowerCase().includes(s.toLowerCase());
-  };
-  if (!matchInterval(opts.tblIntervaloChegada)) return false;
-  if (!matchInterval(opts.tblIntervaloEmbarque)) return false;
   return true;
 }
 
@@ -207,9 +193,6 @@ export default function EncomendasScreen() {
   const [tblFiltroOpen, setTblFiltroOpen] = useState(false);
   const [tblOrigem, setTblOrigem] = useState('');
   const [tblDestino, setTblDestino] = useState('');
-  const [tblHoraEmbarque, setTblHoraEmbarque] = useState('');
-  const [tblIntervaloChegada, setTblIntervaloChegada] = useState('');
-  const [tblIntervaloEmbarque, setTblIntervaloEmbarque] = useState('');
   const [tblDataInicial, setTblDataInicial] = useState('');
   const [tblRemetente, setTblRemetente] = useState('');
   const [tblDestinatario, setTblDestinatario] = useState('');
@@ -231,6 +214,18 @@ export default function EncomendasScreen() {
     return () => { cancelled = true; };
   }, []);
 
+  const pkgLabel = (ps?: string) => {
+    const p = (ps || '').toLowerCase();
+    if (p === 'small' || p.includes('pequ')) return 'Pequeno';
+    if (p === 'medium' || p.includes('medio') || p.includes('médio')) return 'Médio';
+    if (p === 'large' || p === 'xl' || p.includes('grand')) return 'Grande';
+    return ps || '—';
+  };
+  const fmtBRL = (cents: number) =>
+    cents > 0
+      ? `R$ ${(cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : '—';
+
   const tableRowsAll: EncomendaRow[] = encomendasData.map((e) => ({
     id: e.id,
     tipo: e.tipo,
@@ -238,8 +233,8 @@ export default function EncomendasScreen() {
     origem: e.origem,
     remetente: e.remetente,
     data: e.data,
-    embarque: '—',
-    chegada: '—',
+    tamanho: pkgLabel(e.packageSize),
+    valor: fmtBRL(e.amountCents),
     status: e.status,
     rawStatus: String((e as { rawStatus?: string }).rawStatus ?? ''),
   }));
@@ -268,9 +263,6 @@ export default function EncomendasScreen() {
         tblDataInicial,
         tblCodigo,
         tblDestinatario,
-        tblHoraEmbarque,
-        tblIntervaloChegada,
-        tblIntervaloEmbarque,
       })
     ) {
       return false;
@@ -447,8 +439,8 @@ export default function EncomendasScreen() {
       React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500 } }, row.origem),
       React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth, fontWeight: 500 } }, row.remetente),
       React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth } }, row.data),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth } }, row.embarque),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth } }, row.chegada),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth } }, row.tamanho),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth } }, row.valor),
       React.createElement('div', { style: { ...cellBase, flex: tableCols[6].flex, minWidth: tableCols[6].minWidth } },
         React.createElement('span', {
           style: {
@@ -649,9 +641,6 @@ export default function EncomendasScreen() {
       // Fields
       tblField('Origem', 'Ex: São Paulo, SP', tblOrigem, setTblOrigem),
       tblField('Destino', 'Ex: São Luis, SP', tblDestino, setTblDestino),
-      tblField('Hora do embarque', 'Ex: 09:00', tblHoraEmbarque, setTblHoraEmbarque),
-      tblField('Intervalo de chegada', 'Ex: 22:00', tblIntervaloChegada, setTblIntervaloChegada),
-      tblField('Intervalor de embarque', 'Ex: 00:00', tblIntervaloEmbarque, setTblIntervaloEmbarque),
       tblDateInput('Data inicial', tblDataInicial, setTblDataInicial),
       tblField('Remetente', 'Ex: Nome do remetente', tblRemetente, setTblRemetente),
       tblField('Destinatário', 'Ex: Nome do destinatário', tblDestinatario, setTblDestinatario),
