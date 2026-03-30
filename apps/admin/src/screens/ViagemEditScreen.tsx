@@ -24,6 +24,8 @@ import {
 } from '../data/queries';
 import type { BookingDetailForAdmin, MotoristaListItem } from '../data/types';
 import MapView from '../components/MapView';
+import { useTripStops } from '../hooks/useTripStops';
+import { recalculateTripStops } from '../data/queries';
 import PlacesAddressInput from '../components/PlacesAddressInput';
 import { supabase } from '../lib/supabase';
 import { useTripMapCoords } from '../hooks/useTripMapCoords';
@@ -140,6 +142,10 @@ export default function ViagemEditScreen() {
   const [malaDropdownOpen, setMalaDropdownOpen] = useState(false);
 
   // Busca de passageiro no banco
+  // Multi-ponto
+  const tripIdForStops = detail?.listItem?.tripId || null;
+  const { waypoints: tripWaypoints, regenerate: regenerateStops } = useTripStops(tripIdForStops);
+
   const [passengerSearch, setPassengerSearch] = useState('');
   const [passengerResults, setPassengerResults] = useState<any[]>([]);
   const [passengerSearching, setPassengerSearching] = useState(false);
@@ -348,6 +354,7 @@ export default function ViagemEditScreen() {
       React.createElement(MapView, {
         origin: tripCoords.origin,
         destination: tripCoords.destination,
+        waypoints: tripWaypoints.length > 0 ? tripWaypoints : undefined,
         height: DETAIL_TRIP_MAP_HEIGHT,
         staticMode: false,
         connectPoints: true,
@@ -557,7 +564,10 @@ export default function ViagemEditScreen() {
           const { error } = await updateScheduledTripFields(detail.listItem.tripId, { driver_id: newDriverId });
           setSaving(false);
           if (error) { showToast(error); } else {
-            showToast('Motorista substituído com sucesso!');
+            showToast('Motorista substituído com sucesso! Recalculando rota...');
+            // Recalcular stops com nova origem do motorista
+            await recalculateTripStops(detail.listItem.tripId);
+            await regenerateStops();
             const d2 = await fetchBookingDetailForAdmin(detail.listItem.bookingId);
             if (d2) setDetail(d2);
           }

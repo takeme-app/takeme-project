@@ -30,6 +30,7 @@ import { supabase } from '../lib/supabase';
 import type { BookingDetailForAdmin } from '../data/types';
 import type { MotoristaListItem } from '../data/types';
 import MapView from '../components/MapView';
+import { useTripStops } from '../hooks/useTripStops';
 import { useTripMapCoords } from '../hooks/useTripMapCoords';
 
 function rowFromDetail(d: BookingDetailForAdmin): ViagemRow {
@@ -70,6 +71,10 @@ export default function ViagemDetalheScreen() {
   const [linkedShipments, setLinkedShipments] = useState<any[]>([]);
   const [tripCoords] = useTripMapCoords(detail);
   const [driverStats, setDriverStats] = useState<{ rating: number | null; totalTrips: number; avatarUrl: string | null }>({ rating: null, totalTrips: 0, avatarUrl: null });
+
+  // Multi-ponto: buscar paradas da viagem
+  const tripIdForStops = detail?.listItem?.tripId || null;
+  const { waypoints: tripWaypoints } = useTripStops(tripIdForStops);
 
   const isMotoristas = location.pathname.startsWith('/motoristas');
   const isPassageiros = location.pathname.startsWith('/passageiros');
@@ -323,6 +328,7 @@ export default function ViagemDetalheScreen() {
         React.createElement(MapView, {
           origin: tripCoords.origin,
           destination: tripCoords.destination,
+          waypoints: tripWaypoints.length > 0 ? tripWaypoints : undefined,
           height: DETAIL_TRIP_MAP_HEIGHT,
           staticMode: false,
           connectPoints: true,
