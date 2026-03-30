@@ -62,7 +62,7 @@ export default function HomeScreen() {
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [filterDateInicio, setFilterDateInicio] = useState('');
   const [filterDateFim, setFilterDateFim] = useState('');
-  const [filterStatus, setFilterStatus] = useState<'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('em_andamento');
+  const [filterStatus, setFilterStatus] = useState<'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('todos');
   const [filterCategoria, setFilterCategoria] = useState<Set<'take_me' | 'motorista'>>(new Set(['take_me']));
   const [takeMeDropdownOpen, setTakeMeDropdownOpen] = useState(false);
   const [takeMeSelectedOption, setTakeMeSelectedOption] = useState<'Take Me' | 'Motorista parceiro'>('Take Me');
@@ -139,7 +139,7 @@ export default function HomeScreen() {
   const ec = homeCounts?.encomendas;
 
   // Indicador se filtro está ativo
-  const isFilterActive = filterDateInicio !== '' || filterDateFim !== '' || filterStatus !== 'em_andamento';
+  const isFilterActive = filterDateInicio !== '' || filterDateFim !== '' || filterStatus !== 'todos';
   const statCardsData = isEncomendas
     ? [
         { title: 'Entregas em andamento', value: String(ec?.emAndamento ?? '—'), positive: true, testId: 'home-stat-encomendas-em-andamento' as const },
@@ -283,7 +283,8 @@ export default function HomeScreen() {
         filteredChartData);
 
   // Modal Filtro Início (Figma 756-19720)
-  const statusOptions: { id: 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'; label: string }[] = [
+  const statusOptions: { id: 'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'; label: string }[] = [
+    { id: 'todos', label: 'Todos' },
     { id: 'em_andamento', label: 'Em andamento' },
     { id: 'agendadas', label: 'Agendadas' },
     { id: 'concluidas', label: 'Concluídas' },
@@ -300,13 +301,26 @@ export default function HomeScreen() {
       return next;
     });
   };
+  const resetFilters = useCallback(() => {
+    setFilterStatus('todos');
+    setFilterDateInicio('');
+    setFilterDateFim('');
+    setFilterCategoria(new Set(['take_me', 'motorista']));
+  }, []);
+
+  const closeModalSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+    React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
+
   const filterModalInicioContent = React.createElement('div', { style: { ...webStyles.modalBoxInicio, maxWidth: 560 }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
     React.createElement('div', { style: webStyles.modalHeader },
-      React.createElement('div', { style: webStyles.modalHeaderRowInicio },
-        React.createElement('h2', { id: 'home-filtro-modal-titulo', style: webStyles.modalTitleCentered }, 'Filtro'))),
+      React.createElement('div', { style: { ...webStyles.modalHeaderRowInicio, justifyContent: 'space-between' } },
+        React.createElement('h2', { id: 'home-filtro-modal-titulo', style: { ...webStyles.modalTitleCentered, textAlign: 'left' as const } }, 'Filtro'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setFilterModalOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, closeModalSvg))),
     React.createElement('div', { style: webStyles.modalSection },
       React.createElement('h3', { style: webStyles.modalSectionTitle }, 'Data da atividade'),
-      React.createElement('p', { style: { fontSize: 12, color: '#767676', margin: '0 0 8px 0', lineHeight: 1.5 } }, 'Formato ISO (YYYY-MM-DD). Vazio = sem limite nesse extremo.'),
       React.createElement('div', { style: webStyles.modalDateField },
         React.createElement('label', { style: webStyles.modalDateLabel }, 'Data inicial'),
         React.createElement('div', { style: webStyles.modalDateInputWrap },
@@ -325,8 +339,13 @@ export default function HomeScreen() {
       React.createElement('h3', { style: webStyles.modalSectionTitle }, 'Categoria'),
       React.createElement('div', { style: webStyles.modalChips }, ...categoriaOptionsInicio.map((opt) =>
         React.createElement('button', { key: opt.id, type: 'button', style: { ...webStyles.modalChip, ...(filterCategoria.has(opt.id) ? webStyles.modalChipActive : webStyles.modalChipInactive) } as React.CSSProperties, onClick: () => toggleCategoria(opt.id) }, opt.label))),
-    React.createElement('div', { style: webStyles.modalButtonWrap },
-      React.createElement('button', { type: 'button', style: webStyles.modalApplyBtn, onClick: () => { void aplicarFiltroHome(); } }, 'Aplicar filtro'))));
+    React.createElement('div', { style: { ...webStyles.modalButtonWrap, display: 'flex', gap: 12 } },
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => { resetFilters(); setFilterModalOpen(false); },
+        style: { flex: 1, height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', fontSize: 16, fontWeight: 600, color: '#767676', cursor: 'pointer', fontFamily: 'Inter, sans-serif' },
+      }, 'Resetar'),
+      React.createElement('button', { type: 'button', style: { ...webStyles.modalApplyBtn, flex: 1 }, onClick: () => { void aplicarFiltroHome(); } }, 'Aplicar filtro'))));
 
   const filterModalEl = filterModalOpen
     ? React.createElement('div', { style: webStyles.modalOverlay, onClick: () => setFilterModalOpen(false), role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'home-filtro-modal-titulo' }, filterModalInicioContent)
