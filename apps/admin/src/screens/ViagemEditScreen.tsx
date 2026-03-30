@@ -22,6 +22,8 @@ import {
   updateScheduledTripFields,
 } from '../data/queries';
 import type { BookingDetailForAdmin, MotoristaListItem } from '../data/types';
+import MapView from '../components/MapView';
+import { supabase } from '../lib/supabase';
 
 // ── Inline SVG icons ────────────────────────────────────────────────────
 const closeXSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
@@ -136,6 +138,10 @@ export default function ViagemEditScreen() {
   const [addPassageiroData, setAddPassageiroData] = useState({ id: '', nome: '', contato: '', mala: '', valor: '' });
   const [malaDropdownOpen, setMalaDropdownOpen] = useState(false);
 
+  // ── Mapa e Veículo ───────────────────────────────────────────────────
+  const [tripCoords, setTripCoords] = useState<{ origin?: { lat: number; lng: number }; destination?: { lat: number; lng: number } }>({});
+  const [vehicleInfo, setVehicleInfo] = useState<{ model: string; plate: string; year: number | null } | null>(null);
+
   // ── Image zoom modal (Figma 1170-26615) ──────────────────────────────
   const [imageZoomOpen, setImageZoomOpen] = useState(false);
 
@@ -175,6 +181,38 @@ export default function ViagemEditScreen() {
   useEffect(() => {
     fetchMotoristas().then((m) => setDriversList(m.slice(0, 24)));
   }, []);
+
+  // Fetch trip coordinates and vehicle info
+  useEffect(() => {
+    if (!detail?.listItem?.tripId) return;
+    let cancel = false;
+    const tripId = detail.listItem.tripId;
+    const driverId = detail.listItem.driverId;
+    // Coordinates
+    (supabase as any).from('scheduled_trips')
+      .select('origin_lat, origin_lng, destination_lat, destination_lng')
+      .eq('id', tripId).single()
+      .then(({ data }: any) => {
+        if (cancel || !data) return;
+        const c: any = {};
+        if (data.origin_lat && data.origin_lng) c.origin = { lat: data.origin_lat, lng: data.origin_lng };
+        if (data.destination_lat && data.destination_lng) c.destination = { lat: data.destination_lat, lng: data.destination_lng };
+        setTripCoords(c);
+      });
+    // Vehicle from driver
+    if (driverId) {
+      (supabase as any).from('vehicles')
+        .select('model, plate, year')
+        .eq('worker_id', driverId)
+        .eq('is_active', true)
+        .limit(1)
+        .single()
+        .then(({ data }: any) => {
+          if (!cancel && data) setVehicleInfo(data);
+        });
+    }
+    return () => { cancel = true; };
+  }, [detail?.listItem?.tripId, detail?.listItem?.driverId]);
 
   useEffect(() => {
     if (!detail) return;
@@ -899,11 +937,41 @@ export default function ViagemEditScreen() {
         }, 'Fechar'))
     : null;
 
+  // ── Mapa do trajeto ──────────────────────────────────────────────────
+  const mapSection = React.createElement('div', {
+    style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%', paddingBottom: 24, borderBottom: '1px solid #e2e2e2' },
+  },
+    React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Mapa do trajeto'),
+    React.createElement(MapView, {
+      origin: tripCoords.origin,
+      destination: tripCoords.destination,
+      height: 300,
+      staticMode: false,
+    }));
+
+  // ── Info do veículo ─────────────────────────────────────────────────
+  const vehicleSection = vehicleInfo ? React.createElement('div', {
+    style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%', paddingBottom: 24, borderBottom: '1px solid #e2e2e2' },
+  },
+    React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Veículo'),
+    React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+      React.createElement('div', { style: { flex: '1 1 200px', background: '#f6f6f6', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Modelo'),
+        React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, vehicleInfo.model || '—')),
+      React.createElement('div', { style: { flex: '1 1 150px', background: '#f6f6f6', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Placa'),
+        React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, vehicleInfo.plate || '—')),
+      React.createElement('div', { style: { flex: '1 1 100px', background: '#f6f6f6', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Ano'),
+        React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, vehicleInfo.year ? String(vehicleInfo.year) : '—')))) : null;
+
   // ── Final render ─────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
     React.createElement('div', { style: webStyles.detailPage },
       headerSection,
+      mapSection,
       mainForm,
+      vehicleSection,
       motoristasSection,
       passageirosEncomendasRow,
       metricasSection,

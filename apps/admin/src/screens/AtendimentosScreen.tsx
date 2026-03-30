@@ -82,24 +82,41 @@ export default function AtendimentosScreen() {
     let cancelled = false;
     (supabase as any)
       .from('conversations')
-      .select('id, driver_id, client_id, status, participant_name, last_message, last_message_at, created_at')
+      .select('id, driver_id, client_id, status, participant_name, last_message, last_message_at, created_at, category, sla_deadline_at, admin_id')
       .order('last_message_at', { ascending: false })
-      .limit(20)
+      .limit(50)
       .then(({ data }: { data: any[] | null }) => {
         if (cancelled || !data) return;
         const now = Date.now();
+        const categoryLabelMap: Record<string, string> = {
+          excursao: 'Excursão',
+          encomendas: 'Encomendas',
+          reembolso: 'Reembolso',
+          cadastro_transporte: 'Cadastro de transporte',
+          autorizar_menores: 'Autorizar menores',
+          denuncia: 'Denúncia',
+          ouvidoria: 'Ouvidoria',
+          outros: 'Outros',
+        };
         const tickets: Ticket[] = data.map((c: any) => {
           const name = c.participant_name || 'Usuário';
           const diff = now - new Date(c.last_message_at || c.created_at).getTime();
           const mins = Math.floor(diff / 60000);
           const tempo = mins < 60 ? `há ${mins} min` : mins < 1440 ? `há ${Math.floor(mins / 60)}h` : `há ${Math.floor(mins / 1440)} dias`;
+          // SLA: atrasada se não finalizada e criada há mais de 24h
+          const isOverSLA = c.sla_deadline_at
+            ? now > new Date(c.sla_deadline_at).getTime()
+            : diff > 24 * 60 * 60000;
+          let ticketStatus = c.status === 'active' ? 'em_atendimento' : 'finalizada';
+          if (c.status === 'active' && isOverSLA) ticketStatus = 'atrasada';
+          if (c.status === 'active' && !c.admin_id) ticketStatus = 'nao_atendida';
           return {
             nome: name,
             avatar: name.charAt(0).toUpperCase(),
-            categoria: c.status === 'active' ? 'Viagem' : 'Finalizada',
+            categoria: categoryLabelMap[c.category || ''] || c.category || 'Outros',
             descricao: c.last_message || 'Sem mensagens',
             tempo,
-            status: c.status === 'active' ? 'em_atendimento' : 'finalizada',
+            status: ticketStatus,
           };
         });
         setRealTickets(tickets);
@@ -434,9 +451,45 @@ export default function AtendimentosScreen() {
         style: { height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
       }, 'Cancelar'))) : null;
 
+  // ── Pedidos por categoria ──────────────────────────────────────────────
+  const pedidoCategorias = ['Todos', 'Excursão', 'Encomendas', 'Reembolso', 'Cadastro de transporte', 'Autorizar menores', 'Denúncia', 'Ouvidoria', 'Outros'];
+  const [pedidoCatActive, setPedidoCatActive] = useState('Todos');
+  const pedidoCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of realTickets) {
+      counts[t.categoria] = (counts[t.categoria] || 0) + 1;
+    }
+    return pedidoCategorias.map((c) => ({ label: c, count: c === 'Todos' ? realTickets.length : (counts[c] || 0) }));
+  }, [realTickets]);
+
+  const pedidoChips = React.createElement('div', {
+    style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const },
+  }, ...pedidoCounts.map((c) => chip(c.label, c.count, pedidoCatActive === c.label, () => setPedidoCatActive(c.label))));
+
+  const pedidoFilteredTickets = useMemo(() => {
+    if (pedidoCatActive === 'Todos') return realTickets.filter((t) => t.status !== 'finalizada');
+    return realTickets.filter((t) => t.categoria === pedidoCatActive && t.status !== 'finalizada');
+  }, [realTickets, pedidoCatActive]);
+
+  const pedidoCards = React.createElement('div', {
+    style: { display: 'flex', flexDirection: 'column' as const, background: '#f6f6f6', borderRadius: 16, padding: '0 24px' },
+  },
+    pedidoFilteredTickets.length === 0
+      ? [React.createElement('p', { key: 'empty-pedido', style: { padding: '24px 0', fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhum pedido nesta categoria.')]
+      : pedidoFilteredTickets.map((t, i) => ticketCard(t, i)));
+
+  const pedidosSection = React.createElement('div', {
+    style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' },
+  },
+    React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Gestão de cadastros e pedidos'),
+    pedidoChips,
+    pedidoCards);
+
   return React.createElement(React.Fragment, null,
     headerRow,
     metricCards,
+    sep,
+    pedidosSection,
     sep,
     meuSection,
     sep,

@@ -10,7 +10,7 @@ import {
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
-import { fetchPromocoes, fetchPromocaoCounts } from '../data/queries';
+import { fetchPromocoes, fetchPromocaoCounts, createPromotion } from '../data/queries';
 import type { PromocaoListItem } from '../data/types';
 import type { PromocaoCounts } from '../data/queries';
 
@@ -92,7 +92,12 @@ const tableCols = [
   { label: 'Data de Término', flex: '0 0 130px', minWidth: 130 },
   { label: 'Tipo de Público', flex: '0 0 120px', minWidth: 120 },
   { label: 'Status', flex: '0 0 90px', minWidth: 90 },
+  { label: 'Ações', flex: '0 0 80px', minWidth: 80 },
 ];
+
+const duplicateSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+  React.createElement('rect', { x: 9, y: 9, width: 13, height: 13, rx: 2, stroke: '#0d0d0d', strokeWidth: 2 }),
+  React.createElement('path', { d: 'M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
 
 // ── Styles ──────────────────────────────────────────────────────────────
 const s = {
@@ -432,7 +437,32 @@ export default function PromocoesScreen() {
             fontSize: 13, fontWeight: 700, lineHeight: 1.5,
             background: statusBg, color: statusColor, ...font,
           },
-        }, row.status)));
+        }, row.status)),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth, justifyContent: 'center' } },
+        React.createElement('button', {
+          type: 'button',
+          title: 'Duplicar promoção',
+          style: { background: 'none', border: 'none', cursor: 'pointer', padding: 6, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+          onClick: async (e: React.MouseEvent) => {
+            e.stopPropagation();
+            try {
+              await createPromotion({
+                title: `${row.nome} (cópia)`,
+                description: row.descricao || '',
+                start_at: row.startAtIso,
+                end_at: row.endAtIso,
+                target_audiences: [row.tipoPublico],
+                discount_type: row.tipoDesconto === 'Percentual' ? 'percentage' : 'fixed',
+                discount_value: row.valorDesconto,
+                applies_to: row.aplicaA ? row.aplicaA.split(', ') : [],
+                is_active: false,
+              });
+              const [data, counts] = await Promise.all([fetchPromocoes(), fetchPromocaoCounts()]);
+              setPromoData(data);
+              setPromoCounts(counts);
+            } catch (err) { console.error('Erro ao duplicar promoção:', err); }
+          },
+        }, duplicateSvg)));
   });
 
   const tableSection = React.createElement('div', {

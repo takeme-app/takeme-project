@@ -206,15 +206,38 @@ export default function PassageiroDetalheScreen() {
     [viagensConcluidas],
   );
 
+  // ── Busca e filtro historico ─────────────────────────────────────────
+  const [histSearch, setHistSearch] = useState('');
+  const [histMonth, setHistMonth] = useState('');
+
+  const filteredBookings = useMemo(() => {
+    let result = bookings;
+    if (histSearch.trim()) {
+      const q = histSearch.trim().toLowerCase();
+      result = result.filter((b) =>
+        b.origem.toLowerCase().includes(q) ||
+        b.destino.toLowerCase().includes(q) ||
+        b.passageiro.toLowerCase().includes(q));
+    }
+    if (histMonth) {
+      // histMonth is YYYY-MM
+      result = result.filter((b) => b.departureAtIso?.startsWith(histMonth));
+    }
+    return result;
+  }, [bookings, histSearch, histMonth]);
+
   const historicoAlteracoesRows = useMemo(
     () =>
-      bookings.map((b) => ({
+      filteredBookings.map((b) => ({
         action: `Viagem (${b.status})`,
         actor: `${b.origem} → ${b.destino}`,
         when: `${b.data} · ${b.embarque}`,
         icon: histRowIconRoute,
+        price: `R$ ${((b.amountCents || 0) / 100).toFixed(2)}`,
+        passengers: String(b.passengerCount || 1),
+        bagageiro: `${b.trunkOccupancyPct || 0}%`,
       })),
-    [bookings],
+    [filteredBookings],
   );
 
   // ── Add payment method modal state ────────────────────────────────────
@@ -386,8 +409,26 @@ export default function PassageiroDetalheScreen() {
                 style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, lineHeight: 1.5, fontFamily: "'Open Sans', Inter, sans-serif" },
               }, m.value)))))));
 
+  // Search + month filter row
+  const histFilterRow = React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap' as const, alignItems: 'center', width: '100%' } },
+    React.createElement('input', {
+      type: 'text', value: histSearch, placeholder: 'Buscar por destino ou origem...',
+      onChange: (e: React.ChangeEvent<HTMLInputElement>) => setHistSearch(e.target.value),
+      style: { flex: '1 1 200px', height: 40, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 12px', fontSize: 14, outline: 'none', ...font },
+    }),
+    React.createElement('input', {
+      type: 'month', value: histMonth,
+      onChange: (e: React.ChangeEvent<HTMLInputElement>) => setHistMonth(e.target.value),
+      style: { height: 40, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 12px', fontSize: 14, outline: 'none', ...font },
+    }),
+    histMonth ? React.createElement('button', {
+      type: 'button', onClick: () => setHistMonth(''),
+      style: { height: 40, padding: '0 12px', borderRadius: 8, border: '1px solid #e2e2e2', background: '#fff', fontSize: 13, cursor: 'pointer', ...font },
+    }, 'Limpar') : null);
+
   const historicoAlteracoesSection = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' } },
-    React.createElement('p', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 'normal', ...font } }, 'Histórico de alterações'),
+    React.createElement('p', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 'normal', ...font } }, 'Histórico de viagens'),
+    histFilterRow,
     historicoAlteracoesRows.length === 0
       ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhuma viagem registrada para este passageiro.')
       : null,
@@ -415,7 +456,12 @@ export default function PassageiroDetalheScreen() {
           React.createElement('p', { style: { margin: 0, fontSize: 16, fontWeight: 600, color: '#0d0d0d', lineHeight: 1.5, ...font } },
             React.createElement('span', null, `${row.action} • `),
             React.createElement('span', { style: { color: accentActor } }, row.actor)),
-          React.createElement('p', { style: { margin: 0, fontSize: 14, fontWeight: 500, color: '#767676', lineHeight: 1.5, ...font } }, row.when)))));
+          React.createElement('p', { style: { margin: 0, fontSize: 14, fontWeight: 500, color: '#767676', lineHeight: 1.5, ...font } }, row.when)),
+        // Extra columns: price, passengers, bagageiro
+        React.createElement('div', { style: { display: 'flex', gap: 16, flexShrink: 0, alignItems: 'center' } },
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#0d0d0d', ...font, minWidth: 70, textAlign: 'right' as const } }, row.price),
+          React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font, minWidth: 50 } }, `${row.passengers} pax`),
+          React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font, minWidth: 40 } }, row.bagageiro)))));
 
   const historicoTab = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 32, width: '100%' } },
     metricsSection,

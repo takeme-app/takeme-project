@@ -13,6 +13,8 @@ import {
   updateShipmentFields,
 } from '../data/queries';
 import type { EncomendaEditDetail } from '../data/types';
+import MapView from '../components/MapView';
+import { supabase } from '../lib/supabase';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -228,6 +230,8 @@ export default function EncomendaEditScreen() {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
+  const [encomendaCoords, setEncomendaCoords] = useState<{ origin?: { lat: number; lng: number }; destination?: { lat: number; lng: number } }>({});
+
   const [origem, setOrigem] = useState('');
   const [destino, setDestino] = useState('');
   const [instructions, setInstructions] = useState('');
@@ -286,6 +290,25 @@ export default function EncomendaEditScreen() {
       setLoading(false);
     });
   }, [routeId]);
+
+  // Fetch shipment coordinates
+  useEffect(() => {
+    if (!detail) return;
+    let cancel = false;
+    const table = detail.kind === 'shipment' ? 'shipments' : 'dependent_shipments';
+    (supabase as any).from(table)
+      .select('origin_lat, origin_lng, destination_lat, destination_lng')
+      .eq('id', detail.id)
+      .single()
+      .then(({ data }: any) => {
+        if (cancel || !data) return;
+        const c: any = {};
+        if (data.origin_lat && data.origin_lng) c.origin = { lat: data.origin_lat, lng: data.origin_lng };
+        if (data.destination_lat && data.destination_lng) c.destination = { lat: data.destination_lat, lng: data.destination_lng };
+        setEncomendaCoords(c);
+      });
+    return () => { cancel = true; };
+  }, [detail?.id, detail?.kind]);
 
   useEffect(() => {
     fetchApprovedDriversForEncomendaUI().then((list) => {
@@ -424,8 +447,13 @@ export default function EncomendaEditScreen() {
       React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, 'Você está editando esta encomenda')),
     // Map + Summary
     React.createElement('div', { style: { display: 'flex', gap: 24, flexWrap: 'wrap' as const } },
-      React.createElement('div', { style: { flex: '1 1 350px', height: 220, borderRadius: 16, background: '#e8e8e8', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' } },
-        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'Mapa do trajeto')),
+      React.createElement('div', { style: { flex: '1 1 350px', height: 220, borderRadius: 16, overflow: 'hidden' } },
+        React.createElement(MapView, {
+          origin: encomendaCoords.origin,
+          destination: encomendaCoords.destination,
+          height: 220,
+          staticMode: true,
+        })),
       React.createElement('div', { style: { flex: '0 0 280px', display: 'flex', flexDirection: 'column' as const, gap: 12 } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
           React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#767676', ...font } }, 'Resumo da viagem •'),
