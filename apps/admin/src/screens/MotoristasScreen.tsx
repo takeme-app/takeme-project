@@ -236,10 +236,6 @@ export default function MotoristasScreen() {
     style: { display: 'flex', alignItems: 'center', gap: 12, width: '100%', flexWrap: 'wrap' as const },
   },
     React.createElement('button', {
-      type: 'button', onClick: () => setTrocarOpen(true),
-      style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px', background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999, fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const },
-    }, swapIconSvg, 'Trocar motorista'),
-    React.createElement('button', {
       type: 'button', onClick: () => setFiltroOpen(true), 'data-testid': 'motoristas-open-page-filter',
       style: { display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 16px', borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font },
     }, filterIconSvg, 'Filtros'));
