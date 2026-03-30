@@ -724,12 +724,12 @@ export default function PreparadoresScreen() {
           }, 'Aplicar filtro'),
           React.createElement('button', {
             type: 'button',
-            onClick: fecharFiltroPagina,
+            onClick: () => { setDraftPeriodoPagina('todos'); setDraftDataInicialPagina(''); setDraftDataFinalPagina(''); setDraftStatusPagina('todos'); },
             style: {
-              width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'transparent', color: '#0d0d0d',
+              width: '100%', height: 48, borderRadius: 8, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838',
               fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font,
             },
-          }, 'Voltar'))))
+          }, 'Redefinir filtros'))))
     : null;
 
   const filtroTabelaModal = filtroTabelaOpen
@@ -805,12 +805,12 @@ export default function PreparadoresScreen() {
           }, 'Aplicar filtro'),
           React.createElement('button', {
             type: 'button',
-            onClick: fecharFiltroTabela,
+            onClick: () => { setDraftStatusTabela('todos'); setDraftNomeModal(''); setDraftOrigemModal(''); setDraftDestinoModal(''); setDraftHoraEmbarque(''); setDraftHoraChegada(''); setDraftDataInicialTabela(''); setDraftCategoria('todos'); },
             style: {
-              width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'transparent', color: '#0d0d0d',
+              width: '100%', height: 48, borderRadius: 8, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838',
               fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font,
             },
-          }, 'Voltar'))))
+          }, 'Redefinir filtros'))))
     : null;
 
   if (dataLoading) {
