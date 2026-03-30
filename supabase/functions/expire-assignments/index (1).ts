@@ -134,12 +134,38 @@ Deno.serve(async (req) => {
           category: assignment.entity_type,
         });
 
-        // TODO: Disparar estorno via process-refund ou Stripe direto
-        // Pode chamar a Edge Function process-refund internamente:
-        // await fetch(`${supabaseUrl}/functions/v1/process-refund`, { ... })
-        console.log(
-          `[expire-assignments] Expirado: ${assignment.entity_type}/${assignment.entity_id} — estorno pendente`
-        );
+        // Disparar estorno via process-refund Edge Function
+        try {
+          const refundRes = await fetch(
+            `${supabaseUrl}/functions/v1/process-refund`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${serviceRoleKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                entity_type: assignment.entity_type,
+                entity_id: assignment.entity_id,
+                reason: "assignment_expired",
+              }),
+            }
+          );
+          if (!refundRes.ok) {
+            const refundErr = await refundRes.text().catch(() => "");
+            console.warn(
+              `[expire-assignments] Estorno falhou para ${assignment.entity_type}/${assignment.entity_id}: ${refundErr}`
+            );
+          } else {
+            console.log(
+              `[expire-assignments] Estorno processado: ${assignment.entity_type}/${assignment.entity_id}`
+            );
+          }
+        } catch (refundError) {
+          console.warn(
+            `[expire-assignments] Erro ao chamar process-refund: ${refundError instanceof Error ? refundError.message : String(refundError)}`
+          );
+        }
 
         expiredCount++;
       } catch (e) {

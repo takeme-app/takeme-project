@@ -2,9 +2,12 @@
  * AtendimentosScreen — Atendimentos conforme Figma 1044-38472.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
+import { fetchViagemCounts, fetchEncomendaCounts, fetchMotoristas, fetchConversationCategoryCounts } from '../data/queries';
+import type { ConversationCategoryCount } from '../data/queries';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -28,50 +31,12 @@ type Ticket = {
   status: string;
 };
 
-const meuAtendimentoTickets: Ticket[] = [
-  { nome: 'Maria Silva', avatar: 'M', categoria: 'Excursão', descricao: 'Preciso organizar uma viagem para 15 pessoas de São Paulo para Santos...', tempo: 'há 5 min', status: 'nao_atendida' },
-  { nome: 'João Santos', avatar: 'J', categoria: 'Cadastro de transporte', descricao: 'Documentação do veículo anexada para análise', tempo: 'há 5 min', status: 'em_atendimento' },
-  { nome: 'Ana Costa', avatar: 'A', categoria: 'Reembolso', descricao: 'Solicitação de reembolso para viagem cancelada', tempo: 'há 2 dias', status: 'atrasada' },
-];
-
-const todosTickets: Ticket[] = [
-  { nome: 'Pedro Oliveira', avatar: 'P', categoria: 'Ouvidoria', descricao: 'Não consigo acessar minha conta', tempo: 'há 5 min', status: 'nao_atendida' },
-  { nome: 'Carla Souza', avatar: 'C', categoria: 'Denúncia', descricao: 'Gostaria de reportar um problema com o motorista', tempo: 'há 16 horas', status: 'atrasada' },
-];
-
-// ── Category chips for first section ────────────────────────────────────
-const meuCategorias = [
-  { label: 'Todos', count: 24 },
-  { label: 'Excursão', count: 8 },
-  { label: 'Encomendas', count: 5 },
-  { label: 'Reembolso', count: 3 },
-  { label: 'Cadastro de transporte', count: 6 },
-  { label: 'Aurorizar menores', count: 6 },
-];
-
-// ── Status chips for second section ─────────────────────────────────────
-const todosStatusChips = [
-  { label: 'Todos', count: 24 },
-  { label: 'Atrasadas', count: 4 },
-  { label: 'Não atendidas', count: 3 },
-  { label: 'Em atendimento', count: 9 },
-  { label: 'Ouvidoria', count: 2 },
-  { label: 'Denúncia', count: 6 },
-  { label: 'Finalizadas', count: 21 },
-];
-
 // ── Avatar colors ───────────────────────────────────────────────────────
 const avatarColors: Record<string, string> = {
   M: '#E8725C', J: '#7B61FF', A: '#F5A623', P: '#4A90D9', C: '#50C878',
 };
 
-// ── Metrics ─────────────────────────────────────────────────────────────
-const metrics = [
-  { title: 'Viagens no momento', value: '47' },
-  { title: 'Motoristas ativos', value: '128' },
-  { title: 'Cancelamentos (hoje)', value: '3' },
-  { title: 'Encomendas no momento', value: '12' },
-];
+// ── Metrics (loaded from Supabase inside component) ─────────────────────
 
 // ── Clock SVG ───────────────────────────────────────────────────────────
 const clockSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
@@ -92,6 +57,114 @@ export default function AtendimentosScreen() {
   const [filtrarStatusSelected, setFiltrarStatusSelected] = useState('Todos');
   const [meuAtendimentoDropdown, setMeuAtendimentoDropdown] = useState(false);
   const [meuAtendimentoLabel, setMeuAtendimentoLabel] = useState('Meu atendimento');
+
+  // ── Real metrics from Supabase ──────────────────────────────────────
+  const [realMetrics, setRealMetrics] = useState({ viagens: 0, motoristas: 0, cancelamentos: 0, encomendas: 0 });
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([fetchViagemCounts(), fetchEncomendaCounts(), fetchMotoristas()]).then(([vc, ec, mots]) => {
+      if (!cancelled) {
+        setRealMetrics({
+          viagens: vc.emAndamento,
+          motoristas: mots.length,
+          cancelamentos: vc.canceladas,
+          encomendas: ec.emAndamento,
+        });
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  // ── Real conversations from Supabase as tickets ─────────────────────
+  const [realTickets, setRealTickets] = useState<Ticket[]>([]);
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    let cancelled = false;
+    (supabase as any)
+      .from('conversations')
+      .select('id, driver_id, client_id, status, participant_name, last_message, last_message_at, created_at, category, sla_deadline_at, admin_id')
+      .order('last_message_at', { ascending: false })
+      .limit(50)
+      .then(({ data }: { data: any[] | null }) => {
+        if (cancelled || !data) return;
+        const now = Date.now();
+        const categoryLabelMap: Record<string, string> = {
+          excursao: 'Excursão',
+          encomendas: 'Encomendas',
+          reembolso: 'Reembolso',
+          cadastro_transporte: 'Cadastro de transporte',
+          autorizar_menores: 'Autorizar menores',
+          denuncia: 'Denúncia',
+          ouvidoria: 'Ouvidoria',
+          outros: 'Outros',
+        };
+        const tickets: Ticket[] = data.map((c: any) => {
+          const name = c.participant_name || 'Usuário';
+          const diff = now - new Date(c.last_message_at || c.created_at).getTime();
+          const mins = Math.floor(diff / 60000);
+          const tempo = mins < 60 ? `há ${mins} min` : mins < 1440 ? `há ${Math.floor(mins / 60)}h` : `há ${Math.floor(mins / 1440)} dias`;
+          // SLA: atrasada se não finalizada e criada há mais de 24h
+          const isOverSLA = c.sla_deadline_at
+            ? now > new Date(c.sla_deadline_at).getTime()
+            : diff > 24 * 60 * 60000;
+          let ticketStatus = c.status === 'active' ? 'em_atendimento' : 'finalizada';
+          if (c.status === 'active' && isOverSLA) ticketStatus = 'atrasada';
+          if (c.status === 'active' && !c.admin_id) ticketStatus = 'nao_atendida';
+          return {
+            nome: name,
+            avatar: name.charAt(0).toUpperCase(),
+            categoria: categoryLabelMap[c.category || ''] || c.category || 'Outros',
+            descricao: c.last_message || 'Sem mensagens',
+            tempo,
+            status: ticketStatus,
+          };
+        });
+        setRealTickets(tickets);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const activeMeuTickets = realTickets.filter((t) => t.status !== 'finalizada');
+  const activeTodosTickets = realTickets;
+
+  const [convCategoryCounts, setConvCategoryCounts] = useState<ConversationCategoryCount[]>([]);
+  useEffect(() => {
+    fetchConversationCategoryCounts().then(setConvCategoryCounts);
+  }, []);
+
+  const meuCategorias = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of activeMeuTickets) {
+      counts.set(t.categoria, (counts.get(t.categoria) || 0) + 1);
+    }
+    return [
+      { label: 'Todos', count: activeMeuTickets.length },
+      ...[...counts.entries()].map(([label, count]) => ({ label, count })),
+    ];
+  }, [activeMeuTickets]);
+
+  const meuTicketsFiltered = useMemo(() => {
+    if (meuCatActive === 'Todos') return activeMeuTickets;
+    return activeMeuTickets.filter((t) => t.categoria === meuCatActive);
+  }, [activeMeuTickets, meuCatActive]);
+
+  const todosStatusChips = convCategoryCounts.length > 0
+    ? convCategoryCounts
+    : [{ label: 'Todos', count: activeTodosTickets.length }];
+
+  const todosTicketsFiltered = useMemo(() => {
+    if (todosStatusActive === 'Todos') return activeTodosTickets;
+    if (todosStatusActive === 'Em atendimento') return activeTodosTickets.filter((t) => t.status === 'em_atendimento');
+    if (todosStatusActive === 'Finalizadas') return activeTodosTickets.filter((t) => t.status === 'finalizada');
+    return activeTodosTickets;
+  }, [activeTodosTickets, todosStatusActive]);
+
+  const metrics = [
+    { title: 'Viagens no momento', value: String(realMetrics.viagens || 0) },
+    { title: 'Motoristas ativos', value: String(realMetrics.motoristas || 0) },
+    { title: 'Cancelamentos (hoje)', value: String(realMetrics.cancelamentos || 0) },
+    { title: 'Encomendas no momento', value: String(realMetrics.encomendas || 0) },
+  ];
 
   // ── Helper: chip ──────────────────────────────────────────────────────
   const chip = (label: string, count: number, active: boolean, onClick: () => void) =>
@@ -120,6 +193,7 @@ export default function AtendimentosScreen() {
     const avatarBg = avatarColors[t.avatar] || '#999';
     return React.createElement('div', {
       key: `${t.nome}-${idx}`,
+      'data-testid': 'atendimento-ticket-row',
       style: {
         display: 'flex', flexDirection: 'column' as const, gap: 16, padding: '20px 0',
         borderBottom: '1px solid #e2e2e2',
@@ -291,7 +365,9 @@ export default function AtendimentosScreen() {
   const meuTicketCards = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, background: '#f6f6f6', borderRadius: 16, padding: '0 24px' },
   },
-    ...meuAtendimentoTickets.map((t, i) => ticketCard(t, i)));
+    meuTicketsFiltered.length === 0
+      ? [React.createElement('p', { key: 'empty', style: { padding: '24px 0', fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhum atendimento nesta visão.')]
+      : meuTicketsFiltered.map((t, i) => ticketCard(t, i)));
 
   const meuSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' },
@@ -312,7 +388,9 @@ export default function AtendimentosScreen() {
   const todosCards = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, background: '#f6f6f6', borderRadius: 16, padding: '0 24px' },
   },
-    ...todosTickets.map((t, i) => ticketCard(t, i)));
+    todosTicketsFiltered.length === 0
+      ? [React.createElement('p', { key: 'empty-todos', style: { padding: '24px 0', fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhuma conversa listada.')]
+      : todosTicketsFiltered.map((t, i) => ticketCard(t, i)));
 
   const todosSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' },
@@ -373,9 +451,45 @@ export default function AtendimentosScreen() {
         style: { height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
       }, 'Cancelar'))) : null;
 
+  // ── Pedidos por categoria ──────────────────────────────────────────────
+  const pedidoCategorias = ['Todos', 'Excursão', 'Encomendas', 'Reembolso', 'Cadastro de transporte', 'Autorizar menores', 'Denúncia', 'Ouvidoria', 'Outros'];
+  const [pedidoCatActive, setPedidoCatActive] = useState('Todos');
+  const pedidoCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of realTickets) {
+      counts[t.categoria] = (counts[t.categoria] || 0) + 1;
+    }
+    return pedidoCategorias.map((c) => ({ label: c, count: c === 'Todos' ? realTickets.length : (counts[c] || 0) }));
+  }, [realTickets]);
+
+  const pedidoChips = React.createElement('div', {
+    style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const },
+  }, ...pedidoCounts.map((c) => chip(c.label, c.count, pedidoCatActive === c.label, () => setPedidoCatActive(c.label))));
+
+  const pedidoFilteredTickets = useMemo(() => {
+    if (pedidoCatActive === 'Todos') return realTickets.filter((t) => t.status !== 'finalizada');
+    return realTickets.filter((t) => t.categoria === pedidoCatActive && t.status !== 'finalizada');
+  }, [realTickets, pedidoCatActive]);
+
+  const pedidoCards = React.createElement('div', {
+    style: { display: 'flex', flexDirection: 'column' as const, background: '#f6f6f6', borderRadius: 16, padding: '0 24px' },
+  },
+    pedidoFilteredTickets.length === 0
+      ? [React.createElement('p', { key: 'empty-pedido', style: { padding: '24px 0', fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhum pedido nesta categoria.')]
+      : pedidoFilteredTickets.map((t, i) => ticketCard(t, i)));
+
+  const pedidosSection = React.createElement('div', {
+    style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' },
+  },
+    React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Gestão de cadastros e pedidos'),
+    pedidoChips,
+    pedidoCards);
+
   return React.createElement(React.Fragment, null,
     headerRow,
     metricCards,
+    sep,
+    pedidosSection,
     sep,
     meuSection,
     sep,

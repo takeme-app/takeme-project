@@ -9,8 +9,9 @@ import {
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
-import { fetchMotoristas } from '../data/queries';
+import { fetchMotoristas, fetchMotoristaTableRows } from '../data/queries';
 import type { MotoristaListItem } from '../data/types';
+import type { MotoristaTableRow } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -43,14 +44,14 @@ type MotoristaRow = {
 };
 
 const tableCols = [
-  { label: 'Motoristas', flex: '1 1 16%', minWidth: 150 },
-  { label: 'Origem', flex: '1 1 14%', minWidth: 130 },
-  { label: 'Destino', flex: '1 1 14%', minWidth: 120 },
-  { label: 'Data', flex: '0 0 100px', minWidth: 100 },
-  { label: 'Embarque', flex: '0 0 80px', minWidth: 80 },
+  { label: 'Motoristas', flex: '1 1 15%', minWidth: 140 },
+  { label: 'Origem', flex: '1 1 15%', minWidth: 120 },
+  { label: 'Destino', flex: '1 1 15%', minWidth: 120 },
+  { label: 'Data', flex: '0 0 96px', minWidth: 96 },
+  { label: 'Embarque', flex: '0 0 76px', minWidth: 76 },
   { label: 'Chegada', flex: '0 0 72px', minWidth: 72 },
-  { label: 'Status', flex: '0 0 130px', minWidth: 130 },
-  { label: 'Visualizar/Editar', flex: '0 0 96px', minWidth: 96 },
+  { label: 'Status', flex: '0 0 120px', minWidth: 120 },
+  { label: 'Visualizar/Editar', flex: '0 0 90px', minWidth: 90 },
 ];
 
 const statusStyles: Record<string, { bg: string; color: string }> = {
@@ -70,7 +71,7 @@ const chartLegend = [
 // ── Local styles ──────────────────────────────────────────────────────
 const s = {
   metricCard: {
-    flex: '1 1 calc(25% - 18px)', minWidth: 180, background: '#f6f6f6', borderRadius: 16,
+    flex: '1 1 0', minWidth: 0, background: '#f6f6f6', borderRadius: 16,
     padding: '16px 20px', display: 'flex', flexDirection: 'column' as const, gap: 24,
     boxSizing: 'border-box' as const,
   } as React.CSSProperties,
@@ -104,14 +105,38 @@ const s = {
 export default function MotoristasScreen() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const [trocarOpen, setTrocarOpen] = useState(false);
+  const [trocarSelected, setTrocarSelected] = useState(0);
+  const [trocarDate, setTrocarDate] = useState('01 de setembro');
+  const [trocarMotivo, setTrocarMotivo] = useState('');
+  const [filtroOpen, setFiltroOpen] = useState(false);
+  const [filtroDateInicio, setFiltroDateInicio] = useState('05 de setembro');
+  const [filtroDateFim, setFiltroDateFim] = useState('30 de setembro');
+  const [filtroDatasIncluidas, setFiltroDatasIncluidas] = useState<'passadas' | 'passadas_futuras' | 'futuras'>('passadas_futuras');
+  const [filtroStatus, setFiltroStatus] = useState<'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('em_andamento');
+  const [filtroCategoria, setFiltroCategoria] = useState<'todos' | 'take_me' | 'parceiro'>('take_me');
+  // Table filter state
+  const [tblFilterOpen, setTblFilterOpen] = useState(false);
+  const [tblIdMotorista, setTblIdMotorista] = useState('');
+  const [tblNomeMotorista, setTblNomeMotorista] = useState('');
+  const [tblIdViagem, setTblIdViagem] = useState('');
+  const [tblOrigem, setTblOrigem] = useState('');
+  const [tblDestino, setTblDestino] = useState('');
+  const [tblEmbarque, setTblEmbarque] = useState('');
+  const [tblChegada, setTblChegada] = useState('');
+  const [tblDataInicial, setTblDataInicial] = useState('01 de setembro');
+  const [tblFiltroCategoria, setTblFiltroCategoria] = useState('Take Me');
 
   // ── Real data from Supabase ─────────────────────────────────────────
   const [motoristasData, setMotoristasData] = useState<MotoristaListItem[]>([]);
+  const [tableData, setTableData] = useState<MotoristaTableRow[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    fetchMotoristas().then((items) => { if (!cancelled) { setMotoristasData(items); setDataLoading(false); } });
+    Promise.all([fetchMotoristas(), fetchMotoristaTableRows()]).then(([stats, rows]) => {
+      if (!cancelled) { setMotoristasData(stats); setTableData(rows); setDataLoading(false); }
+    });
     return () => { cancelled = true; };
   }, []);
 
@@ -129,14 +154,50 @@ export default function MotoristasScreen() {
 
   const topDrivers = motoristasData.slice(0, 5).map((m) => ({ viagens: m.totalViagens, nome: m.nome }));
 
-  const tableRows: MotoristaRow[] = motoristasData.map((m) => ({
-    nome: m.nome,
-    origem: '—',
-    destino: '—',
-    data: '—',
-    embarque: '—',
-    chegada: '—',
-    status: m.viagensAtivas > 0 ? 'Em andamento' as const : 'Concluído' as const,
+  const filteredTableData = tableData.filter((t) => {
+    if (search) {
+      const q = search.toLowerCase();
+      if (!t.nome.toLowerCase().includes(q) && !t.origem.toLowerCase().includes(q) && !t.destino.toLowerCase().includes(q)) return false;
+    }
+    const nn = tblNomeMotorista.trim().toLowerCase();
+    if (nn && !t.nome.toLowerCase().includes(nn)) return false;
+    const oo = tblOrigem.trim().toLowerCase();
+    if (oo && !t.origem.toLowerCase().includes(oo)) return false;
+    const dd = tblDestino.trim().toLowerCase();
+    if (dd && !t.destino.toLowerCase().includes(dd)) return false;
+    const he = tblEmbarque.trim().toLowerCase();
+    if (he && !t.embarque.toLowerCase().includes(he)) return false;
+    const hc = tblChegada.trim().toLowerCase();
+    if (hc && !t.chegada.toLowerCase().includes(hc)) return false;
+    const vid = tblIdViagem.trim().toLowerCase().replace(/#/g, '');
+    if (vid && !t.tripId.toLowerCase().includes(vid) && !t.data.toLowerCase().includes(vid)) return false;
+    const mid = tblIdMotorista.trim().toLowerCase().replace(/#/g, '');
+    if (mid && !t.driverId.toLowerCase().includes(mid) && !t.nome.toLowerCase().includes(mid)) return false;
+
+    if (filtroStatus === 'em_andamento' && t.status !== 'Em andamento') return false;
+    if (filtroStatus === 'agendadas' && t.status !== 'Agendado') return false;
+    if (filtroStatus === 'concluidas' && t.status !== 'Concluído') return false;
+    if (filtroStatus === 'canceladas' && t.status !== 'Cancelado') return false;
+
+    // Filtro por categoria (Take Me / Parceiro)
+    if (filtroCategoria === 'take_me' && t.categoria !== 'take_me') return false;
+    if (filtroCategoria === 'parceiro' && t.categoria !== 'parceiro') return false;
+
+    // Filtro da tabela por categoria
+    if (tblFiltroCategoria === 'Take Me' && t.categoria !== 'take_me') return false;
+    if (tblFiltroCategoria === 'Motorista parceiro' && t.categoria !== 'parceiro') return false;
+
+    return true;
+  });
+
+  const tableRows: MotoristaRow[] = filteredTableData.map((t) => ({
+    nome: t.nome,
+    origem: t.origem,
+    destino: t.destino,
+    data: t.data,
+    embarque: t.embarque,
+    chegada: t.chegada,
+    status: t.status,
   }));
 
   // ── Search row ────────────────────────────────────────────────────────
@@ -162,6 +223,7 @@ export default function MotoristasScreen() {
     // Trocar motorista button
     React.createElement('button', {
       type: 'button',
+      onClick: () => setTrocarOpen(true),
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999,
@@ -171,6 +233,8 @@ export default function MotoristasScreen() {
     // Filtro button
     React.createElement('button', {
       type: 'button',
+      onClick: () => setFiltroOpen(true),
+      'data-testid': 'motoristas-open-page-filter',
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#f1f1f1', border: 'none', borderRadius: 999,
@@ -234,6 +298,8 @@ export default function MotoristasScreen() {
     React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font } }, 'Lista de motoristas'),
     React.createElement('button', {
       type: 'button',
+      onClick: () => setTblFilterOpen(true),
+      'data-testid': 'motoristas-open-table-filter',
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 40, padding: '8px 24px',
         background: '#fff', border: 'none', borderRadius: 999, cursor: 'pointer',
@@ -255,12 +321,14 @@ export default function MotoristasScreen() {
 
   // Table rows
   const tableRowEls = tableRows.map((row, idx) => {
+    const trip = filteredTableData[idx];
     const initial = row.nome.charAt(0);
     const avatarBg = avatarColors[initial] || '#999';
     const st = statusStyles[row.status] || { bg: '#eee', color: '#333' };
 
     return React.createElement('div', {
-      key: idx,
+      key: trip?.tripId ?? idx,
+      'data-testid': 'motorista-table-row',
       style: {
         display: 'flex', height: 64, alignItems: 'center', padding: '0 16px',
         borderBottom: '1px solid #d9d9d9', background: '#f6f6f6',
@@ -268,19 +336,19 @@ export default function MotoristasScreen() {
     },
       // Motoristas (avatar + name)
       React.createElement('div', {
-        style: { ...cellBase, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth, gap: 10 },
+        style: { ...cellBase, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth, gap: 8, overflow: 'hidden' },
       },
         React.createElement('div', {
           style: {
-            width: 40, height: 40, borderRadius: '50%', background: avatarBg, flexShrink: 0,
+            width: 36, height: 36, borderRadius: '50%', background: avatarBg, flexShrink: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
           },
-        }, React.createElement('span', { style: { color: '#fff', fontSize: 16, fontWeight: 600, ...font } }, initial)),
-        React.createElement('span', { style: { fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, row.nome)),
+        }, React.createElement('span', { style: { color: '#fff', fontSize: 14, fontWeight: 600, ...font } }, initial)),
+        React.createElement('span', { style: { fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 } }, row.nome)),
       // Origem
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, row.origem),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 } }, row.origem),
       // Destino
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, row.destino),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 } }, row.destino),
       // Data
       React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth } }, row.data),
       // Embarque
@@ -300,8 +368,12 @@ export default function MotoristasScreen() {
       React.createElement('div', {
         style: { flex: tableCols[7].flex, minWidth: tableCols[7].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
       },
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar' }, eyeActionSvg),
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar' }, pencilActionSvg)));
+        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar', onClick: () => {
+          const t = trip;
+          if (!t) return;
+          navigate(`/motoristas/${t.driverId}/viagem/${t.tripId}`, { state: { trip: { passageiro: t.nome, origem: t.origem, destino: t.destino, data: t.data, embarque: t.embarque, chegada: t.chegada, status: t.status === 'Concluído' ? 'concluído' : t.status === 'Cancelado' ? 'cancelado' : t.status === 'Agendado' ? 'agendado' : 'em_andamento' } } });
+        } }, eyeActionSvg),
+        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => { if (trip) navigate(`/motoristas/${trip.driverId}/editar`); } }, pencilActionSvg)));
   });
 
   const tableSection = React.createElement('div', {
@@ -318,6 +390,285 @@ export default function MotoristasScreen() {
       React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando motoristas...'));
   }
 
+  // ── Trocar motorista slide panel ──────────────────────────────────────
+  const tmDrivers = tableData.length > 0
+    ? [...new Map(tableData.map((t) => [t.driverId, t])).values()].map((t, i) => ({
+        nome: t.nome, rota: `${t.origem} → ${t.destino}`, data: t.data,
+        valorTotal: 'R$ 150,00', valorUnitario: 'R$ 75,00', pessoasRestantes: '2', ocupacao: '80%',
+      }))
+    : [{ nome: 'Motorista', rota: '—', data: '—', valorTotal: '—', valorUnitario: '—', pessoasRestantes: '—', ocupacao: '—' }];
+
+  const radioSvg = (selected: boolean) => React.createElement('svg', { width: 22, height: 22, viewBox: '0 0 24 24', fill: 'none' },
+    React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#0d0d0d', strokeWidth: 2, fill: 'none' }),
+    selected ? React.createElement('circle', { cx: 12, cy: 12, r: 5, fill: '#0d0d0d' }) : null);
+
+  const tmField = (label: string, val: string) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 2 } },
+      React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#0d0d0d', ...font } }, label),
+      React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, val));
+
+  const trocarMotoristaPanel = trocarOpen ? React.createElement('div', {
+    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000 },
+    onClick: () => setTrocarOpen(false),
+  },
+    React.createElement('div', {
+      style: {
+        position: 'fixed' as const, top: 0, right: 0, bottom: 0, width: '100%', maxWidth: 480,
+        background: '#fff', borderRadius: '16px 0 0 16px', padding: '28px 24px',
+        display: 'flex', flexDirection: 'column' as const, gap: 20,
+        overflowY: 'auto' as const, maxHeight: '100vh',
+      },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      // Header
+      React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' } },
+        React.createElement('div', null,
+          React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Trocar motorista'),
+          React.createElement('p', { style: { fontSize: 13, color: '#767676', margin: '4px 0 0', ...font } }, 'Selecione outro motorista disponível para continuar.')),
+        React.createElement('button', {
+          type: 'button', onClick: () => setTrocarOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      // Data da atividade
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Data da atividade'),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, 'Data'),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px' } },
+          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+            React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+            React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
+          React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, trocarDate))),
+      // Viagem atual
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Viagem atual'),
+      ...tmDrivers.slice(0, 1).map((d, i) =>
+        React.createElement('button', {
+          key: `current-${i}`, type: 'button',
+          onClick: () => setTrocarSelected(i),
+          style: { display: 'flex', gap: 12, alignItems: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' as const },
+        },
+          radioSvg(trocarSelected === i),
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+            React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, d.nome),
+            tmField('Origem - Destino', d.rota),
+            tmField('Data', d.data),
+            tmField('Valor total', d.valorTotal),
+            tmField('Valor unitário', d.valorUnitario),
+            tmField('Pessoas restantes', d.pessoasRestantes),
+            tmField('Ocupação do bagageiro', d.ocupacao)))),
+      // Outras viagens disponíveis
+      tmDrivers.length > 1 ? React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Outras viagens disponíveis') : null,
+      ...tmDrivers.slice(1).map((d, i) =>
+        React.createElement('button', {
+          key: `other-${i}`, type: 'button',
+          onClick: () => setTrocarSelected(i + 1),
+          style: { display: 'flex', gap: 12, alignItems: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' as const },
+        },
+          radioSvg(trocarSelected === i + 1),
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+            React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, d.nome),
+            tmField('Origem - Destino', d.rota),
+            tmField('Data', d.data),
+            tmField('Valor total', d.valorTotal),
+            tmField('Valor unitário', d.valorUnitario),
+            tmField('Pessoas restantes', d.pessoasRestantes),
+            tmField('Ocupação do bagageiro', d.ocupacao)))),
+      // Motivo
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, 'Motivo da troca'),
+        React.createElement('textarea', {
+          value: trocarMotivo,
+          onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => setTrocarMotivo(e.target.value),
+          placeholder: 'Descreva o motivo da troca...',
+          style: { width: '100%', minHeight: 80, borderRadius: 8, border: '1px solid #e2e2e2', padding: 12, fontSize: 14, color: '#0d0d0d', resize: 'vertical' as const, outline: 'none', boxSizing: 'border-box' as const, ...font },
+        })),
+      // Buttons
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, marginTop: 8 } },
+        React.createElement('button', {
+          type: 'button', onClick: () => setTrocarOpen(false),
+          style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+        }, 'Confirmar troca'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setTrocarOpen(false),
+          style: { height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#0d0d0d', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+        }, 'Cancelar')))) : null;
+
+  // ── Filtro modal ───────────────────────────────────────────────────────
+  const fRadio = (selected: boolean, label: string, onClick: () => void) =>
+    React.createElement('button', {
+      type: 'button', onClick,
+      style: { display: 'flex', alignItems: 'center', gap: 10, background: 'none', border: 'none', cursor: 'pointer', padding: '6px 0' },
+    },
+      React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none' },
+        React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#0d0d0d', strokeWidth: 2 }),
+        selected ? React.createElement('circle', { cx: 12, cy: 12, r: 5, fill: '#0d0d0d' }) : null),
+      React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, label));
+
+  const fChip = (label: string, active: boolean, onClick: () => void) =>
+    React.createElement('button', {
+      type: 'button', onClick,
+      style: {
+        height: 36, padding: '0 16px', borderRadius: 999,
+        border: active ? 'none' : '1px solid #e2e2e2',
+        background: active ? '#0d0d0d' : '#fff', color: active ? '#fff' : '#0d0d0d',
+        fontSize: 14, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' as const, ...font,
+      },
+    }, label);
+
+  const fDateField = (label: string, value: string) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+      React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, label),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px' } },
+        React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+          React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
+        React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, value)));
+
+  const filtroModal = filtroOpen ? React.createElement('div', {
+    style: {
+      position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+    },
+    onClick: () => setFiltroOpen(false),
+    role: 'dialog' as const,
+    'aria-modal': true,
+    'aria-labelledby': 'motoristas-filtro-pagina-titulo',
+  },
+    React.createElement('div', {
+      style: {
+        background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, padding: '28px 32px',
+        display: 'flex', flexDirection: 'column' as const, gap: 20,
+        boxShadow: '0 20px 60px rgba(0,0,0,.15)', maxHeight: '90vh', overflowY: 'auto' as const,
+      },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      // Header
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('h2', { id: 'motoristas-filtro-pagina-titulo', style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setFiltroOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      // Data da atividade
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Data da atividade'),
+      fDateField('Data inicial', filtroDateInicio),
+      fDateField('Data final', filtroDateFim),
+      // Datas incluídas
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Datas incluídas'),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+        fRadio(filtroDatasIncluidas === 'passadas', 'Somente passadas', () => setFiltroDatasIncluidas('passadas')),
+        fRadio(filtroDatasIncluidas === 'passadas_futuras', 'Passadas e futuras', () => setFiltroDatasIncluidas('passadas_futuras')),
+        fRadio(filtroDatasIncluidas === 'futuras', 'Somente futuras', () => setFiltroDatasIncluidas('futuras'))),
+      // Status da viagem
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Status da viagem'),
+      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        fChip('Em andamento', filtroStatus === 'em_andamento', () => setFiltroStatus('em_andamento')),
+        fChip('Agendadas', filtroStatus === 'agendadas', () => setFiltroStatus('agendadas')),
+        fChip('Concluídas', filtroStatus === 'concluidas', () => setFiltroStatus('concluidas')),
+        fChip('Canceladas', filtroStatus === 'canceladas', () => setFiltroStatus('canceladas'))),
+      // Categoria
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Categoria'),
+      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        fChip('Todos', filtroCategoria === 'todos', () => setFiltroCategoria('todos')),
+        fChip('Take Me', filtroCategoria === 'take_me', () => setFiltroCategoria('take_me')),
+        fChip('Motorista parceiro', filtroCategoria === 'parceiro', () => setFiltroCategoria('parceiro'))),
+      // Buttons
+      React.createElement('button', {
+        type: 'button', onClick: () => setFiltroOpen(false),
+        style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+      }, 'Aplicar filtro'),
+      React.createElement('button', {
+        type: 'button', onClick: () => setFiltroOpen(false),
+        style: { height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#0d0d0d', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+      }, 'Voltar'))) : null;
+
+  // ── Table filter modal (Filtro da tabela) ──────────────────────────────
+  const tblField = (label: string, placeholder: string, value: string, onChange: (v: string) => void) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+      React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
+      React.createElement('input', {
+        type: 'text', value, placeholder,
+        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+        style: { height: 44, borderRadius: 8, background: '#f1f1f1', border: 'none', padding: '0 16px', fontSize: 14, color: '#0d0d0d', outline: 'none', ...font },
+      }));
+
+  const tblChip = (label: string, active: boolean, onClick: () => void) =>
+    React.createElement('button', {
+      type: 'button', onClick,
+      style: {
+        height: 36, padding: '0 16px', borderRadius: 999,
+        border: active ? 'none' : '1px solid #e2e2e2',
+        background: active ? '#0d0d0d' : '#fff', color: active ? '#fff' : '#0d0d0d',
+        fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
+      },
+    }, label);
+
+  const calSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
+    React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+    React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' }));
+
+  const tblFilterModal = tblFilterOpen ? React.createElement('div', {
+    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+    onClick: () => setTblFilterOpen(false),
+    role: 'dialog' as const,
+    'aria-modal': true,
+    'aria-labelledby': 'motoristas-filtro-tabela-titulo',
+  },
+    React.createElement('div', {
+      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 480, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 16, boxShadow: '0 20px 60px rgba(0,0,0,.15)', maxHeight: '90vh', overflowY: 'auto' as const },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      // Header
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('h2', { id: 'motoristas-filtro-tabela-titulo', style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro da tabela'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setTblFilterOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      // Fields
+      tblField('Id do motorista', 'Ex: #12312312', tblIdMotorista, setTblIdMotorista),
+      tblField('Nome do motorista', 'Ex: Carlos Silva', tblNomeMotorista, setTblNomeMotorista),
+      tblField('ID da viagem', 'Ex: #12312312', tblIdViagem, setTblIdViagem),
+      tblField('Origem', 'Ex: São Paulo, SP', tblOrigem, setTblOrigem),
+      tblField('Destino', 'Ex: Rio de janeiro, JR', tblDestino, setTblDestino),
+      tblField('Hora do embarque', 'Ex: 09:00', tblEmbarque, setTblEmbarque),
+      tblField('Hora de chegada', 'Ex: 12:00', tblChegada, setTblChegada),
+      // Data inicial
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+        React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Data inicial'),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px' } },
+          calSvg,
+          React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, tblDataInicial))),
+      // Status da viagem
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Status da viagem'),
+      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        ...([
+          { id: 'em_andamento' as const, label: 'Em andamento' },
+          { id: 'agendadas' as const, label: 'Agendadas' },
+          { id: 'concluidas' as const, label: 'Concluídas' },
+          { id: 'canceladas' as const, label: 'Canceladas' },
+        ].map((o) =>
+          tblChip(o.label, filtroStatus === o.id, () => setFiltroStatus(o.id))))),
+      // Categoria
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Categoria'),
+      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        ...['Todos', 'Take Me', 'Motorista parceiro'].map((c) =>
+          tblChip(c, tblFiltroCategoria === c, () => setTblFiltroCategoria(c)))),
+      // Buttons
+      React.createElement('button', {
+        type: 'button', onClick: () => setTblFilterOpen(false),
+        style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+      }, 'Aplicar filtro'),
+      React.createElement('button', {
+        type: 'button', onClick: () => setTblFilterOpen(false),
+        style: { height: 40, background: 'none', border: 'none', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
+      }, 'Voltar'))) : null;
+
   // ── Render ─────────────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Motoristas'),
@@ -325,5 +676,8 @@ export default function MotoristasScreen() {
     metricCards,
     secondRow,
     chartSection,
-    tableSection);
+    tableSection,
+    trocarMotoristaPanel,
+    filtroModal,
+    tblFilterModal);
 }

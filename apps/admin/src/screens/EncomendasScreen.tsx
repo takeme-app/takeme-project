@@ -3,12 +3,13 @@
  * Uses React.createElement() calls (NOT JSX).
  */
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
-import { fetchEncomendas, fetchEncomendaCounts, type EncomendaCounts } from '../data/queries';
+import { fetchEncomendas, fetchEncomendaCounts, updateShipmentStatus, updateDependentShipmentStatus, type EncomendaCounts } from '../data/queries';
 import type { EncomendaListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -24,6 +25,8 @@ const chevronDownSvg = React.createElement('svg', { width: 14, height: 14, viewB
   React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 
 type EncomendaRow = {
+  id: string;
+  tipo: EncomendaListItem['tipo'];
   destino: string;
   origem: string;
   remetente: string;
@@ -31,6 +34,7 @@ type EncomendaRow = {
   embarque: string;
   chegada: string;
   status: 'Cancelado' | 'Concluído' | 'Agendado' | 'Em andamento';
+  rawStatus: string;
 };
 
 const tableCols = [
@@ -50,6 +54,116 @@ const statusStyles: Record<string, { bg: string; color: string }> = {
   'Agendado': { bg: '#a8c6ef', color: '#102d57' },
   'Em andamento': { bg: '#fee59a', color: '#654c01' },
 };
+
+/** Filtro por rótulo dos chips (página ou tabela) — alinhado ao `status` mapeado da API. */
+function encomendaRowMatchesStatusLabel(
+  rowStatus: EncomendaRow['status'],
+  filtroLabel: string,
+): boolean {
+  if (!filtroLabel || filtroLabel === 'Todos') return true;
+  const statusLower = rowStatus.toLowerCase();
+  const filtroLower = filtroLabel.toLowerCase();
+  if (filtroLower === 'em andamento' && !statusLower.includes('andamento') && !statusLower.includes('progress')) return false;
+  if (filtroLower === 'agendadas' && !statusLower.includes('agendad') && !statusLower.includes('confirmed')) return false;
+  if (filtroLower === 'concluídas' && !statusLower.includes('conclu') && !statusLower.includes('delivered')) return false;
+  if (filtroLower === 'canceladas' && !statusLower.includes('cancel')) return false;
+  return true;
+}
+
+/** Chips do modal da tabela (Pequeno / Medio / Grande) ↔ `package_size` em shipments. */
+function encomendaItemMatchesTipoTable(
+  item: EncomendaListItem | undefined,
+  tblTipo: string,
+): boolean {
+  if (tblTipo === 'Todos') return true;
+  const pkg = (item?.packageSize || '').toLowerCase().trim();
+  const t = tblTipo.toLowerCase();
+  if (t === 'pequeno') {
+    return pkg.includes('small') || pkg.includes('pequen') || pkg === 's' || pkg === 'pequena';
+  }
+  if (t === 'medio') {
+    return pkg.includes('medium') || pkg.includes('medio') || pkg.includes('médio') || pkg === 'm';
+  }
+  if (t === 'grande') {
+    return pkg.includes('large') || pkg.includes('grand') || pkg === 'l' || pkg === 'xl';
+  }
+  return true;
+}
+
+/** Data local `YYYY-MM-DD` a partir de ISO. */
+function isoDatePartLocal(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Hora local `HH:mm` a partir de ISO. */
+function isoTimeHHmmLocal(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** "9:00" → "09:00"; null se inválido. */
+function parseHHmm(needle: string): string | null {
+  const t = needle.trim();
+  if (!t) return null;
+  const m = t.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+}
+
+/**
+ * Filtros extra do modal da tabela. Opção A do plano: colunas Embarque/Chegada são "—";
+ * horários filtram pela hora local de `createdAtIso` (heurística até haver campos reais).
+ */
+function encomendaExtrasMatch(
+  item: EncomendaListItem | undefined,
+  opts: {
+    tblDataInicial: string;
+    tblCodigo: string;
+    tblDestinatario: string;
+    tblHoraEmbarque: string;
+    tblIntervaloChegada: string;
+    tblIntervaloEmbarque: string;
+  },
+): boolean {
+  if (!item) return false;
+  const di = opts.tblDataInicial.trim();
+  if (di) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(di)) {
+      const rowDay = isoDatePartLocal(item.createdAtIso);
+      if (!rowDay || rowDay < di) return false;
+    } else {
+      const blob = `${item.data} ${item.createdAtIso}`.toLowerCase();
+      if (!blob.includes(di.toLowerCase())) return false;
+    }
+  }
+  const cod = opts.tblCodigo.replace(/^#/, '').replace(/\s/g, '').toLowerCase();
+  if (cod && !item.id.toLowerCase().includes(cod)) return false;
+  const dest = opts.tblDestinatario.trim().toLowerCase();
+  if (dest && !item.remetente.toLowerCase().includes(dest)) return false;
+  const emb = parseHHmm(opts.tblHoraEmbarque);
+  if (emb && isoTimeHHmmLocal(item.createdAtIso) !== emb) return false;
+  const matchInterval = (raw: string) => {
+    const s = raw.trim();
+    if (!s) return true;
+    const p = parseHHmm(s);
+    if (p) return isoTimeHHmmLocal(item.createdAtIso) === p;
+    return item.createdAtIso.toLowerCase().includes(s.toLowerCase());
+  };
+  if (!matchInterval(opts.tblIntervaloChegada)) return false;
+  if (!matchInterval(opts.tblIntervaloEmbarque)) return false;
+  return true;
+}
 
 // ── Styles ──────────────────────────────────────────────────────────────
 const s = {
@@ -75,8 +189,33 @@ const s = {
   progressPct: { fontSize: 12, fontWeight: 600, color: '#0d0d0d', marginTop: 2, ...font } as React.CSSProperties,
 };
 
+const UF_NOMES = ['Todos os estados', 'Acre', 'Alagoas', 'Amapá', 'Amazonas', 'Bahia', 'Ceará', 'Distrito Federal', 'Espírito Santo', 'Goiás', 'Maranhão', 'Mato Grosso', 'Mato Grosso do Sul', 'Minas Gerais', 'Pará', 'Paraíba', 'Paraná', 'Pernambuco', 'Piauí', 'Rio de Janeiro', 'Rio Grande do Norte', 'Rio Grande do Sul', 'Rondônia', 'Roraima', 'Santa Catarina', 'São Paulo', 'Sergipe', 'Tocantins'];
+
 export default function EncomendasScreen() {
+  const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const [estadosOpen, setEstadosOpen] = useState(false);
+  const [estadoSel, setEstadoSel] = useState('Todos os estados');
+  // Filtro modal state
+  const [filtroOpen, setFiltroOpen] = useState(false);
+  const [filtroDataIni, setFiltroDataIni] = useState('');
+  const [filtroDataFim, setFiltroDataFim] = useState('');
+  const [filtroDatas, setFiltroDatas] = useState<'passadas' | 'ambas' | 'futuras' | null>(null);
+  const [filtroStatus, setFiltroStatus] = useState('Em andamento');
+  const [filtroCategoria, setFiltroCategoria] = useState('Take Me');
+  // Table filter modal state
+  const [tblFiltroOpen, setTblFiltroOpen] = useState(false);
+  const [tblOrigem, setTblOrigem] = useState('');
+  const [tblDestino, setTblDestino] = useState('');
+  const [tblHoraEmbarque, setTblHoraEmbarque] = useState('');
+  const [tblIntervaloChegada, setTblIntervaloChegada] = useState('');
+  const [tblIntervaloEmbarque, setTblIntervaloEmbarque] = useState('');
+  const [tblDataInicial, setTblDataInicial] = useState('');
+  const [tblRemetente, setTblRemetente] = useState('');
+  const [tblDestinatario, setTblDestinatario] = useState('');
+  const [tblCodigo, setTblCodigo] = useState('');
+  const [tblStatusEncomenda, setTblStatusEncomenda] = useState('Em andamento');
+  const [tblTipoEncomenda, setTblTipoEncomenda] = useState('Todos');
 
   // ── Real data from Supabase ─────────────────────────────────────────
   const [encomendasData, setEncomendasData] = useState<EncomendaListItem[]>([]);
@@ -92,7 +231,9 @@ export default function EncomendasScreen() {
     return () => { cancelled = true; };
   }, []);
 
-  const tableRows: EncomendaRow[] = encomendasData.map((e) => ({
+  const tableRowsAll: EncomendaRow[] = encomendasData.map((e) => ({
+    id: e.id,
+    tipo: e.tipo,
     destino: e.destino,
     origem: e.origem,
     remetente: e.remetente,
@@ -100,7 +241,42 @@ export default function EncomendasScreen() {
     embarque: '—',
     chegada: '—',
     status: e.status,
+    rawStatus: String((e as { rawStatus?: string }).rawStatus ?? ''),
   }));
+
+  // Apply filters
+  const tableRows = tableRowsAll.filter((row) => {
+    const q = search.trim().toLowerCase();
+    if (q) {
+      const blob = `${row.origem} ${row.destino} ${row.remetente}`.toLowerCase();
+      if (!blob.includes(q)) return false;
+    }
+    const o = tblOrigem.trim().toLowerCase();
+    if (o && !row.origem.toLowerCase().includes(o)) return false;
+    const d = tblDestino.trim().toLowerCase();
+    if (d && !row.destino.toLowerCase().includes(d)) return false;
+    const rem = tblRemetente.trim().toLowerCase();
+    if (rem && !row.remetente.toLowerCase().includes(rem)) return false;
+    if (!encomendaRowMatchesStatusLabel(row.status, tblStatusEncomenda)) return false;
+    if (tblTipoEncomenda !== 'Todos') {
+      const item = encomendasData.find((x) => x.id === row.id);
+      if (!encomendaItemMatchesTipoTable(item, tblTipoEncomenda)) return false;
+    }
+    const item = encomendasData.find((x) => x.id === row.id);
+    if (
+      !encomendaExtrasMatch(item, {
+        tblDataInicial,
+        tblCodigo,
+        tblDestinatario,
+        tblHoraEmbarque,
+        tblIntervaloChegada,
+        tblIntervaloEmbarque,
+      })
+    ) {
+      return false;
+    }
+    return true;
+  });
 
   const metricsRow1 = [
     { title: 'Total de Entregas', value: String(eCounts.total), pct: '', pctColor: '', desc: '' },
@@ -150,16 +326,38 @@ export default function EncomendasScreen() {
         onChange: (e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value),
         style: { flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 14, color: '#0d0d0d', ...font },
       })),
-    React.createElement('button', {
-      type: 'button',
-      style: {
-        display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 16px',
-        background: '#fff', border: '1px solid #e2e2e2', borderRadius: 999,
-        fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const,
+    React.createElement('div', { style: { position: 'relative' as const } },
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => setEstadosOpen(!estadosOpen),
+        style: {
+          display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 16px',
+          background: '#fff', border: '1px solid #e2e2e2', borderRadius: 999,
+          fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const,
+        },
+      }, estadoSel, chevronDownSvg),
+      estadosOpen ? React.createElement('div', {
+        style: {
+          position: 'absolute' as const, top: 52, left: 0, background: '#fff', borderRadius: 12,
+          boxShadow: '0 8px 30px rgba(0,0,0,0.15)', minWidth: 240, maxHeight: 300,
+          overflowY: 'auto' as const, zIndex: 50,
+        },
       },
-    }, 'Todos os estados', chevronDownSvg),
+        ...UF_NOMES.map((uf, i, arr) =>
+          React.createElement('button', {
+            key: uf, type: 'button',
+            onClick: () => { setEstadoSel(uf); setEstadosOpen(false); },
+            style: {
+              display: 'block', width: '100%', padding: '14px 20px', background: 'none',
+              borderTop: 'none', borderRight: 'none', borderLeft: 'none',
+              borderBottom: i < arr.length - 1 ? '1px solid #f1f1f1' : 'none',
+              fontSize: 14, fontWeight: estadoSel === uf ? 600 : 400,
+              color: estadoSel === uf ? '#0d0d0d' : '#767676', cursor: 'pointer', textAlign: 'left' as const, ...font,
+            },
+          }, uf))) : null),
     React.createElement('button', {
       type: 'button',
+      onClick: () => setFiltroOpen(true),
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#f1f1f1', border: 'none', borderRadius: 999,
@@ -214,6 +412,8 @@ export default function EncomendasScreen() {
     React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font } }, 'Lista de encomendas'),
     React.createElement('button', {
       type: 'button',
+      onClick: () => setTblFiltroOpen(true),
+      'data-testid': 'encomendas-open-table-filter',
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 40, padding: '8px 24px',
         background: '#fff', border: 'none', borderRadius: 999, cursor: 'pointer',
@@ -232,10 +432,12 @@ export default function EncomendasScreen() {
       style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 8px', display: 'flex', alignItems: 'center', height: '100%' },
     }, c.label)));
 
-  const tableRowEls = tableRows.map((row, idx) => {
+  const tableRowEls = tableRows.map((row) => {
     const st = statusStyles[row.status];
+    const item = encomendasData.find((x) => x.id === row.id);
     return React.createElement('div', {
-      key: idx,
+      key: row.id,
+      'data-testid': 'encomenda-table-row',
       style: {
         display: 'flex', height: 64, alignItems: 'center', padding: '0 16px',
         borderBottom: '1px solid #d9d9d9', background: '#f6f6f6',
@@ -258,8 +460,38 @@ export default function EncomendasScreen() {
       React.createElement('div', {
         style: { flex: tableCols[7].flex, minWidth: tableCols[7].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
       },
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar' }, eyeActionSvg),
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar' }, pencilActionSvg)));
+        React.createElement('button', {
+          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar',
+          onClick: () => { if (item) navigate(`/encomendas/${item.id}/editar`, { state: { from: 'encomendas' } }); },
+        }, eyeActionSvg),
+        React.createElement('button', {
+          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
+          onClick: () => { if (item) navigate(`/encomendas/${item.id}/editar`, { state: { from: 'encomendas' } }); },
+        }, pencilActionSvg),
+        row.rawStatus === 'pending_review' ? React.createElement('button', {
+          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Confirmar encomenda',
+          onClick: async () => {
+            if (item && confirm('Confirmar esta encomenda?')) {
+              if (item.tipo === 'dependent_shipment') await updateDependentShipmentStatus(item.id, 'confirmed');
+              else await updateShipmentStatus(item.id, 'confirmed');
+              const [items, c] = await Promise.all([fetchEncomendas(), fetchEncomendaCounts()]);
+              setEncomendasData(items); setECounts(c);
+            }
+          },
+        }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#22c55e', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))) : null,
+        row.status !== 'Cancelado' && row.status !== 'Concluído' ? React.createElement('button', {
+          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Cancelar encomenda',
+          onClick: async () => {
+            if (item && confirm('Cancelar esta encomenda?')) {
+              if (item.tipo === 'dependent_shipment') await updateDependentShipmentStatus(item.id, 'cancelled');
+              else await updateShipmentStatus(item.id, 'cancelled');
+              const [items, c] = await Promise.all([fetchEncomendas(), fetchEncomendaCounts()]);
+              setEncomendasData(items); setECounts(c);
+            }
+          },
+        }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#b53838', strokeWidth: 2, strokeLinecap: 'round' }))) : null));
   });
 
   const tableSection = React.createElement('div', {
@@ -276,6 +508,176 @@ export default function EncomendasScreen() {
       React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando encomendas...'));
   }
 
+  // ── Filtro modal (Figma 849-38738) ────────────────────────────────────
+  const filtroRadio = (label: string, val: 'passadas' | 'ambas' | 'futuras') =>
+    React.createElement('button', {
+      type: 'button', onClick: () => setFiltroDatas(filtroDatas === val ? null : val),
+      style: { display: 'flex', alignItems: 'center', gap: 12, background: 'none', border: 'none', cursor: 'pointer', padding: '10px 0', width: '100%' },
+    },
+      React.createElement('div', {
+        style: { width: 20, height: 20, borderRadius: '50%', border: `2px solid ${filtroDatas === val ? '#0d0d0d' : '#c4c4c4'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+      }, filtroDatas === val ? React.createElement('div', { style: { width: 10, height: 10, borderRadius: '50%', background: '#0d0d0d' } }) : null),
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, label));
+
+  const filtroPill = (label: string, active: boolean, onClick: () => void) =>
+    React.createElement('button', {
+      type: 'button', onClick,
+      style: {
+        height: 40, padding: '0 16px', borderRadius: 90, border: 'none', cursor: 'pointer',
+        background: active ? '#0d0d0d' : '#f1f1f1', color: active ? '#fff' : '#0d0d0d',
+        fontSize: 14, fontWeight: 500, ...font, whiteSpace: 'nowrap' as const,
+      },
+    }, label);
+
+  const filtroModal = filtroOpen ? React.createElement('div', {
+    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+    onClick: () => setFiltroOpen(false),
+  },
+    React.createElement('div', {
+      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)', maxHeight: '90vh', overflowY: 'auto' as const },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      // Header
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setFiltroOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      // Data da atividade
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Data da atividade'),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Data inicial'),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, background: '#f1f1f1', borderRadius: 8, padding: '0 16px', gap: 8 } },
+          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+            React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+            React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
+          React.createElement('span', { style: { fontSize: 14, color: filtroDataIni ? '#0d0d0d' : '#767676', ...font } }, filtroDataIni || '01 de setembro'))),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Data final'),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, background: '#f1f1f1', borderRadius: 8, padding: '0 16px', gap: 8 } },
+          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+            React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+            React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
+          React.createElement('span', { style: { fontSize: 14, color: filtroDataFim ? '#0d0d0d' : '#767676', ...font } }, filtroDataFim || '31 de setembro'))),
+      // Datas incluídas
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Datas incluídas'),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const } },
+        filtroRadio('Somente passadas', 'passadas'),
+        filtroRadio('Passadas e futuras', 'ambas'),
+        filtroRadio('Somente futuras', 'futuras')),
+      // Status da viagem
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Status da viagem'),
+      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        ...['Em andamento', 'Agendadas', 'Concluídas', 'Canceladas'].map((st) => filtroPill(st, filtroStatus === st, () => setFiltroStatus(st)))),
+      // Categoria
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Categoria'),
+      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        ...['Todos', 'Take Me', 'Motorista parceiro'].map((cat) => filtroPill(cat, filtroCategoria === cat, () => setFiltroCategoria(cat)))),
+      // Buttons
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => {
+          setTblStatusEncomenda(filtroStatus);
+          setFiltroOpen(false);
+        },
+        style: { width: '100%', height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', boxSizing: 'border-box' as const, flexShrink: 0, ...font },
+      }, 'Aplicar filtro'),
+      React.createElement('button', {
+        type: 'button', onClick: () => setFiltroOpen(false),
+        style: { height: 40, background: 'none', border: 'none', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
+      }, 'Voltar'))) : null;
+
+  // ── Table filter modal (Figma 1252-39455) ────────────────────────────
+  const tblField = (label: string, placeholder: string, value: string, onChange: (v: string) => void) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, label),
+      React.createElement('input', {
+        type: 'text', value, placeholder,
+        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+        style: { height: 44, borderRadius: 8, background: '#f1f1f1', border: 'none', padding: '0 16px', fontSize: 14, color: '#0d0d0d', outline: 'none', ...font },
+      }));
+
+  const tblDateInput = (label: string, value: string, onChange: (v: string) => void) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, label),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, background: '#f1f1f1', borderRadius: 8, padding: '0 12px 0 16px', gap: 8 } },
+        React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+          React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })),
+        React.createElement('input', {
+          type: 'date',
+          value,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+          'data-testid': 'encomendas-tbl-filter-data-inicial',
+          'aria-label': 'Data inicial',
+          style: { flex: 1, minWidth: 0, height: 40, border: 'none', background: 'transparent', fontSize: 14, color: value ? '#0d0d0d' : '#767676', outline: 'none', ...font },
+        })));
+
+  const tblPill = (label: string, active: boolean, onClick: () => void) =>
+    React.createElement('button', {
+      type: 'button', onClick,
+      style: {
+        height: 40, padding: '0 16px', borderRadius: 90, border: 'none', cursor: 'pointer',
+        background: active ? '#0d0d0d' : '#f1f1f1', color: active ? '#fff' : '#0d0d0d',
+        fontSize: 14, fontWeight: 500, ...font, whiteSpace: 'nowrap' as const,
+      },
+    }, label);
+
+  const tblFiltroModal = tblFiltroOpen ? React.createElement('div', {
+    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+    onClick: () => setTblFiltroOpen(false),
+    role: 'dialog' as const,
+    'aria-modal': true,
+    'aria-labelledby': 'encomendas-filtro-tabela-titulo',
+  },
+    React.createElement('div', {
+      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, padding: '28px 32px 32px', display: 'flex', flexDirection: 'column' as const, gap: 16, boxShadow: '0 20px 60px rgba(0,0,0,.15)', maxHeight: '90vh', overflowY: 'auto' as const },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      // Header
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('h2', { id: 'encomendas-filtro-tabela-titulo', style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro da tabela'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setTblFiltroOpen(false),
+          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      // Fields
+      tblField('Origem', 'Ex: São Paulo, SP', tblOrigem, setTblOrigem),
+      tblField('Destino', 'Ex: São Luis, SP', tblDestino, setTblDestino),
+      tblField('Hora do embarque', 'Ex: 09:00', tblHoraEmbarque, setTblHoraEmbarque),
+      tblField('Intervalo de chegada', 'Ex: 22:00', tblIntervaloChegada, setTblIntervaloChegada),
+      tblField('Intervalor de embarque', 'Ex: 00:00', tblIntervaloEmbarque, setTblIntervaloEmbarque),
+      tblDateInput('Data inicial', tblDataInicial, setTblDataInicial),
+      tblField('Remetente', 'Ex: Nome do remetente', tblRemetente, setTblRemetente),
+      tblField('Destinatário', 'Ex: Nome do destinatário', tblDestinatario, setTblDestinatario),
+      tblField('Código da encomenda', 'Ex: #3421341342', tblCodigo, setTblCodigo),
+      // Status da encomenda
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Status da encomenda'),
+      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        ...['Em andamento', 'Agendadas', 'Concluídas', 'Canceladas'].map((st) => tblPill(st, tblStatusEncomenda === st, () => setTblStatusEncomenda(st)))),
+      // Tipo de encomenda
+      React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Tipo de encomenda'),
+      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        ...['Todos', 'Pequeno', 'Medio', 'Grande'].map((t) => tblPill(t, tblTipoEncomenda === t, () => setTblTipoEncomenda(t)))),
+      // Buttons
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => {
+          setFiltroStatus(tblStatusEncomenda);
+          setTblFiltroOpen(false);
+        },
+        style: { width: '100%', height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', boxSizing: 'border-box' as const, flexShrink: 0, ...font },
+      }, 'Aplicar filtro'),
+      React.createElement('button', {
+        type: 'button', onClick: () => setTblFiltroOpen(false),
+        style: { height: 40, background: 'none', border: 'none', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
+      }, 'Voltar'))) : null;
+
   // ── Render ─────────────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Encomendas'),
@@ -283,5 +685,7 @@ export default function EncomendasScreen() {
     metricRow(metricsRow1),
     metricRow(metricsRow2),
     progressSection,
-    tableSection);
+    tableSection,
+    filtroModal,
+    tblFiltroModal);
 }

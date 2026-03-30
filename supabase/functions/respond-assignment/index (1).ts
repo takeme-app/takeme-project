@@ -407,16 +407,41 @@ async function processRefund(
     return;
   }
 
-  // Nota: Em produção, o payment_intent_id deve ser armazenado na tabela de pagamentos
-  // ao processar a cobrança. Aqui fazemos refund se houver um payment_intent vinculado.
-  // Este é um placeholder — ajustar conforme o fluxo real de cobrança.
-  try {
-    // Se houver um campo stripe_payment_intent_id na entidade, usar aqui:
-    // const refundParams = new URLSearchParams({ payment_intent: data.stripe_payment_intent_id });
-    // await stripeFetch(stripeSecret, "POST", "/refunds", refundParams);
-    console.log(
-      `[respond-assignment] Refund pendente: ${entityType}/${entityId}, valor: ${data[amountField]} centavos`
+  // Buscar stripe_payment_intent_id da entidade
+  const { data: entityRow } = await admin
+    .from(table)
+    .select("stripe_payment_intent_id")
+    .eq("id", entityId)
+    .maybeSingle();
+
+  const paymentIntentId = entityRow?.stripe_payment_intent_id;
+  if (!paymentIntentId) {
+    console.warn(
+      `[respond-assignment] sem stripe_payment_intent_id para ${entityType}/${entityId}, estorno ignorado`
     );
+    return;
+  }
+
+  try {
+    const STRIPE_API = "https://api.stripe.com/v1";
+    const refundParams = new URLSearchParams({ payment_intent: paymentIntentId });
+    const res = await fetch(`${STRIPE_API}/refunds`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${stripeSecret}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: refundParams.toString(),
+    });
+    const refundData = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const errMsg = (refundData as any)?.error?.message ?? res.statusText;
+      console.error(`[respond-assignment] Stripe refund error: ${errMsg}`);
+    } else {
+      console.log(
+        `[respond-assignment] Estorno processado: ${entityType}/${entityId}, refund_id: ${(refundData as any)?.id}`
+      );
+    }
   } catch (e) {
     console.error("[respond-assignment] Stripe refund error:", e);
   }

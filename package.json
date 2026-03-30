@@ -19,6 +19,7 @@
     "preparador-encomendas": "npm run start --workspace=preparador-encomendas",
     "preparador-excursoes": "npm run start --workspace=preparador-excursoes",
     "admin": "npm run start --workspace=admin",
+    "test:e2e:admin": "npm run test:e2e --workspace=admin",
     "deploy:verify-email-code": "npx supabase functions deploy verify-email-code --no-verify-jwt",
     "create-avatars-bucket": "node scripts/create-avatars-bucket.js",
     "db:push": "supabase db push",
@@ -37,8 +38,8 @@
   "overrides": {
     "minimatch": "^10.2.1",
     "react": "19.1.0",
+    "react-dom": "19.1.0",
     "react-native": "0.81.5",
     "tar": "^7.5.8"
-  },
-  "dependencies": {}
+  }
 }

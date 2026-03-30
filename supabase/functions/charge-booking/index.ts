@@ -161,6 +161,7 @@ Deno.serve(async (req) => {
         status: "paid",
         paid_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
+        stripe_payment_intent_id: pi.id ?? null,
       })
       .eq("id", bookingId)
       .eq("user_id", userId);

@@ -5,6 +5,9 @@ export type ViagemRow = { passageiro: string; origem: string; destino: string; d
 export type DetailTimelineIconType = 'clock' | 'origin' | 'destination' | 'inventory';
 export type DetailTimelineItem = { id: string; icon: DetailTimelineIconType; label: string; value: string; showConnectorAfter?: boolean };
 
+/** Altura do mapa na faixa detalhe/editar viagem (alinha com a coluna da timeline). */
+export const DETAIL_TRIP_MAP_HEIGHT = 392;
+
 // ── Logo helpers ───────────────────────────────────────────────────────
 const logoAdminAsset = require('../../assets/logo-admin.png');
 const logoAsset = require('../../assets/logo.png');
@@ -46,18 +49,18 @@ export const starSvg = React.createElement('svg', { width: 16, height: 16, viewB
 export const chartLineSvg = React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } }, React.createElement('path', { d: 'M3 17l6-6-6-6', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }), React.createElement('path', { d: 'M12 19h9', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
 
 // Timeline icons (Figma 792-1597)
-const iconColor = '#0d0d0d';
+const iconColor = '#767676';
 export const detailTimelineIcons: Record<DetailTimelineIconType, React.ReactNode> = {
   clock: React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-    React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: iconColor, strokeWidth: 2 }),
-    React.createElement('path', { d: 'M12 6v6l4 2', stroke: iconColor, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })),
+    React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: iconColor, strokeWidth: 1.5 }),
+    React.createElement('path', { d: 'M12 6v6l4 2', stroke: iconColor, strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' })),
   origin: React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-    React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: iconColor, strokeWidth: 2 }),
+    React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: iconColor, strokeWidth: 1.5 }),
     React.createElement('circle', { cx: 12, cy: 12, r: 3, fill: iconColor })),
   destination: React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-    React.createElement('rect', { x: 6, y: 6, width: 12, height: 12, rx: 2, stroke: iconColor, strokeWidth: 2 })),
+    React.createElement('rect', { x: 6, y: 6, width: 12, height: 12, rx: 2, stroke: iconColor, strokeWidth: 1.5 })),
   inventory: React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-    React.createElement('path', { d: 'M20 8H4V6h16v2zM4 20h16v-2H4v2zm0-6h16v-2H4v2z', stroke: iconColor, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })),
+    React.createElement('path', { d: 'M20 8H4V6h16v2zM4 20h16v-2H4v2zm0-6h16v-2H4v2z', stroke: iconColor, strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' })),
 };
 export const timeSvg = detailTimelineIcons.clock;
 export const inventorySvgLight = React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } }, React.createElement('path', { d: 'M20 8H4V6h16v2zM4 20h16v-2H4v2zm0-6h16v-2H4v2z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
@@ -422,14 +425,22 @@ export const webStyles = {
   detailDocBtns: { display: 'flex', alignItems: 'center', gap: 16 },
   detailDocBtn: { display: 'flex', alignItems: 'center', gap: 8, height: 44, minWidth: 104, padding: '8px 24px', background: '#f1f1f1', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', borderRadius: 999 },
   detailMapTimelineRow: { display: 'flex', alignItems: 'stretch', gap: 24, width: '100%', flexWrap: 'wrap' as const },
-  detailMapWrap: { flex: '1 1 400px', minWidth: 0, height: 255, borderRadius: 12, overflow: 'hidden', background: '#e8e8e8' },
+  detailMapWrap: {
+    flex: '1 1 400px',
+    minWidth: 0,
+    height: DETAIL_TRIP_MAP_HEIGHT,
+    minHeight: DETAIL_TRIP_MAP_HEIGHT,
+    borderRadius: 12,
+    overflow: 'hidden',
+    background: '#e8e8e8',
+  },
   detailTimeline: { display: 'flex', flexDirection: 'column', gap: 16, width: '100%', maxWidth: 308, alignItems: 'flex-start' },
   detailTimelineBadgeWrap: { alignSelf: 'flex-start' },
   detailTimelineRows: { display: 'flex', flexDirection: 'column', gap: 8, width: '100%' },
   detailTimelineItem: { display: 'flex', alignItems: 'center', gap: 16, minHeight: 47 },
   detailTimelineIconCol: { display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, width: 24 },
   detailTimelineIcon: { width: 24, height: 24, borderRadius: '50%', background: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, overflow: 'hidden' as const },
-  detailTimelineConnector: { width: 2, height: 32, backgroundColor: '#0d0d0d', flexShrink: 0 },
+  detailTimelineConnector: { width: 1.5, height: 32, backgroundColor: '#767676', flexShrink: 0 },
   detailTimelineTextBlock: { display: 'flex', flexDirection: 'column', gap: 2, minHeight: 47, justifyContent: 'center', flex: '1 1 0', minWidth: 0 },
   detailTimelineLabel: { fontSize: 14, fontWeight: 400, color: '#767676', fontFamily: 'Inter, sans-serif', margin: 0, lineHeight: 1.5 },
   detailTimelineValue: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', margin: 0, lineHeight: 1.5 },
@@ -443,7 +454,7 @@ export const webStyles = {
   detailPerfCards: { display: 'flex', gap: 24, flexWrap: 'wrap' as const },
   detailPerfCard: { flex: '1 1 200px', minWidth: 0, background: '#f6f6f6', borderRadius: 16, padding: 24, display: 'flex', flexDirection: 'column', gap: 16 },
   detailPerfCardTitle: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' },
-  detailPerfCardValue: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' },
+  detailPerfCardValue: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', fontFamily: "'Open Sans', Inter, sans-serif", lineHeight: 1.5 },
   detailMotoristaCard: { background: '#f6f6f6', borderRadius: 12, padding: '24px 16px', display: 'flex', flexWrap: 'wrap' as const, alignItems: 'center', gap: 16 },
   detailMotoristaAvatar: { width: 56, height: 56, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0 },
   detailMotoristaBadge: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', background: '#f1f1f1', borderRadius: 90, fontSize: 14, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' },

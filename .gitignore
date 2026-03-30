@@ -44,3 +44,10 @@ pnpm-debug.log*
 
 # EAS
 .easignore
+
+# Playwright (admin E2E)
+**/test-results/
+**/playwright-report/
+**/blob-report/
+**/playwright/.cache/
+apps/admin/e2e/.auth/admin.json
