@@ -762,14 +762,10 @@ export interface HomeApprovedExpenseCents {
 
 export async function fetchApprovedTripExpensesCents(): Promise<HomeApprovedExpenseCents> {
   if (!isSupabaseConfigured) return { totalCents: 0 };
-  const { data } = await sb
-    .from('payouts')
-    .select('gross_amount_cents')
-    .eq('status', 'paid')
-    .in('entity_type', ['booking', 'shipment', 'dependent_shipment', 'excursion'])
-    .limit(5000);
-  const totalCents = (data || []).reduce((s: number, p: any) => s + (p.gross_amount_cents || 0), 0);
-  return { totalCents };
+  // Usa function SQL que soma TODOS os payouts sem limite
+  const { data, error } = await (sb as any).rpc('admin_approved_expenses_cents');
+  if (error || data == null) return { totalCents: 0 };
+  return { totalCents: Number(data) || 0 };
 }
 
 export interface ConversationCategoryCount {
