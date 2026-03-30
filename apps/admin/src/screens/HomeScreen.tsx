@@ -339,13 +339,17 @@ export default function HomeScreen() {
       React.createElement('h3', { style: webStyles.modalSectionTitle }, 'Categoria'),
       React.createElement('div', { style: webStyles.modalChips }, ...categoriaOptionsInicio.map((opt) =>
         React.createElement('button', { key: opt.id, type: 'button', style: { ...webStyles.modalChip, ...(filterCategoria.has(opt.id) ? webStyles.modalChipActive : webStyles.modalChipInactive) } as React.CSSProperties, onClick: () => toggleCategoria(opt.id) }, opt.label))),
-    React.createElement('div', { style: { ...webStyles.modalButtonWrap, display: 'flex', gap: 12 } },
+    React.createElement('div', { style: { width: '100%', display: 'flex', flexDirection: 'column' as const, gap: 12, marginTop: 8 } },
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => { void aplicarFiltroHome(); },
+        style: { width: '100%', minHeight: 48, height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', fontSize: 16, fontWeight: 600, color: '#fff', cursor: 'pointer', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box' as const },
+      }, 'Aplicar filtro'),
       React.createElement('button', {
         type: 'button',
         onClick: () => { resetFilters(); setFilterModalOpen(false); },
-        style: { flex: 1, height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', fontSize: 16, fontWeight: 600, color: '#767676', cursor: 'pointer', fontFamily: 'Inter, sans-serif' },
-      }, 'Resetar'),
-      React.createElement('button', { type: 'button', style: { ...webStyles.modalApplyBtn, flex: 1 }, onClick: () => { void aplicarFiltroHome(); } }, 'Aplicar filtro'))));
+        style: { width: '100%', minHeight: 48, height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', fontSize: 16, fontWeight: 600, color: '#b53838', cursor: 'pointer', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box' as const },
+      }, 'Resetar filtros'))));
 
   const filterModalEl = filterModalOpen
     ? React.createElement('div', { style: webStyles.modalOverlay, onClick: () => setFilterModalOpen(false), role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'home-filtro-modal-titulo' }, filterModalInicioContent)
