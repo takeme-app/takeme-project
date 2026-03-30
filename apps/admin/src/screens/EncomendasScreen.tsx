@@ -659,10 +659,10 @@ export default function EncomendasScreen() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Encomendas'),
+    searchRow,
     kpiRow,
     pieSection,
     topSection,
-    searchRow,
     tableSection,
     filtroModal,
     tblFiltroModal);
