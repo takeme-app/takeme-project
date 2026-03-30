@@ -1,0 +1,69 @@
+import { useEffect, useState, useCallback } from 'react';
+import { supabase } from '../lib/supabase';
+
+// ── Types ────────────────────────────────────────────────────────────
+interface PlatformSetting {
+  key: string;
+  value: any;
+}
+
+interface UsePlatformSettingsReturn {
+  settings: Record<string, any>;
+  loading: boolean;
+  /** Atualiza um setting */
+  updateSetting: (key: string, value: any) => Promise<void>;
+  /** Busca o valor de um setting */
+  getSetting: (key: string, defaultValue?: any) => any;
+  refresh: () => void;
+}
+
+// ── Hook ─────────────────────────────────────────────────────────────
+export function usePlatformSettings(): UsePlatformSettingsReturn {
+  const [settings, setSettings] = useState<Record<string, any>>({});
+  const [loading, setLoading] = useState(true);
+
+  const fetchSettings = useCallback(() => {
+    setLoading(true);
+    (supabase as any)
+      .from('platform_settings')
+      .select('key, value')
+      .then(({ data, error }: any) => {
+        if (!error && data) {
+          const map: Record<string, any> = {};
+          data.forEach((row: PlatformSetting) => {
+            map[row.key] = row.value?.value ?? row.value;
+          });
+          setSettings(map);
+        }
+        setLoading(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    fetchSettings();
+  }, [fetchSettings]);
+
+  const updateSetting = useCallback(async (key: string, value: any) => {
+    const { data: session } = await (supabase as any).auth.getSession();
+    const userId = session?.session?.user?.id;
+
+    const { error } = await (supabase as any)
+      .from('platform_settings')
+      .upsert({
+        key,
+        value: { value },
+        updated_at: new Date().toISOString(),
+        updated_by: userId || null,
+      }, { onConflict: 'key' });
+
+    if (!error) {
+      setSettings((prev) => ({ ...prev, [key]: value }));
+    }
+  }, []);
+
+  const getSetting = useCallback((key: string, defaultValue?: any) => {
+    return settings[key] ?? defaultValue;
+  }, [settings]);
+
+  return { settings, loading, updateSetting, getSetting, refresh: fetchSettings };
+}

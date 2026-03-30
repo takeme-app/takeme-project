@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ComponentType } from 'react';
 import {
   View,
   Text,
@@ -106,7 +106,7 @@ export function LoginScreen({ onForgotPassword, onLoginSuccess }: Props) {
     }
   };
 
-  const Wrapper = isWeb ? View : TouchableWithoutFeedback;
+  const Wrapper = (isWeb ? View : TouchableWithoutFeedback) as ComponentType<Record<string, unknown>>;
   const wrapperProps = isWeb
     ? { style: styles.containerOuter }
     : { onPress: Keyboard.dismiss, accessible: false };

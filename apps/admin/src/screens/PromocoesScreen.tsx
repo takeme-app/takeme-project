@@ -1,45 +1,90 @@
 /**
  * PromocoesScreen — Promoções conforme Figma 867-19582.
+ * Modal filtro da tabela: Figma 867-21529.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
   searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
+import { fetchPromocoes, fetchPromocaoCounts, createPromotion } from '../data/queries';
+import type { PromocaoListItem } from '../data/types';
+import type { PromocaoCounts } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
-// ── Mock data ───────────────────────────────────────────────────────────
-const metrics1 = [
-  { title: 'Total de Promoções', value: '48', pct: '+12%', desc: 'vs mês anterior' },
-  { title: 'Promoções Ativas', value: '12', pct: '+8%', desc: 'vs mês anterior' },
-  { title: 'Promoções Inativas', value: '36', pct: '-3%', desc: 'vs mês anterior', negative: true },
-];
+const calendarSvgLg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
+  React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+  React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' }));
+const closeModalSvg = React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
 
-const metrics2 = [
-  { title: 'Adesão Motoristas', value: '68%', pct: '+5%', desc: 'vs mês anterior' },
-  { title: 'Adesão Preparadores', value: '72%', pct: '+7%', desc: 'vs mês anterior' },
-];
+type PromoPeriodoFiltro = 'semana' | 'mes' | 'ano';
 
-type PromoRow = {
-  nome: string;
-  dataInicio: string;
-  dataTermino: string;
-  tipoPublico: string;
+type PromoAppliedFiltro = {
   status: 'Ativo' | 'Inativo';
+  periodo: PromoPeriodoFiltro;
+  escopoEsteMes: boolean;
+  dataIni?: string;
+  dataFim?: string;
 };
 
-const tableRows: PromoRow[] = [
-  { nome: 'Desconto de Natal 2025', dataInicio: '01/12/2025\n08:00', dataTermino: '15/12/2025\n23:59', tipoPublico: 'Passageiro', status: 'Inativo' },
-  { nome: 'Bônus Motoristas - Novembro', dataInicio: '01/11/2024\n08:00', dataTermino: '20/11/2024\n23:59', tipoPublico: 'Motorista', status: 'Inativo' },
-  { nome: 'Cashback Preparadores', dataInicio: '05/11/2024\n08:00', dataTermino: '10/11/2024\n23:59', tipoPublico: 'Preparador', status: 'Inativo' },
-  { nome: 'Black Friday', dataInicio: '01/11/2024\n08:00', dataTermino: '05/11/2024\n23:59', tipoPublico: 'Passageiro', status: 'Ativo' },
-  { nome: 'Bônus Preparadores', dataInicio: '05/10/2024\n08:00', dataTermino: '10/10/2024\n23:59', tipoPublico: 'Preparador', status: 'Ativo' },
-  { nome: 'Desconto Encomendas Express', dataInicio: '01/09/2024\n08:00', dataTermino: '15/09/2024\n23:59', tipoPublico: 'Encomenda', status: 'Ativo' },
-  { nome: 'Cashback Motoristas', dataInicio: '01/08/2024\n08:00', dataTermino: '10/08/2024\n23:59', tipoPublico: 'Motorista', status: 'Ativo' },
-];
+function getPeriodRange(t: PromoPeriodoFiltro): { start: Date; end: Date } {
+  const now = new Date();
+  if (t === 'semana') {
+    const d = new Date(now);
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    monday.setHours(0, 0, 0, 0);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+    return { start: monday, end: sunday };
+  }
+  if (t === 'mes') {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    return { start, end };
+  }
+  const start = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+  const end = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
+  return { start, end };
+}
+
+function intervalsOverlap(a0: number, a1: number, b0: number, b1: number): boolean {
+  return a0 <= b1 && a1 >= b0;
+}
+
+function rowOverlapsRange(row: PromocaoListItem, rangeStart: Date, rangeEnd: Date): boolean {
+  if (!row.startAtIso || !row.endAtIso) return true;
+  const rs = new Date(row.startAtIso).getTime();
+  const re = new Date(row.endAtIso).getTime();
+  if (Number.isNaN(rs) || Number.isNaN(re)) return true;
+  return intervalsOverlap(rs, re, rangeStart.getTime(), rangeEnd.getTime());
+}
+
+const chipFiltro = (label: string, selecionado: boolean, onClick: () => void) =>
+  React.createElement('button', {
+    type: 'button',
+    onClick,
+    style: {
+      height: 40,
+      padding: '0 16px',
+      borderRadius: 90,
+      border: 'none',
+      cursor: 'pointer',
+      background: selecionado ? '#0d0d0d' : '#f1f1f1',
+      color: selecionado ? '#fff' : '#0d0d0d',
+      fontSize: 14,
+      fontWeight: 500,
+      lineHeight: 1.5,
+      whiteSpace: 'nowrap' as const,
+      ...font,
+    },
+  }, label);
 
 const tableCols = [
   { label: 'Nome da Promoção', flex: '1 1 25%', minWidth: 180 },
@@ -47,15 +92,12 @@ const tableCols = [
   { label: 'Data de Término', flex: '0 0 130px', minWidth: 130 },
   { label: 'Tipo de Público', flex: '0 0 120px', minWidth: 120 },
   { label: 'Status', flex: '0 0 90px', minWidth: 90 },
+  { label: 'Ações', flex: '0 0 80px', minWidth: 80 },
 ];
 
-// ── Chart data (4 days × 3 lines) ──────────────────────────────────────
-const chartData = {
-  labels: ['Dia 1', 'Dia 2', 'Dia 3', 'Dia 4'],
-  motoristas: [30, 58, 35, 40],
-  preparadores: [25, 54, 30, 28],
-  passageiros: [5, 46, 22, 20],
-};
+const duplicateSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+  React.createElement('rect', { x: 9, y: 9, width: 13, height: 13, rx: 2, stroke: '#0d0d0d', strokeWidth: 2 }),
+  React.createElement('path', { d: 'M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
 
 // ── Styles ──────────────────────────────────────────────────────────────
 const s = {
@@ -64,57 +106,233 @@ const s = {
     padding: '16px 20px', display: 'flex', flexDirection: 'column' as const, gap: 8,
     boxSizing: 'border-box' as const,
   } as React.CSSProperties,
-  chartCard: {
-    width: '100%', background: '#f6f6f6', borderRadius: 16, padding: 24,
-    display: 'flex', flexDirection: 'column' as const, gap: 16, boxSizing: 'border-box' as const,
-  } as React.CSSProperties,
 };
-
-// ── SVG line chart ──────────────────────────────────────────────────────
-function buildLineChart() {
-  const W = 700, H = 200, padL = 40, padR = 20, padT = 10, padB = 30;
-  const chartW = W - padL - padR;
-  const chartH = H - padT - padB;
-  const maxVal = 80;
-  const xStep = chartW / (chartData.labels.length - 1);
-
-  const toX = (i: number) => padL + i * xStep;
-  const toY = (v: number) => padT + chartH - (v / maxVal) * chartH;
-
-  const makePath = (values: number[]) =>
-    values.map((v, i) => `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
-
-  const gridLines: React.ReactElement[] = [];
-  for (let pct = 0; pct <= 80; pct += 20) {
-    const y = toY(pct);
-    gridLines.push(
-      React.createElement('line', { key: `g${pct}`, x1: padL, x2: W - padR, y1: y, y2: y, stroke: '#e2e2e2', strokeWidth: 1 }),
-      React.createElement('text', { key: `t${pct}`, x: padL - 6, y: y + 4, textAnchor: 'end', fontSize: 11, fill: '#767676', ...font }, `${pct}%`),
-    );
-  }
-
-  const xLabels = chartData.labels.map((l, i) =>
-    React.createElement('text', { key: `xl${i}`, x: toX(i), y: H - 4, textAnchor: 'middle', fontSize: 11, fill: '#767676', ...font }, l));
-
-  const lines = [
-    { values: chartData.motoristas, color: '#767676' },
-    { values: chartData.preparadores, color: '#22c55e' },
-    { values: chartData.passageiros, color: '#b53838' },
-  ];
-
-  const pathEls = lines.map((l, li) => [
-    React.createElement('path', { key: `p${li}`, d: makePath(l.values), fill: 'none', stroke: l.color, strokeWidth: 2 }),
-    ...l.values.map((v, i) =>
-      React.createElement('circle', { key: `c${li}-${i}`, cx: toX(i), cy: toY(v), r: 4, fill: '#fff', stroke: l.color, strokeWidth: 2 })),
-  ]).flat();
-
-  return React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, style: { width: '100%', maxWidth: W, height: 'auto' } },
-    ...gridLines, ...xLabels, ...pathEls);
-}
 
 // ── Component ───────────────────────────────────────────────────────────
 export default function PromocoesScreen() {
+  const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const [promoData, setPromoData] = useState<PromocaoListItem[]>([]);
+  const [promoCounts, setPromoCounts] = useState<PromocaoCounts>({ total: 0, ativas: 0, inativas: 0 });
+  const [loading, setLoading] = useState(true);
+  const [filtroModalOpen, setFiltroModalOpen] = useState(false);
+  const [filtroTabelaAtivo, setFiltroTabelaAtivo] = useState(false);
+  const [appliedFiltro, setAppliedFiltro] = useState<PromoAppliedFiltro>({
+    status: 'Ativo',
+    periodo: 'mes',
+    escopoEsteMes: true,
+  });
+  const [draftStatus, setDraftStatus] = useState<'Ativo' | 'Inativo'>('Ativo');
+  const [draftPeriodo, setDraftPeriodo] = useState<PromoPeriodoFiltro>('mes');
+  const [draftEscopo, setDraftEscopo] = useState<'todas' | 'este_mes'>('este_mes');
+  const [draftDataIni, setDraftDataIni] = useState('');
+  const [draftDataFim, setDraftDataFim] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([fetchPromocoes(), fetchPromocaoCounts()]).then(([items, c]) => {
+      if (!cancelled) { setPromoData(items); setPromoCounts(c); setLoading(false); }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const abrirFiltroModal = useCallback(() => {
+    if (filtroTabelaAtivo) {
+      setDraftStatus(appliedFiltro.status);
+      setDraftPeriodo(appliedFiltro.periodo);
+      setDraftEscopo(appliedFiltro.escopoEsteMes ? 'este_mes' : 'todas');
+      setDraftDataIni(appliedFiltro.dataIni ?? '');
+      setDraftDataFim(appliedFiltro.dataFim ?? '');
+    } else {
+      setDraftStatus('Ativo');
+      setDraftPeriodo('mes');
+      setDraftEscopo('este_mes');
+      setDraftDataIni('');
+      setDraftDataFim('');
+    }
+    setFiltroModalOpen(true);
+  }, [filtroTabelaAtivo, appliedFiltro]);
+
+  const fecharFiltroModal = useCallback(() => setFiltroModalOpen(false), []);
+
+  const aplicarFiltroModal = useCallback(() => {
+    setAppliedFiltro({
+      status: draftStatus,
+      periodo: draftPeriodo,
+      escopoEsteMes: draftEscopo === 'este_mes',
+      dataIni: draftDataIni.trim() || undefined,
+      dataFim: draftDataFim.trim() || undefined,
+    });
+    setFiltroTabelaAtivo(true);
+    setFiltroModalOpen(false);
+  }, [draftStatus, draftPeriodo, draftEscopo, draftDataIni, draftDataFim]);
+
+  useEffect(() => {
+    if (!filtroModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') fecharFiltroModal();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [filtroModalOpen, fecharFiltroModal]);
+
+  const metrics1 = [
+    { title: 'Total de Promoções', value: String(promoCounts.total), pct: '', desc: '' },
+    { title: 'Promoções Ativas', value: String(promoCounts.ativas), pct: '', desc: '' },
+    { title: 'Promoções Inativas', value: String(promoCounts.inativas), pct: '', desc: '', negative: true },
+  ];
+
+  const filteredRows = useMemo(() => {
+    const now = new Date();
+    const inicioMes = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const fimMes = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    return promoData.filter((r) => {
+      if (search) {
+        const s = search.toLowerCase();
+        if (!r.nome.toLowerCase().includes(s) && !r.tipoPublico.toLowerCase().includes(s)) return false;
+      }
+      if (!filtroTabelaAtivo) return true;
+
+      if (r.status !== appliedFiltro.status) return false;
+
+      const { start, end } = getPeriodRange(appliedFiltro.periodo);
+      if (!rowOverlapsRange(r, start, end)) return false;
+
+      if (appliedFiltro.escopoEsteMes && !rowOverlapsRange(r, inicioMes, fimMes)) return false;
+
+      if (appliedFiltro.dataIni) {
+        const q = appliedFiltro.dataIni.toLowerCase();
+        if (!r.dataInicio.toLowerCase().includes(q)) return false;
+      }
+      if (appliedFiltro.dataFim) {
+        const q = appliedFiltro.dataFim.toLowerCase();
+        if (!r.dataTermino.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  }, [promoData, search, filtroTabelaAtivo, appliedFiltro]);
+
+  const inputTabelaStyle: React.CSSProperties = {
+    flex: 1,
+    minWidth: 0,
+    border: 'none',
+    outline: 'none',
+    background: 'transparent',
+    fontSize: 16,
+    fontWeight: 400,
+    color: '#0d0d0d',
+    padding: '0 16px',
+    height: '100%',
+    ...font,
+  };
+
+  const tituloSecaoModal18: React.CSSProperties = { fontSize: 18, fontWeight: 600, color: '#0d0d0d', lineHeight: 1.5, ...font };
+
+  const campoDataPromo = (rotulo: string, valor: string, onChange: (v: string) => void, placeholder: string) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%', gap: 0 } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, rotulo),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, borderRadius: 8, background: '#f1f1f1', paddingLeft: 16, overflow: 'hidden', width: '100%', boxSizing: 'border-box' as const } },
+        calendarSvgLg,
+        React.createElement('input', {
+          type: 'text',
+          value: valor,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+          placeholder,
+          style: { ...inputTabelaStyle, color: valor ? '#0d0d0d' : '#767676' },
+        })));
+
+  const overlayModalStyle: React.CSSProperties = {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(0,0,0,0.4)',
+    zIndex: 1000,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    boxSizing: 'border-box',
+  };
+
+  const filtroTabelaModal = filtroModalOpen
+    ? React.createElement('div', {
+      role: 'dialog',
+      'aria-modal': true,
+      'aria-labelledby': 'filtro-tabela-promocoes-titulo',
+      style: overlayModalStyle,
+      onClick: fecharFiltroModal,
+    },
+      React.createElement('div', {
+        style: {
+          background: '#fff',
+          borderRadius: 16,
+          boxShadow: '6px 6px 12px 0 rgba(0,0,0,0.15)',
+          width: '100%',
+          maxWidth: 420,
+          maxHeight: '90vh',
+          overflowY: 'auto' as const,
+          display: 'flex',
+          flexDirection: 'column' as const,
+          gap: 24,
+          padding: '24px 0',
+          boxSizing: 'border-box' as const,
+        },
+        onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      },
+        React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 24, width: '100%' } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, paddingLeft: 16, paddingRight: 16, width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('div', { style: { flex: '1 1 auto', minWidth: 0 } },
+              React.createElement('h2', { id: 'filtro-tabela-promocoes-titulo', style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, ...font } }, 'Filtro da tabela'),
+              React.createElement('p', {
+                style: { fontSize: 14, fontWeight: 400, color: '#767676', margin: '6px 0 0 0', lineHeight: 1.4, ...font },
+              }, 'Filtra apenas a lista de promoções abaixo.')),
+            React.createElement('button', {
+              type: 'button',
+              onClick: fecharFiltroModal,
+              'aria-label': 'Fechar',
+              style: {
+                width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0, marginTop: -2,
+              },
+            }, closeModalSvg))),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
+          React.createElement('span', { style: tituloSecaoModal18 }, 'Data da atividade'),
+          campoDataPromo('Data inicial', draftDataIni, setDraftDataIni, '01 de setembro'),
+          campoDataPromo('Data final', draftDataFim, setDraftDataFim, '31 de dezembro')),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
+          React.createElement('span', { style: tituloSecaoModal18 }, 'Status'),
+          React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
+            chipFiltro('Ativo', draftStatus === 'Ativo', () => setDraftStatus('Ativo')),
+            chipFiltro('Inativo', draftStatus === 'Inativo', () => setDraftStatus('Inativo')))),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
+          React.createElement('span', { style: tituloSecaoModal18 }, 'Período'),
+          React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
+            chipFiltro('Esta semana', draftPeriodo === 'semana', () => setDraftPeriodo('semana')),
+            chipFiltro('Este mês', draftPeriodo === 'mes', () => setDraftPeriodo('mes')),
+            chipFiltro('Este ano', draftPeriodo === 'ano', () => setDraftPeriodo('ano')))),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
+          React.createElement('span', { style: tituloSecaoModal18 }, 'Promoções'),
+          React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
+            chipFiltro('Todas as promoções', draftEscopo === 'todas', () => setDraftEscopo('todas')),
+            chipFiltro('Promoções deste mês', draftEscopo === 'este_mes', () => setDraftEscopo('este_mes')))),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
+          React.createElement('button', {
+            type: 'button',
+            onClick: aplicarFiltroModal,
+            style: {
+              width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff',
+              fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font,
+            },
+          }, 'Aplicar filtro'),
+          React.createElement('button', {
+            type: 'button',
+            onClick: fecharFiltroModal,
+            style: {
+              width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'transparent', color: '#0d0d0d',
+              fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font,
+            },
+          }, 'Voltar'))))
+    : null;
 
   // ── Title ─────────────────────────────────────────────────────────────
   const title = React.createElement('h1', { style: webStyles.homeTitle }, 'Promoções');
@@ -137,6 +355,8 @@ export default function PromocoesScreen() {
       })),
     React.createElement('button', {
       type: 'button',
+      onClick: abrirFiltroModal,
+      'data-testid': 'promocoes-open-table-filter',
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#f1f1f1', border: 'none', borderRadius: 999,
@@ -145,6 +365,7 @@ export default function PromocoesScreen() {
     }, filterIconSvg, 'Filtro'),
     React.createElement('button', {
       type: 'button',
+      onClick: () => navigate('/promocoes/nova'),
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999,
@@ -166,34 +387,6 @@ export default function PromocoesScreen() {
           React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: m.negative ? '#b53838' : '#22c55e', ...font } }, m.pct),
           React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, m.desc)),
         React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, m.value))));
-
-  // ── Metrics row 2 ─────────────────────────────────────────────────────
-  const metricCards2 = React.createElement('div', {
-    style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
-  },
-    ...metrics2.map((m) =>
-      React.createElement('div', { key: m.title, style: s.metricCard },
-        React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, m.title),
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
-          React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, m.pct),
-          React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, m.desc)),
-        React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, m.value))));
-
-  // ── Chart section ─────────────────────────────────────────────────────
-  const chartSection = React.createElement('div', { style: s.chartCard },
-    React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Crescimento de Adesão - Mês Atual'),
-    buildLineChart(),
-    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 24, marginTop: 8 } },
-      ...([
-        { label: 'Motoristas', color: '#767676' },
-        { label: 'Preparadores', color: '#22c55e' },
-        { label: 'Passageiros', color: '#b53838' },
-      ].map((l) =>
-        React.createElement('div', { key: l.label, style: { display: 'flex', alignItems: 'center', gap: 6 } },
-          React.createElement('svg', { width: 20, height: 12, viewBox: '0 0 20 12' },
-            React.createElement('line', { x1: 0, y1: 6, x2: 20, y2: 6, stroke: l.color, strokeWidth: 2 }),
-            React.createElement('circle', { cx: 10, cy: 6, r: 3, fill: '#fff', stroke: l.color, strokeWidth: 2 })),
-          React.createElement('span', { style: { fontSize: 13, color: l.color, fontWeight: 500, ...font } }, l.label))))));
 
   // ── Table ─────────────────────────────────────────────────────────────
   const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 6px' };
@@ -222,11 +415,12 @@ export default function PromocoesScreen() {
       style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 6px', display: 'flex', alignItems: 'center', height: '100%' },
     }, c.label)));
 
-  const tableRowEls = tableRows.map((row, idx) => {
+  const tableRowEls = filteredRows.map((row) => {
     const statusBg = row.status === 'Ativo' ? '#b0e8d1' : '#eeafaa';
     const statusColor = row.status === 'Ativo' ? '#174f38' : '#551611';
     return React.createElement('div', {
-      key: idx,
+      key: row.id,
+      'data-testid': 'promocao-table-row',
       style: {
         display: 'flex', minHeight: 56, alignItems: 'center', padding: '8px 16px',
         borderBottom: '1px solid #d9d9d9', background: '#f6f6f6',
@@ -243,7 +437,32 @@ export default function PromocoesScreen() {
             fontSize: 13, fontWeight: 700, lineHeight: 1.5,
             background: statusBg, color: statusColor, ...font,
           },
-        }, row.status)));
+        }, row.status)),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth, justifyContent: 'center' } },
+        React.createElement('button', {
+          type: 'button',
+          title: 'Duplicar promoção',
+          style: { background: 'none', border: 'none', cursor: 'pointer', padding: 6, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+          onClick: async (e: React.MouseEvent) => {
+            e.stopPropagation();
+            try {
+              await createPromotion({
+                title: `${row.nome} (cópia)`,
+                description: row.descricao || '',
+                start_at: row.startAtIso,
+                end_at: row.endAtIso,
+                target_audiences: [row.tipoPublico],
+                discount_type: row.tipoDesconto === 'Percentual' ? 'percentage' : 'fixed',
+                discount_value: row.valorDesconto,
+                applies_to: row.aplicaA ? row.aplicaA.split(', ') : [],
+                is_active: false,
+              });
+              const [data, counts] = await Promise.all([fetchPromocoes(), fetchPromocaoCounts()]);
+              setPromoData(data);
+              setPromoCounts(counts);
+            } catch (err) { console.error('Erro ao duplicar promoção:', err); }
+          },
+        }, duplicateSvg)));
   });
 
   const tableSection = React.createElement('div', {
@@ -255,6 +474,15 @@ export default function PromocoesScreen() {
         tableHeader,
         ...tableRowEls)));
 
+  if (loading) {
+    return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
+      React.createElement('span', { style: { fontSize: 16, color: '#767676', ...font } }, 'Carregando promoções...'));
+  }
+
+  const emptyMsg = filteredRows.length === 0
+    ? React.createElement('div', { style: { padding: 40, textAlign: 'center' as const, color: '#767676', ...font } }, 'Nenhuma promoção encontrada.')
+    : null;
+
   return React.createElement(React.Fragment, null,
-    title, searchRow, metricCards1, metricCards2, chartSection, tableSection);
+    title, searchRow, metricCards1, emptyMsg || tableSection, filtroTabelaModal);
 }

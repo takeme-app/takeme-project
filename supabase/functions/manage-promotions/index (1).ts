@@ -103,6 +103,7 @@ Deno.serve(async (req) => {
         discount_type?: string;
         discount_value?: number;
         applies_to?: string[];
+        is_active?: boolean;
       };
 
       if (
@@ -139,6 +140,7 @@ Deno.serve(async (req) => {
           discount_type: body.discount_type,
           discount_value: body.discount_value,
           applies_to: body.applies_to,
+          is_active: typeof body.is_active === "boolean" ? body.is_active : true,
           created_by: user.id,
         })
         .select()

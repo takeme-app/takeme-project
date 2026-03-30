@@ -1,0 +1,567 @@
+/**
+ * EncomendaEditScreen — Editar encomenda conforme Figma 849-37300.
+ * Secção motoristas: Figma 1283-34111.
+ * Uses React.createElement() calls (NOT JSX).
+ */
+import React, { useCallback, useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import {
+  fetchApprovedDriversForEncomendaUI,
+  fetchEncomendaEditDetail,
+  formatCurrencyBRL,
+  updateDependentShipmentFields,
+  updateShipmentFields,
+} from '../data/queries';
+import type { EncomendaEditDetail } from '../data/types';
+import MapView from '../components/MapView';
+import { supabase } from '../lib/supabase';
+
+const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
+
+const driverWaitingAsset = require('../../assets/driver-waiting.png');
+const motoristaAvatar1 = require('../../assets/motoristas/m1.png');
+const motoristaAvatar2 = require('../../assets/motoristas/m2.png');
+const motoristaAvatar3 = require('../../assets/motoristas/m3.png');
+const motoristaAvatar4 = require('../../assets/motoristas/m4.png');
+const logoTakeMeBadge = require('../../assets/motoristas/logo-takeme.png');
+
+type MotoristaBadge = 'takeme' | 'parceiro';
+
+type MotoristaDisponivel = {
+  id: string;
+  nome: string;
+  nota: number;
+  viagensTexto: string;
+  badge: MotoristaBadge;
+  foto: string | number;
+  fotoLargura?: number;
+  rota: string;
+  data: string;
+  horaSaida: string;
+  valorTotal: string;
+  valorUnitario: string;
+  pessoasRestantes: string;
+  bagageiro: string;
+};
+
+const arrowBackSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', { d: 'M19 12H5M12 19l-7-7 7-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+const xSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+  React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#b53838', strokeWidth: 2, strokeLinecap: 'round' }));
+const checkSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+  React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+const infoSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
+  React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#cba04b', strokeWidth: 2 }),
+  React.createElement('path', { d: 'M12 16v-4M12 8h.01', stroke: '#cba04b', strokeWidth: 2, strokeLinecap: 'round' }));
+const headphoneSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', { d: 'M3 18v-6a9 9 0 0118 0v6', stroke: '#cba04b', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
+  React.createElement('path', { d: 'M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3v5zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3v5z', stroke: '#cba04b', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+const calendarSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
+  React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+  React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' }));
+const calendarSvgLg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
+  React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
+  React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' }));
+const starSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: '#cba04b', style: { display: 'block', flexShrink: 0 } },
+  React.createElement('path', { d: 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z' }));
+const checkOutlineSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
+  React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+
+const motoristaLinha = (rotulo: string, valor: string) =>
+  React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, width: '100%', minWidth: 0 } },
+    React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', flexShrink: 0, lineHeight: 1.5, ...font } }, rotulo),
+    React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', textAlign: 'right' as const, lineHeight: 1.5, minWidth: 0, wordBreak: 'break-word' as const, ...font } }, valor));
+
+const radioMotorista = (selecionado: boolean, onClick: () => void) =>
+  React.createElement('button', {
+    type: 'button',
+    onClick,
+    'aria-pressed': selecionado,
+    'aria-label': selecionado ? 'Motorista selecionado' : 'Selecionar motorista',
+    style: {
+      width: 40,
+      height: 40,
+      padding: 0,
+      border: 'none',
+      background: 'transparent',
+      cursor: 'pointer',
+      flexShrink: 0,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+  },
+    React.createElement('span', {
+      style: {
+        width: 22,
+        height: 22,
+        borderRadius: '50%',
+        border: `2px solid ${selecionado ? '#0d0d0d' : '#9a9a9a'}`,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        boxSizing: 'border-box' as const,
+      },
+    }, selecionado ? React.createElement('span', { style: { width: 12, height: 12, borderRadius: '50%', background: '#0d0d0d' } }) : null));
+
+const badgeMotorista = (tipo: MotoristaBadge) => {
+  if (tipo === 'parceiro') {
+    return React.createElement('div', { style: { display: 'flex', alignItems: 'center', background: '#fff', padding: '4px 8px', borderRadius: 90 } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', lineHeight: 1.5, whiteSpace: 'nowrap' as const, ...font } }, 'Motorista Parceiro'));
+  }
+  return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4, background: '#fff', padding: '4px 8px', borderRadius: 90 } },
+    React.createElement('img', { src: logoTakeMeBadge, alt: '', style: { width: 16, height: 16, objectFit: 'cover', flexShrink: 0 } }),
+    React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', lineHeight: 1.5, whiteSpace: 'nowrap' as const, ...font } }, 'Motorista TakeMe'));
+};
+
+const cartaoMotorista = (m: MotoristaDisponivel, selecionado: boolean, onSelect: () => void) => {
+  const w = m.fotoLargura ?? 56;
+  const h = 56;
+  const blocoNota = React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: '4px 8px', alignItems: 'center' } },
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+      starSvg,
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#545454', ...font } }, String(m.nota))),
+    React.createElement('span', { style: { fontSize: 14, fontWeight: 400, color: '#767676', ...font } }, m.viagensTexto));
+  const colunaTexto = React.createElement('div', { style: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, width: '100%' } },
+      badgeMotorista(m.badge),
+      radioMotorista(selecionado, onSelect)),
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+      React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', lineHeight: 1.5, ...font } }, m.nome),
+      blocoNota));
+  const cabecalho = React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 12, width: '100%' } },
+    React.createElement('div', { style: { display: 'flex', gap: 16, alignItems: 'flex-start', width: '100%', minWidth: 0 } },
+      React.createElement('div', { style: { flexShrink: 0 } },
+        React.createElement('img', {
+          src: m.foto,
+          alt: '',
+          style: { width: w, height: h, borderRadius: 9999, objectFit: 'cover', display: 'block' },
+        })),
+      colunaTexto));
+  const detalhes = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%' } },
+    motoristaLinha('Origem - Destino', m.rota),
+    motoristaLinha('Data', m.data),
+    motoristaLinha('Hora de saída', m.horaSaida),
+    motoristaLinha('Valor total', m.valorTotal),
+    motoristaLinha('Valor unitário', m.valorUnitario),
+    motoristaLinha('Pessoas restantes', m.pessoasRestantes),
+    motoristaLinha('Ocupação do bagageiro', m.bagageiro));
+  return React.createElement('div', {
+    key: m.id,
+    style: {
+      flex: '1 1 calc(50% - 8px)',
+      minWidth: 280,
+      boxSizing: 'border-box' as const,
+      display: 'flex',
+      flexDirection: 'column' as const,
+      gap: 12,
+      padding: '24px 16px',
+      borderRadius: 12,
+      background: '#f6f6f6',
+      border: selecionado ? '2px solid #0d0d0d' : '2px solid transparent',
+    },
+  }, cabecalho, detalhes);
+};
+
+const readField = (label: string, value: string) =>
+  React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+    React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
+    React.createElement('div', { style: { height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } }, value));
+
+const editField = (label: string, value: string, onChange: (v: string) => void) =>
+  React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+    React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
+    React.createElement('input', {
+      type: 'text',
+      value,
+      onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+      style: {
+        height: 44, borderRadius: 8, background: '#f1f1f1', border: 'none', padding: '0 16px', fontSize: 14, color: '#0d0d0d',
+        width: '100%', boxSizing: 'border-box' as const, ...font,
+      },
+    }));
+
+function toDatetimeLocalValue(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const encomendaCard = (tamanho: string, valor: string, remetente: string, destinatario: string, recolha: string, entrega: string, obs: string) =>
+  React.createElement('div', {
+    style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, padding: 20, border: '1px solid #e2e2e2', borderRadius: 16, background: '#fff', alignItems: 'flex-start' },
+  },
+    React.createElement('div', { style: { width: 56, height: 56, borderRadius: 12, background: '#f1f1f1', flexShrink: 0 } }),
+    React.createElement('div', { style: { flex: 1, minWidth: 200, display: 'flex', flexWrap: 'wrap' as const, gap: '12px 24px' } },
+      React.createElement('div', null,
+        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Tamanho:'),
+        React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, tamanho)),
+      React.createElement('div', null,
+        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Valor:'),
+        React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, valor)),
+      React.createElement('div', null,
+        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Remetente:'),
+        React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, remetente)),
+      React.createElement('div', null,
+        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Destinatário:'),
+        React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, destinatario)),
+      React.createElement('div', { style: { width: '100%', display: 'flex', gap: 24, flexWrap: 'wrap' as const } },
+        React.createElement('div', null,
+          React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Recolha:'),
+          React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, recolha)),
+        React.createElement('div', null,
+          React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Entrega'),
+          React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, entrega)),
+        React.createElement('div', null,
+          React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Observações:'),
+          React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, obs)))),
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: '50%', background: '#faf5eb' } }, headphoneSvg));
+
+const avatarsPool = [motoristaAvatar1, motoristaAvatar2, motoristaAvatar3, motoristaAvatar4];
+
+export default function EncomendaEditScreen() {
+  const navigate = useNavigate();
+  const { id: routeId } = useParams<{ id: string }>();
+  const [detail, setDetail] = useState<EncomendaEditDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const [encomendaCoords, setEncomendaCoords] = useState<{ origin?: { lat: number; lng: number }; destination?: { lat: number; lng: number } }>({});
+
+  const [origem, setOrigem] = useState('');
+  const [destino, setDestino] = useState('');
+  const [instructions, setInstructions] = useState('');
+  const [recipientName, setRecipientName] = useState('');
+  const [recipientPhone, setRecipientPhone] = useState('');
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [packageSize, setPackageSize] = useState('');
+  const [whenOption, setWhenOption] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
+  const [receiverName, setReceiverName] = useState('');
+  const [bagsCount, setBagsCount] = useState('');
+  const [scheduledLocal, setScheduledLocal] = useState('');
+
+  const [motoristas, setMotoristas] = useState<MotoristaDisponivel[]>([]);
+  const [motoristaSelecionado, setMotoristaSelecionado] = useState('');
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  useEffect(() => {
+    if (!routeId) {
+      setLoading(false);
+      setLoadErr('ID inválido.');
+      return;
+    }
+    setLoading(true);
+    setLoadErr(null);
+    fetchEncomendaEditDetail(routeId).then((d) => {
+      if (!d) {
+        setDetail(null);
+        setLoadErr('Encomenda não encontrada.');
+        setLoading(false);
+        return;
+      }
+      setDetail(d);
+      setOrigem(d.originAddress);
+      setDestino(d.destinationAddress);
+      setInstructions(d.instructions ?? '');
+      setWhenOption(d.whenOption);
+      setScheduledLocal(toDatetimeLocalValue(d.scheduledAt));
+      if (d.kind === 'shipment') {
+        setRecipientName(d.recipientName);
+        setRecipientPhone(d.recipientPhone);
+        setRecipientEmail(d.recipientEmail);
+        setPackageSize(d.packageSize);
+      } else {
+        setFullName(d.fullName);
+        setContactPhone(d.contactPhone);
+        setReceiverName(d.receiverName ?? '');
+        setBagsCount(String(d.bagsCount ?? 0));
+      }
+      setLoading(false);
+    });
+  }, [routeId]);
+
+  // Fetch shipment coordinates
+  useEffect(() => {
+    if (!detail) return;
+    let cancel = false;
+    const table = detail.kind === 'shipment' ? 'shipments' : 'dependent_shipments';
+    (supabase as any).from(table)
+      .select('origin_lat, origin_lng, destination_lat, destination_lng')
+      .eq('id', detail.id)
+      .single()
+      .then(({ data }: any) => {
+        if (cancel || !data) return;
+        const c: any = {};
+        if (data.origin_lat && data.origin_lng) c.origin = { lat: data.origin_lat, lng: data.origin_lng };
+        if (data.destination_lat && data.destination_lng) c.destination = { lat: data.destination_lat, lng: data.destination_lng };
+        setEncomendaCoords(c);
+      });
+    return () => { cancel = true; };
+  }, [detail?.id, detail?.kind]);
+
+  useEffect(() => {
+    fetchApprovedDriversForEncomendaUI().then((list) => {
+      const ui: MotoristaDisponivel[] = list.map((d, i) => ({
+        id: d.id,
+        nome: d.nome,
+        nota: Number(d.rating ?? 0),
+        viagensTexto: `(${d.totalViagens} viagens)`,
+        badge: d.isPartner ? 'parceiro' : 'takeme',
+        foto: avatarsPool[i % avatarsPool.length],
+        rota: '—',
+        data: '—',
+        horaSaida: '—',
+        valorTotal: '—',
+        valorUnitario: '—',
+        pessoasRestantes: '—',
+        bagageiro: '—',
+      }));
+      setMotoristas(ui);
+      setMotoristaSelecionado((prev) => prev || ui[0]?.id || '');
+    });
+  }, []);
+
+  const save = useCallback(async () => {
+    if (!detail) return;
+    const schedIso = scheduledLocal ? new Date(scheduledLocal).toISOString() : null;
+    setSaving(true);
+    let res: { error: string | null };
+    if (detail.kind === 'shipment') {
+      res = await updateShipmentFields(detail.id, {
+        origin_address: origem,
+        destination_address: destino,
+        recipient_name: recipientName,
+        recipient_phone: recipientPhone,
+        recipient_email: recipientEmail,
+        package_size: packageSize,
+        when_option: whenOption,
+        instructions: instructions || null,
+        scheduled_at: schedIso,
+      });
+    } else {
+      res = await updateDependentShipmentFields(detail.id, {
+        origin_address: origem,
+        destination_address: destino,
+        full_name: fullName,
+        contact_phone: contactPhone,
+        receiver_name: receiverName || null,
+        when_option: whenOption,
+        instructions: instructions || null,
+        bags_count: Number(bagsCount) || 0,
+        scheduled_at: schedIso,
+      });
+    }
+    setSaving(false);
+    if (res.error) setToast(res.error);
+    else {
+      setToast('Alterações guardadas.');
+      const d2 = await fetchEncomendaEditDetail(detail.id);
+      if (d2) setDetail(d2);
+    }
+  }, [detail, origem, destino, instructions, recipientName, recipientPhone, recipientEmail, packageSize, whenOption, scheduledLocal, fullName, contactPhone, receiverName, bagsCount]);
+
+  if (loading) {
+    return React.createElement('div', { style: { padding: 40, ...font } }, 'Carregando…');
+  }
+
+  if (loadErr || !detail) {
+    return React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, padding: 24, ...font } },
+      React.createElement('p', null, loadErr || 'Sem dados.'),
+      React.createElement('button', { type: 'button', onClick: () => navigate(-1), style: { alignSelf: 'flex-start', cursor: 'pointer' } }, 'Voltar'));
+  }
+
+  const dataLinha = scheduledLocal
+    ? new Date(scheduledLocal).toLocaleDateString('pt-BR')
+    : new Date(detail.createdAt).toLocaleDateString('pt-BR');
+  const horaLinha = scheduledLocal
+    ? new Date(scheduledLocal).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    : '—';
+  const motoristasComRota = motoristas.map((m) => ({
+    ...m,
+    rota: `${origem.slice(0, 40)} → ${destino.slice(0, 40)}`,
+    data: dataLinha,
+    horaSaida: horaLinha,
+  }));
+
+  const resumoId = `#${detail.id.slice(0, 8)}`;
+  const statusLabel = detail.status || '—';
+  const encomendaPreview = detail.kind === 'shipment'
+    ? encomendaCard(
+        packageSize || '—',
+        formatCurrencyBRL(detail.amountCents),
+        '—',
+        recipientName || '—',
+        origem,
+        destino,
+        instructions || '—',
+      )
+    : encomendaCard(
+        `${bagsCount || '0'} mala(s)`,
+        formatCurrencyBRL(detail.amountCents),
+        fullName || '—',
+        receiverName || fullName || '—',
+        origem,
+        destino,
+        instructions || '—',
+      );
+
+  const motoristaNote = React.createElement('p', {
+    style: { fontSize: 12, color: '#767676', margin: '0 0 8px', ...font },
+  }, 'Motoristas aprovados (referência). Não há coluna de motorista atribuído em shipments: use «Salvar alteração» para gravar os dados da encomenda.');
+
+  return React.createElement(React.Fragment, null,
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%', maxWidth: 1044, margin: '0 auto', boxSizing: 'border-box' as const } },
+    // Breadcrumb
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 600, color: '#767676', ...font } },
+      React.createElement('span', null, 'Encomendas'),
+      React.createElement('span', { style: { margin: '0 4px' } }, '›'),
+      React.createElement('span', { style: { color: '#0d0d0d' } }, 'Editar encomenda')),
+    // Toolbar
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' as const, gap: 12 } },
+      React.createElement('button', { type: 'button', onClick: () => navigate(-1), style: { display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#0d0d0d', padding: 0, ...font } }, arrowBackSvg, 'Voltar'),
+      React.createElement('div', { style: { display: 'flex', gap: 8 } },
+        React.createElement('button', { type: 'button', onClick: () => navigate(-1), style: { display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px', borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font } }, xSvg, 'Cancelar'),
+        React.createElement('button', {
+          type: 'button',
+          disabled: saving,
+          onClick: () => { void save(); },
+          style: {
+            display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px', borderRadius: 999, border: 'none',
+            background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, ...font,
+          },
+        }, checkSvg, saving ? 'A guardar…' : 'Salvar alteração'))),
+    // Warning banner
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, padding: '14px 20px', background: '#f6f6f6', borderRadius: 12, width: '100%', boxSizing: 'border-box' as const } },
+      infoSvg,
+      React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, 'Você está editando esta encomenda')),
+    // Map + Summary
+    React.createElement('div', { style: { display: 'flex', gap: 24, flexWrap: 'wrap' as const } },
+      React.createElement('div', { style: { flex: '1 1 350px', height: 220, borderRadius: 16, overflow: 'hidden' } },
+        React.createElement(MapView, {
+          origin: encomendaCoords.origin,
+          destination: encomendaCoords.destination,
+          height: 220,
+          staticMode: true,
+          showFigmaMapChrome: false,
+        })),
+      React.createElement('div', { style: { flex: '0 0 280px', display: 'flex', flexDirection: 'column' as const, gap: 12 } },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#767676', ...font } }, 'Resumo da viagem •'),
+          React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, resumoId)),
+        React.createElement('span', { style: { display: 'inline-block', padding: '4px 14px', borderRadius: 999, background: '#a8c6ef', color: '#102d57', fontSize: 13, fontWeight: 700, alignSelf: 'flex-start', ...font } }, statusLabel),
+        React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Rota'),
+        React.createElement('div', { style: { height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } },
+          `${origem.slice(0, 28)}… → ${destino.slice(0, 28)}…`))),
+    // Trajeto
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#767676', ...font } }, 'Trajeto de origem e destino'),
+      editField('Origem', origem, setOrigem),
+      editField('Destino', destino, setDestino),
+      detail.kind === 'shipment'
+        ? React.createElement(React.Fragment, null,
+          editField('Destinatário', recipientName, setRecipientName),
+          editField('Telefone destinatário', recipientPhone, setRecipientPhone),
+          editField('Email destinatário', recipientEmail, setRecipientEmail),
+          editField('Tamanho (package_size)', packageSize, setPackageSize),
+          editField('Quando (when_option)', whenOption, setWhenOption))
+        : React.createElement(React.Fragment, null,
+          editField('Nome completo (remetente)', fullName, setFullName),
+          editField('Telefone de contacto', contactPhone, setContactPhone),
+          editField('Nome do receptor', receiverName, setReceiverName),
+          editField('Número de malas', bagsCount, setBagsCount),
+          editField('Quando (when_option)', whenOption, setWhenOption)),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+        React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Observações / instruções'),
+        React.createElement('textarea', {
+          value: instructions,
+          onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => setInstructions(e.target.value),
+          rows: 3,
+          style: {
+            borderRadius: 8, background: '#f1f1f1', border: 'none', padding: 12, fontSize: 14, color: '#0d0d0d', width: '100%', boxSizing: 'border-box' as const, resize: 'vertical' as const, ...font,
+          },
+        }))),
+    // Horário agendado
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Horário agendado (scheduled_at)'),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px' } },
+        calendarSvg,
+        React.createElement('input', {
+          type: 'datetime-local',
+          value: scheduledLocal,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setScheduledLocal(e.target.value),
+          style: { flex: 1, border: 'none', background: 'transparent', fontSize: 14, color: '#0d0d0d', ...font },
+        })),
+      React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Alterar o horário de início atualizará automaticamente o tempo estimado de chegada.')),
+    // Motoristas disponíveis (Figma 1283-34111)
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, paddingBottom: 32, borderBottom: '1px solid #e2e2e2' } },
+      motoristasComRota.length === 0
+        ? React.createElement(React.Fragment, null,
+          React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } },
+            'Motoristas disponíveis ',
+            React.createElement('span', { style: { fontWeight: 400, color: '#767676' } }, '(Aguardando motorista)')),
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: '32px 16px' } },
+            React.createElement('div', { style: { width: '100%', maxWidth: 280, minHeight: 160, background: '#f1f1f1', borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, boxSizing: 'border-box' as const } },
+              React.createElement('img', {
+                src: driverWaitingAsset,
+                alt: '',
+                style: { width: '100%', maxWidth: 200, height: 'auto', maxHeight: 200, objectFit: 'contain' as const },
+              }))))
+        : React.createElement(React.Fragment, null,
+          React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.3, ...font } }, 'Motoristas disponíveis'),
+          motoristaNote,
+          React.createElement('div', { style: { border: '1px solid #e2e2e2', borderRadius: 12, padding: 24, width: '100%', boxSizing: 'border-box' as const } },
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+              React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+                React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Data de referência'),
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 0, height: 44, borderRadius: 8, background: '#f1f1f1', paddingLeft: 16, overflow: 'hidden' } },
+                  calendarSvgLg,
+                  React.createElement('span', { style: { fontSize: 16, fontWeight: 400, color: '#3a3a3a', paddingLeft: 16, paddingRight: 16, flex: 1, lineHeight: 1.5, ...font } }, dataLinha))),
+              React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
+                motoristasComRota.slice(0, 2).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id)))),
+              React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
+                motoristasComRota.slice(2, 4).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id)))))),
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', width: '100%', marginTop: 0 } },
+            React.createElement('button', {
+              type: 'button',
+              onClick: () => setToast('A escolha do motorista não é gravada nesta versão (sem coluna no banco).'),
+              style: {
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                height: 44,
+                padding: '0 24px',
+                borderRadius: 999,
+                border: '1px solid #0d0d0d',
+                background: '#fff',
+                cursor: 'pointer',
+                fontSize: 14,
+                fontWeight: 600,
+                color: '#0d0d0d',
+                ...font,
+              },
+            }, checkOutlineSvg, 'Confirmar substituição')))),
+    // Encomendas
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+      React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Encomendas'),
+      encomendaPreview)),
+    toast
+      ? React.createElement('div', {
+        style: {
+          position: 'fixed' as const, bottom: 32, left: '50%', transform: 'translateX(-50%)',
+          background: '#0d0d0d', color: '#fff', padding: '12px 20px', borderRadius: 12, fontSize: 14, zIndex: 9999, ...font,
+        },
+      }, toast)
+      : null,
+  );
+}

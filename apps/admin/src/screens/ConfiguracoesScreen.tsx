@@ -1,10 +1,13 @@
 /**
  * Configurações > Perfil (Figma 1435-22732). Conteúdo abaixo do Layout; dados do usuário logado.
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
 import { useAuth } from '../contexts/AuthContext';
+import { fetchAdminUsers, createAdminUser, deleteAdminUser, invokeEdgeFunction } from '../data/queries';
+import type { AdminUserListItem } from '../data/types';
+import { usePlatformSettings } from '../hooks/usePlatformSettings';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -46,11 +49,19 @@ function readOnlyField(label: string, value: string) {
 export default function ConfiguracoesScreen() {
   const navigate = useNavigate();
   const { session } = useAuth();
-  const [aba, setAba] = useState<'perfil' | 'usuarios'>('perfil');
+  const [aba, setAba] = useState<'perfil' | 'usuarios' | 'plataforma'>('perfil');
   const [novoUsuarioOpen, setNovoUsuarioOpen] = useState(false);
   const [nuNome, setNuNome] = useState('');
   const [nuEmail, setNuEmail] = useState('');
   const [nuPermissoes, setNuPermissoes] = useState<Record<string, boolean>>({ 'Início': true, 'Viagens': true });
+  const [adminUsers, setAdminUsers] = useState<AdminUserListItem[]>([]);
+  const [adminLoading, setAdminLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAdminUsers().then((items) => { if (!cancelled) { setAdminUsers(items); setAdminLoading(false); } });
+    return () => { cancelled = true; };
+  }, []);
 
   const nome = session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || '—';
   const email = session?.user?.email || '—';
@@ -91,7 +102,24 @@ export default function ConfiguracoesScreen() {
         type: 'button',
         style: tabStyle(aba === 'usuarios'),
         onClick: () => setAba('usuarios'),
-      }, 'Usuários e Permissões')),
+      }, 'Usuários e Permissões',
+        aba === 'usuarios' ? React.createElement('span', {
+          style: {
+            position: 'absolute' as const, left: 0, right: 0, bottom: 0, height: 2,
+            background: '#0d0d0d', borderRadius: 100,
+          },
+        }) : null),
+      React.createElement('button', {
+        type: 'button',
+        style: tabStyle(aba === 'plataforma'),
+        onClick: () => setAba('plataforma'),
+      }, 'Plataforma',
+        aba === 'plataforma' ? React.createElement('span', {
+          style: {
+            position: 'absolute' as const, left: 0, right: 0, bottom: 0, height: 2,
+            background: '#0d0d0d', borderRadius: 100,
+          },
+        }) : null)),
     React.createElement('div', { style: { height: 1, width: '100%', background: '#e2e2e2', marginTop: 0 } }));
 
   const alterarSenhaBtn = React.createElement('button', {
@@ -148,13 +176,13 @@ export default function ConfiguracoesScreen() {
       readOnlyField('Nível de acesso', nivel)));
 
   // ── Usuários e Permissões ───────────────────────────────────────────────
-  const userRows = [
-    { nome: 'Carlos Silva', email: 'joaosilva@takeme.com', permissao: 'Administrador', data: '10/10/2025', status: 'Ativo' as const },
-    { nome: 'João Porto', email: 'joaosilva@takeme.com', permissao: 'Administrador', data: '10/10/2025', status: 'Ativo' as const },
-    { nome: 'Jorge Silva', email: 'joaosilva@takeme.com', permissao: 'Financeiro', data: '10/10/2025', status: 'Ativo' as const },
-    { nome: 'Carlos Silva', email: 'joaosilva@takeme.com', permissao: 'Atendente', data: '10/10/2025', status: 'Ativo' as const },
-    { nome: 'Danilo Santos', email: 'joaosilva@takeme.com', permissao: 'Atendente', data: '10/10/2025', status: 'Inativo' as const },
-  ];
+  const userRows = adminUsers.map((u) => ({
+    nome: u.nome,
+    email: u.email || '—',
+    permissao: u.nivel,
+    data: u.dataCriacao,
+    status: u.status,
+  }));
   const userCols = [
     { label: 'Usuário', flex: '1 1 20%', minWidth: 160 },
     { label: 'E-mail', flex: '1 1 22%', minWidth: 180 },
@@ -214,7 +242,19 @@ export default function ConfiguracoesScreen() {
         React.createElement('span', { style: { display: 'inline-block', padding: '4px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700, background: stBg, color: stColor, ...font } }, row.status)),
       React.createElement('div', { style: { flex: userCols[5].flex, minWidth: userCols[5].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 } },
         React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar' }, eyeSvg),
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar' }, pencilSvg)));
+        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar' }, pencilSvg),
+        React.createElement('button', {
+          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Remover',
+          onClick: async () => {
+            const u = adminUsers[idx];
+            if (u && confirm(`Remover admin ${u.nome}?`)) {
+              await deleteAdminUser(u.id);
+              const items = await fetchAdminUsers();
+              setAdminUsers(items);
+            }
+          },
+        }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14', stroke: '#b53838', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))));
   });
 
   const usuariosContent = React.createElement('div', {
@@ -222,6 +262,60 @@ export default function ConfiguracoesScreen() {
   }, React.createElement('div', { style: { background: '#fff', borderRadius: 16, overflow: 'hidden', width: '100%' } },
     userToolbar,
     React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } }, userHeader, ...userRowEls)));
+
+  // ── Novo Usuário Modal ──────────────────────────────────────────────────
+  // ── Plataforma (Platform Settings) ──────────────────────────────────
+  const { settings: platSettings, updateSetting, loading: platLoading } = usePlatformSettings();
+  const [gasPrice, setGasPrice] = useState('');
+  const [kmPrice, setKmPrice] = useState('');
+  const [platSaved, setPlatSaved] = useState(false);
+
+  useEffect(() => {
+    if (!platLoading) {
+      setGasPrice(String((platSettings.gas_price_cents ?? 599) / 100));
+      setKmPrice(String((platSettings.km_price_cents ?? 150) / 100));
+    }
+  }, [platLoading, platSettings]);
+
+  const savePlatformSettings = useCallback(async () => {
+    const gasCents = Math.round(parseFloat(gasPrice || '0') * 100);
+    const kmCents = Math.round(parseFloat(kmPrice || '0') * 100);
+    await Promise.all([
+      updateSetting('gas_price_cents', gasCents),
+      updateSetting('km_price_cents', kmCents),
+    ]);
+    setPlatSaved(true);
+    setTimeout(() => setPlatSaved(false), 2000);
+  }, [gasPrice, kmPrice, updateSetting]);
+
+  const platInput = (label: string, value: string, onChange: (v: string) => void, placeholder: string) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6, flex: '1 1 200px' } },
+      React.createElement('label', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+        React.createElement('span', { style: { fontSize: 16, color: '#767676', ...font } }, 'R$'),
+        React.createElement('input', {
+          type: 'number', step: '0.01', min: '0', value, placeholder,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+          style: { height: 44, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', ...font, flex: 1 },
+        })));
+
+  const plataformaContent = React.createElement('div', {
+    style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%', maxWidth: 600 },
+  },
+    React.createElement('h2', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Configurações da Plataforma'),
+    React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+      platInput('Preço da gasolina (litro)', gasPrice, setGasPrice, '5.99'),
+      platInput('Preço do KM rodado', kmPrice, setKmPrice, '1.50')),
+    React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
+      React.createElement('button', {
+        type: 'button',
+        onClick: savePlatformSettings,
+        style: {
+          height: 44, padding: '0 28px', borderRadius: 999, border: 'none',
+          background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
+        },
+      }, 'Salvar'),
+      platSaved ? React.createElement('span', { style: { color: '#22c55e', fontSize: 14, fontWeight: 500, ...font } }, 'Salvo com sucesso!') : null));
 
   // ── Novo Usuário Modal ──────────────────────────────────────────────────
   const permModulos = ['Início', 'Viagens', 'Passageiros', 'Motoristas', 'Destinos', 'Encomendas', 'Preparadores', 'Promoções', 'Pagamentos', 'Atendimento'];
@@ -297,7 +391,24 @@ export default function ConfiguracoesScreen() {
           style: { flex: 1, height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', fontSize: 16, fontWeight: 600, color: '#0d0d0d', cursor: 'pointer', ...font },
         }, 'Cancelar'),
         React.createElement('button', {
-          type: 'button', onClick: () => setNovoUsuarioOpen(false),
+          type: 'button',
+          onClick: async () => {
+            if (nuNome.trim() && nuEmail.trim()) {
+              // Gerar senha aleatória
+              const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+              const tempPassword = Array.from({ length: 10 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+              await createAdminUser({ full_name: nuNome, email: nuEmail, permissions: nuPermissoes });
+              // Enviar credenciais por email
+              try {
+                await invokeEdgeFunction('send-admin-credentials', 'POST', undefined, {
+                  email: nuEmail.trim(), name: nuNome.trim(), password: tempPassword,
+                });
+              } catch (e) { console.warn('Falha ao enviar email de credenciais:', e); }
+              const items = await fetchAdminUsers();
+              setAdminUsers(items);
+            }
+            setNovoUsuarioOpen(false);
+          },
           style: { flex: 1, height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', fontSize: 16, fontWeight: 600, color: '#fff', cursor: 'pointer', ...font },
         }, 'Salvar')))) : null;
 
@@ -306,6 +417,6 @@ export default function ConfiguracoesScreen() {
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%' } },
         React.createElement('h1', { style: { ...webStyles.homeTitle, margin: 0, width: '100%' } }, 'Configurações'),
         tabsRow),
-      aba === 'perfil' ? perfilContent : usuariosContent),
+      aba === 'perfil' ? perfilContent : aba === 'usuarios' ? usuariosContent : plataformaContent),
     novoUsuarioModal);
 }

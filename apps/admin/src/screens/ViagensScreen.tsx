@@ -2,7 +2,7 @@
  * ViagensScreen — Lista de viagens conforme Figma node 783-10796.
  * Uses React.createElement() calls (NOT JSX).
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -22,7 +22,13 @@ import {
   statusPill,
   type ViagemRow,
 } from '../styles/webStyles';
-import { fetchViagens, fetchViagemCounts, type ViagemCounts } from '../data/queries';
+import {
+  fetchViagens,
+  updateBookingStatus,
+  filterViagemListItem,
+  viagemCountsFromItems,
+  type ViagemListFilter,
+} from '../data/queries';
 import type { ViagemListItem } from '../data/types';
 
 // SVG icons for view/edit actions (stroke-based, matching project icons)
@@ -43,14 +49,13 @@ export default function ViagensScreen() {
 
   // ── Real data from Supabase ─────────────────────────────────────────
   const [viagens, setViagens] = useState<ViagemListItem[]>([]);
-  const [counts, setCounts] = useState<ViagemCounts>({ total: 0, concluidas: 0, agendadas: 0, emAndamento: 0, canceladas: 0 });
   const [dataLoading, setDataLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [items, c] = await Promise.all([fetchViagens(), fetchViagemCounts()]);
-      if (!cancelled) { setViagens(items); setCounts(c); setDataLoading(false); }
+      const items = await fetchViagens();
+      if (!cancelled) { setViagens(items); setDataLoading(false); }
     })();
     return () => { cancelled = true; };
   }, []);
@@ -60,15 +65,34 @@ export default function ViagensScreen() {
   const [filterDateInicio, setFilterDateInicio] = useState('');
   const [filterDateFim, setFilterDateFim] = useState('');
   const [filterDatasIncluidas, setFilterDatasIncluidas] = useState<'somente_passadas' | 'passadas_e_futuras' | 'somente_futuras'>('passadas_e_futuras');
-  const [filterStatus, setFilterStatus] = useState<'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('em_andamento');
-  const [filterCategoria, setFilterCategoria] = useState<'todos' | 'take_me' | 'motorista'>('take_me');
-  // Table filter modal (Figma 1132-26548)
+  const [filterStatus, setFilterStatus] = useState<'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('todos');
+  const [filterCategoria, setFilterCategoria] = useState<'todos' | 'take_me' | 'motorista'>('todos');
+  // Table filter modal (Figma 1132-26548) — status/categoria partilhados com o modal da barra (estado único)
   const [tableFilterOpen, setTableFilterOpen] = useState(false);
   const [tableFilterNome, setTableFilterNome] = useState('');
   const [tableFilterOrigem, setTableFilterOrigem] = useState('');
   const [tableFilterDate, setTableFilterDate] = useState('');
-  const [tableFilterStatus, setTableFilterStatus] = useState<'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('em_andamento');
-  const [tableFilterCategoria, setTableFilterCategoria] = useState<'todos' | 'take_me' | 'motorista'>('take_me');
+
+  const listFilter: ViagemListFilter = useMemo(
+    () => ({
+      status: filterStatus,
+      categoria: filterCategoria,
+      nomeNeedle: tableFilterNome,
+      origemNeedle: tableFilterOrigem,
+      tableDateYmd: tableFilterDate,
+      periodoInicioYmd: filterDateInicio,
+      periodoFimYmd: filterDateFim,
+      datasIncluidas: filterDatasIncluidas,
+    }),
+    [filterStatus, filterCategoria, tableFilterNome, tableFilterOrigem, tableFilterDate, filterDateInicio, filterDateFim, filterDatasIncluidas],
+  );
+
+  const viagensFiltradas = useMemo(
+    () => viagens.filter((v) => filterViagemListItem(v, listFilter)),
+    [viagens, listFilter],
+  );
+
+  const counts = useMemo(() => viagemCountsFromItems(viagensFiltradas), [viagensFiltradas]);
 
   // ── Alterar passageiro panel (Figma 1271-32750) ────────────────────
   const [alterarPassageiroOpen, setAlterarPassageiroOpen] = useState(false);
@@ -90,13 +114,8 @@ export default function ViagensScreen() {
     return () => clearTimeout(t);
   }, [toastMsg]);
 
-  const viagensSearchRow = React.createElement('div', { style: webStyles.searchRow },
-    React.createElement('div', { style: webStyles.searchInputWrap },
-      React.createElement('div', { style: webStyles.searchInputInner },
-        React.createElement('span', { style: webStyles.searchIcon }, searchIconSvg),
-        React.createElement('input', { type: 'search', placeholder: 'Buscar', style: webStyles.searchInput, 'aria-label': 'Buscar' }))),
+  const viagensSearchRow = React.createElement('div', { style: { ...webStyles.searchRow, justifyContent: 'flex-end' } },
     React.createElement('div', { style: webStyles.filterGroup },
-      React.createElement('button', { type: 'button', style: webStyles.filterBtn, onClick: () => { setTrocarMotoristaOpen(true); setTrocarMotoristaSelected(0); setTrocarMotoristaMotivo(''); } }, React.createElement('span', null, editIconSvg), 'Trocar motorista'),
       React.createElement('button', { type: 'button', style: webStyles.filterBtn, onClick: () => setFilterModalOpen(true) }, React.createElement('span', null, filterIconSvg), 'Filtro')));
 
   const viagensMetrics = [
@@ -116,29 +135,66 @@ export default function ViagensScreen() {
     React.createElement('div', { style: { ...webStyles.statCardsRow, marginBottom: 0 } }, ...viagensMetrics.slice(0, 3).map(viagensMetricCardEl)),
     React.createElement('div', { style: webStyles.statCardsRow }, ...viagensMetrics.slice(3, 5).map(viagensMetricCardEl)));
 
-  const total = counts.total || 1;
-  const d1 = Math.round((counts.concluidas / total) * 360);
-  const d2 = d1 + Math.round((counts.agendadas / total) * 360);
-  const d3 = d2 + Math.round((counts.emAndamento / total) * 360);
-  const donutGradient = `conic-gradient(#0d8344 0deg ${d1}deg, #016df9 ${d1}deg ${d2}deg, #cba04b ${d2}deg ${d3}deg, #d64545 ${d3}deg 360deg)`;
+  // ── Recharts PieChart para distribuição por status ─────────────────
+  const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } = require('recharts');
+  const statusPieData = [
+    { name: 'Concluídas', value: counts.concluidas, color: '#0d8344' },
+    { name: 'Agendadas', value: counts.agendadas, color: '#016df9' },
+    { name: 'Em andamento', value: counts.emAndamento, color: '#cba04b' },
+    { name: 'Canceladas', value: counts.canceladas, color: '#d64545' },
+  ].filter((d) => d.value > 0);
+  if (statusPieData.length === 0) statusPieData.push({ name: 'Sem dados', value: 1, color: '#e2e2e2' });
+
+  const statusTooltip = ({ active, payload }: any) => {
+    if (!active || !payload?.[0]) return null;
+    const d = payload[0].payload;
+    const total = counts.total || 1;
+    const pct = Math.round((d.value / total) * 100);
+    return React.createElement('div', {
+      style: { background: '#0d0d0d', color: '#fff', padding: '10px 16px', borderRadius: 10, fontSize: 14, fontWeight: 600, fontFamily: 'Inter, sans-serif', boxShadow: '0 4px 16px rgba(0,0,0,0.25)' },
+    }, `${d.name}: ${pct}% (${d.value})`);
+  };
+
+  const legendDot = (bg: string): React.CSSProperties => ({ width: 20, height: 20, borderRadius: 999, background: bg, flexShrink: 0 });
+
   const viagensChartCard = React.createElement('div', { style: webStyles.viagensChartCard },
     React.createElement('h3', { style: webStyles.chartCardTitle }, 'Distribuição de viagens por status'),
     React.createElement('p', { style: webStyles.chartCardDesc }, 'Dados consolidados com base no período selecionado'),
-    React.createElement('div', { style: webStyles.chartRow },
-      React.createElement('div', { style: { width: 200, height: 200, borderRadius: '50%', background: donutGradient, flexShrink: 0 } }),
-      React.createElement('div', { style: webStyles.chartLegend },
-        React.createElement('div', { style: webStyles.viagensChartLegendItem },
-          React.createElement('span', { style: { ...webStyles.viagensChartLegendDot, background: '#0d8344' } }),
-          React.createElement('span', { style: { ...webStyles.viagensChartLegendText, color: '#0d8344' } }, 'Concluídas')),
-        React.createElement('div', { style: webStyles.viagensChartLegendItem },
-          React.createElement('span', { style: { ...webStyles.viagensChartLegendDot, background: '#016df9' } }),
-          React.createElement('span', { style: { ...webStyles.viagensChartLegendText, color: '#016df9' } }, 'Agendadas')),
-        React.createElement('div', { style: webStyles.viagensChartLegendItem },
-          React.createElement('span', { style: { ...webStyles.viagensChartLegendDot, background: '#cba04b' } }),
-          React.createElement('span', { style: { ...webStyles.viagensChartLegendText, color: '#cba04b' } }, 'Em andamento')),
-        React.createElement('div', { style: webStyles.viagensChartLegendItem },
-          React.createElement('span', { style: { ...webStyles.viagensChartLegendDot, background: '#d64545' } }),
-          React.createElement('span', { style: { ...webStyles.viagensChartLegendText, color: '#d64545' } }, 'Canceladas')))));
+    React.createElement('div', { style: { display: 'flex', gap: 72, alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' as const } },
+      // Recharts PieChart (260px conforme Figma)
+      React.createElement('div', { style: { width: 260, height: 260, flexShrink: 0 } },
+        React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
+          React.createElement(PieChart, null,
+            React.createElement(Pie, {
+              data: statusPieData, cx: '50%', cy: '50%',
+              innerRadius: 0, outerRadius: 120, dataKey: 'value',
+              stroke: '#f6f6f6', strokeWidth: 2,
+              animationBegin: 0, animationDuration: 800,
+            },
+              ...statusPieData.map((entry: any, idx: number) =>
+                React.createElement(Cell, { key: `cell-${idx}`, fill: entry.color }))),
+            React.createElement(Tooltip, { content: statusTooltip })))),
+      // Legenda conforme Figma com % antes do título
+      (() => {
+        const total = counts.total || 1;
+        const pctConc = Math.round((counts.concluidas / total) * 100);
+        const pctAgen = Math.round((counts.agendadas / total) * 100);
+        const pctAnda = Math.round((counts.emAndamento / total) * 100);
+        const pctCanc = Math.round((counts.canceladas / total) * 100);
+        return React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24 } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('span', { style: legendDot('#0d8344') }),
+            React.createElement('span', { style: { fontSize: 16, fontWeight: 400, color: '#0d8344', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 } }, `${pctConc}% Concluídas`)),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('span', { style: legendDot('#016df9') }),
+            React.createElement('span', { style: { fontSize: 16, fontWeight: 400, color: '#016df9', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 } }, `${pctAgen}% Agendadas`)),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('span', { style: legendDot('#cba04b') }),
+            React.createElement('span', { style: { fontSize: 16, fontWeight: 400, color: '#cba04b', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 } }, `${pctAnda}% Em andamento`)),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('span', { style: legendDot('#d64545') }),
+            React.createElement('span', { style: { fontSize: 16, fontWeight: 400, color: '#d64545', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 } }, `${pctCanc}% Canceladas`)));
+      })()));
 
   // Table columns — use flex proportions to fit container width
   const tableCols = [
@@ -152,14 +208,18 @@ export default function ViagensScreen() {
     { label: 'Visualizar/Editar', flex: '0 0 96px', minWidth: 96 },
   ];
 
-  const viagensTableRows: ViagemRow[] = viagens.map((v) => ({
-    passageiro: v.passageiro,
-    origem: v.origem,
-    destino: v.destino,
-    data: v.data,
-    embarque: v.embarque,
-    chegada: v.chegada,
-    status: v.status,
+  type RowWithItem = { row: ViagemRow; item: ViagemListItem };
+  const viagensTableRows: RowWithItem[] = viagensFiltradas.map((v) => ({
+    item: v,
+    row: {
+      passageiro: v.passageiro,
+      origem: v.origem,
+      destino: v.destino,
+      data: v.data,
+      embarque: v.embarque,
+      chegada: v.chegada,
+      status: v.status,
+    },
   }));
 
   // Table header
@@ -175,9 +235,8 @@ export default function ViagensScreen() {
       },
     }, c.label)));
 
-  const openTripDetail = (row: ViagemRow, idx: number) => {
-    const item = viagens[idx];
-    navigate(`/viagens/${item?.bookingId ?? idx}`, { state: { trip: row } });
+  const openTripDetail = (row: ViagemRow, item: ViagemListItem) => {
+    navigate(`/viagens/${item.bookingId}`, { state: { trip: row } });
   };
 
   // Render avatar with initial letter and colored bg
@@ -193,15 +252,19 @@ export default function ViagensScreen() {
 
   // Table rows
   const cellBase = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', padding: '0 8px' } as const;
-  const viagensTableRowEl = (row: ViagemRow, idx: number) => {
+  const viagensTableRowEl = (entry: RowWithItem, idx: number) => {
+    const { row, item } = entry;
     const st = statusStyles[row.status];
+    const canConfirmPay = item.bookingDbStatus === 'pending' || item.bookingDbStatus === 'confirmed';
+    const canCancelBooking = item.bookingDbStatus !== 'cancelled' && item.bookingDbStatus !== 'paid';
     return React.createElement('div', {
-      key: idx,
+      key: item.bookingId,
+      'data-testid': 'viagem-table-row',
       style: { ...webStyles.viagensTableRow, display: 'flex', cursor: 'pointer' },
-      onClick: () => openTripDetail(row, idx),
+      onClick: () => openTripDetail(row, item),
       role: 'button',
       tabIndex: 0,
-      onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTripDetail(row, idx); } },
+      onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTripDetail(row, item); } },
     },
       // Passageiros
       React.createElement('div', { style: { ...webStyles.viagensPassengerCell, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth } },
@@ -209,8 +272,7 @@ export default function ViagensScreen() {
           style: { cursor: 'pointer' },
           onClick: (e: React.MouseEvent) => {
             e.stopPropagation();
-            const ids = ['#312312312', '#312312313', '#312312314', '#312312315', '#312312316', '#312312317', '#312312318'];
-            setAlterarPassageiroData({ id: ids[idx] || '#312312312', nome: row.passageiro, contato: '(21) 98888-7777', mala: 'Pequena', valor: 'R$ 25,00' });
+            setAlterarPassageiroData({ id: item.bookingId, nome: row.passageiro, contato: '(21) 98888-7777', mala: 'Pequena', valor: 'R$ 25,00' });
             setAlterarPassageiroOpen(true);
           },
         }, renderAvatar(row.passageiro)),
@@ -236,19 +298,21 @@ export default function ViagensScreen() {
         React.createElement('div', { style: webStyles.viagensActionIcons },
           React.createElement('button', {
             type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar',
-            onClick: (e: React.MouseEvent) => { e.stopPropagation(); openTripDetail(row, idx); },
+            onClick: (e: React.MouseEvent) => { e.stopPropagation(); openTripDetail(row, item); },
           }, eyeActionSvg),
           React.createElement('button', {
             type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
-            onClick: (e: React.MouseEvent) => { e.stopPropagation(); const item = viagens[idx]; navigate('/viagens/' + (item?.bookingId ?? idx) + '/editar', { state: { trip: row } }); },
+            onClick: (e: React.MouseEvent) => { e.stopPropagation(); navigate(`/viagens/${item.bookingId}/editar`, { state: { trip: row } }); },
           }, pencilActionSvg))));
   };
 
-  const viagensTableBody = viagensTableRows.map(viagensTableRowEl);
+  const viagensTableBody = viagensTableRows.map((entry, idx) => viagensTableRowEl(entry, idx));
 
   // Filtro button for section header (pill style matching Figma)
   const filtroBtn = React.createElement('button', {
     type: 'button',
+    'data-testid': 'viagens-open-table-filter',
+    'aria-label': 'Abrir filtro da tabela de viagens',
     style: {
       display: 'flex', alignItems: 'center', gap: 8, height: 40,
       padding: '8px 24px', borderRadius: 999, border: 'none',
@@ -267,7 +331,8 @@ export default function ViagensScreen() {
     ...viagensTableBody);
 
   // Modal Filtro da tabela (Figma 1132-26548)
-  const statusOptions: { id: 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'; label: string }[] = [
+  const statusOptions: { id: 'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'; label: string }[] = [
+    { id: 'todos', label: 'Todos' },
     { id: 'em_andamento', label: 'Em andamento' },
     { id: 'agendadas', label: 'Agendadas' },
     { id: 'concluidas', label: 'Concluídas' },
@@ -398,7 +463,7 @@ export default function ViagensScreen() {
     // Buttons
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, padding: '0 23px' } },
       React.createElement('button', { type: 'button', style: modalPrimaryBtn, onClick: () => setFilterModalOpen(false) }, 'Aplicar filtro'),
-      React.createElement('button', { type: 'button', style: modalSecBtn, onClick: () => setFilterModalOpen(false) }, 'Voltar')));
+      React.createElement('button', { type: 'button', style: { ...modalSecBtn, color: '#b53838' }, onClick: () => { setFilterStatus('todos'); setFilterCategoria('todos'); setFilterDateInicio(''); setFilterDateFim(''); setFilterDatasIncluidas('passadas_e_futuras'); setFilterModalOpen(false); } }, 'Resetar filtros')));
 
   // ── Table filter modal (Figma 1132-26548) ──
   const tableFilterContent = React.createElement('div', { style: modalBox, onClick: (e: React.MouseEvent) => e.stopPropagation() },
@@ -431,8 +496,8 @@ export default function ViagensScreen() {
         ...statusOptions.map((opt) =>
           React.createElement('button', {
             key: opt.id, type: 'button',
-            style: tableFilterStatus === opt.id ? chipActive : chipInactive,
-            onClick: () => setTableFilterStatus(opt.id),
+            style: filterStatus === opt.id ? chipActive : chipInactive,
+            onClick: () => setFilterStatus(opt.id),
           }, opt.label)))),
     React.createElement('div', { style: { ...modalFieldWrap, gap: 0 } },
       React.createElement('span', { style: modalSectionLabel }, 'Categoria'),
@@ -440,12 +505,12 @@ export default function ViagensScreen() {
         ...categoriaOptions.map((opt) =>
           React.createElement('button', {
             key: opt.id, type: 'button',
-            style: tableFilterCategoria === opt.id ? chipActive : chipInactive,
-            onClick: () => setTableFilterCategoria(opt.id),
+            style: filterCategoria === opt.id ? chipActive : chipInactive,
+            onClick: () => setFilterCategoria(opt.id),
           }, opt.label)))),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, padding: '0 23px' } },
       React.createElement('button', { type: 'button', style: modalPrimaryBtn, onClick: () => setTableFilterOpen(false) }, 'Aplicar filtro'),
-      React.createElement('button', { type: 'button', style: modalSecBtn, onClick: () => setTableFilterOpen(false) }, 'Voltar')));
+      React.createElement('button', { type: 'button', style: { ...modalSecBtn, color: '#b53838' }, onClick: () => { setTableFilterNome(''); setTableFilterOrigem(''); setTableFilterDate(''); setFilterStatus('todos'); setFilterCategoria('todos'); setTableFilterOpen(false); } }, 'Resetar filtros')));
 
   const searchFilterEl = filterModalOpen
     ? React.createElement('div', { style: webStyles.modalOverlay, onClick: () => setFilterModalOpen(false), role: 'dialog', 'aria-modal': true, 'aria-label': 'Filtro' }, searchFilterContent)
