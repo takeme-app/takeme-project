@@ -134,16 +134,12 @@ export default function HomeScreen() {
       React.createElement('p', { style: webStyles.expenseCardValue }, fmtExpenseBRL(approvedExpenseCents)),
       React.createElement('button', { type: 'button', style: webStyles.expenseCardLink }, 'Ver detalhes em Pagamentos', React.createElement('span', null, arrowForwardSvg))));
 
-  // Contagens fixas — sempre mostram totais de TODAS viagens/encomendas (sem filtro de status)
-  const totalCounts = useMemo(() => {
-    if (!dataLoaded) return null;
-    const vAll = viagemCountsFromItems(allViagens);
-    const eAll = encomendaCountsFromItems(allEncomendas);
-    return { viagens: vAll, encomendas: eAll };
-  }, [dataLoaded, allViagens, allEncomendas]);
+  // Contagens filtradas — refletem os filtros aplicados (data, status, categoria)
+  const vc = homeCounts?.viagens;
+  const ec = homeCounts?.encomendas;
 
-  const vc = totalCounts?.viagens;
-  const ec = totalCounts?.encomendas;
+  // Indicador se filtro está ativo
+  const isFilterActive = filterDateInicio !== '' || filterDateFim !== '' || filterStatus !== 'em_andamento';
   const statCardsData = isEncomendas
     ? [
         { title: 'Entregas em andamento', value: String(ec?.emAndamento ?? '—'), positive: true, testId: 'home-stat-encomendas-em-andamento' as const },
@@ -250,15 +246,41 @@ export default function HomeScreen() {
               React.createElement('span', { style: legendText }, `${despesasPct}% Despesas`))))));
   };
 
+  // Calcular totais do gráfico com base nos itens FILTRADOS
+  const filteredChartData = useMemo(() => {
+    if (!dataLoaded) return { grossCents: 0, adminCents: 0, workerCents: 0 };
+    const cat = homeCategoriaToFilter(filterCategoria);
+    const vf: ViagemListFilter = {
+      status: filterStatus, categoria: cat, nomeNeedle: '', origemNeedle: '',
+      tableDateYmd: '', periodoInicioYmd: filterDateInicio, periodoFimYmd: filterDateFim,
+      datasIncluidas: 'passadas_e_futuras',
+    };
+    if (isEncomendas) {
+      const eFil = allEncomendas.filter((e) => filterEncomendaForHome(e, filterStatus, filterDateInicio, filterDateFim));
+      const gross = eFil.reduce((s, e) => s + e.amountCents, 0);
+      // Estimar split: 30% admin, 70% worker (sem dados granulares de payout por item filtrado)
+      const adminPctEstimate = pagByCategory?.chartEncomendas?.grossCents
+        ? (pagByCategory.chartEncomendas.adminCents / pagByCategory.chartEncomendas.grossCents) : 0.3;
+      return { grossCents: gross, adminCents: Math.round(gross * adminPctEstimate), workerCents: Math.round(gross * (1 - adminPctEstimate)) };
+    } else {
+      const vFil = allViagens.filter((v) => filterViagemListItem(v, vf));
+      const gross = vFil.reduce((s, v) => s + v.amountCents, 0);
+      const adminPctEstimate = pagByCategory?.chartPassageiros?.grossCents
+        ? (pagByCategory.chartPassageiros.adminCents / pagByCategory.chartPassageiros.grossCents) : 0.3;
+      return { grossCents: gross, adminCents: Math.round(gross * adminPctEstimate), workerCents: Math.round(gross * (1 - adminPctEstimate)) };
+    }
+  }, [dataLoaded, isEncomendas, allViagens, allEncomendas, filterCategoria, filterStatus, filterDateInicio, filterDateFim, pagByCategory]);
+
+  const filterLabel = isFilterActive ? ' (filtrado)' : '';
   const chartCardEl = isEncomendas
     ? buildChartSection(
-        'Distribuição de valores das encomendas concluídas',
-        'Distribuição de valores das encomendas concluídas no período filtrado.',
-        pagByCategory?.chartEncomendas)
+        'Distribuição de valores das encomendas' + filterLabel,
+        'Distribuição de valores das encomendas no período filtrado.',
+        filteredChartData)
     : buildChartSection(
-        'Distribuição de receitas',
-        'A receita total inclui todas as viagens concluídas no período filtrado.',
-        pagByCategory?.chartPassageiros);
+        'Distribuição de receitas' + filterLabel,
+        'A receita total inclui todas as viagens no período filtrado.',
+        filteredChartData);
 
   // Modal Filtro Início (Figma 756-19720)
   const statusOptions: { id: 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'; label: string }[] = [
