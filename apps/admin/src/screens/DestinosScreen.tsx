@@ -367,7 +367,7 @@ export default function DestinosScreen() {
   // ── Search row ────────────────────────────────────────────────────────────
 
   const searchRow = React.createElement('div', {
-    style: { display: 'flex', alignItems: 'center', gap: 12, width: '100%', flexWrap: 'wrap' as const },
+    style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, width: '100%', flexWrap: 'wrap' as const },
   },
     React.createElement('button', {
       type: 'button', onClick: () => setCriarRotaOpen(true),
