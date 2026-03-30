@@ -172,58 +172,71 @@ export default function HomeScreen() {
   const fmtBRL = (c: number) => `R$ ${(c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
   const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
-  // ── Gráfico conforme Figma: 3 fatias (Taxas, Valor líquido, Despesas) ──
-  // Taxas = admin_amount (gold), Valor líquido = worker_amount (gray), Despesas = surcharges/outros (black)
+  // ── Gráfico com Recharts (PieChart) ──────────────────────────────────
+  const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } = require('recharts');
+
+  const CHART_COLORS = ['#cba04b', '#545454', '#0d0d0d'];
+
   const buildChartSection = (
     title: string,
     desc: string,
     chart: { grossCents: number; adminCents: number; workerCents: number } | undefined,
   ) => {
     const gross = chart?.grossCents ?? 0;
-    const taxas = chart?.adminCents ?? 0; // plataforma
-    const liquido = chart?.workerCents ?? 0; // motoristas/preparadores
-    const despesas = Math.max(0, gross - taxas - liquido); // surcharges e outros
+    const taxas = chart?.adminCents ?? 0;
+    const liquido = chart?.workerCents ?? 0;
+    const despesas = Math.max(0, gross - taxas - liquido);
+
+    const pieData = [
+      { name: 'Taxas', value: taxas, color: '#cba04b' },
+      { name: 'Valor líquido', value: liquido, color: '#545454' },
+      { name: 'Despesas', value: despesas, color: '#0d0d0d' },
+    ].filter((d) => d.value > 0);
+
+    // Se não tem dados, mostrar placeholder
+    if (pieData.length === 0) pieData.push({ name: 'Sem dados', value: 1, color: '#e2e2e2' });
+
+    const dot = (bg: string): React.CSSProperties => ({ width: 20, height: 20, borderRadius: 999, background: bg, flexShrink: 0 });
+    const legendText: React.CSSProperties = { fontSize: 16, fontWeight: 400, color: '#0d0d0d', ...font };
     const total = gross || 1;
     const taxasPct = Math.round((taxas / total) * 100);
     const liquidoPct = Math.round((liquido / total) * 100);
-    const despesasPct = 100 - taxasPct - liquidoPct;
-    const taxasDeg = Math.round((taxasPct / 100) * 360);
-    const liquidoDeg = taxasDeg + Math.round((liquidoPct / 100) * 360);
+    const despesasPct = Math.max(0, 100 - taxasPct - liquidoPct);
 
-    // Legenda dot style (20px circle como no Figma)
-    const dot = (bg: string): React.CSSProperties => ({ width: 20, height: 20, borderRadius: 999, background: bg, flexShrink: 0 });
-    const legendText: React.CSSProperties = { fontSize: 16, fontWeight: 400, color: '#0d0d0d', ...font };
+    const customTooltip = ({ active, payload }: any) => {
+      if (!active || !payload?.[0]) return null;
+      const d = payload[0].payload;
+      const pct = gross > 0 ? Math.round((d.value / gross) * 100) : 0;
+      return React.createElement('div', {
+        style: { background: '#0d0d0d', color: '#fff', padding: '10px 16px', borderRadius: 10, fontSize: 14, fontWeight: 600, ...font, boxShadow: '0 4px 16px rgba(0,0,0,0.25)' },
+      }, `${d.name}: ${pct}% (${fmtBRL(d.value)})`);
+    };
 
     return React.createElement('div', {
       style: { display: 'flex', flexDirection: 'column' as const, gap: 40, padding: 24, borderRadius: 16, background: '#f6f6f6', width: '100%', boxSizing: 'border-box' as const },
     },
-      // Header
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
         React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font } }, title),
         React.createElement('p', { style: { fontSize: 14, fontWeight: 400, color: '#767676', margin: 0, lineHeight: 1.5, ...font } }, desc)),
-      // Chart + Legend row
       React.createElement('div', {
         style: { display: 'flex', gap: 56, alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' as const, width: '100%' },
       },
-        // Pizza chart (260px como no Figma, com labels dentro)
-        React.createElement('div', { style: { width: 260, height: 260, position: 'relative' as const, flexShrink: 0 } },
-          React.createElement('div', {
-            style: {
-              width: 260, height: 260, borderRadius: '50%',
-              background: `conic-gradient(#cba04b 0deg ${taxasDeg}deg, #545454 ${taxasDeg}deg ${liquidoDeg}deg, #0d0d0d ${liquidoDeg}deg 360deg)`,
-            },
-          }),
-          // Labels dentro do gráfico
-          React.createElement('span', {
-            style: { position: 'absolute' as const, top: '32%', left: '45%', fontSize: 12, color: '#0d0d0d', ...font, pointerEvents: 'none' as const },
-          }, `${taxasPct}% Taxas`),
-          React.createElement('span', {
-            style: { position: 'absolute' as const, top: '58%', left: '15%', fontSize: 12, color: '#fff', ...font, pointerEvents: 'none' as const },
-          }, `${liquidoPct}% Valor líquido`),
-          React.createElement('span', {
-            style: { position: 'absolute' as const, top: '68%', left: '50%', fontSize: 12, color: '#fff', ...font, pointerEvents: 'none' as const },
-          }, `${despesasPct}% Despesas`)),
-        // Legenda (direita)
+        // Recharts PieChart
+        React.createElement('div', { style: { width: 280, height: 280, flexShrink: 0 } },
+          React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
+            React.createElement(PieChart, null,
+              React.createElement(Pie, {
+                data: pieData,
+                cx: '50%', cy: '50%',
+                innerRadius: 0, outerRadius: 120,
+                dataKey: 'value',
+                stroke: '#f6f6f6', strokeWidth: 2,
+                animationBegin: 0, animationDuration: 800,
+              },
+                ...pieData.map((entry: any, idx: number) =>
+                  React.createElement(Cell, { key: `cell-${idx}`, fill: entry.color }))),
+              React.createElement(Tooltip, { content: customTooltip })))),
+        // Legenda
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 40 } },
           React.createElement('p', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } },
             `Faturamento total: ${fmtBRL(gross)}`),
