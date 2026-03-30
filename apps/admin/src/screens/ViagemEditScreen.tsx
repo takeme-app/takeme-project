@@ -6,6 +6,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   webStyles,
+  DETAIL_TRIP_MAP_HEIGHT,
   arrowBackSvg,
   starSvg,
   logoArrowSmallSvg,
@@ -23,7 +24,10 @@ import {
 } from '../data/queries';
 import type { BookingDetailForAdmin, MotoristaListItem } from '../data/types';
 import MapView from '../components/MapView';
+import PlacesAddressInput from '../components/PlacesAddressInput';
 import { supabase } from '../lib/supabase';
+import { useTripMapCoords } from '../hooks/useTripMapCoords';
+import { geocodeAddress } from '../lib/googleGeocoding';
 
 // ── Inline SVG icons ────────────────────────────────────────────────────
 const closeXSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
@@ -49,9 +53,6 @@ const warningSvg = React.createElement('svg', { width: 16, height: 16, viewBox: 
 const clockSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#767676', strokeWidth: 2 }),
   React.createElement('path', { d: 'M12 6v6l4 2', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
-const locationPinSvg = React.createElement('svg', { width: 44, height: 44, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-  React.createElement('path', { d: 'M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z', stroke: '#cba04b', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-  React.createElement('circle', { cx: 12, cy: 10, r: 3, stroke: '#cba04b', strokeWidth: 2 }));
 const starFilledSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z', fill: '#F59E0B', stroke: '#F59E0B', strokeWidth: 1 }));
 
@@ -139,7 +140,7 @@ export default function ViagemEditScreen() {
   const [malaDropdownOpen, setMalaDropdownOpen] = useState(false);
 
   // ── Mapa e Veículo ───────────────────────────────────────────────────
-  const [tripCoords, setTripCoords] = useState<{ origin?: { lat: number; lng: number }; destination?: { lat: number; lng: number } }>({});
+  const [tripCoords, setTripCoords] = useTripMapCoords(detail);
   const [vehicleInfo, setVehicleInfo] = useState<{ model: string; plate: string; year: number | null } | null>(null);
 
   // ── Image zoom modal (Figma 1170-26615) ──────────────────────────────
@@ -182,24 +183,11 @@ export default function ViagemEditScreen() {
     fetchMotoristas().then((m) => setDriversList(m.slice(0, 24)));
   }, []);
 
-  // Fetch trip coordinates and vehicle info
+  // Veículo do motorista (coordenadas do mapa vêm de useTripMapCoords)
   useEffect(() => {
     if (!detail?.listItem?.tripId) return;
     let cancel = false;
-    const tripId = detail.listItem.tripId;
     const driverId = detail.listItem.driverId;
-    // Coordinates
-    (supabase as any).from('scheduled_trips')
-      .select('origin_lat, origin_lng, destination_lat, destination_lng')
-      .eq('id', tripId).single()
-      .then(({ data }: any) => {
-        if (cancel || !data) return;
-        const c: any = {};
-        if (data.origin_lat && data.origin_lng) c.origin = { lat: data.origin_lat, lng: data.origin_lng };
-        if (data.destination_lat && data.destination_lng) c.destination = { lat: data.destination_lat, lng: data.destination_lng };
-        setTripCoords(c);
-      });
-    // Vehicle from driver
     if (driverId) {
       (supabase as any).from('vehicles')
         .select('model, plate, year')
@@ -210,6 +198,8 @@ export default function ViagemEditScreen() {
         .then(({ data }: any) => {
           if (!cancel && data) setVehicleInfo(data);
         });
+    } else {
+      setVehicleInfo(null);
     }
     return () => { cancel = true; };
   }, [detail?.listItem?.tripId, detail?.listItem?.driverId]);
@@ -243,10 +233,39 @@ export default function ViagemEditScreen() {
       showToast('Defina um horário de partida válido.');
       return;
     }
+    let oLat = tripCoords.origin?.lat ?? detail.originLat ?? null;
+    let oLng = tripCoords.origin?.lng ?? detail.originLng ?? null;
+    let dLat = tripCoords.destination?.lat ?? detail.destinationLat ?? null;
+    let dLng = tripCoords.destination?.lng ?? detail.destinationLng ?? null;
+    if (oLat == null || oLng == null) {
+      const g = await geocodeAddress(origem);
+      if (g) {
+        oLat = g.lat;
+        oLng = g.lng;
+        setTripCoords((c) => ({ ...c, origin: { lat: g.lat, lng: g.lng } }));
+      }
+    }
+    if (dLat == null || dLng == null) {
+      const g = await geocodeAddress(destino);
+      if (g) {
+        dLat = g.lat;
+        dLng = g.lng;
+        setTripCoords((c) => ({ ...c, destination: { lat: g.lat, lng: g.lng } }));
+      }
+    }
+    if (oLat == null || oLng == null || dLat == null || dLng == null) {
+      showToast('Não foi possível obter coordenadas de origem e destino. Use as sugestões do Google ou configure EXPO_PUBLIC_GOOGLE_MAPS_API_KEY.');
+      return;
+    }
+
     setSaving(true);
     const bErr = await updateBookingFields(detail.listItem.bookingId, {
       origin_address: origem,
       destination_address: destino,
+      origin_lat: oLat,
+      origin_lng: oLng,
+      destination_lat: dLat,
+      destination_lng: dLng,
     });
     let tErr: { error: string | null } = { error: null };
     if (detail.listItem.tripId && depIso) {
@@ -265,7 +284,7 @@ export default function ViagemEditScreen() {
       const d2 = await fetchBookingDetailForAdmin(detail.listItem.bookingId);
       if (d2) setDetail(d2);
     }
-  }, [detail, departureLocal, origem, destino, ocupacao, driversList, selectedMotorista, showToast]);
+  }, [detail, departureLocal, origem, destino, ocupacao, driversList, selectedMotorista, showToast, tripCoords]);
 
   if (loading) {
     return React.createElement('div', { style: { ...webStyles.detailPage, padding: 40, fontFamily: 'Inter, sans-serif' } }, 'Carregando…');
@@ -307,22 +326,64 @@ export default function ViagemEditScreen() {
       React.createElement('input', { type: 'text', value, onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value), style: { ...inputStyle, paddingLeft: 40 } }));
 
   const leftColumn = React.createElement('div', { style: { flex: 1, maxWidth: 581, display: 'flex', flexDirection: 'column' as const, gap: 24 } },
-    // Map placeholder (clickable → zoom modal)
-    React.createElement('div', { style: {
-      background: '#fff8e6', borderRadius: 12, height: 255, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-    }, onClick: () => setImageZoomOpen(true) },
-      React.createElement('div', { style: { width: 88, height: 88, borderRadius: '50%', background: 'linear-gradient(135deg, #cba04b 0%, #e8c96a 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
-        locationPinSvg)),
+    // Mapa Mapbox GL (origem verde, destino vermelho, linha do trajeto) + ampliar
+    React.createElement('div', { style: { position: 'relative' as const, borderRadius: 12, overflow: 'hidden', minHeight: DETAIL_TRIP_MAP_HEIGHT, height: DETAIL_TRIP_MAP_HEIGHT } },
+      React.createElement(MapView, {
+        origin: tripCoords.origin,
+        destination: tripCoords.destination,
+        height: DETAIL_TRIP_MAP_HEIGHT,
+        staticMode: false,
+        connectPoints: true,
+        style: { borderRadius: 0 },
+      }),
+      React.createElement('button', {
+        type: 'button',
+        onClick: (e: React.MouseEvent) => { e.stopPropagation(); setImageZoomOpen(true); },
+        style: {
+          position: 'absolute' as const,
+          top: 10,
+          right: 10,
+          zIndex: 2,
+          padding: '8px 14px',
+          borderRadius: 8,
+          border: 'none',
+          background: 'rgba(255,255,255,0.95)',
+          boxShadow: '0 2px 10px rgba(0,0,0,0.12)',
+          fontSize: 13,
+          fontWeight: 600,
+          color: '#0d0d0d',
+          cursor: 'pointer',
+          ...font,
+        },
+      }, 'Ampliar mapa')),
     // Section title
     React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#767676', ...font } }, 'Trajeto de origem e destino'),
     // Origem
     React.createElement('div', { style: fieldWrap },
       React.createElement('label', { style: labelStyle }, 'Origem'),
-      React.createElement('input', { type: 'text', value: origem, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setOrigem(e.target.value), style: inputStyle })),
+      React.createElement(PlacesAddressInput, {
+        value: origem,
+        onChange: setOrigem,
+        onPlaceResolved: (p) => {
+          setOrigem(p.formattedAddress);
+          setTripCoords((c) => ({ ...c, origin: { lat: p.lat, lng: p.lng } }));
+        },
+        inputStyle,
+        placeholder: 'Buscar endereço de origem…',
+      })),
     // Destino
     React.createElement('div', { style: fieldWrap },
       React.createElement('label', { style: labelStyle }, 'Destino'),
-      React.createElement('input', { type: 'text', value: destino, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDestino(e.target.value), style: inputStyle })),
+      React.createElement(PlacesAddressInput, {
+        value: destino,
+        onChange: setDestino,
+        onPlaceResolved: (p) => {
+          setDestino(p.formattedAddress);
+          setTripCoords((c) => ({ ...c, destination: { lat: p.lat, lng: p.lng } }));
+        },
+        inputStyle,
+        placeholder: 'Buscar endereço de destino…',
+      })),
     // Horário agendado
     React.createElement('div', { style: fieldWrap },
       React.createElement('label', { style: labelStyle }, 'Horário agendado para início'),
@@ -471,7 +532,19 @@ export default function ViagemEditScreen() {
           ...motoristaRows.map(motoristaCard)),
       // Confirm button
       React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end' } },
-        React.createElement('button', { type: 'button', onClick: () => showToast('Grave com «Salvar alteração» no topo.'), style: {
+        React.createElement('button', { type: 'button', onClick: async () => {
+          if (!detail?.listItem?.tripId) return;
+          const newDriverId = driversList[selectedMotorista]?.id;
+          if (!newDriverId) { showToast('Selecione um motorista primeiro.'); return; }
+          setSaving(true);
+          const { error } = await updateScheduledTripFields(detail.listItem.tripId, { driver_id: newDriverId });
+          setSaving(false);
+          if (error) { showToast(error); } else {
+            showToast('Motorista substituído com sucesso!');
+            const d2 = await fetchBookingDetailForAdmin(detail.listItem.bookingId);
+            if (d2) setDetail(d2);
+          }
+        }, style: {
           display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '8px 24px',
           borderRadius: 999, border: '1px solid #0d0d0d', background: 'transparent',
           cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font,
@@ -917,13 +990,19 @@ export default function ViagemEditScreen() {
         React.createElement('div', {
           style: {
             width: '100%', maxWidth: 900, height: 675, borderRadius: 14,
-            overflow: 'hidden' as const, background: '#fff8e6',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            overflow: 'hidden' as const, background: '#e8e8e8',
+            display: 'flex', alignItems: 'stretch', justifyContent: 'stretch', flexShrink: 0,
           },
           onClick: (e: React.MouseEvent) => e.stopPropagation(),
         },
-          React.createElement('div', { style: { width: 88, height: 88, borderRadius: '50%', background: 'linear-gradient(135deg, #cba04b 0%, #e8c96a 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
-            locationPinSvg)),
+          React.createElement(MapView, {
+            origin: tripCoords.origin,
+            destination: tripCoords.destination,
+            height: 675,
+            staticMode: false,
+            connectPoints: true,
+            style: { borderRadius: 0, width: '100%', height: '100%' },
+          })),
         // Fechar button
         React.createElement('button', {
           type: 'button',
@@ -937,17 +1016,7 @@ export default function ViagemEditScreen() {
         }, 'Fechar'))
     : null;
 
-  // ── Mapa do trajeto ──────────────────────────────────────────────────
-  const mapSection = React.createElement('div', {
-    style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%', paddingBottom: 24, borderBottom: '1px solid #e2e2e2' },
-  },
-    React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Mapa do trajeto'),
-    React.createElement(MapView, {
-      origin: tripCoords.origin,
-      destination: tripCoords.destination,
-      height: 300,
-      staticMode: false,
-    }));
+  // Mapa do trajeto integrado no leftColumn (sem seção separada)
 
   // ── Info do veículo ─────────────────────────────────────────────────
   const vehicleSection = vehicleInfo ? React.createElement('div', {
@@ -969,7 +1038,6 @@ export default function ViagemEditScreen() {
   return React.createElement(React.Fragment, null,
     React.createElement('div', { style: webStyles.detailPage },
       headerSection,
-      mapSection,
       mainForm,
       vehicleSection,
       motoristasSection,

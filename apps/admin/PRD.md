@@ -1,7 +1,7 @@
 # Take Me — PRD Completo do Admin Web
 
-> **Versao:** 2.1 | **Data:** 29/03/2026 | **Status:** Implementado
-> **Stack:** React 19 + React Router DOM 6 + Expo Web + Supabase
+> **Versao:** 2.2 | **Data:** 30/03/2026 | **Status:** Implementado
+> **Stack:** React 19 + React Router DOM 6 + Expo Web + Supabase + Mapbox GL + Google Maps (Places/Geocoding) + Recharts
 > **Repositorio:** monorepo `take_me/apps/admin`
 > **Rendering:** `React.createElement()` (sem JSX)
 > **Estilizacao:** React.CSSProperties inline (webStyles.ts)
@@ -104,7 +104,7 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 - Filtro por categoria: Take Me vs. Motorista parceiro
 - Lista de itens com busca textual
 - Metricas financeiras: Pagamentos previstos, pagamentos feitos, lucro
-- Grafico de pizza (conic-gradient): Receita total, taxas admin, motoristas/preparadores
+- Grafico de pizza com **Recharts** (`PieChart`, `ResponsiveContainer`, tooltips): Receita total, taxas admin, motoristas/preparadores
 - **Filtro por categoria de receita:** Todos, Passageiros, Encomendas
 - Despesas aprovadas pelo backoffice
 
@@ -116,10 +116,12 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 - Busca por passageiro, motorista, origem, destino
 - Filtro por status, periodo, categoria (Take Me / Parceiro)
 - Cards de contagem clicaveis
+- **Grafico de distribuicao por status** com **Recharts** (pie chart responsivo, alinhado ao dashboard)
 
 #### 4.2.2 Detalhe da Viagem (`/viagens/:id`)
 
-- **Mapa Mapbox** real (estatico com pins origem/destino, interativo no zoom)
+- **Mapa Mapbox:** modo estatico (Static Images API, estilo `light-v11`) ou GL interativo; marcadores customizados (origem/destino); opcional **rota** via **Mapbox Directions API** (`connectPoints`, perfis `driving` / `driving-traffic` / `walking` / `cycling`); fallback linha reta se Directions falhar
+- **Coordenadas:** lat/lng do booking e, se ausentes, `scheduled_trips`; se ainda faltar ponto, **geocoding Google** (REST) quando `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` estiver definida — hook `useTripMapCoords`
 - Timeline: Embarque, Origem, Destino, Ocupacao bagageiro, Chegada
 - **Passageiros expandidos:** Nome, CPF, tamanho da mala (Pequena/Media/Grande), valor unitario calculado, botao chat
 - **Motorista:** Nome, badge Take Me/Parceiro, avaliacao, viagens, lugares restantes, horarios, bagageiro
@@ -134,7 +136,10 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 
 #### 4.2.4 Editar Viagem (`/viagens/:id/editar`)
 
-- **Mapa do trajeto** (MapView interativo com coordenadas reais)
+- **Mapa do trajeto** (MapView GL com rota/Directions quando aplicavel)
+- **Origem e destino:** `PlacesAddressInput` — autocompletar **Google Places** (script `maps/api/js` + `libraries=places`); ao escolher sugestao, grava endereco formatado e coordenadas via `onPlaceResolved`
+- **Ao salvar:** geocoding Google (`geocodeAddress`) para origem/destino quando necessario para persistir lat/lng
+- Coordenadas em tempo real no mapa via `useTripMapCoords` (Supabase + fallback Google)
 - **Secao Veiculo:** Modelo, Placa, Ano (do veiculo do motorista)
 - Campos editaveis: Origem, Destino, Horarios, Valor, Status, Ocupacao
 - Add/remove passageiros (slide panel)
@@ -194,7 +199,7 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 
 #### 4.6.2 Editar (`/encomendas/:id/editar`)
 
-- **Mapa Mapbox** real com coordenadas do shipment
+- **Mapa Mapbox** em modo **estatico** (`staticMode: true`) com origem/destino derivados dos dados da encomenda (coordenadas validadas; `parseCoordPair` ignora `0,0` placeholder)
 - Campos editaveis por tipo (shipment vs dependent_shipment)
 - Selecao de motorista disponivel
 - Resumo com status badge e rota
@@ -418,9 +423,11 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 | `confirm-code` | Verifica codigos de pickup/delivery | POST |
 | `ensure-stripe-customer` | Cria/busca customer Stripe | POST |
 | `save-payment-method` | Salva cartao no Stripe | POST |
-| `geocode` | Geocoding via Nominatim | POST |
+| `geocode` | Geocoding via Nominatim (Edge; outros clientes) | POST |
 | `send-email-verification-code` | OTP 4 digitos para cadastro | POST |
 | `create-motorista-account` | Cadastro completo de motorista | POST |
+
+**Nota (admin web):** autocomplete e geocoding de enderecos no painel usam as APIs Google no browser (ver secoes 9.0–9.2), nao a Edge Function `geocode`.
 
 ---
 
@@ -428,7 +435,12 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 
 | Componente | Descricao | Usado em |
 |------------|-----------|----------|
-| `MapView.tsx` | Mapa Mapbox GL (estatico via Static Images API + interativo via dynamic import) | Viagens detalhe/edit, Encomendas edit |
+| `MapView.tsx` | Mapbox GL (`mapbox-gl`): estatico (Static Images API, padding/letterbox) ou interativo (import dinamico); Directions v5 para polyline; props `currentPosition`, `connectPoints`, `directionsProfile`, `showFigmaMapChrome` | Viagens detalhe/edit, Encomendas edit |
+| `PlacesAddressInput.tsx` | Campo endereco com sugestoes **Google Places** (load async do JS API); sem chave, comporta-se como input texto simples | Viagem editar |
+| `useTripMapCoords` | Resolve `origin`/`destination` para o mapa: booking → `scheduled_trips` → **Google Geocoding** se necessario | Viagem detalhe, Viagem editar |
+| `googleGeocoding.ts` | `geocodeAddress()` — REST Geocoding API, `region=br` | Salvamento e hook de mapa |
+| `mapCoordUtils.ts` | `parseCoordPair` — valida lat/lng e descarta `0,0` | Mapas e forms |
+| `expoExtra.ts` | `getExpoExtra`, `getMapboxAccessToken`, `getGoogleMapsApiKey` — leem `Constants.expoConfig.extra` com fallback `process.env` (Metro local) | Mapas e Places |
 | `ChatPanel.tsx` | Chat com Supabase Realtime, bolhas, anexos PDF/imagem, auto-scroll | Atendimentos detalhe |
 | `FileUpload.tsx` | Drag & drop de PDF/imagem para Supabase Storage (bucket chat-attachments) | ChatPanel |
 | `useRealtimeMessages` | Hook com subscription Realtime em `messages`, send, markAsRead | ChatPanel |
@@ -442,7 +454,41 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 
 ## 9. Integracoes e Infraestrutura
 
-### 9.1 Stack Tecnica
+### 9.0 Configuracao de ambiente (Admin Web)
+
+- **`app.config.js`:** carrega `.env` com `dotenv` no Node (local e deploy, ex.: Vercel) e injeta em `expo.extra` para o bundle web nao depender de `process.env` vazio no cliente.
+- **Chaves expostas ao cliente (prefixo `EXPO_PUBLIC_`):**
+  - `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`
+  - `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN` — mapas estaticos/GL e Directions (restringir token por URL no dashboard Mapbox)
+  - `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` — **Places API** (autocomplete) e **Geocoding API** (geocode ao salvar / fallback no mapa); restringir por referrer HTTP no Google Cloud
+- **Referencia:** `apps/admin/.env.example` documenta cada variavel e testes E2E (`E2E_ADMIN_EMAIL`, `E2E_ADMIN_PASSWORD`, opcional `E2E_REQUIRE_DB_ROWS`).
+
+### 9.1 Mapbox (uso no admin)
+
+| Recurso | Uso |
+|---------|-----|
+| **mapbox-gl** (npm) | Mapa interativo, marcadores HTML custom, camadas de linha (rota) |
+| **Static Images API** | Vista rapida sem WebGL (`staticMode: true`) — estilo `light-v11`, padding para atribuicao |
+| **Directions API v5** | Geometria `polyline` entre origem e destino; fallback reta se `code !== Ok` ou sem token |
+| **Token** | `getMapboxAccessToken()` em `expoExtra.ts` |
+
+### 9.2 Google Maps (uso no admin)
+
+| Recurso | Uso |
+|---------|-----|
+| **Places Library** (JS loader) | Sugestoes em `PlacesAddressInput`; session token; debounce |
+| **Geocoding API** (JSON REST) | `googleGeocoding.geocodeAddress` — endereco → lat/lng + `formatted_address` |
+| **Sem chave** | Places vira input simples; mapa de viagem ainda usa coords de BD quando existem |
+
+### 9.3 Graficos (Recharts)
+
+| Uso | Tela |
+|-----|------|
+| **recharts** v3 | `PieChart`, `Pie`, `Cell`, `Tooltip`, `ResponsiveContainer` via `require('recharts')` (compativel com bundle sem JSX) |
+| Distribuicao de receita (categorias) | `HomeScreen` |
+| Distribuicao por status de viagem | `ViagensScreen` |
+
+### 9.4 Stack Tecnica
 
 | Camada | Tecnologia |
 |--------|------------|
@@ -452,11 +498,12 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 | Rendering | `React.createElement()` (sem JSX) |
 | Monorepo | `@take-me/shared` (Supabase client compartilhado) |
 | Pagamentos | Stripe (Customers, PaymentMethods, PaymentIntents, Refunds) |
-| Mapas | Mapbox GL JS (Static Images API + interactive, dynamic import) |
+| Mapas | **Mapbox GL JS** + Static Images + Directions; **Google Maps** (Places + Geocoding) para enderecos e fallback de coordenadas |
+| Graficos | **Recharts** 3.x |
 | E-mails | Resend (transacionais) |
 | Testes | Playwright (E2E) |
 
-### 9.2 Supabase Storage Buckets
+### 9.5 Supabase Storage Buckets
 
 | Bucket | Uso |
 |--------|-----|
@@ -467,7 +514,7 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 | `excursion-passenger-docs` | Documentos de participantes de excursao |
 | `chat-attachments` | PDFs e imagens enviados no chat de atendimento (max 10MB) |
 
-### 9.3 Seguranca (RLS)
+### 9.6 Seguranca (RLS)
 
 - Todas as tabelas possuem Row Level Security ativado
 - Funcao `is_admin()` (security definer) verifica `app_metadata.role`

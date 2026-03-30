@@ -312,13 +312,14 @@ export default function HomeScreen() {
     React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
 
   const filterModalInicioContent = React.createElement('div', { style: { ...webStyles.modalBoxInicio, maxWidth: 560 }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
-    React.createElement('div', { style: webStyles.modalHeader },
-      React.createElement('div', { style: { ...webStyles.modalHeaderRowInicio, justifyContent: 'space-between' } },
-        React.createElement('h2', { id: 'home-filtro-modal-titulo', style: { ...webStyles.modalTitleCentered, textAlign: 'left' as const } }, 'Filtro'),
-        React.createElement('button', {
-          type: 'button', onClick: () => setFilterModalOpen(false),
-          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-        }, closeModalSvg))),
+    React.createElement('div', {
+      style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', paddingBottom: 20, borderBottom: '1px solid #e2e2e2', boxSizing: 'border-box' as const },
+    },
+      React.createElement('h2', { id: 'home-filtro-modal-titulo', style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, fontFamily: 'Inter, sans-serif' } }, 'Filtro'),
+      React.createElement('button', {
+        type: 'button', onClick: () => setFilterModalOpen(false),
+        style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+      }, closeModalSvg)),
     React.createElement('div', { style: webStyles.modalSection },
       React.createElement('h3', { style: webStyles.modalSectionTitle }, 'Data da atividade'),
       React.createElement('div', { style: webStyles.modalDateField },

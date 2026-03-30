@@ -453,6 +453,7 @@ export default function EncomendaEditScreen() {
           destination: encomendaCoords.destination,
           height: 220,
           staticMode: true,
+          showFigmaMapChrome: false,
         })),
       React.createElement('div', { style: { flex: '0 0 280px', display: 'flex', flexDirection: 'column' as const, gap: 12 } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
