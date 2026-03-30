@@ -223,19 +223,6 @@ export default function PassageirosScreen() {
   const searchRow = React.createElement('div', {
     style: { display: 'flex', alignItems: 'center', gap: 12, width: '100%', flexWrap: 'wrap' as const },
   },
-    React.createElement('div', {
-      style: { flex: '1 1 300px', display: 'flex', alignItems: 'center', gap: 8, background: '#f1f1f1', borderRadius: 999, height: 44, paddingLeft: 16, paddingRight: 16 },
-    },
-      searchIconSvg,
-      React.createElement('input', {
-        type: 'text', value: search, placeholder: 'Buscar passageiro, cidade ou estado...',
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value),
-        style: { flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 14, color: '#0d0d0d', ...font },
-      })),
-    React.createElement('button', {
-      type: 'button', onClick: () => { setTrocarOpen(true); setTrocarSelected(0); setTrocarMotivo(''); },
-      style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px', background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999, fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const },
-    }, editIconSvg, 'Trocar motorista'),
     React.createElement('button', {
       type: 'button', onClick: () => setFiltroOpen(true), 'data-testid': 'passageiros-open-page-filter',
       style: { display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 16px', borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 500, ...font },
