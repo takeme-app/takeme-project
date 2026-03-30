@@ -162,6 +162,9 @@ export default function HomeScreen() {
       React.createElement('span', { style: { ...webStyles.statCardChange, ...(s.positive ? webStyles.statCardChangePos : webStyles.statCardChangeNeg) } }, s.change),
       React.createElement('span', { style: webStyles.statCardValue, 'data-testid': s.testId }, s.value)));
 
+  // Revenue category filter
+  const [revenueCategory, setRevenueCategory] = useState<'todos' | 'passageiros' | 'encomendas'>('todos');
+
   const chartTitle = isEncomendas ? 'Distribuição de valores das encomendas concluídas' : 'Distribuição de receitas';
   const chartDesc = 'Valores consolidados de payouts no projeto (não filtrados pelo modal; os cartões acima refletem o filtro aplicado).';
   // Real chart data from payouts
@@ -175,9 +178,26 @@ export default function HomeScreen() {
   const adminDeg = Math.round((adminPct / 100) * 360);
   const workerDeg = adminDeg + Math.round((workerPct / 100) * 360);
   const fmtBRL = (c: number) => `R$ ${(c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+  const revCatChip = (label: string, value: 'todos' | 'passageiros' | 'encomendas') => {
+    const active = revenueCategory === value;
+    return React.createElement('button', {
+      key: value,
+      type: 'button',
+      onClick: () => setRevenueCategory(value),
+      style: {
+        padding: '6px 16px', borderRadius: 999, border: active ? 'none' : '1px solid #e2e2e2',
+        background: active ? '#0d0d0d' : '#fff', color: active ? '#fff' : '#545454',
+        fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
+      },
+    }, label);
+  };
+  const revCatRow = React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+    revCatChip('Todos', 'todos'), revCatChip('Passageiros', 'passageiros'), revCatChip('Encomendas', 'encomendas'));
+
   const chartCardEl = React.createElement('div', { style: webStyles.chartCard },
     React.createElement('h3', { style: webStyles.chartCardTitle }, chartTitle),
     React.createElement('p', { style: webStyles.chartCardDesc }, chartDesc),
+    revCatRow,
     React.createElement('div', { style: webStyles.chartRow },
       React.createElement('div', { style: { width: 200, height: 200, borderRadius: '50%', background: `conic-gradient(#cba04b 0deg ${adminDeg}deg, #545454 ${adminDeg}deg ${workerDeg}deg, #0d0d0d ${workerDeg}deg 360deg)`, flexShrink: 0 } }),
       React.createElement('div', { style: webStyles.chartLegend },

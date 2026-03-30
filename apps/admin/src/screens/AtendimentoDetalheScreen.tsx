@@ -5,6 +5,9 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
+import ChatPanel from '../components/ChatPanel';
+import { invokeEdgeFunction } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -34,7 +37,7 @@ const historicoItems = [
 ];
 
 // ── Action chip labels ──────────────────────────────────────────────────
-const actionChips = ['Dados cadastrais', 'Documentos', 'Encomendas', 'Viagens', 'Pagamentos', 'Solicitação'];
+const actionChips = ['Dados cadastrais', 'Documentos', 'Encomendas', 'Viagens', 'Pagamentos', 'Solicitação', 'Reembolso', 'Veículo', 'Menores'];
 
 export default function AtendimentoDetalheScreen() {
   const navigate = useNavigate();
@@ -74,6 +77,21 @@ export default function AtendimentoDetalheScreen() {
     await (supabase as any).from('conversations').update({ status: 'closed', updated_at: new Date().toISOString() }).eq('id', conversationId);
     setConvStatus('closed');
   }, [conversationId]);
+
+  const { session } = useAuth();
+  const currentUserId = session?.user?.id || '';
+
+  // ── Specialized form states ──────────────────────────────────────────
+  const [refundOpen, setRefundOpen] = useState(false);
+  const [refundEntityType, setRefundEntityType] = useState('booking');
+  const [refundEntityId, setRefundEntityId] = useState('');
+  const [refundProcessing, setRefundProcessing] = useState(false);
+
+  const [vehicleAuthOpen, setVehicleAuthOpen] = useState(false);
+  const [vehicleData, setVehicleData] = useState<any>(null);
+
+  const [minorAuthOpen, setMinorAuthOpen] = useState(false);
+  const [minorData, setMinorData] = useState<any>(null);
 
   const nome = ticket.nome || 'Maria Silva';
   const email = ticket.email || 'maria.silva@gmail.com';
@@ -223,7 +241,7 @@ export default function AtendimentoDetalheScreen() {
       ...actionChips.map((label) =>
         React.createElement('button', {
           key: label, type: 'button',
-          onClick: label === 'Dados cadastrais' ? () => setDadosCadastraisOpen(true) : label === 'Documentos' ? () => setDocumentosOpen(true) : label === 'Encomendas' ? () => setEncomendaOpen(true) : label === 'Viagens' ? () => setViagemOpen(true) : label === 'Pagamentos' ? () => setPagamentoOpen(true) : label === 'Solicitação' ? () => setSolicitacaoOpen(true) : undefined,
+          onClick: label === 'Dados cadastrais' ? () => setDadosCadastraisOpen(true) : label === 'Documentos' ? () => setDocumentosOpen(true) : label === 'Encomendas' ? () => setEncomendaOpen(true) : label === 'Viagens' ? () => setViagemOpen(true) : label === 'Pagamentos' ? () => setPagamentoOpen(true) : label === 'Solicitação' ? () => setSolicitacaoOpen(true) : label === 'Reembolso' ? () => setRefundOpen(true) : label === 'Veículo' ? () => { (supabase as any).from('vehicles').select('*').eq('status', 'pending').limit(1).single().then(({ data }: any) => { setVehicleData(data); setVehicleAuthOpen(true); }); } : label === 'Menores' ? () => { (supabase as any).from('dependents').select('*').eq('status', 'pending').limit(1).single().then(({ data }: any) => { setMinorData(data); setMinorAuthOpen(true); }); } : undefined,
           style: {
             height: 40, padding: '0 20px', borderRadius: 999, border: '1px solid #e2e2e2',
             background: '#fff', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
@@ -333,90 +351,156 @@ export default function AtendimentoDetalheScreen() {
   const checkSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
     React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 
-  const chatPanel = chatOpen ? React.createElement('div', {
+  // ChatPanel com Supabase Realtime (substitui chat manual)
+  const chatPanel = chatOpen ? React.createElement(ChatPanel, {
+    conversationId: conversationId || null,
+    currentUserId,
+    participantName: nome,
+    onClose: () => setChatOpen(false),
+    floating: true,
+  }) : null;
+
+  // ── Reembolso modal ───────────────────────────────────────────────────
+  const refundModal = refundOpen ? React.createElement('div', {
     style: {
-      position: 'fixed' as const, bottom: 80, right: 24, width: 380, maxHeight: 520,
-      background: '#fff', borderRadius: 16, boxShadow: '0 8px 40px rgba(0,0,0,0.2)', zIndex: 101,
-      display: 'flex', flexDirection: 'column' as const, overflow: 'hidden',
+      position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
     },
+    onClick: () => setRefundOpen(false),
   },
-    // Chat header
     React.createElement('div', {
       style: {
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '14px 20px', borderBottom: '1px solid #e2e2e2',
+        background: '#fff', borderRadius: 16, width: '100%', maxWidth: 480, padding: '28px 32px',
+        display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)',
       },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
     },
-      React.createElement('span', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Conversa'),
-      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-        React.createElement('button', {
-          type: 'button', onClick: () => setChatOpen(false),
-          style: {
-            width: 32, height: 32, borderRadius: '50%', background: '#f1f1f1', border: 'none',
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          },
-        }, minimizeSvg),
-        React.createElement('button', {
-          type: 'button', onClick: () => setChatOpen(false),
-          style: {
-            width: 32, height: 32, borderRadius: '50%', background: '#f1f1f1', border: 'none',
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          },
-        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
-          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
-
-    // Messages area
-    React.createElement('div', {
-      style: { flex: 1, overflowY: 'auto' as const, padding: '16px 20px', display: 'flex', flexDirection: 'column' as const, gap: 16 },
-    },
-      ...chatMessages.map((msg, idx) =>
-        React.createElement('div', {
-          key: idx,
-          style: {
-            display: 'flex', flexDirection: 'column' as const,
-            alignItems: msg.from === 'agent' ? 'flex-end' : 'flex-start',
-          },
+      React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Processar Reembolso'),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
+        React.createElement('label', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Tipo de entidade'),
+        React.createElement('select', {
+          value: refundEntityType,
+          onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setRefundEntityType(e.target.value),
+          style: { height: 44, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 12px', fontSize: 14, ...font },
         },
-          React.createElement('div', {
-            style: {
-              maxWidth: '85%', padding: '12px 16px', borderRadius: 12,
-              background: msg.from === 'agent' ? '#fef8e7' : '#f1f1f1',
-              fontSize: 14, color: '#0d0d0d', lineHeight: 1.5, whiteSpace: 'pre-line' as const, ...font,
-            },
-          }, msg.text),
-          React.createElement('div', {
-            style: { display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 },
+          React.createElement('option', { value: 'booking' }, 'Viagem (booking)'),
+          React.createElement('option', { value: 'shipment' }, 'Encomenda (shipment)'),
+          React.createElement('option', { value: 'excursion' }, 'Excursão')),
+        React.createElement('label', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'ID da entidade'),
+        React.createElement('input', {
+          type: 'text', value: refundEntityId, placeholder: 'UUID da reserva/encomenda',
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setRefundEntityId(e.target.value),
+          style: { height: 44, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 12px', fontSize: 14, ...font },
+        })),
+      React.createElement('div', { style: { display: 'flex', gap: 12 } },
+        React.createElement('button', {
+          type: 'button',
+          disabled: refundProcessing || !refundEntityId.trim(),
+          onClick: async () => {
+            setRefundProcessing(true);
+            try {
+              await invokeEdgeFunction('process-refund', 'POST', undefined, {
+                entity_type: refundEntityType, entity_id: refundEntityId.trim(), reason: 'admin_refund',
+              });
+              showToast('Reembolso processado com sucesso');
+              setRefundOpen(false);
+            } catch (err: any) { showToast(`Erro: ${err.message || 'falha no reembolso'}`); }
+            setRefundProcessing(false);
           },
-            React.createElement('span', { style: { fontSize: 12, color: '#767676', fontWeight: 600, ...font } }, msg.time),
-            msg.from === 'agent' ? checkSvg : null)))),
+          style: { flex: 1, height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', opacity: refundProcessing ? 0.6 : 1, ...font },
+        }, refundProcessing ? 'Processando...' : 'Processar Reembolso'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setRefundOpen(false),
+          style: { flex: 1, height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+        }, 'Cancelar')))) : null;
 
-    // Input bar
+  // ── Autorização de veículo modal ──────────────────────────────────────
+  const vehicleAuthModal = vehicleAuthOpen ? React.createElement('div', {
+    style: {
+      position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+    },
+    onClick: () => setVehicleAuthOpen(false),
+  },
     React.createElement('div', {
       style: {
-        display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px',
-        borderTop: '1px solid #e2e2e2',
+        background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, padding: '28px 32px',
+        display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)',
       },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
     },
-      React.createElement('button', {
-        type: 'button',
-        style: { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', flexShrink: 0 },
-      }, plusSvg),
-      React.createElement('input', {
-        type: 'text', value: chatMsg, placeholder: 'Digite sua mensagem...',
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => setChatMsg(e.target.value),
-        style: {
-          flex: 1, height: 40, borderRadius: 999, border: '1px solid #e2e2e2', padding: '0 16px',
-          fontSize: 14, color: '#0d0d0d', outline: 'none', ...font,
-        },
-      }),
-      React.createElement('button', {
-        type: 'button',
-        style: { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', flexShrink: 0 },
-      }, sendSvg),
-      React.createElement('button', {
-        type: 'button',
-        style: { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', flexShrink: 0 },
-      }, cameraSvg))) : null;
+      React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Autorizar Cadastro de Veículo'),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      vehicleData
+        ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+            React.createElement('div', { style: { fontSize: 14, ...font } }, `Modelo: ${vehicleData.model || '—'}`),
+            React.createElement('div', { style: { fontSize: 14, ...font } }, `Placa: ${vehicleData.plate || '—'}`),
+            React.createElement('div', { style: { fontSize: 14, ...font } }, `Ano: ${vehicleData.year || '—'}`))
+        : React.createElement('p', { style: { fontSize: 14, color: '#767676', ...font } }, 'Nenhum veículo pendente.'),
+      React.createElement('div', { style: { display: 'flex', gap: 12 } },
+        React.createElement('button', {
+          type: 'button',
+          onClick: async () => {
+            if (vehicleData?.id) {
+              await (supabase as any).from('vehicles').update({ status: 'approved', reviewed_at: new Date().toISOString() }).eq('id', vehicleData.id);
+              showToast('Veículo aprovado');
+              setVehicleAuthOpen(false);
+            }
+          },
+          style: { flex: 1, height: 48, borderRadius: 999, border: 'none', background: '#22c55e', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+        }, 'Aprovar'),
+        React.createElement('button', {
+          type: 'button',
+          onClick: async () => {
+            if (vehicleData?.id) {
+              await (supabase as any).from('vehicles').update({ status: 'rejected', reviewed_at: new Date().toISOString() }).eq('id', vehicleData.id);
+              showToast('Veículo rejeitado');
+              setVehicleAuthOpen(false);
+            }
+          },
+          style: { flex: 1, height: 48, borderRadius: 999, border: '1px solid #b53838', background: '#fff', color: '#b53838', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+        }, 'Rejeitar')))) : null;
+
+  // ── Autorização de menores modal ──────────────────────────────────────
+  const minorAuthModal = minorAuthOpen ? React.createElement('div', {
+    style: {
+      position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+    },
+    onClick: () => setMinorAuthOpen(false),
+  },
+    React.createElement('div', {
+      style: {
+        background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, padding: '28px 32px',
+        display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)',
+      },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Autorizar Menor'),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      minorData
+        ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+            React.createElement('div', { style: { fontSize: 14, ...font } }, `Nome: ${minorData.full_name || '—'}`),
+            React.createElement('div', { style: { fontSize: 14, ...font } }, `Idade: ${minorData.age || '—'}`),
+            minorData.document_url ? React.createElement('a', { href: minorData.document_url, target: '_blank', rel: 'noopener noreferrer', style: { fontSize: 14, color: '#3b82f6', ...font } }, 'Ver documento') : null)
+        : React.createElement('p', { style: { fontSize: 14, color: '#767676', ...font } }, 'Nenhum menor pendente.'),
+      React.createElement('div', { style: { display: 'flex', gap: 12 } },
+        React.createElement('button', {
+          type: 'button',
+          onClick: async () => {
+            if (minorData?.id) {
+              await (supabase as any).from('dependents').update({ status: 'validated' }).eq('id', minorData.id);
+              showToast('Menor autorizado');
+              setMinorAuthOpen(false);
+            }
+          },
+          style: { flex: 1, height: 48, borderRadius: 999, border: 'none', background: '#22c55e', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+        }, 'Autorizar'),
+        React.createElement('button', {
+          type: 'button', onClick: () => setMinorAuthOpen(false),
+          style: { flex: 1, height: 48, borderRadius: 999, border: '1px solid #b53838', background: '#fff', color: '#b53838', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
+        }, 'Negar')))) : null;
 
   // ── Dados cadastrais modal ─────────────────────────────────────────────
   const readField = (label: string, value: string, flex = '1 1 0') =>
@@ -1139,6 +1223,9 @@ export default function AtendimentoDetalheScreen() {
       style: { display: 'flex', gap: 40, width: '100%', flexWrap: 'wrap' as const, alignItems: 'flex-start' },
     }, leftPanel, rightPanel),
     chatPanel,
+    refundModal,
+    vehicleAuthModal,
+    minorAuthModal,
     dadosCadastraisModal,
     documentosModal,
     encomendaModal,

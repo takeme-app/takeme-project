@@ -1129,6 +1129,8 @@ export interface MotoristaTableRow {
   status: 'Concluído' | 'Cancelado' | 'Agendado' | 'Em andamento';
   driverId: string;
   avatarUrl: string | null;
+  /** 'take_me' ou 'parceiro' — derivado de worker_profiles.subtype */
+  categoria: 'take_me' | 'parceiro';
 }
 
 export async function fetchMotoristaTableRows(): Promise<MotoristaTableRow[]> {
@@ -1142,15 +1144,17 @@ export async function fetchMotoristaTableRows(): Promise<MotoristaTableRow[]> {
   if (error || !trips || trips.length === 0) return [];
 
   const driverIds = [...new Set((trips as any[]).map((t) => t.driver_id))];
-  const { data: profiles } = await supabase
-    .from('profiles')
-    .select('id, full_name, avatar_url')
-    .in('id', driverIds);
+  const [{ data: profiles }, { data: workers }] = await Promise.all([
+    supabase.from('profiles').select('id, full_name, avatar_url').in('id', driverIds),
+    (supabase as any).from('worker_profiles').select('id, subtype').in('id', driverIds),
+  ]);
 
   const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p]));
+  const workerMap = new Map((workers ?? []).map((w: any) => [w.id, w]));
 
   return (trips as any[]).map((t) => {
     const p = profileMap.get(t.driver_id) as any;
+    const w = workerMap.get(t.driver_id) as any;
     const tripStatus = t.status as string;
     let uiStatus: MotoristaTableRow['status'] = 'Em andamento';
     if (tripStatus === 'completed') uiStatus = 'Concluído';
@@ -1168,6 +1172,7 @@ export async function fetchMotoristaTableRows(): Promise<MotoristaTableRow[]> {
       status: uiStatus,
       driverId: t.driver_id,
       avatarUrl: p?.avatar_url ?? null,
+      categoria: w?.subtype === 'partner' ? 'parceiro' as const : 'take_me' as const,
     };
   });
 }

@@ -179,6 +179,14 @@ export default function MotoristasScreen() {
     if (filtroStatus === 'concluidas' && t.status !== 'Concluído') return false;
     if (filtroStatus === 'canceladas' && t.status !== 'Cancelado') return false;
 
+    // Filtro por categoria (Take Me / Parceiro)
+    if (filtroCategoria === 'take_me' && t.categoria !== 'take_me') return false;
+    if (filtroCategoria === 'parceiro' && t.categoria !== 'parceiro') return false;
+
+    // Filtro da tabela por categoria
+    if (tblFiltroCategoria === 'Take Me' && t.categoria !== 'take_me') return false;
+    if (tblFiltroCategoria === 'Motorista parceiro' && t.categoria !== 'parceiro') return false;
+
     return true;
   });
 

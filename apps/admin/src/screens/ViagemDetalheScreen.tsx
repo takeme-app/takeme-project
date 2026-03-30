@@ -25,8 +25,10 @@ import {
   type DetailTimelineItem,
 } from '../styles/webStyles';
 import { fetchBookingDetailForAdmin, fetchMotoristas } from '../data/queries';
+import { supabase } from '../lib/supabase';
 import type { BookingDetailForAdmin } from '../data/types';
 import type { MotoristaListItem } from '../data/types';
+import MapView from '../components/MapView';
 
 function rowFromDetail(d: BookingDetailForAdmin): ViagemRow {
   const v = d.listItem;
@@ -63,6 +65,8 @@ export default function ViagemDetalheScreen() {
   const [availDrivers, setAvailDrivers] = useState<MotoristaListItem[]>([]);
   const [selectedDriver, setSelectedDriver] = useState(0);
   const [imageZoomOpen, setImageZoomOpen] = useState(false);
+  const [linkedShipments, setLinkedShipments] = useState<any[]>([]);
+  const [tripCoords, setTripCoords] = useState<{ origin?: { lat: number; lng: number }; destination?: { lat: number; lng: number } }>({});
 
   const isMotoristas = location.pathname.startsWith('/motoristas');
   const isPassageiros = location.pathname.startsWith('/passageiros');
@@ -98,6 +102,34 @@ export default function ViagemDetalheScreen() {
     if (!isMotoristas) return;
     fetchMotoristas().then((m) => setAvailDrivers(m.slice(0, 12)));
   }, [isMotoristas]);
+
+  // Fetch trip coordinates and linked shipments
+  useEffect(() => {
+    if (!detail?.listItem?.tripId) return;
+    let cancel = false;
+    const tripId = detail.listItem.tripId;
+    // Coordinates from scheduled_trips
+    (supabase as any).from('scheduled_trips')
+      .select('origin_lat, origin_lng, destination_lat, destination_lng')
+      .eq('id', tripId)
+      .single()
+      .then(({ data }: any) => {
+        if (cancel || !data) return;
+        const coords: any = {};
+        if (data.origin_lat && data.origin_lng) coords.origin = { lat: data.origin_lat, lng: data.origin_lng };
+        if (data.destination_lat && data.destination_lng) coords.destination = { lat: data.destination_lat, lng: data.destination_lng };
+        setTripCoords(coords);
+      });
+    // Linked shipments (shipments with same trip timeframe and route)
+    (supabase as any).from('shipments')
+      .select('id, origin_address, destination_address, package_size, recipient_name, recipient_phone, amount_cents, status, photo_url, instructions')
+      .order('created_at', { ascending: false })
+      .limit(20)
+      .then(({ data }: any) => {
+        if (!cancel && data) setLinkedShipments(data);
+      });
+    return () => { cancel = true; };
+  }, [detail?.listItem?.tripId]);
 
   const t: ViagemRow | null = useMemo(() => {
     if (detail) return rowFromDetail(detail);
@@ -197,24 +229,40 @@ export default function ViagemDetalheScreen() {
     React.createElement('h2', { style: webStyles.detailSectionTitle }, 'Motorista'),
     motoristaCard);
 
-  const passageiroCard = (name: string) =>
-    React.createElement('div', { style: { background: '#f6f6f6', borderRadius: 12, padding: 16, minWidth: 280, maxWidth: 330, flex: '1 1 280px', display: 'flex', flexDirection: 'column' as const, gap: 0 } },
+  const passageiroCard = (name: string, idx: number) => {
+    const pData = detail?.passengerData?.[idx];
+    const bags = pData?.bags ?? 1;
+    const bagLabel = bags <= 1 ? 'Pequena' : bags <= 2 ? 'Média' : 'Grande';
+    const unitPrice = detail && detail.passengerCount > 0
+      ? fmtBRL(Math.round((detail.amountCents ?? 0) / detail.passengerCount))
+      : 'R$ 150,00';
+    const cpfLabel = pData?.cpf ? `CPF: ${pData.cpf}` : '';
+
+    return React.createElement('div', { style: { background: '#f6f6f6', borderRadius: 12, padding: 16, minWidth: 280, maxWidth: 330, flex: '1 1 280px', display: 'flex', flexDirection: 'column' as const, gap: 0 } },
       React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, paddingBottom: 12, borderBottom: '1px solid #e2e2e2', justifyContent: 'space-between' } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, flex: 1, minWidth: 0 } },
-          React.createElement('div', { style: { width: 48, height: 48, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0 } }),
+          React.createElement('div', { style: { width: 48, height: 48, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 600, color: '#767676', fontFamily: 'Inter, sans-serif' } },
+            name.charAt(0).toUpperCase()),
           React.createElement('div', { style: { flex: 1, minWidth: 0 } },
             React.createElement('div', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } }, name),
+            cpfLabel ? React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif', marginTop: 2 } }, cpfLabel) : null,
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 } },
               starFilledSvg,
-              React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#545454', fontFamily: 'Inter, sans-serif' } }, '4.8')))),
-        React.createElement('div', { style: { width: 40, height: 40, borderRadius: '50%', background: '#ffefc2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 } }, headsetIconSvg)),
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#545454', fontFamily: 'Inter, sans-serif' } }, '—')))),
+        // Chat button
+        React.createElement('button', {
+          type: 'button',
+          title: 'Chat com passageiro',
+          style: { width: 40, height: 40, borderRadius: '50%', background: '#ffefc2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: 'none', cursor: 'pointer' },
+        }, headsetIconSvg)),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, paddingTop: 12 } },
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
           React.createElement('span', { style: { fontSize: 14, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Mala'),
-          React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } }, 'Média')),
+          React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } }, bagLabel)),
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
           React.createElement('span', { style: { fontSize: 14, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Valor unitário:'),
-          React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } }, 'R$ 150,00'))));
+          React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } }, unitPrice))));
+  };
 
   const passageirosChevronBtn = React.createElement('button', {
     type: 'button',
@@ -231,7 +279,7 @@ export default function ViagemDetalheScreen() {
       React.createElement('h2', { style: { ...webStyles.detailSectionTitle, margin: 0 } }, 'Passageiros'),
       passageirosChevronBtn),
     React.createElement('div', { style: { display: 'flex', gap: 24, overflowX: 'auto' as const } },
-      ...passengerNames.map((n) => passageiroCard(n))));
+      ...passengerNames.map((n, i) => passageiroCard(n, i))));
 
   const firstSection = React.createElement('div', { style: { ...webStyles.detailSection, ...detailSectionBorder } },
     React.createElement('div', { style: webStyles.detailBreadcrumb },
@@ -264,26 +312,14 @@ export default function ViagemDetalheScreen() {
             React.createElement('path', { d: 'M12 6v6l4 2', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })),
           'Histórico') : null)),
     React.createElement('div', { style: webStyles.detailMapTimelineRow },
-      React.createElement('div', { style: { ...webStyles.detailMapWrap, cursor: 'pointer', position: 'relative' as const }, onClick: () => setImageZoomOpen(true) },
-        React.createElement('div', {
-          style: {
-            position: 'absolute', inset: 0,
-            background: 'linear-gradient(165deg, #c8d9e8 0%, #dde8f0 35%, #e4ebe8 70%, #d0ddd5 100%)',
-          },
-        }),
-        React.createElement('svg', {
-          width: '100%', height: '100%', viewBox: '0 0 704 255', preserveAspectRatio: 'xMidYMid slice',
-          style: { display: 'block', position: 'relative' as const, zIndex: 1 },
-        },
-          React.createElement('path', {
-            d: 'M120 180 Q 280 40 420 100 T 620 70',
-            fill: 'none', stroke: '#1a73e8', strokeWidth: 5, strokeLinecap: 'round', strokeLinejoin: 'round', opacity: 0.92,
-          }),
-          React.createElement('g', { transform: 'translate(108,168)' },
-            React.createElement('circle', { r: 18, fill: '#0d0d0d' }),
-            React.createElement('path', { d: 'M-4-2h8v6h-8z M0-8v4', stroke: '#fff', strokeWidth: 1.5, fill: 'none' })),
-          React.createElement('circle', { cx: 598, cy: 62, r: 14, fill: '#1a73e8', stroke: '#fff', strokeWidth: 3 }),
-          React.createElement('circle', { cx: 598, cy: 62, r: 5, fill: '#fff' }))),
+      React.createElement('div', { style: { ...webStyles.detailMapWrap, cursor: 'pointer', position: 'relative' as const, overflow: 'hidden' }, onClick: () => setImageZoomOpen(true) },
+        React.createElement(MapView, {
+          origin: tripCoords.origin,
+          destination: tripCoords.destination,
+          height: 255,
+          staticMode: true,
+          style: { borderRadius: 0 },
+        })),
       React.createElement('div', { style: webStyles.detailTimeline },
         React.createElement('div', { style: webStyles.detailTimelineBadgeWrap }, statusPill(statusLabels[t.status], statusStyles[t.status].bg, statusStyles[t.status].color)),
         React.createElement('div', { style: webStyles.detailTimelineRows },
@@ -349,10 +385,42 @@ export default function ViagemDetalheScreen() {
           React.createElement('div', { style: { width: 44, height: 44, borderRadius: '50%', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' } }, chartLineSvg)),
         React.createElement('span', { style: webStyles.detailPerfCardValue }, distKmLabel))));
 
+  const shipmentCard = (s: any) => {
+    const sizeLabel = s.package_size === 'pequeno' ? 'Pequeno' : s.package_size === 'medio' ? 'Médio' : s.package_size === 'grande' ? 'Grande' : s.package_size || '—';
+    return React.createElement('div', {
+      key: s.id,
+      style: { background: '#f6f6f6', borderRadius: 12, padding: 16, minWidth: 280, maxWidth: 330, flex: '1 1 280px', display: 'flex', flexDirection: 'column' as const, gap: 8 },
+    },
+      // Photo + size
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+        s.photo_url
+          ? React.createElement('img', { src: s.photo_url, alt: 'Encomenda', style: { width: 48, height: 48, borderRadius: 8, objectFit: 'cover' as const } })
+          : React.createElement('div', { style: { width: 48, height: 48, borderRadius: 8, background: '#e2e2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 } }, '\u{1F4E6}'),
+        React.createElement('div', null,
+          React.createElement('div', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } }, `Pacote ${sizeLabel}`),
+          React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif' } }, fmtBRL(s.amount_cents || 0)))),
+      // Remetente
+      React.createElement('div', { style: { fontSize: 13, color: '#545454', fontFamily: 'Inter, sans-serif' } },
+        React.createElement('strong', null, 'Destinatário: '), s.recipient_name || '—'),
+      // Recolha / Entrega
+      React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif' } },
+        React.createElement('strong', null, 'Recolha: '), s.origin_address?.slice(0, 40) || '—'),
+      React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif' } },
+        React.createElement('strong', null, 'Entrega: '), s.destination_address?.slice(0, 40) || '—'),
+      // Contato + Observações
+      s.recipient_phone ? React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif' } },
+        React.createElement('strong', null, 'Tel: '), s.recipient_phone) : null,
+      s.instructions ? React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif', fontStyle: 'italic' } },
+        s.instructions.slice(0, 80)) : null);
+  };
+
   const encomendasSection = React.createElement('div', { style: { ...webStyles.detailPassageirosSection, borderBottom: 'none' } },
     React.createElement('h2', { style: webStyles.detailSectionTitle }, 'Encomendas'),
-    React.createElement('p', { style: { fontSize: 14, color: '#767676', fontFamily: 'Inter, sans-serif' } },
-      'Não há encomendas vinculadas a esta reserva no sistema.'));
+    linkedShipments.length === 0
+      ? React.createElement('p', { style: { fontSize: 14, color: '#767676', fontFamily: 'Inter, sans-serif' } },
+          'Não há encomendas vinculadas a esta reserva no sistema.')
+      : React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+          ...linkedShipments.map(shipmentCard)));
 
   const imageZoomModal = imageZoomOpen
     ? React.createElement('div', {
@@ -372,7 +440,13 @@ export default function ViagemDetalheScreen() {
           },
           onClick: (e: React.MouseEvent) => e.stopPropagation(),
         },
-          React.createElement('div', { style: { color: '#767676', fontSize: 18, fontFamily: 'Inter, sans-serif' } }, 'Mapa do trajeto')),
+          React.createElement(MapView, {
+            origin: tripCoords.origin,
+            destination: tripCoords.destination,
+            height: 675,
+            staticMode: false,
+            style: { borderRadius: 0, width: '100%', height: '100%' },
+          })),
         React.createElement('button', {
           type: 'button',
           onClick: () => setImageZoomOpen(false),

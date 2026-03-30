@@ -224,6 +224,9 @@ export default function PreparadorEditScreen() {
   const [history, setHistory] = useState<ExcursionStatusHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [sortByAge, setSortByAge] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t); } }, [toast]);
   const [banner, setBanner] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const [destination, setDestination] = useState('');
@@ -502,6 +505,13 @@ export default function PreparadorEditScreen() {
   const row1 = candidatesFiltered.slice(0, half);
   const row2 = candidatesFiltered.slice(half);
 
+  const toastEl = toast ? React.createElement('div', {
+    style: {
+      position: 'fixed' as const, bottom: 32, left: '50%', transform: 'translateX(-50%)',
+      background: '#0d0d0d', color: '#fff', padding: '12px 24px', borderRadius: 12, fontSize: 14, fontWeight: 600, zIndex: 9999, ...font,
+    },
+  }, toast) : null;
+
   return React.createElement('div', {
     style: {
       display: 'flex',
@@ -739,11 +749,24 @@ export default function PreparadorEditScreen() {
             },
           }, checkOutlineSvg, 'Confirmar substituição')))),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
-      secTitle('Passageiros da excursão'),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' as const, gap: 8 } },
+        secTitle('Passageiros da excursão'),
+        React.createElement('button', {
+          type: 'button',
+          onClick: () => {
+            setSortByAge((prev) => !prev);
+          },
+          style: { height: 36, padding: '0 16px', borderRadius: 8, border: '1px solid #e2e2e2', background: sortByAge ? '#0d0d0d' : '#fff', color: sortByAge ? '#fff' : '#0d0d0d', fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font },
+        }, sortByAge ? 'Ordenar por nome' : 'Ordenar por idade')),
       detail.passengers.length === 0
         ? React.createElement('p', { style: { fontSize: 14, color: '#767676', ...font } }, 'Sem passageiros registados nesta solicitação.')
         : React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16 } },
-          ...detail.passengers.map((pass) =>
+          ...[...detail.passengers].sort((a, b) => {
+            if (!sortByAge) return 0;
+            const ageA = parseInt(String((a as any).age || '0'), 10) || 0;
+            const ageB = parseInt(String((b as any).age || '0'), 10) || 0;
+            return ageA - ageB;
+          }).map((pass) =>
             React.createElement('div', {
               key: pass.id,
               style: {
@@ -755,7 +778,27 @@ export default function PreparadorEditScreen() {
               React.createElement('div', { style: { height: 8 } }),
               readOnlyBox('Telefone', pass.phone ?? '—'),
               React.createElement('div', { style: { height: 8 } }),
-              readOnlyBox('Observações', pass.observations ?? '—'))))),
+              readOnlyBox('Observações', pass.observations ?? '—'),
+              // Check-in / Check-out buttons
+              React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 12 } },
+                React.createElement('button', {
+                  type: 'button',
+                  onClick: async () => {
+                    await (await import('../lib/supabase')).supabase.from('excursion_passengers')
+                      .update({ status_departure: 'embarked' }).eq('id', pass.id);
+                    setToast(`${pass.fullName} embarcado(a)`);
+                  },
+                  style: { flex: 1, height: 36, borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font },
+                }, 'Check-in'),
+                React.createElement('button', {
+                  type: 'button',
+                  onClick: async () => {
+                    await (await import('../lib/supabase')).supabase.from('excursion_passengers')
+                      .update({ status_return: 'disembarked' }).eq('id', pass.id);
+                    setToast(`${pass.fullName} desembarcado(a)`);
+                  },
+                  style: { flex: 1, height: 36, borderRadius: 8, border: '1px solid #e2e2e2', background: '#fff', color: '#0d0d0d', fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font },
+                }, 'Check-out')))))),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
       secTitle('Métricas e histórico'),
       React.createElement('div', { style: { border: '1px solid #e2e2e2', borderRadius: 16, padding: '24px 24px 32px', background: '#fff' } },
