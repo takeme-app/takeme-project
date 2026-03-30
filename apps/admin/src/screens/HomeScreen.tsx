@@ -129,7 +129,7 @@ export default function HomeScreen() {
     React.createElement('div', { style: webStyles.expenseCardIcon }, infoIconSvg),
     React.createElement('div', { style: webStyles.expenseCardBody },
       React.createElement('p', { style: webStyles.expenseCardTitle }, 'Despesas aprovadas pelo backoffice'),
-      React.createElement('p', { style: webStyles.expenseCardDesc }, 'Soma de payouts com status pago (amostra até 5000 linhas; tipos booking, shipment, dependent_shipment, excursion).'),
+      React.createElement('p', { style: webStyles.expenseCardDesc }, 'Total de pagamentos realizados para motoristas e preparadores no período selecionado.'),
       React.createElement('p', { style: webStyles.expenseCardLabel }, 'Total de despesas aprovadas no período'),
       React.createElement('p', { style: webStyles.expenseCardValue }, fmtExpenseBRL(approvedExpenseCents)),
       React.createElement('button', { type: 'button', style: webStyles.expenseCardLink }, 'Ver detalhes em Pagamentos', React.createElement('span', null, arrowForwardSvg))));
