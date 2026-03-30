@@ -10,9 +10,18 @@ export interface MapCoord {
 /** Perfil da [Directions API](https://docs.mapbox.com/api/navigation/directions/) v5. */
 export type MapboxDirectionsProfile = 'driving' | 'driving-traffic' | 'walking' | 'cycling';
 
+export interface MapWaypoint extends MapCoord {
+  label?: string;
+  color?: string;
+  /** Tipo da parada (para icone customizado) */
+  type?: 'driver_origin' | 'passenger_pickup' | 'shipment_pickup' | 'base_dropoff' | 'trip_destination' | string;
+}
+
 export interface MapViewProps {
   origin?: MapCoord;
   destination?: MapCoord;
+  /** Pontos intermediarios (passageiros, encomendas, bases) — renderizados na ordem */
+  waypoints?: MapWaypoint[];
   /** Ponto atual (tracking em tempo real) */
   currentPosition?: MapCoord;
   /** Altura do container (default 300) */
@@ -119,8 +128,11 @@ async function fetchDirectionsLineString(
   token: string,
   profile: MapboxDirectionsProfile,
   signal?: AbortSignal,
+  intermediatePoints?: MapCoord[],
 ): Promise<{ type: 'LineString'; coordinates: number[][] } | null> {
-  const coordPath = `${origin.lng},${origin.lat};${destination.lng},${destination.lat}`;
+  // Multi-waypoint: origin ; wp1 ; wp2 ; ... ; destination
+  const allPoints = [origin, ...(intermediatePoints || []), destination];
+  const coordPath = allPoints.map(p => `${p.lng},${p.lat}`).join(';');
   const url =
     `https://api.mapbox.com/directions/v5/mapbox/${profile}/${coordPath}` +
     `?geometries=geojson&overview=full&access_token=${encodeURIComponent(token)}`;
@@ -393,6 +405,7 @@ export default function MapView(props: MapViewProps) {
     destination,
     currentPosition,
     height = 300,
+    waypoints,
     staticMode = false,
     connectPoints = true,
     directionsProfile = 'driving-traffic',
@@ -508,13 +521,47 @@ export default function MapView(props: MapViewProps) {
             );
           }
 
+          // Waypoint markers (passageiros, encomendas, bases)
+          if (waypoints && waypoints.length > 0) {
+            waypoints.forEach((wp, idx) => {
+              const colors: Record<string, string> = {
+                passenger_pickup: '#3b82f6',
+                shipment_pickup: '#f59e0b',
+                base_dropoff: '#22c55e',
+              };
+              const bg = wp.color || colors[wp.type || ''] || '#767676';
+              const el = document.createElement('div');
+              el.style.width = '28px';
+              el.style.height = '28px';
+              el.style.borderRadius = '50%';
+              el.style.background = bg;
+              el.style.border = '3px solid #fff';
+              el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.2)';
+              el.style.display = 'flex';
+              el.style.alignItems = 'center';
+              el.style.justifyContent = 'center';
+              el.style.color = '#fff';
+              el.style.fontSize = '11px';
+              el.style.fontWeight = '700';
+              el.style.fontFamily = 'Inter, sans-serif';
+              el.textContent = String(idx + 1);
+              if (wp.label) el.title = wp.label;
+              markersRef.current.push(
+                new (mapboxgl as any).Marker({ element: el, anchor: 'center' })
+                  .setLngLat([wp.lng, wp.lat])
+                  .addTo(m),
+              );
+            });
+          }
+
           if (connectPoints && origin && destination) {
             try {
               removeTripLineLayer(m);
-              let line = await fetchDirectionsLineString(origin, destination, token, directionsProfile, ac.signal);
+              const intermediateCoords = (waypoints || []).filter(wp => wp.lat && wp.lng);
+              let line = await fetchDirectionsLineString(origin, destination, token, directionsProfile, ac.signal, intermediateCoords);
               if (cancelled || !mapRef.current) return;
               if (!line && directionsProfile === 'driving-traffic') {
-                line = await fetchDirectionsLineString(origin, destination, token, 'driving', ac.signal);
+                line = await fetchDirectionsLineString(origin, destination, token, 'driving', ac.signal, intermediateCoords);
               }
               if (cancelled || !mapRef.current) return;
               if (line) {

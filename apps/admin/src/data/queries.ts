@@ -2110,3 +2110,124 @@ export async function createBase(input: CreateBaseInput): Promise<BaseListItem |
     createdAt: fmtDate(data.created_at),
   };
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Rotas Multi-Ponto e Encomenda como Viagem
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * Vincula uma encomenda a uma viagem existente e regenera os stops.
+ */
+export async function linkShipmentToTrip(
+  shipmentId: string,
+  tripId: string,
+): Promise<{ error: string | null }> {
+  const { error } = await sb.from('shipments').update({
+    scheduled_trip_id: tripId,
+  }).eq('id', shipmentId);
+  if (error) return { error: error.message };
+
+  // Regenerar stops da viagem
+  await sb.rpc('generate_trip_stops', { p_trip_id: tripId });
+  return { error: null };
+}
+
+/**
+ * Cenario 1: Encomenda via moto/preparador — cria trip: motorista → cliente → base mais proxima
+ */
+export async function createShipmentTripViaBase(
+  shipmentId: string,
+  driverId: string,
+): Promise<{ tripId: string | null; error: string | null }> {
+  // Buscar dados da encomenda
+  const { data: shipment } = await sb.from('shipments')
+    .select('origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng')
+    .eq('id', shipmentId).single();
+  if (!shipment) return { tripId: null, error: 'Encomenda não encontrada' };
+
+  // Buscar base mais proxima da origem do cliente
+  const { data: bases } = await sb.rpc('nearest_active_base', {
+    p_lat: shipment.origin_lat || 0,
+    p_lng: shipment.origin_lng || 0,
+  });
+  const base = bases?.[0];
+
+  // Buscar endereco do motorista (do perfil)
+  const { data: driverProfile } = await supabase.from('profiles')
+    .select('city, state').eq('id', driverId).single();
+
+  // Criar trip: motorista → cliente → base
+  const { data: trip, error: tripErr } = await sb.from('scheduled_trips').insert({
+    driver_id: driverId,
+    origin_address: driverProfile?.city ? `${driverProfile.city}, ${driverProfile.state || ''}` : shipment.origin_address,
+    origin_lat: shipment.origin_lat,
+    origin_lng: shipment.origin_lng,
+    destination_address: base ? base.base_address : shipment.destination_address,
+    destination_lat: base ? base.base_lat : shipment.destination_lat,
+    destination_lng: base ? base.base_lng : shipment.destination_lng,
+    departure_at: new Date().toISOString(),
+    arrival_at: new Date(Date.now() + 3600000).toISOString(),
+    seats_available: 0,
+    bags_available: 1,
+    badge: 'Take Me',
+    status: 'active',
+    is_active: true,
+  }).select('id').single();
+
+  if (tripErr || !trip) return { tripId: null, error: tripErr?.message || 'Erro ao criar viagem' };
+
+  // Vincular encomenda à viagem
+  await sb.from('shipments').update({ scheduled_trip_id: trip.id }).eq('id', shipmentId);
+
+  // Gerar stops
+  await sb.rpc('generate_trip_stops', { p_trip_id: trip.id });
+
+  return { tripId: trip.id, error: null };
+}
+
+/**
+ * Cenario 2: Encomenda via carro — cria trip: motorista → cliente → destino encomenda (direto)
+ */
+export async function createShipmentTripDirect(
+  shipmentId: string,
+  driverId: string,
+): Promise<{ tripId: string | null; error: string | null }> {
+  const { data: shipment } = await sb.from('shipments')
+    .select('origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng')
+    .eq('id', shipmentId).single();
+  if (!shipment) return { tripId: null, error: 'Encomenda não encontrada' };
+
+  const { data: driverProfile } = await supabase.from('profiles')
+    .select('city, state').eq('id', driverId).single();
+
+  const { data: trip, error: tripErr } = await sb.from('scheduled_trips').insert({
+    driver_id: driverId,
+    origin_address: driverProfile?.city ? `${driverProfile.city}, ${driverProfile.state || ''}` : shipment.origin_address,
+    origin_lat: shipment.origin_lat,
+    origin_lng: shipment.origin_lng,
+    destination_address: shipment.destination_address,
+    destination_lat: shipment.destination_lat,
+    destination_lng: shipment.destination_lng,
+    departure_at: new Date().toISOString(),
+    arrival_at: new Date(Date.now() + 3600000).toISOString(),
+    seats_available: 0,
+    bags_available: 1,
+    badge: 'Take Me',
+    status: 'active',
+    is_active: true,
+  }).select('id').single();
+
+  if (tripErr || !trip) return { tripId: null, error: tripErr?.message || 'Erro ao criar viagem' };
+
+  await sb.from('shipments').update({ scheduled_trip_id: trip.id }).eq('id', shipmentId);
+  await sb.rpc('generate_trip_stops', { p_trip_id: trip.id });
+
+  return { tripId: trip.id, error: null };
+}
+
+/**
+ * Recalcula stops de uma viagem (ex: após trocar motorista)
+ */
+export async function recalculateTripStops(tripId: string): Promise<void> {
+  await sb.rpc('generate_trip_stops', { p_trip_id: tripId });
+}
