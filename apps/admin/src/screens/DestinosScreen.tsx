@@ -369,18 +369,6 @@ export default function DestinosScreen() {
   const searchRow = React.createElement('div', {
     style: { display: 'flex', alignItems: 'center', gap: 12, width: '100%', flexWrap: 'wrap' as const },
   },
-    React.createElement('div', {
-      style: {
-        flex: '1 1 250px', display: 'flex', alignItems: 'center', gap: 8,
-        background: '#f1f1f1', borderRadius: 999, height: 44, paddingLeft: 16, paddingRight: 16,
-      },
-    },
-      searchIconSvg,
-      React.createElement('input', {
-        type: 'text', value: search, placeholder: 'Buscar motorista, destino ou origem...',
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value),
-        style: { flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 14, color: '#0d0d0d', ...font },
-      })),
     React.createElement('button', {
       type: 'button', onClick: () => setCriarRotaOpen(true),
       style: {
