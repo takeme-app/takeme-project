@@ -167,6 +167,8 @@ export interface PassageiroListItem {
   cidade: string;
   estado: string;
   dataCriacao: string;
+  /** ISO 8601 — filtros de período no admin */
+  createdAtIso: string;
   cpf: string;
   status: 'Ativo' | 'Inativo';
   avatarUrl: string | null;
