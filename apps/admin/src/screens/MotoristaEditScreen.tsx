@@ -312,8 +312,8 @@ export default function MotoristaEditScreen() {
     React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
       ...[
         { title: 'Viagens realizadas', value: String(completedTrips) },
-        { title: 'Média de km percorridos', value: '—' },
-        { title: 'Encomendas realizadas', value: '—' },
+        { title: 'Viagens ativas', value: String(trips.filter((t: any) => t.status === 'active').length) },
+        { title: 'Viagens agendadas', value: String(trips.filter((t: any) => t.status === 'scheduled').length) },
       ].map((m) =>
         React.createElement('div', {
           key: m.title,

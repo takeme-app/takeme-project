@@ -626,18 +626,47 @@ export async function fetchDriverTripRowsForPaymentDetail(driverId: string): Pro
     .limit(50);
   if (error || !trips?.length) return [];
   const fmtMoney = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`;
-  return (trips as any[]).map((t) => ({
-    tripId: t.id,
-    origem: shortAddr(t.origin_address || ''),
-    destino: shortAddr(t.destination_address || ''),
-    data: t.departure_at ? fmtDate(t.departure_at) : '—',
-    embarque: t.departure_at ? fmtTime(t.departure_at) : '—',
-    chegada: t.arrival_at ? fmtTime(t.arrival_at) : '—',
-    valor: fmtMoney(Number(t.amount_cents ?? 0)),
-    pctMotorista: '—',
-    pctAdmin: '—',
-    pagamento: '—',
-  }));
+
+  // Buscar payouts vinculados às viagens para calcular splits reais
+  const tripIds = (trips as any[]).map((t) => t.id);
+  const { data: payouts } = await (supabase as any)
+    .from('payouts')
+    .select('entity_id, worker_amount_cents, admin_amount_cents, gross_amount_cents, status, payment_method')
+    .in('entity_id', tripIds);
+
+  const payoutMap = new Map<string, any>();
+  for (const p of (payouts ?? []) as any[]) {
+    payoutMap.set(p.entity_id, p);
+  }
+
+  const fmtPct = (num: number, denom: number) =>
+    denom > 0 ? `${Math.round((num / denom) * 100)}%` : '—';
+  const fmtPayMethod = (method: string | null) => {
+    if (!method) return '—';
+    if (method === 'pix') return 'Pix';
+    if (method === 'credit_card') return 'Crédito';
+    if (method === 'debit_card') return 'Débito';
+    return method;
+  };
+
+  return (trips as any[]).map((t) => {
+    const payout = payoutMap.get(t.id);
+    const gross = Number(payout?.gross_amount_cents ?? 0);
+    const workerAmt = Number(payout?.worker_amount_cents ?? 0);
+    const adminAmt = Number(payout?.admin_amount_cents ?? 0);
+    return {
+      tripId: t.id,
+      origem: shortAddr(t.origin_address || ''),
+      destino: shortAddr(t.destination_address || ''),
+      data: t.departure_at ? fmtDate(t.departure_at) : '—',
+      embarque: t.departure_at ? fmtTime(t.departure_at) : '—',
+      chegada: t.arrival_at ? fmtTime(t.arrival_at) : '—',
+      valor: fmtMoney(Number(t.amount_cents ?? 0)),
+      pctMotorista: payout ? fmtPct(workerAmt, gross) : '—',
+      pctAdmin: payout ? fmtPct(adminAmt, gross) : '—',
+      pagamento: payout ? fmtPayMethod(payout.payment_method) : '—',
+    };
+  });
 }
 
 export interface PreparerEncTrechoRow {
@@ -1110,7 +1139,7 @@ export async function fetchMotoristas(): Promise<MotoristaListItem[]> {
     const entry = driverMap.get(did) ?? { total: 0, active: 0, scheduled: 0 };
     entry.total++;
     if (t.status === 'active') entry.active++;
-    if (t.status === 'active') entry.scheduled++;
+    if (t.status === 'scheduled') entry.scheduled++;
     driverMap.set(did, entry);
   }
 
