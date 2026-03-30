@@ -1349,51 +1349,58 @@ function asRecord(raw: unknown): Record<string, unknown> {
 }
 
 export async function fetchPreparadores(): Promise<PreparadorListItem[]> {
-  const { data, error } = await supabase
+  // FK preparer_id → auth.users (not public.profiles), so we do two queries
+  const { data, error } = await (supabase as any)
     .from('excursion_requests')
-    .select(`
-      id, destination, excursion_date, status, preparer_id, scheduled_departure_at, created_at,
-      profiles!excursion_requests_preparer_id_fkey ( full_name )
-    `)
+    .select('id, destination, excursion_date, status, preparer_id, scheduled_departure_at, created_at')
     .not('preparer_id', 'is', null)
     .order('created_at', { ascending: false })
     .limit(200);
 
-  if (error || !data) return [];
+  if (error || !data || data.length === 0) return [];
 
-  return data.map((e: any) => {
-    const profile = e.profiles;
-    return {
-      id: e.id,
-      nome: profile?.full_name ?? 'Preparador',
-      origem: '—',
-      destino: e.destination,
-      dataInicio: e.scheduled_departure_at ? `${fmtDate(e.scheduled_departure_at)}\n${fmtTime(e.scheduled_departure_at)}` : fmtDate(e.excursion_date),
-      previsao: '—',
-      avaliacao: null,
-      status: mapPreparadorStatus(e.status),
-    };
-  });
+  // Fetch preparer names from profiles (keyed by user id)
+  const preparerIds: string[] = [...new Set<string>(data.map((e: any) => e.preparer_id as string))];
+  const { data: profilesData } = await (supabase as any)
+    .from('profiles')
+    .select('id, full_name')
+    .in('id', preparerIds);
+
+  const profileMap: Record<string, string> = {};
+  (profilesData ?? []).forEach((p: any) => { profileMap[p.id] = p.full_name ?? 'Preparador'; });
+
+  return data.map((e: any) => ({
+    id: e.id,
+    nome: profileMap[e.preparer_id] ?? 'Preparador',
+    origem: '—',
+    destino: e.destination,
+    dataInicio: e.scheduled_departure_at ? `${fmtDate(e.scheduled_departure_at)}\n${fmtTime(e.scheduled_departure_at)}` : fmtDate(e.excursion_date),
+    previsao: '—',
+    avaliacao: null,
+    status: mapPreparadorStatus(e.status),
+  }));
 }
 
 export async function fetchPreparadorById(id: string): Promise<PreparadorListItem | null> {
   if (!isSupabaseConfigured) return null;
-  const { data, error } = await supabase
+  const { data, error } = await (supabase as any)
     .from('excursion_requests')
-    .select(`
-      id, destination, excursion_date, status, preparer_id, scheduled_departure_at, created_at,
-      profiles!excursion_requests_preparer_id_fkey ( full_name )
-    `)
+    .select('id, destination, excursion_date, status, preparer_id, scheduled_departure_at, created_at')
     .eq('id', id)
     .maybeSingle();
 
   if (error || !data) return null;
 
   const e = data as any;
-  const profile = e.profiles;
+  let nome = 'Preparador';
+  if (e.preparer_id) {
+    const { data: prof } = await (supabase as any)
+      .from('profiles').select('full_name').eq('id', e.preparer_id).maybeSingle();
+    if (prof?.full_name) nome = prof.full_name;
+  }
   return {
     id: e.id,
-    nome: profile?.full_name ?? 'Preparador',
+    nome,
     origem: '—',
     destino: e.destination,
     dataInicio: e.scheduled_departure_at ? `${fmtDate(e.scheduled_departure_at)}\n${fmtTime(e.scheduled_departure_at)}` : fmtDate(e.excursion_date),
