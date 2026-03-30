@@ -861,7 +861,7 @@ export function todayLocalYmd(): string {
 export type ViagemDatasIncluidas = 'somente_passadas' | 'passadas_e_futuras' | 'somente_futuras';
 
 export type ViagemListFilter = {
-  status: 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas';
+  status: 'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas';
   categoria: 'todos' | 'take_me' | 'motorista';
   nomeNeedle: string;
   origemNeedle: string;
@@ -874,6 +874,7 @@ export type ViagemListFilter = {
 };
 
 const STATUS_BUCKET: Record<ViagemListFilter['status'], ViagemListItem['status'][]> = {
+  todos: ['em_andamento', 'agendado', 'concluído', 'cancelado'],
   em_andamento: ['em_andamento'],
   agendadas: ['agendado'],
   concluidas: ['concluído'],
@@ -881,8 +882,10 @@ const STATUS_BUCKET: Record<ViagemListFilter['status'], ViagemListItem['status']
 };
 
 export function filterViagemListItem(v: ViagemListItem, f: ViagemListFilter): boolean {
-  const bucket = STATUS_BUCKET[f.status];
-  if (!bucket.includes(v.status)) return false;
+  if (f.status !== 'todos') {
+    const bucket = STATUS_BUCKET[f.status];
+    if (!bucket.includes(v.status)) return false;
+  }
   if (f.categoria === 'take_me' && v.motoristaCategoria !== 'take_me') return false;
   if (f.categoria === 'motorista' && v.motoristaCategoria !== 'motorista') return false;
   const n = f.nomeNeedle.trim().toLowerCase();
@@ -905,9 +908,10 @@ export function filterViagemListItem(v: ViagemListItem, f: ViagemListFilter): bo
   return true;
 }
 
-export type HomeEncomendaFilterStatus = 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas';
+export type HomeEncomendaFilterStatus = 'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas';
 
 const ENC_STATUS_BUCKET: Record<HomeEncomendaFilterStatus, EncomendaListItem['status'][]> = {
+  todos: ['Em andamento', 'Agendado', 'Concluído', 'Cancelado'],
   em_andamento: ['Em andamento'],
   agendadas: ['Agendado'],
   concluidas: ['Concluído'],
@@ -920,7 +924,7 @@ export function filterEncomendaForHome(
   periodoInicioYmd: string,
   periodoFimYmd: string,
 ): boolean {
-  if (!ENC_STATUS_BUCKET[status].includes(e.status)) return false;
+  if (status !== 'todos' && !ENC_STATUS_BUCKET[status].includes(e.status)) return false;
   const cy = localYmdFromIso(e.createdAtIso);
   if (periodoInicioYmd && cy && cy < periodoInicioYmd) return false;
   if (periodoFimYmd && cy && cy > periodoFimYmd) return false;
