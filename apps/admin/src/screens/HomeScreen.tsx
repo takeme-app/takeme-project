@@ -105,18 +105,7 @@ export default function HomeScreen() {
         onClick: () => setHomeSubTab('encomendas'),
       }, React.createElement('span', null, 'Encomendas'), isEncomendas ? React.createElement('span', { style: webStyles.subTabIndicator }) : null)));
 
-  const searchSection = React.createElement('div', { style: webStyles.searchRow },
-    React.createElement('div', { style: webStyles.searchInputWrap },
-      React.createElement('div', { style: webStyles.searchInputInner },
-        React.createElement('span', { style: webStyles.searchIcon }, searchIconSvg),
-        React.createElement('input', {
-          type: 'search',
-          value: homeSearch,
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setHomeSearch(e.target.value),
-          placeholder: 'Buscar (aplique o filtro para refletir nos cartões)',
-          style: webStyles.searchInput,
-          'aria-label': 'Buscar',
-        }))),
+  const searchSection = React.createElement('div', { style: { ...webStyles.searchRow, justifyContent: 'flex-end' } },
     React.createElement('div', { style: webStyles.filterGroup },
       ...(isEncomendas ? [] : [
         React.createElement('div', { key: 'takeme-wrap', style: webStyles.dropdownWrap },
@@ -185,14 +174,14 @@ export default function HomeScreen() {
   const chartTitle = isEncomendas ? 'Distribuição de valores das encomendas concluídas' : 'Distribuição de receitas';
   const chartDesc = 'Valores consolidados de payouts no projeto (não filtrados pelo modal; os cartões acima refletem o filtro aplicado).';
 
-  // Selecionar dados com base no filtro de categoria de receita
-  const activePag = revenueCategory === 'passageiros' ? pagByCategory?.passageiros
-    : revenueCategory === 'encomendas' ? pagByCategory?.encomendas
-    : pagCounts;
+  // Selecionar dados do gráfico com base no filtro de categoria de receita
+  const activeChart = revenueCategory === 'passageiros' ? pagByCategory?.chartPassageiros
+    : revenueCategory === 'encomendas' ? pagByCategory?.chartEncomendas
+    : pagByCategory?.chartAll;
 
-  const grossCents = (activePag?.pagamentosPrevistos ?? 0) + (activePag?.pagamentosFeitos ?? 0);
-  const adminCents = activePag?.lucro ?? 0;
-  const workerCents = activePag?.pagamentosFeitos ?? 0;
+  const grossCents = activeChart?.grossCents ?? 0;
+  const adminCents = activeChart?.adminCents ?? 0;
+  const workerCents = activeChart?.workerCents ?? 0;
   const otherCents = Math.max(0, grossCents - adminCents - workerCents);
   const totalCents = grossCents || 1;
   const adminPct = Math.round((adminCents / totalCents) * 100);

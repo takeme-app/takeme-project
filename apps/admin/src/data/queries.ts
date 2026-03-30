@@ -1821,6 +1821,16 @@ export interface PagamentoCountsByCategory {
   all: PagamentoCounts;
   passageiros: PagamentoCounts;
   encomendas: PagamentoCounts;
+  /** Totais para o gráfico (inclui pending + paid) */
+  chartAll: PayoutTotals;
+  chartPassageiros: PayoutTotals;
+  chartEncomendas: PayoutTotals;
+}
+
+export interface PayoutTotals {
+  grossCents: number;
+  adminCents: number;
+  workerCents: number;
 }
 
 function sumPayouts(rows: any[]): PagamentoCounts {
@@ -1830,6 +1840,14 @@ function sumPayouts(rows: any[]): PagamentoCounts {
     pagamentosPrevistos: pending.reduce((s: number, p: any) => s + (p.gross_amount_cents || 0), 0),
     pagamentosFeitos: paid.reduce((s: number, p: any) => s + (p.gross_amount_cents || 0), 0),
     lucro: paid.reduce((s: number, p: any) => s + (p.admin_amount_cents || 0), 0),
+  };
+}
+
+function sumPayoutTotals(rows: any[]): PayoutTotals {
+  return {
+    grossCents: rows.reduce((s: number, p: any) => s + (p.gross_amount_cents || 0), 0),
+    adminCents: rows.reduce((s: number, p: any) => s + (p.admin_amount_cents || 0), 0),
+    workerCents: rows.reduce((s: number, p: any) => s + (p.worker_amount_cents || 0), 0),
   };
 }
 
@@ -1845,7 +1863,8 @@ export async function fetchPagamentoCountsByCategory(): Promise<PagamentoCountsB
 
   if (error || !data) {
     const zero = { pagamentosPrevistos: 0, pagamentosFeitos: 0, lucro: 0 };
-    return { all: zero, passageiros: zero, encomendas: zero };
+    const zeroChart = { grossCents: 0, adminCents: 0, workerCents: 0 };
+    return { all: zero, passageiros: zero, encomendas: zero, chartAll: zeroChart, chartPassageiros: zeroChart, chartEncomendas: zeroChart };
   }
 
   const passageiros = data.filter((p: any) => p.entity_type === 'booking' || p.entity_type === 'excursion');
@@ -1855,6 +1874,9 @@ export async function fetchPagamentoCountsByCategory(): Promise<PagamentoCountsB
     all: sumPayouts(data),
     passageiros: sumPayouts(passageiros),
     encomendas: sumPayouts(encomendas),
+    chartAll: sumPayoutTotals(data),
+    chartPassageiros: sumPayoutTotals(passageiros),
+    chartEncomendas: sumPayoutTotals(encomendas),
   };
 }
 
