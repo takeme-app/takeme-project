@@ -119,15 +119,6 @@ export default function HomeScreen() {
 
   const searchSection = React.createElement('div', { style: { ...webStyles.searchRow, justifyContent: 'flex-end' } },
     React.createElement('div', { style: webStyles.filterGroup },
-      ...(isEncomendas ? [] : [
-        React.createElement('div', { key: 'takeme-wrap', style: webStyles.dropdownWrap },
-          React.createElement('button', { type: 'button', style: webStyles.filterBtn, onClick: () => setTakeMeDropdownOpen((v) => !v), 'aria-expanded': takeMeDropdownOpen, 'aria-haspopup': true }, takeMeSelectedOption, React.createElement('span', null, chevronDownSvg)),
-          takeMeDropdownOpen ? React.createElement(React.Fragment, { key: 'takeme-dd' },
-            React.createElement('div', { key: 'overlay', style: webStyles.dropdownOverlay, onClick: () => setTakeMeDropdownOpen(false), 'aria-hidden': true }),
-            React.createElement('div', { key: 'popover', style: webStyles.dropdownPopover, role: 'menu' },
-              React.createElement('button', { type: 'button', style: webStyles.dropdownOption, role: 'menuitem', onClick: () => { setTakeMeSelectedOption('Take Me'); setFilterCategoria(new Set(['take_me'])); setTakeMeDropdownOpen(false); } }, 'Take Me'),
-              React.createElement('button', { type: 'button', style: webStyles.dropdownOption, role: 'menuitem', onClick: () => { setTakeMeSelectedOption('Motorista parceiro'); setFilterCategoria(new Set(['motorista'])); setTakeMeDropdownOpen(false); } }, 'Motorista parceiro'))) : null),
-      ]),
       React.createElement('button', {
         key: 'filtro', type: 'button', 'data-testid': 'home-open-filter',
         'aria-label': 'Abrir filtro do Início', style: webStyles.filterBtn, onClick: () => setFilterModalOpen(true),
