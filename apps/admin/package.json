@@ -23,7 +23,8 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
-    "react-router-dom": "^6.30.3"
+    "react-router-dom": "^6.30.3",
+    "recharts": "^3.8.1"
   },
   "devDependencies": {
     "@babel/core": "^7.25.0",
