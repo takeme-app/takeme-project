@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import type { MapWaypoint } from '../components/MapView';
 
@@ -92,16 +92,22 @@ export function useTripStops(tripId: string | null | undefined): UseTripStopsRet
 
   // Converter stops intermediários em waypoints para MapView
   // (exclui driver_origin e trip_destination que viram origin/destination do MapView)
-  const waypoints: MapWaypoint[] = stops
-    .filter((s) => s.stop_type !== 'driver_origin' && s.stop_type !== 'trip_destination')
-    .filter((s) => s.lat != null && s.lng != null)
-    .map((s) => ({
-      lat: s.lat!,
-      lng: s.lng!,
-      label: s.label || s.address,
-      color: STOP_COLORS[s.stop_type] || '#767676',
-      type: s.stop_type,
-    }));
+  // useMemo evita criar nova referência a cada render (o MapView depende da referência
+  // para saber quando re-desenhar markers e buscar rota nova).
+  const waypoints: MapWaypoint[] = useMemo(
+    () =>
+      stops
+        .filter((s) => s.stop_type !== 'driver_origin' && s.stop_type !== 'trip_destination')
+        .filter((s) => s.lat != null && s.lng != null)
+        .map((s) => ({
+          lat: s.lat!,
+          lng: s.lng!,
+          label: s.label || s.address,
+          color: STOP_COLORS[s.stop_type] || '#767676',
+          type: s.stop_type,
+        })),
+    [stops],
+  );
 
   return { stops, waypoints, loading, regenerate };
 }
