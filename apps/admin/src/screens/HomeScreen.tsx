@@ -134,39 +134,37 @@ export default function HomeScreen() {
       React.createElement('p', { style: webStyles.expenseCardValue }, fmtExpenseBRL(approvedExpenseCents)),
       React.createElement('button', { type: 'button', style: webStyles.expenseCardLink }, 'Ver detalhes em Pagamentos', React.createElement('span', null, arrowForwardSvg))));
 
-  const vc = homeCounts?.viagens;
-  const ec = homeCounts?.encomendas;
+  // Contagens fixas — sempre mostram totais de TODAS viagens/encomendas (sem filtro de status)
+  const totalCounts = useMemo(() => {
+    if (!dataLoaded) return null;
+    const vAll = viagemCountsFromItems(allViagens);
+    const eAll = encomendaCountsFromItems(allEncomendas);
+    return { viagens: vAll, encomendas: eAll };
+  }, [dataLoaded, allViagens, allEncomendas]);
+
+  const vc = totalCounts?.viagens;
+  const ec = totalCounts?.encomendas;
   const statCardsData = isEncomendas
     ? [
-        { title: 'Entregas em andamento', value: String(ec?.emAndamento ?? '—'), change: '', positive: true, testId: 'home-stat-encomendas-em-andamento' as const },
-        { title: 'Agendadas', value: String(ec?.agendadas ?? '—'), change: '', positive: true, testId: 'home-stat-encomendas-agendadas' as const },
-        { title: 'Concluídas', value: String(ec?.concluidas ?? '—'), change: '', positive: true, testId: 'home-stat-encomendas-concluidas' as const },
-        { title: 'Canceladas', value: String(ec?.canceladas ?? '—'), change: '', positive: false, testId: 'home-stat-encomendas-canceladas' as const },
+        { title: 'Entregas em andamento', value: String(ec?.emAndamento ?? '—'), positive: true, testId: 'home-stat-encomendas-em-andamento' as const },
+        { title: 'Agendadas', value: String(ec?.agendadas ?? '—'), positive: true, testId: 'home-stat-encomendas-agendadas' as const },
+        { title: 'Concluídas', value: String(ec?.concluidas ?? '—'), positive: true, testId: 'home-stat-encomendas-concluidas' as const },
+        { title: 'Canceladas', value: String(ec?.canceladas ?? '—'), positive: false, testId: 'home-stat-encomendas-canceladas' as const },
       ]
     : [
-        { title: 'Viagens em andamento', value: String(vc?.emAndamento ?? '—'), change: '', positive: true, testId: 'home-stat-viagens-em-andamento' as const },
-        { title: 'Agendadas', value: String(vc?.agendadas ?? '—'), change: '', positive: true, testId: 'home-stat-viagens-agendadas' as const },
-        { title: 'Concluídas', value: String(vc?.concluidas ?? '—'), change: '', positive: true, testId: 'home-stat-viagens-concluidas' as const },
-        { title: 'Canceladas', value: String(vc?.canceladas ?? '—'), change: '', positive: false, testId: 'home-stat-viagens-canceladas' as const },
+        { title: 'Viagens em andamento', value: String(vc?.emAndamento ?? '—'), positive: true, testId: 'home-stat-viagens-em-andamento' as const },
+        { title: 'Agendadas', value: String(vc?.agendadas ?? '—'), positive: true, testId: 'home-stat-viagens-agendadas' as const },
+        { title: 'Concluídas', value: String(vc?.concluidas ?? '—'), positive: true, testId: 'home-stat-viagens-concluidas' as const },
+        { title: 'Canceladas', value: String(vc?.canceladas ?? '—'), positive: false, testId: 'home-stat-viagens-canceladas' as const },
       ];
-  const statusKeyMap: Record<string, 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'> = {
-    'Viagens em andamento': 'em_andamento', 'Entregas em andamento': 'em_andamento',
-    'Agendadas': 'agendadas', 'Concluídas': 'concluidas', 'Canceladas': 'canceladas',
-  };
 
   const statCards = statCardsData.map((s) =>
-    React.createElement('button', {
-      key: s.title, type: 'button',
-      onClick: () => {
-        const key = statusKeyMap[s.title];
-        if (key) { setFilterStatus(key); aplicarFiltroHome(); }
-      },
-      style: { ...webStyles.statCard, cursor: 'pointer', border: filterStatus === statusKeyMap[s.title] ? '2px solid #cba04b' : '1px solid transparent', transition: 'border-color 0.2s' },
+    React.createElement('div', {
+      key: s.title,
+      style: webStyles.statCard,
     },
       React.createElement('div', { style: webStyles.statCardHeader },
-        React.createElement('span', { style: webStyles.statCardTitle }, s.title),
-        React.createElement('span', { style: { opacity: 0 } }, '○')),
-      React.createElement('span', { style: { ...webStyles.statCardChange, ...(s.positive ? webStyles.statCardChangePos : webStyles.statCardChangeNeg) } }, s.change),
+        React.createElement('span', { style: webStyles.statCardTitle }, s.title)),
       React.createElement('span', { style: webStyles.statCardValue, 'data-testid': s.testId }, s.value)));
 
   const fmtBRL = (c: number) => `R$ ${(c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
