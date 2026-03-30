@@ -1817,20 +1817,44 @@ export async function fetchPagamentos(): Promise<PagamentoListItem[]> {
   }));
 }
 
-export async function fetchPagamentoCounts(): Promise<PagamentoCounts> {
-  const { data, error } = await sb
-    .from('payouts')
-    .select('status, gross_amount_cents, admin_amount_cents');
+export interface PagamentoCountsByCategory {
+  all: PagamentoCounts;
+  passageiros: PagamentoCounts;
+  encomendas: PagamentoCounts;
+}
 
-  if (error || !data) return { pagamentosPrevistos: 0, pagamentosFeitos: 0, lucro: 0 };
-
-  const pending = data.filter((p: any) => p.status === 'pending' || p.status === 'processing');
-  const paid = data.filter((p: any) => p.status === 'paid');
-
+function sumPayouts(rows: any[]): PagamentoCounts {
+  const pending = rows.filter((p: any) => p.status === 'pending' || p.status === 'processing');
+  const paid = rows.filter((p: any) => p.status === 'paid');
   return {
     pagamentosPrevistos: pending.reduce((s: number, p: any) => s + (p.gross_amount_cents || 0), 0),
     pagamentosFeitos: paid.reduce((s: number, p: any) => s + (p.gross_amount_cents || 0), 0),
     lucro: paid.reduce((s: number, p: any) => s + (p.admin_amount_cents || 0), 0),
+  };
+}
+
+export async function fetchPagamentoCounts(): Promise<PagamentoCounts> {
+  const res = await fetchPagamentoCountsByCategory();
+  return res.all;
+}
+
+export async function fetchPagamentoCountsByCategory(): Promise<PagamentoCountsByCategory> {
+  const { data, error } = await sb
+    .from('payouts')
+    .select('status, gross_amount_cents, admin_amount_cents, worker_amount_cents, entity_type');
+
+  if (error || !data) {
+    const zero = { pagamentosPrevistos: 0, pagamentosFeitos: 0, lucro: 0 };
+    return { all: zero, passageiros: zero, encomendas: zero };
+  }
+
+  const passageiros = data.filter((p: any) => p.entity_type === 'booking' || p.entity_type === 'excursion');
+  const encomendas = data.filter((p: any) => p.entity_type === 'shipment' || p.entity_type === 'dependent_shipment');
+
+  return {
+    all: sumPayouts(data),
+    passageiros: sumPayouts(passageiros),
+    encomendas: sumPayouts(encomendas),
   };
 }
 

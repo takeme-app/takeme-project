@@ -17,7 +17,7 @@ import {
 } from '../styles/webStyles';
 import {
   fetchHomeCounts,
-  fetchPagamentoCounts,
+  fetchPagamentoCountsByCategory,
   fetchViagens,
   fetchEncomendas,
   filterViagemListItem,
@@ -27,6 +27,7 @@ import {
   fetchApprovedTripExpensesCents,
   type HomeCounts,
   type ViagemListFilter,
+  type PagamentoCountsByCategory,
 } from '../data/queries';
 import type { PagamentoCounts } from '../data/types';
 
@@ -34,15 +35,17 @@ export default function HomeScreen() {
   const [homeSubTab, setHomeSubTab] = useState<'viagens' | 'encomendas'>('viagens');
   const [homeCounts, setHomeCounts] = useState<HomeCounts | null>(null);
   const [pagCounts, setPagCounts] = useState<PagamentoCounts | null>(null);
+  const [pagByCategory, setPagByCategory] = useState<PagamentoCountsByCategory | null>(null);
   const [approvedExpenseCents, setApprovedExpenseCents] = useState(0);
   const [homeSearch, setHomeSearch] = useState('');
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([fetchHomeCounts(), fetchPagamentoCounts(), fetchApprovedTripExpensesCents()]).then(([hc, pc, exp]) => {
+    Promise.all([fetchHomeCounts(), fetchPagamentoCountsByCategory(), fetchApprovedTripExpensesCents()]).then(([hc, pbc, exp]) => {
       if (!cancelled) {
         setHomeCounts(hc);
-        setPagCounts(pc);
+        setPagCounts(pbc.all);
+        setPagByCategory(pbc);
         setApprovedExpenseCents(exp.totalCents);
       }
     });
@@ -154,8 +157,20 @@ export default function HomeScreen() {
         { title: 'Concluídas', value: String(vc?.concluidas ?? '—'), change: '', positive: true, testId: 'home-stat-viagens-concluidas' as const },
         { title: 'Canceladas', value: String(vc?.canceladas ?? '—'), change: '', positive: false, testId: 'home-stat-viagens-canceladas' as const },
       ];
+  const statusKeyMap: Record<string, 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'> = {
+    'Viagens em andamento': 'em_andamento', 'Entregas em andamento': 'em_andamento',
+    'Agendadas': 'agendadas', 'Concluídas': 'concluidas', 'Canceladas': 'canceladas',
+  };
+
   const statCards = statCardsData.map((s) =>
-    React.createElement('div', { key: s.title, style: webStyles.statCard },
+    React.createElement('button', {
+      key: s.title, type: 'button',
+      onClick: () => {
+        const key = statusKeyMap[s.title];
+        if (key) { setFilterStatus(key); aplicarFiltroHome(); }
+      },
+      style: { ...webStyles.statCard, cursor: 'pointer', border: filterStatus === statusKeyMap[s.title] ? '2px solid #cba04b' : '1px solid transparent', transition: 'border-color 0.2s' },
+    },
       React.createElement('div', { style: webStyles.statCardHeader },
         React.createElement('span', { style: webStyles.statCardTitle }, s.title),
         React.createElement('span', { style: { opacity: 0 } }, '○')),
@@ -165,13 +180,21 @@ export default function HomeScreen() {
   // Revenue category filter
   const [revenueCategory, setRevenueCategory] = useState<'todos' | 'passageiros' | 'encomendas'>('todos');
 
+  const [chartHover, setChartHover] = useState<string | null>(null);
+
   const chartTitle = isEncomendas ? 'Distribuição de valores das encomendas concluídas' : 'Distribuição de receitas';
   const chartDesc = 'Valores consolidados de payouts no projeto (não filtrados pelo modal; os cartões acima refletem o filtro aplicado).';
-  // Real chart data from payouts
-  const grossCents = (pagCounts?.pagamentosPrevistos ?? 0) + (pagCounts?.pagamentosFeitos ?? 0);
-  const adminCents = pagCounts?.lucro ?? 0;
-  const workerCents = pagCounts?.pagamentosFeitos ?? 0;
-  const totalCents = grossCents || 1; // avoid div by 0
+
+  // Selecionar dados com base no filtro de categoria de receita
+  const activePag = revenueCategory === 'passageiros' ? pagByCategory?.passageiros
+    : revenueCategory === 'encomendas' ? pagByCategory?.encomendas
+    : pagCounts;
+
+  const grossCents = (activePag?.pagamentosPrevistos ?? 0) + (activePag?.pagamentosFeitos ?? 0);
+  const adminCents = activePag?.lucro ?? 0;
+  const workerCents = activePag?.pagamentosFeitos ?? 0;
+  const otherCents = Math.max(0, grossCents - adminCents - workerCents);
+  const totalCents = grossCents || 1;
   const adminPct = Math.round((adminCents / totalCents) * 100);
   const workerPct = Math.round((workerCents / totalCents) * 100);
   const otherPct = 100 - adminPct - workerPct;
@@ -199,18 +222,57 @@ export default function HomeScreen() {
     React.createElement('p', { style: webStyles.chartCardDesc }, chartDesc),
     revCatRow,
     React.createElement('div', { style: webStyles.chartRow },
-      React.createElement('div', { style: { width: 200, height: 200, borderRadius: '50%', background: `conic-gradient(#cba04b 0deg ${adminDeg}deg, #545454 ${adminDeg}deg ${workerDeg}deg, #0d0d0d ${workerDeg}deg 360deg)`, flexShrink: 0 } }),
+      // Gráfico de pizza interativo com hover
+      React.createElement('div', { style: { width: 200, height: 200, flexShrink: 0, position: 'relative' as const } },
+        React.createElement('div', { style: { width: 200, height: 200, borderRadius: '50%', background: `conic-gradient(#cba04b 0deg ${adminDeg}deg, #545454 ${adminDeg}deg ${workerDeg}deg, #0d0d0d ${workerDeg}deg 360deg)`, overflow: 'hidden' } },
+          // Áreas clicáveis invisíveis para hover (3 setores)
+          React.createElement('div', {
+            onMouseEnter: () => setChartHover('admin'),
+            onMouseLeave: () => setChartHover(null),
+            style: { position: 'absolute' as const, top: 0, left: 0, right: 0, bottom: '50%', cursor: 'pointer' },
+          }),
+          React.createElement('div', {
+            onMouseEnter: () => setChartHover('workers'),
+            onMouseLeave: () => setChartHover(null),
+            style: { position: 'absolute' as const, top: '50%', left: 0, right: '50%', bottom: 0, cursor: 'pointer' },
+          }),
+          React.createElement('div', {
+            onMouseEnter: () => setChartHover('outros'),
+            onMouseLeave: () => setChartHover(null),
+            style: { position: 'absolute' as const, top: '50%', left: '50%', right: 0, bottom: 0, cursor: 'pointer' },
+          })),
+        // Tooltip flutuante
+        chartHover ? React.createElement('div', {
+          style: {
+            position: 'absolute' as const, top: -40, left: '50%', transform: 'translateX(-50%)',
+            background: '#0d0d0d', color: '#fff', padding: '8px 14px', borderRadius: 8,
+            fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' as const, zIndex: 10,
+            fontFamily: 'Inter, sans-serif', boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+          },
+        }, chartHover === 'admin' ? `Admin: ${adminPct}% (${fmtBRL(adminCents)})`
+          : chartHover === 'workers' ? `Workers: ${workerPct}% (${fmtBRL(workerCents)})`
+          : `Outros: ${otherPct}% (${fmtBRL(otherCents)})`) : null),
       React.createElement('div', { style: webStyles.chartLegend },
         React.createElement('p', { style: webStyles.chartTotal }, `Faturamento total: ${fmtBRL(grossCents)}`),
-        React.createElement('div', { style: webStyles.chartLegendItem },
+        React.createElement('div', {
+          style: { ...webStyles.chartLegendItem, cursor: 'pointer', opacity: chartHover === 'admin' ? 1 : chartHover ? 0.5 : 1, transition: 'opacity 0.2s' },
+          onMouseEnter: () => setChartHover('admin'), onMouseLeave: () => setChartHover(null),
+        },
           React.createElement('span', { style: { ...webStyles.chartLegendDot, background: '#cba04b' } }),
-          React.createElement('span', { style: webStyles.chartLegendText }, `${adminPct}% Admin (taxas)`)),
-        React.createElement('div', { style: webStyles.chartLegendItem },
+          React.createElement('span', { style: webStyles.chartLegendText }, `${adminPct}% Admin (taxas) — ${fmtBRL(adminCents)}`)),
+        React.createElement('div', {
+          style: { ...webStyles.chartLegendItem, cursor: 'pointer', opacity: chartHover === 'workers' ? 1 : chartHover ? 0.5 : 1, transition: 'opacity 0.2s' },
+          onMouseEnter: () => setChartHover('workers'), onMouseLeave: () => setChartHover(null),
+        },
           React.createElement('span', { style: { ...webStyles.chartLegendDot, background: '#545454' } }),
-          React.createElement('span', { style: webStyles.chartLegendText }, `${workerPct}% Motoristas/Preparadores`)),
-        React.createElement('div', { style: webStyles.chartLegendItem },
+          React.createElement('span', { style: webStyles.chartLegendText }, `${workerPct}% Motoristas/Preparadores — ${fmtBRL(workerCents)}`)),
+        React.createElement('div', {
+          style: { ...webStyles.chartLegendItem, cursor: 'pointer', opacity: chartHover === 'outros' ? 1 : chartHover ? 0.5 : 1, transition: 'opacity 0.2s' },
+          onMouseEnter: () => setChartHover('outros'), onMouseLeave: () => setChartHover(null),
+        },
           React.createElement('span', { style: { ...webStyles.chartLegendDot, background: '#0d0d0d' } }),
-          React.createElement('span', { style: webStyles.chartLegendText }, `${otherPct}% Outros`)))));
+          React.createElement('span', { style: webStyles.chartLegendText }, `${otherPct}% Outros — ${fmtBRL(otherCents)}`)))));
+
 
   // Modal Filtro Início (Figma 756-19720)
   const statusOptions: { id: 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'; label: string }[] = [
