@@ -30,7 +30,7 @@ const closeModalSvg = React.createElement('svg', { width: 24, height: 24, viewBo
   React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
 
 type FiltroStatusChip = 'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas';
-type FiltroPeriodo = 'semana' | 'mes' | 'ano';
+type FiltroPeriodo = 'todos' | 'semana' | 'mes' | 'ano';
 type FiltroCategoria = 'todos' | 'takeme' | 'parceiro';
 
 // Avatar colors
@@ -124,11 +124,11 @@ export default function PreparadoresScreen() {
   const [activeTab, setActiveTab] = useState<'encomendas' | 'excursoes'>('encomendas');
   // ── Filtro da página (Figma 898-22995) ──────────────────────────────
   const [filtroPaginaOpen, setFiltroPaginaOpen] = useState(false);
-  const [appliedPeriodoPagina, setAppliedPeriodoPagina] = useState<FiltroPeriodo>('semana');
+  const [appliedPeriodoPagina, setAppliedPeriodoPagina] = useState<FiltroPeriodo>('todos');
   const [appliedDataInicialPagina, setAppliedDataInicialPagina] = useState('05 de setembro-2025');
   const [appliedDataFinalPagina, setAppliedDataFinalPagina] = useState('31 de setembro');
   const [appliedStatusPagina, setAppliedStatusPagina] = useState<FiltroStatusChip>('todos');
-  const [draftPeriodoPagina, setDraftPeriodoPagina] = useState<FiltroPeriodo>('semana');
+  const [draftPeriodoPagina, setDraftPeriodoPagina] = useState<FiltroPeriodo>('todos');
   const [draftDataInicialPagina, setDraftDataInicialPagina] = useState('05 de setembro-2025');
   const [draftDataFinalPagina, setDraftDataFinalPagina] = useState('31 de setembro');
   const [draftStatusPagina, setDraftStatusPagina] = useState<FiltroStatusChip>('todos');
@@ -701,6 +701,7 @@ export default function PreparadoresScreen() {
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
           React.createElement('span', { style: tituloSecaoModal18 }, 'Período'),
           React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
+            chipFiltro('Todos', draftPeriodoPagina === 'todos', () => setDraftPeriodoPagina('todos')),
             chipFiltro('Esta semana', draftPeriodoPagina === 'semana', () => setDraftPeriodoPagina('semana')),
             chipFiltro('Este mês', draftPeriodoPagina === 'mes', () => setDraftPeriodoPagina('mes')),
             chipFiltro('Este ano', draftPeriodoPagina === 'ano', () => setDraftPeriodoPagina('ano')))),
