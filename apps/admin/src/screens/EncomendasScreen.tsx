@@ -507,17 +507,7 @@ export default function EncomendasScreen() {
           },
         }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
           React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#22c55e', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))) : null,
-        row.status !== 'Cancelado' && row.status !== 'Concluído' ? React.createElement('button', {
-          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Cancelar encomenda',
-          onClick: async () => {
-            if (item && confirm('Cancelar esta encomenda?')) {
-              if (item.tipo === 'dependent_shipment') await updateDependentShipmentStatus(item.id, 'cancelled');
-              else await updateShipmentStatus(item.id, 'cancelled');
-              await refetch();
-            }
-          },
-        }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
-          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#b53838', strokeWidth: 2, strokeLinecap: 'round' }))) : null));
+        null));
   });
 
   const tableSection = React.createElement('div', {
