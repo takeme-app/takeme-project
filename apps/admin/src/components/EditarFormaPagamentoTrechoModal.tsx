@@ -3,6 +3,7 @@
  * Uses React.createElement() (no JSX).
  */
 import React, { useState, useEffect, useCallback } from 'react';
+import { updatePricingRoute } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -26,9 +27,19 @@ const overlayStyle: React.CSSProperties = {
 export type EditarFormaPagamentoTrechoModalProps = {
   open: boolean;
   onClose: () => void;
+  /** Quando definido, «Salvar alterações» persiste em `manage-pricing-routes`. */
+  pricingRouteId?: string | null;
+  initialAcceptedPaymentMethods?: string[];
+  onSaved?: () => void;
 };
 
-export default function EditarFormaPagamentoTrechoModal({ open, onClose }: EditarFormaPagamentoTrechoModalProps) {
+export default function EditarFormaPagamentoTrechoModal({
+  open,
+  onClose,
+  pricingRouteId,
+  initialAcceptedPaymentMethods,
+  onSaved,
+}: EditarFormaPagamentoTrechoModalProps) {
   const [payPix, setPayPix] = useState(false);
   const [payCartao, setPayCartao] = useState(false);
   const [payDebito, setPayDebito] = useState(false);
@@ -44,9 +55,25 @@ export default function EditarFormaPagamentoTrechoModal({ open, onClose }: Edita
 
   const fechar = useCallback(() => onClose(), [onClose]);
 
-  const salvar = useCallback(() => {
+  const salvar = useCallback(async () => {
+    const methods: string[] = [];
+    if (payPix) methods.push('pix');
+    if (payCartao) methods.push('credit_card');
+    if (payDebito) methods.push('debit_card');
+    if (pricingRouteId) {
+      const { error } = await updatePricingRoute(pricingRouteId, { accepted_payment_methods: methods });
+      if (!error) onSaved?.();
+    }
     onClose();
-  }, [onClose]);
+  }, [onClose, payPix, payCartao, payDebito, pricingRouteId, onSaved]);
+
+  useEffect(() => {
+    if (!open) return;
+    const m = initialAcceptedPaymentMethods ?? [];
+    setPayPix(m.includes('pix'));
+    setPayCartao(m.includes('credit_card'));
+    setPayDebito(m.includes('debit_card'));
+  }, [open, initialAcceptedPaymentMethods]);
 
   useEffect(() => {
     if (!open) return;
@@ -176,7 +203,7 @@ export default function EditarFormaPagamentoTrechoModal({ open, onClose }: Edita
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
           React.createElement('button', {
             type: 'button',
-            onClick: salvar,
+            onClick: () => { void salvar(); },
             style: {
               width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff',
               fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font,

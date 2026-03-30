@@ -4,6 +4,14 @@
  */
 import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import {
+  fetchMotoristas,
+  findMotoristaIdByPaymentSlug,
+  fetchMotoristaPaymentHeader,
+  fetchPricingRoutes,
+} from '../data/queries';
+import type { MotoristaPaymentHeader } from '../data/queries';
+import type { PricingRouteRow } from '../data/types';
 import { webStyles } from '../styles/webStyles';
 import { PAGAMENTOS_GESTAO_PREPARADORES_HREF } from '../constants/pagamentosGestaoNav';
 import EditarTabelaTrechoModal, { TrechoData } from '../components/EditarTabelaTrechoModal';
@@ -12,6 +20,7 @@ import EditarFormaPagamentoTrechoModal from '../components/EditarFormaPagamentoT
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
 type TrechoMotRow = {
+  pricingRouteId: string;
   idTrecho: string;
   origem: string;
   destino: string;
@@ -24,13 +33,6 @@ type TrechoMotRow = {
   pctAdmin: string;
   pagamento: string;
 };
-
-const MOCK_TRECHOS: TrechoMotRow[] = [
-  { idTrecho: '#12345', origem: 'São Paulo - SP', destino: 'Campinas - SP', valor: 'R$ 250,00', idaLinha1: '15/02/2025, ', idaLinha2: '08:00', retLinha1: '15/02/2025, ', retLinha2: '18:00', pctMotorista: '15%', pctAdmin: '5%', pagamento: 'Pix,\nDebito' },
-  { idTrecho: '#45678', origem: 'Campinas - SP', destino: 'Brasília - DF', valor: 'R$ 380,00', idaLinha1: '15/02/2025, ', idaLinha2: '08:00', retLinha1: '15/02/2025, ', retLinha2: '18:00', pctMotorista: '12%', pctAdmin: '7%', pagamento: 'Pix,\nCrédito' },
-  { idTrecho: '#910112', origem: 'Brasília - DF', destino: 'Campinas - SP', valor: 'R$ 650,00', idaLinha1: '15/02/2025, ', idaLinha2: '08:00', retLinha1: '15/02/2025, ', retLinha2: '18:00', pctMotorista: '11%', pctAdmin: '6%', pagamento: 'Pix,\nCrédito' },
-  { idTrecho: '#910112', origem: 'Curitiba - PR', destino: 'Porto Alegre - RS', valor: 'R$ 550,00', idaLinha1: '15/02/2025, ', idaLinha2: '08:00', retLinha1: '15/02/2025, ', retLinha2: '18:00', pctMotorista: '14%', pctAdmin: '8%', pagamento: 'Pix,\nCrédito,\nDebito' },
-];
 
 type MotDetail = {
   nome: string;
@@ -45,19 +47,29 @@ type MotDetail = {
   trechos: TrechoMotRow[];
 };
 
-const DETAIL_BY_SLUG: Record<string, MotDetail> = {
-  'joao-porto': { nome: 'João Porto', rating: 4.2, pixChave: 'joao.porto@gmail.com', numRotas: 149, mediaAval: '4.4', ganhoMes: 'R$ 4.580,00', ganhoAno: 'R$ 54.900,00', totalMensal: 'R$ 1.280,00', lucroMedio: '16.0%', trechos: MOCK_TRECHOS },
-  'carlos-silva': { nome: 'Carlos Silva', rating: 4.4, pixChave: 'carlos.silva@gmail.com', numRotas: 193, mediaAval: '4.4', ganhoMes: 'R$ 5.200,00', ganhoAno: 'R$ 62.400,00', totalMensal: 'R$ 1.450,00', lucroMedio: '14.5%', trechos: MOCK_TRECHOS },
-  'jorge-silva': { nome: 'Jorge Silva', rating: 4.1, pixChave: 'jorge.silva@gmail.com', numRotas: 156, mediaAval: '4.1', ganhoMes: 'R$ 3.900,00', ganhoAno: 'R$ 46.800,00', totalMensal: 'R$ 1.100,00', lucroMedio: '15.2%', trechos: MOCK_TRECHOS },
-};
-
-function resolveDetail(slug: string | undefined): MotDetail {
-  if (!slug) return { nome: 'Motorista', rating: 0, pixChave: '—', numRotas: 0, mediaAval: '0', ganhoMes: 'R$ 0,00', ganhoAno: 'R$ 0,00', totalMensal: 'R$ 0,00', lucroMedio: '0%', trechos: MOCK_TRECHOS };
-  const fixed = DETAIL_BY_SLUG[slug];
-  if (fixed) return fixed;
-  const nome = slug.split('-').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
-  const local = nome.toLowerCase().replace(/\s+/g, '.');
-  return { nome, rating: 4.2, pixChave: `${local}@email.com`, numRotas: 149, mediaAval: '4.4', ganhoMes: 'R$ 4.580,00', ganhoAno: 'R$ 54.900,00', totalMensal: 'R$ 1.280,00', lucroMedio: '16.0%', trechos: MOCK_TRECHOS };
+function pricingToTrechoMotRow(r: PricingRouteRow): TrechoMotRow {
+  const fmtMoney = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`;
+  const pay = (r.accepted_payment_methods || []).map((m) =>
+    m === 'pix' ? 'Pix' : m === 'credit_card' ? 'Crédito' : m === 'debit_card' ? 'Débito' : String(m),
+  );
+  const pagamento = pay.join(',\n') || '—';
+  const created = r.created_at ? new Date(r.created_at) : null;
+  const idaLinha1 = created ? `${created.toLocaleDateString('pt-BR')}, ` : '—, ';
+  const idaLinha2 = created ? created.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—';
+  return {
+    pricingRouteId: r.id,
+    idTrecho: `#${r.id.slice(0, 6)}`,
+    origem: (r.origin_address || '—').slice(0, 80),
+    destino: (r.destination_address || '—').slice(0, 80),
+    valor: fmtMoney(r.price_cents),
+    idaLinha1,
+    idaLinha2,
+    retLinha1: '—',
+    retLinha2: '—',
+    pctMotorista: `${r.driver_pct ?? 0}%`,
+    pctAdmin: `${r.admin_pct ?? 0}%`,
+    pagamento,
+  };
 }
 
 const avatarColors: Record<string, string> = { C: '#50C878', J: '#7B61FF', E: '#4A90D9', M: '#F5A623', D: '#F5A623' };
@@ -108,7 +120,54 @@ const colTrecho = [
 export default function PagamentoMotoristaDetailScreen() {
   const navigate = useNavigate();
   const { slug } = useParams<{ slug: string }>();
-  const detail = useMemo(() => resolveDetail(slug), [slug]);
+  const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
+  const [header, setHeader] = useState<MotoristaPaymentHeader | null>(null);
+  const [pricingRoutes, setPricingRoutes] = useState<PricingRouteRow[]>([]);
+  const [trechos, setTrechos] = useState<TrechoMotRow[]>([]);
+
+  useEffect(() => {
+    let cancel = false;
+    setLoading(true);
+    setNotFound(false);
+    (async () => {
+      const list = await fetchMotoristas();
+      if (cancel) return;
+      const id = slug ? findMotoristaIdByPaymentSlug(slug, list) : null;
+      if (!id) {
+        setNotFound(true);
+        setHeader(null);
+        setPricingRoutes([]);
+        setTrechos([]);
+        setLoading(false);
+        return;
+      }
+      const [h, routes] = await Promise.all([
+        fetchMotoristaPaymentHeader(id),
+        fetchPricingRoutes('driver'),
+      ]);
+      if (cancel) return;
+      setHeader(h);
+      setPricingRoutes(routes);
+      setTrechos(routes.map(pricingToTrechoMotRow));
+      setLoading(false);
+    })();
+    return () => { cancel = true; };
+  }, [slug]);
+
+  const detail: MotDetail = useMemo(() => ({
+    nome: header?.nome ?? (slug ? slug.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ') : 'Motorista'),
+    rating: header?.rating ?? 0,
+    pixChave: header?.pixChave ?? '—',
+    numRotas: header?.numRotas ?? 0,
+    mediaAval: header?.mediaAval ?? '—',
+    ganhoMes: header?.ganhoMes ?? '—',
+    ganhoAno: header?.ganhoAno ?? '—',
+    totalMensal: header?.totalMensal ?? '—',
+    lucroMedio: header?.lucroMedio ?? '—',
+    trechos,
+  }), [header, trechos, slug]);
+
   const initial = detail.nome.charAt(0);
   const avatarBg = avatarColors[initial] || '#999';
 
@@ -146,6 +205,19 @@ export default function PagamentoMotoristaDetailScreen() {
     mq.addEventListener('change', sync);
     return () => mq.removeEventListener('change', sync);
   }, []);
+
+  if (loading) {
+    return React.createElement('div', { style: { padding: 40, ...font } }, 'Carregando…');
+  }
+  if (notFound) {
+    return React.createElement('div', { style: { padding: 40, display: 'flex', flexDirection: 'column' as const, gap: 16, ...font } },
+      React.createElement('p', { style: { margin: 0 } }, 'Motorista não encontrado para este URL.'),
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => navigate('/pagamentos/gestao?tab=Motorista'),
+        style: { alignSelf: 'flex-start', cursor: 'pointer', padding: '8px 16px' },
+      }, 'Voltar à gestão'));
+  }
 
   // --- Breadcrumb ---
   const bcLink = (label: string, onClick: () => void) =>
@@ -352,6 +424,18 @@ export default function PagamentoMotoristaDetailScreen() {
       totalBar,
       tableSection),
     React.createElement(EditarTabelaTrechoModal, { open: editTrechoOpen, onClose: fecharEditTrecho, trecho: editTrechoData }),
-    React.createElement(EditarFormaPagamentoTrechoModal, { open: editPagamentoOpen, onClose: fecharEditPagamento }),
+    React.createElement(EditarFormaPagamentoTrechoModal, {
+      open: editPagamentoOpen,
+      onClose: fecharEditPagamento,
+      pricingRouteId: pricingRoutes[0]?.id ?? null,
+      initialAcceptedPaymentMethods: pricingRoutes[0]?.accepted_payment_methods,
+      onSaved: () => {
+        if (!slug) return;
+        void fetchPricingRoutes('driver').then((routes) => {
+          setPricingRoutes(routes);
+          setTrechos(routes.map(pricingToTrechoMotRow));
+        });
+      },
+    }),
     confirmRemoveModal);
 }

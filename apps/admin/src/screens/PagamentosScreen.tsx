@@ -334,6 +334,7 @@ export default function PagamentosScreen() {
     React.createElement('button', {
       type: 'button',
       onClick: abrirFiltroModal,
+      'data-testid': 'pagamentos-open-table-filter',
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#f1f1f1', border: 'none', borderRadius: 999,
@@ -379,10 +380,11 @@ export default function PagamentosScreen() {
       },
     }, c.label)));
 
-  const tableRowEls = filteredRows.map((row, idx) => {
+  const tableRowEls = filteredRows.map((row) => {
     const st = statusStyles[row.status];
     return React.createElement('div', {
-      key: idx,
+      key: row.id,
+      'data-testid': 'pagamento-table-row',
       style: {
         display: 'flex', minHeight: 64, alignItems: 'center', padding: '8px 16px',
         borderBottom: '1px solid #d9d9d9', background: '#fff',
@@ -400,15 +402,15 @@ export default function PagamentosScreen() {
             background: st.bg, color: st.color, ...font,
           },
         }, row.status)),
-      row.status === 'Pendente' || row.status === 'pending'
+      row.status === 'Agendado'
         ? React.createElement('button', {
             type: 'button',
             onClick: async () => {
               if (!isSupabaseConfigured || !row.id) return;
               if (!confirm('Marcar este pagamento como pago?')) return;
-              await (supabase.from('payouts') as any).update({ status: 'paid', paid_at: new Date().toISOString() }).eq('id', row.id);
+              await (supabase as any).from('payouts').update({ status: 'paid', paid_at: new Date().toISOString() }).eq('id', row.id);
               const [items, c] = await Promise.all([fetchPagamentos(), fetchPagamentoCounts()]);
-              setPagamentos(items); setPCounts(c);
+              setPagamentos(items); setCounts(c);
             },
             style: { marginLeft: 8, height: 28, padding: '0 10px', borderRadius: 999, border: 'none', background: '#22c55e', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const },
           }, 'Pagar')

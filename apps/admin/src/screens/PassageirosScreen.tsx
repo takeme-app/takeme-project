@@ -12,7 +12,7 @@ import {
   calendarIconSvg,
   closeIconSvg,
 } from '../styles/webStyles';
-import { fetchPassageiros, fetchPassageiroCounts, type PassageiroCounts } from '../data/queries';
+import { fetchPassageiros, fetchPassageiroCounts, fetchPassageiroBookings, type PassageiroCounts } from '../data/queries';
 import type { PassageiroListItem } from '../data/types';
 
 // SVG icons for view/edit actions
@@ -29,6 +29,7 @@ const avatarColors: Record<string, string> = {
 };
 
 type PassageiroRow = {
+  id: string;
   nome: string;
   cidade: string;
   estado: string;
@@ -213,6 +214,7 @@ export default function PassageirosScreen() {
   }, []);
 
   const tableRowsAll: PassageiroRow[] = passageirosData.map((p) => ({
+    id: p.id,
     nome: p.nome,
     cidade: p.cidade,
     estado: p.estado,
@@ -221,14 +223,7 @@ export default function PassageirosScreen() {
     status: p.status,
   }));
 
-  // Apply filters
-  const tableRows = tableRowsAll.filter((row) => {
-    const statusLower = row.status.toLowerCase();
-    if (filterStatus === 'em_andamento' && !statusLower.includes('ativ')) return false;
-    if (filterStatus === 'concluidas' && !statusLower.includes('verificad')) return false;
-    if (filterStatus === 'canceladas' && !statusLower.includes('inativ') && !statusLower.includes('cancel')) return false;
-    return true;
-  });
+  // Filter is applied below after filterStatus state is declared
 
   const metrics = [
     { title: 'Totais de passageiros', pct: '', pctPositive: true, desc: '', value: String(pCounts.total) },
@@ -264,7 +259,6 @@ export default function PassageirosScreen() {
   const [tblFilterNome, setTblFilterNome] = useState('');
   const [tblFilterOrigem, setTblFilterOrigem] = useState('');
   const [tblFilterDate, setTblFilterDate] = useState('01 de setembro');
-  const [tblFilterStatus, setTblFilterStatus] = useState<'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('em_andamento');
   const [tblFilterCategoria, setTblFilterCategoria] = useState<'todos' | 'take_me' | 'motorista'>('take_me');
 
   // ── Filter modal state (Figma 837-14711) ───────────────────────────
@@ -276,6 +270,20 @@ export default function PassageirosScreen() {
   const [filterFaixa, setFilterFaixa] = useState<'10_20' | '21_30' | '30_60'>('10_20');
   const [filterGenero, setFilterGenero] = useState<'masculino' | 'feminino'>('feminino');
 
+  // Apply filters — modal da tabela (tbl*) + chip de status do modal principal
+  const tableRows = tableRowsAll.filter((row) => {
+    const statusLower = row.status.toLowerCase();
+    if (filterStatus === 'em_andamento' && !statusLower.includes('ativ')) return false;
+    if (filterStatus === 'agendadas') return false;
+    if (filterStatus === 'concluidas' && !statusLower.includes('verificad')) return false;
+    if (filterStatus === 'canceladas' && !statusLower.includes('inativ') && !statusLower.includes('cancel')) return false;
+    const nn = tblFilterNome.trim().toLowerCase();
+    if (nn && !row.nome.toLowerCase().includes(nn)) return false;
+    const oo = tblFilterOrigem.trim().toLowerCase();
+    if (oo && !(`${row.cidade} ${row.estado}`.toLowerCase().includes(oo))) return false;
+    return true;
+  });
+
   // ── Search row ────────────────────────────────────────────────────────
   const searchRow = React.createElement('div', { style: webStyles.searchRow },
     React.createElement('div', { style: webStyles.searchInputWrap },
@@ -284,7 +292,7 @@ export default function PassageirosScreen() {
         React.createElement('input', { type: 'search', placeholder: 'Buscar passageiro, destino ou origem...', style: webStyles.searchInput, 'aria-label': 'Buscar' }))),
     React.createElement('div', { style: webStyles.filterGroup },
       React.createElement('button', { type: 'button', style: webStyles.filterBtn, onClick: () => { setTrocarOpen(true); setTrocarSelected(0); setTrocarMotivo(''); } }, React.createElement('span', null, editIconSvg), 'Trocar motorista'),
-      React.createElement('button', { type: 'button', style: webStyles.filterBtn, onClick: () => setFilterOpen(true) }, React.createElement('span', null, filterIconSvg), 'Filtro')));
+      React.createElement('button', { type: 'button', 'data-testid': 'passageiros-open-page-filter', style: webStyles.filterBtn, onClick: () => setFilterOpen(true) }, React.createElement('span', null, filterIconSvg), 'Filtro')));
 
   // ── Metric cards ──────────────────────────────────────────────────────
   const metricCardEl = (m: typeof metrics[0]) =>
@@ -367,7 +375,8 @@ export default function PassageirosScreen() {
   const tableRowEl = (row: PassageiroRow, idx: number) => {
     const statusStyle = row.status === 'Ativo' ? s.statusPillAtivo : s.statusPillInativo;
     return React.createElement('div', {
-      key: idx,
+      key: row.id,
+      'data-testid': 'passageiro-table-row',
       style: { ...webStyles.viagensTableRow, display: 'flex', background: idx % 2 === 1 ? '#ffffff' : undefined },
     },
       // Passageiros (avatar + name)
@@ -393,14 +402,51 @@ export default function PassageirosScreen() {
         style: { flex: tableCols[6].flex, minWidth: tableCols[6].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
       },
         React.createElement('div', { style: webStyles.viagensActionIcons },
-          React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar', onClick: () => { const item = passageirosData[idx]; navigate(`/passageiros/${item?.id ?? idx}/viagem/0`, { state: { trip: { passageiro: row.nome, origem: row.cidade, destino: '—', data: row.dataCriacao, embarque: '—', chegada: '—', status: 'em_andamento' } } }); } }, eyeActionSvg),
-          React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => { const item = passageirosData[idx]; navigate(`/passageiros/${item?.id ?? idx}/viagem/0/editar`, { state: { trip: { passageiro: row.nome, origem: row.cidade, destino: '—', data: row.dataCriacao, embarque: '—', chegada: '—', status: 'em_andamento' }, from: 'Passageiros' } }); } }, pencilActionSvg))));
+          React.createElement('button', {
+            type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar',
+            onClick: () => {
+              void (async () => {
+                const bookings = await fetchPassageiroBookings(row.id);
+                const first = bookings[0];
+                if (first) {
+                  navigate(`/passageiros/${row.id}/viagem/${first.bookingId}`, {
+                    state: {
+                      trip: {
+                        passageiro: row.nome, origem: first.origem, destino: first.destino, data: first.data,
+                        embarque: first.embarque, chegada: first.chegada, status: first.status,
+                      },
+                    },
+                  });
+                } else navigate(`/passageiros/${row.id}`);
+              })();
+            },
+          }, eyeActionSvg),
+          React.createElement('button', {
+            type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
+            onClick: () => {
+              void (async () => {
+                const bookings = await fetchPassageiroBookings(row.id);
+                const first = bookings[0];
+                if (first) {
+                  navigate(`/passageiros/${row.id}/viagem/${first.bookingId}/editar`, {
+                    state: {
+                      trip: {
+                        passageiro: row.nome, origem: first.origem, destino: first.destino, data: first.data,
+                        embarque: first.embarque, chegada: first.chegada, status: first.status,
+                      },
+                      from: 'Passageiros',
+                    },
+                  });
+                } else navigate(`/passageiros/${row.id}`);
+              })();
+            },
+          }, pencilActionSvg))));
   };
 
   const tableSectionEl = React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 16, width: '100%' } },
     React.createElement('div', { style: s.tableSectionHeader },
       React.createElement('h2', { style: s.tableSectionTitle }, 'Passageiros'),
-      React.createElement('button', { type: 'button', style: webStyles.filterBtn, onClick: () => setTableFilterOpen(true) }, React.createElement('span', null, filterIconSvg), 'Filtro')),
+      React.createElement('button', { type: 'button', style: webStyles.filterBtn, onClick: () => setTableFilterOpen(true), 'data-testid': 'passageiros-open-table-filter' }, React.createElement('span', null, filterIconSvg), 'Filtro')),
     React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } },
       tableHeader,
       ...tableRows.map(tableRowEl)));
@@ -549,7 +595,7 @@ export default function PassageirosScreen() {
   },
     // Header
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', paddingBottom: 24, borderBottom: '1px solid #e2e2e2' } },
-      React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro'),
+      React.createElement('h2', { id: 'passageiros-filtro-pagina-titulo', style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro'),
       React.createElement('button', {
         type: 'button', 'aria-label': 'Fechar',
         onClick: () => setFilterOpen(false),
@@ -605,7 +651,7 @@ export default function PassageirosScreen() {
     ? React.createElement('div', {
         style: webStyles.modalOverlay,
         onClick: () => setFilterOpen(false),
-        role: 'dialog', 'aria-modal': true, 'aria-label': 'Filtro',
+        role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'passageiros-filtro-pagina-titulo',
       }, filterModalContent)
     : null;
 
@@ -669,10 +715,10 @@ export default function PassageirosScreen() {
     React.createElement('div', { style: { padding: '0 24px', display: 'flex', flexDirection: 'column' as const, gap: 12 } },
       React.createElement('span', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Status da viagem'),
       React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-        tblChip('Em andamento', tblFilterStatus === 'em_andamento', () => setTblFilterStatus('em_andamento')),
-        tblChip('Agendadas', tblFilterStatus === 'agendadas', () => setTblFilterStatus('agendadas')),
-        tblChip('Concluídas', tblFilterStatus === 'concluidas', () => setTblFilterStatus('concluidas')),
-        tblChip('Canceladas', tblFilterStatus === 'canceladas', () => setTblFilterStatus('canceladas')))),
+        tblChip('Em andamento', filterStatus === 'em_andamento', () => setFilterStatus('em_andamento')),
+        tblChip('Agendadas', filterStatus === 'agendadas', () => setFilterStatus('agendadas')),
+        tblChip('Concluídas', filterStatus === 'concluidas', () => setFilterStatus('concluidas')),
+        tblChip('Canceladas', filterStatus === 'canceladas', () => setFilterStatus('canceladas')))),
     // Categoria
     React.createElement('div', { style: { padding: '0 24px', display: 'flex', flexDirection: 'column' as const, gap: 12 } },
       React.createElement('span', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Categoria'),

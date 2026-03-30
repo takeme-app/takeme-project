@@ -3,8 +3,16 @@
  * Secção motoristas: Figma 1283-34111.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import {
+  fetchApprovedDriversForEncomendaUI,
+  fetchEncomendaEditDetail,
+  formatCurrencyBRL,
+  updateDependentShipmentFields,
+  updateShipmentFields,
+} from '../data/queries';
+import type { EncomendaEditDetail } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -33,71 +41,6 @@ type MotoristaDisponivel = {
   pessoasRestantes: string;
   bagageiro: string;
 };
-
-/** Lista vazia = estado “aguardando motorista” (ícone 3D). Preencha para o layout do Figma. */
-const MOTORISTAS_MOCK: MotoristaDisponivel[] = [
-  {
-    id: '1',
-    nome: 'Matheus Barros',
-    nota: 4.8,
-    viagensTexto: '(120 viagens concluídas)',
-    badge: 'takeme',
-    foto: motoristaAvatar1,
-    rota: 'Rio de Janeiro - RJ → São Paulo - SP',
-    data: '05/09/2025',
-    horaSaida: '15:30',
-    valorTotal: 'R$ 145,00',
-    valorUnitario: 'R$ 70,00',
-    pessoasRestantes: '3',
-    bagageiro: '70%',
-  },
-  {
-    id: '2',
-    nome: 'Carlos Silva',
-    nota: 4.7,
-    viagensTexto: '(133 viagens concluídas)',
-    badge: 'takeme',
-    foto: motoristaAvatar2,
-    rota: 'Rio de Janeiro - RJ → São Paulo - SP',
-    data: '05/09/2025',
-    horaSaida: '16:40',
-    valorTotal: 'R$ 125,00',
-    valorUnitario: 'R$ 65,00',
-    pessoasRestantes: '2',
-    bagageiro: '80%',
-  },
-  {
-    id: '3',
-    nome: 'Fernando Pontes',
-    nota: 4.6,
-    viagensTexto: '(133 viagens concluídas)',
-    badge: 'parceiro',
-    foto: motoristaAvatar3,
-    fotoLargura: 48,
-    rota: 'Rio de Janeiro - RJ → São Paulo - SP',
-    data: '05/09/2025',
-    horaSaida: '17:15',
-    valorTotal: 'R$ 145,00',
-    valorUnitario: 'R$ 75,00',
-    pessoasRestantes: '3',
-    bagageiro: '75%',
-  },
-  {
-    id: '4',
-    nome: 'Marta Gomes',
-    nota: 4.1,
-    viagensTexto: '(143 viagens concluídas)',
-    badge: 'takeme',
-    foto: motoristaAvatar4,
-    rota: 'Rio de Janeiro - RJ → São Paulo - SP',
-    data: '05/09/2025',
-    horaSaida: '13:40',
-    valorTotal: 'R$ 165,00',
-    valorUnitario: 'R$ 85,00',
-    pessoasRestantes: '4',
-    bagageiro: '15%',
-  },
-];
 
 const arrowBackSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M19 12H5M12 19l-7-7 7-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
@@ -223,6 +166,27 @@ const readField = (label: string, value: string) =>
     React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
     React.createElement('div', { style: { height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } }, value));
 
+const editField = (label: string, value: string, onChange: (v: string) => void) =>
+  React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+    React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
+    React.createElement('input', {
+      type: 'text',
+      value,
+      onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+      style: {
+        height: 44, borderRadius: 8, background: '#f1f1f1', border: 'none', padding: '0 16px', fontSize: 14, color: '#0d0d0d',
+        width: '100%', boxSizing: 'border-box' as const, ...font,
+      },
+    }));
+
+function toDatetimeLocalValue(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 const encomendaCard = (tamanho: string, valor: string, remetente: string, destinatario: string, recolha: string, entrega: string, obs: string) =>
   React.createElement('div', {
     style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, padding: 20, border: '1px solid #e2e2e2', borderRadius: 16, background: '#fff', alignItems: 'flex-start' },
@@ -253,12 +217,188 @@ const encomendaCard = (tamanho: string, valor: string, remetente: string, destin
           React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, obs)))),
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: '50%', background: '#faf5eb' } }, headphoneSvg));
 
+const avatarsPool = [motoristaAvatar1, motoristaAvatar2, motoristaAvatar3, motoristaAvatar4];
+
 export default function EncomendaEditScreen() {
   const navigate = useNavigate();
-  const motoristas = MOTORISTAS_MOCK;
-  const [motoristaSelecionado, setMotoristaSelecionado] = useState(() => motoristas[0]?.id ?? '');
+  const { id: routeId } = useParams<{ id: string }>();
+  const [detail, setDetail] = useState<EncomendaEditDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
 
-  return React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%', maxWidth: 1044, margin: '0 auto', boxSizing: 'border-box' as const } },
+  const [origem, setOrigem] = useState('');
+  const [destino, setDestino] = useState('');
+  const [instructions, setInstructions] = useState('');
+  const [recipientName, setRecipientName] = useState('');
+  const [recipientPhone, setRecipientPhone] = useState('');
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [packageSize, setPackageSize] = useState('');
+  const [whenOption, setWhenOption] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
+  const [receiverName, setReceiverName] = useState('');
+  const [bagsCount, setBagsCount] = useState('');
+  const [scheduledLocal, setScheduledLocal] = useState('');
+
+  const [motoristas, setMotoristas] = useState<MotoristaDisponivel[]>([]);
+  const [motoristaSelecionado, setMotoristaSelecionado] = useState('');
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  useEffect(() => {
+    if (!routeId) {
+      setLoading(false);
+      setLoadErr('ID inválido.');
+      return;
+    }
+    setLoading(true);
+    setLoadErr(null);
+    fetchEncomendaEditDetail(routeId).then((d) => {
+      if (!d) {
+        setDetail(null);
+        setLoadErr('Encomenda não encontrada.');
+        setLoading(false);
+        return;
+      }
+      setDetail(d);
+      setOrigem(d.originAddress);
+      setDestino(d.destinationAddress);
+      setInstructions(d.instructions ?? '');
+      setWhenOption(d.whenOption);
+      setScheduledLocal(toDatetimeLocalValue(d.scheduledAt));
+      if (d.kind === 'shipment') {
+        setRecipientName(d.recipientName);
+        setRecipientPhone(d.recipientPhone);
+        setRecipientEmail(d.recipientEmail);
+        setPackageSize(d.packageSize);
+      } else {
+        setFullName(d.fullName);
+        setContactPhone(d.contactPhone);
+        setReceiverName(d.receiverName ?? '');
+        setBagsCount(String(d.bagsCount ?? 0));
+      }
+      setLoading(false);
+    });
+  }, [routeId]);
+
+  useEffect(() => {
+    fetchApprovedDriversForEncomendaUI().then((list) => {
+      const ui: MotoristaDisponivel[] = list.map((d, i) => ({
+        id: d.id,
+        nome: d.nome,
+        nota: Number(d.rating ?? 0),
+        viagensTexto: `(${d.totalViagens} viagens)`,
+        badge: d.isPartner ? 'parceiro' : 'takeme',
+        foto: avatarsPool[i % avatarsPool.length],
+        rota: '—',
+        data: '—',
+        horaSaida: '—',
+        valorTotal: '—',
+        valorUnitario: '—',
+        pessoasRestantes: '—',
+        bagageiro: '—',
+      }));
+      setMotoristas(ui);
+      setMotoristaSelecionado((prev) => prev || ui[0]?.id || '');
+    });
+  }, []);
+
+  const save = useCallback(async () => {
+    if (!detail) return;
+    const schedIso = scheduledLocal ? new Date(scheduledLocal).toISOString() : null;
+    setSaving(true);
+    let res: { error: string | null };
+    if (detail.kind === 'shipment') {
+      res = await updateShipmentFields(detail.id, {
+        origin_address: origem,
+        destination_address: destino,
+        recipient_name: recipientName,
+        recipient_phone: recipientPhone,
+        recipient_email: recipientEmail,
+        package_size: packageSize,
+        when_option: whenOption,
+        instructions: instructions || null,
+        scheduled_at: schedIso,
+      });
+    } else {
+      res = await updateDependentShipmentFields(detail.id, {
+        origin_address: origem,
+        destination_address: destino,
+        full_name: fullName,
+        contact_phone: contactPhone,
+        receiver_name: receiverName || null,
+        when_option: whenOption,
+        instructions: instructions || null,
+        bags_count: Number(bagsCount) || 0,
+        scheduled_at: schedIso,
+      });
+    }
+    setSaving(false);
+    if (res.error) setToast(res.error);
+    else {
+      setToast('Alterações guardadas.');
+      const d2 = await fetchEncomendaEditDetail(detail.id);
+      if (d2) setDetail(d2);
+    }
+  }, [detail, origem, destino, instructions, recipientName, recipientPhone, recipientEmail, packageSize, whenOption, scheduledLocal, fullName, contactPhone, receiverName, bagsCount]);
+
+  if (loading) {
+    return React.createElement('div', { style: { padding: 40, ...font } }, 'Carregando…');
+  }
+
+  if (loadErr || !detail) {
+    return React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, padding: 24, ...font } },
+      React.createElement('p', null, loadErr || 'Sem dados.'),
+      React.createElement('button', { type: 'button', onClick: () => navigate(-1), style: { alignSelf: 'flex-start', cursor: 'pointer' } }, 'Voltar'));
+  }
+
+  const dataLinha = scheduledLocal
+    ? new Date(scheduledLocal).toLocaleDateString('pt-BR')
+    : new Date(detail.createdAt).toLocaleDateString('pt-BR');
+  const horaLinha = scheduledLocal
+    ? new Date(scheduledLocal).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    : '—';
+  const motoristasComRota = motoristas.map((m) => ({
+    ...m,
+    rota: `${origem.slice(0, 40)} → ${destino.slice(0, 40)}`,
+    data: dataLinha,
+    horaSaida: horaLinha,
+  }));
+
+  const resumoId = `#${detail.id.slice(0, 8)}`;
+  const statusLabel = detail.status || '—';
+  const encomendaPreview = detail.kind === 'shipment'
+    ? encomendaCard(
+        packageSize || '—',
+        formatCurrencyBRL(detail.amountCents),
+        '—',
+        recipientName || '—',
+        origem,
+        destino,
+        instructions || '—',
+      )
+    : encomendaCard(
+        `${bagsCount || '0'} mala(s)`,
+        formatCurrencyBRL(detail.amountCents),
+        fullName || '—',
+        receiverName || fullName || '—',
+        origem,
+        destino,
+        instructions || '—',
+      );
+
+  const motoristaNote = React.createElement('p', {
+    style: { fontSize: 12, color: '#767676', margin: '0 0 8px', ...font },
+  }, 'Motoristas aprovados (referência). Não há coluna de motorista atribuído em shipments: use «Salvar alteração» para gravar os dados da encomenda.');
+
+  return React.createElement(React.Fragment, null,
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%', maxWidth: 1044, margin: '0 auto', boxSizing: 'border-box' as const } },
     // Breadcrumb
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 600, color: '#767676', ...font } },
       React.createElement('span', null, 'Encomendas'),
@@ -269,7 +409,15 @@ export default function EncomendaEditScreen() {
       React.createElement('button', { type: 'button', onClick: () => navigate(-1), style: { display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#0d0d0d', padding: 0, ...font } }, arrowBackSvg, 'Voltar'),
       React.createElement('div', { style: { display: 'flex', gap: 8 } },
         React.createElement('button', { type: 'button', onClick: () => navigate(-1), style: { display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px', borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font } }, xSvg, 'Cancelar'),
-        React.createElement('button', { type: 'button', style: { display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px', borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font } }, checkSvg, 'Salvar alteração'))),
+        React.createElement('button', {
+          type: 'button',
+          disabled: saving,
+          onClick: () => { void save(); },
+          style: {
+            display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px', borderRadius: 999, border: 'none',
+            background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, ...font,
+          },
+        }, checkSvg, saving ? 'A guardar…' : 'Salvar alteração'))),
     // Warning banner
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, padding: '14px 20px', background: '#f6f6f6', borderRadius: 12, width: '100%', boxSizing: 'border-box' as const } },
       infoSvg,
@@ -281,25 +429,54 @@ export default function EncomendaEditScreen() {
       React.createElement('div', { style: { flex: '0 0 280px', display: 'flex', flexDirection: 'column' as const, gap: 12 } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
           React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#767676', ...font } }, 'Resumo da viagem •'),
-          React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, '#123456')),
-        React.createElement('span', { style: { display: 'inline-block', padding: '4px 14px', borderRadius: 999, background: '#a8c6ef', color: '#102d57', fontSize: 13, fontWeight: 700, alignSelf: 'flex-start', ...font } }, 'Agendado'),
+          React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, resumoId)),
+        React.createElement('span', { style: { display: 'inline-block', padding: '4px 14px', borderRadius: 999, background: '#a8c6ef', color: '#102d57', fontSize: 13, fontWeight: 700, alignSelf: 'flex-start', ...font } }, statusLabel),
         React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Rota'),
-        React.createElement('div', { style: { height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } }, 'SP → RJ'))),
+        React.createElement('div', { style: { height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } },
+          `${origem.slice(0, 28)}… → ${destino.slice(0, 28)}…`))),
     // Trajeto
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
       React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#767676', ...font } }, 'Trajeto de origem e destino'),
-      readField('Origem', 'Av. Paulista, 1578 - São Paulo, SP'),
-      readField('Destino', 'Av. Atlântica, 1702 - Rio de Janeiro, RJ')),
+      editField('Origem', origem, setOrigem),
+      editField('Destino', destino, setDestino),
+      detail.kind === 'shipment'
+        ? React.createElement(React.Fragment, null,
+          editField('Destinatário', recipientName, setRecipientName),
+          editField('Telefone destinatário', recipientPhone, setRecipientPhone),
+          editField('Email destinatário', recipientEmail, setRecipientEmail),
+          editField('Tamanho (package_size)', packageSize, setPackageSize),
+          editField('Quando (when_option)', whenOption, setWhenOption))
+        : React.createElement(React.Fragment, null,
+          editField('Nome completo (remetente)', fullName, setFullName),
+          editField('Telefone de contacto', contactPhone, setContactPhone),
+          editField('Nome do receptor', receiverName, setReceiverName),
+          editField('Número de malas', bagsCount, setBagsCount),
+          editField('Quando (when_option)', whenOption, setWhenOption)),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+        React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Observações / instruções'),
+        React.createElement('textarea', {
+          value: instructions,
+          onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => setInstructions(e.target.value),
+          rows: 3,
+          style: {
+            borderRadius: 8, background: '#f1f1f1', border: 'none', padding: 12, fontSize: 14, color: '#0d0d0d', width: '100%', boxSizing: 'border-box' as const, resize: 'vertical' as const, ...font,
+          },
+        }))),
     // Horário agendado
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
-      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Horário agendado para início'),
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Horário agendado (scheduled_at)'),
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px' } },
         calendarSvg,
-        React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, '05 de setembro-2025, 15:30')),
+        React.createElement('input', {
+          type: 'datetime-local',
+          value: scheduledLocal,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setScheduledLocal(e.target.value),
+          style: { flex: 1, border: 'none', background: 'transparent', fontSize: 14, color: '#0d0d0d', ...font },
+        })),
       React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Alterar o horário de início atualizará automaticamente o tempo estimado de chegada.')),
     // Motoristas disponíveis (Figma 1283-34111)
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, paddingBottom: 32, borderBottom: '1px solid #e2e2e2' } },
-      motoristas.length === 0
+      motoristasComRota.length === 0
         ? React.createElement(React.Fragment, null,
           React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } },
             'Motoristas disponíveis ',
@@ -313,20 +490,22 @@ export default function EncomendaEditScreen() {
               }))))
         : React.createElement(React.Fragment, null,
           React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.3, ...font } }, 'Motoristas disponíveis'),
+          motoristaNote,
           React.createElement('div', { style: { border: '1px solid #e2e2e2', borderRadius: 12, padding: 24, width: '100%', boxSizing: 'border-box' as const } },
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
               React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
-                React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Selecione a data'),
+                React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Data de referência'),
                 React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 0, height: 44, borderRadius: 8, background: '#f1f1f1', paddingLeft: 16, overflow: 'hidden' } },
                   calendarSvgLg,
-                  React.createElement('span', { style: { fontSize: 16, fontWeight: 400, color: '#3a3a3a', paddingLeft: 16, paddingRight: 16, flex: 1, lineHeight: 1.5, ...font } }, '05 de setembro-2025'))),
+                  React.createElement('span', { style: { fontSize: 16, fontWeight: 400, color: '#3a3a3a', paddingLeft: 16, paddingRight: 16, flex: 1, lineHeight: 1.5, ...font } }, dataLinha))),
               React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
-                motoristas.slice(0, 2).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id)))),
+                motoristasComRota.slice(0, 2).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id)))),
               React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
-                motoristas.slice(2, 4).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id)))))),
+                motoristasComRota.slice(2, 4).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id)))))),
           React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', width: '100%', marginTop: 0 } },
             React.createElement('button', {
               type: 'button',
+              onClick: () => setToast('A escolha do motorista não é gravada nesta versão (sem coluna no banco).'),
               style: {
                 display: 'flex',
                 alignItems: 'center',
@@ -346,6 +525,14 @@ export default function EncomendaEditScreen() {
     // Encomendas
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
       React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Encomendas'),
-      encomendaCard('Médio', 'R$ 80,00', 'Fernanda Lima', 'Ana Silva', 'Rua das Acácias, 45', 'Av. Central, 890', 'Frágil - manusear com cuidado'),
-      encomendaCard('Pequeno', 'R$ 45,00', 'Pedro Pontes', 'Maria Silva', 'Rua das Acácias, 45', 'Av. Central, 890', 'Frágil - manusear com cuidado')));
+      encomendaPreview)),
+    toast
+      ? React.createElement('div', {
+        style: {
+          position: 'fixed' as const, bottom: 32, left: '50%', transform: 'translateX(-50%)',
+          background: '#0d0d0d', color: '#fff', padding: '12px 20px', borderRadius: 12, fontSize: 14, zIndex: 9999, ...font,
+        },
+      }, toast)
+      : null,
+  );
 }

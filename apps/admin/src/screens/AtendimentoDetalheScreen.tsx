@@ -51,14 +51,14 @@ export default function AtendimentoDetalheScreen() {
     if (!isSupabaseConfigured || !conversationId) return;
     let cancelled = false;
     // Fetch conversation
-    supabase.from('conversations').select('status, participant_name').eq('id', conversationId).single()
-      .then(({ data }) => { if (!cancelled && data) setConvStatus(data.status); });
+    (supabase as any).from('conversations').select('status, participant_name').eq('id', conversationId).single()
+      .then(({ data }: { data: { status: 'active' | 'closed' } | null }) => { if (!cancelled && data) setConvStatus(data.status); });
     // Fetch messages
-    supabase.from('messages').select('id, sender_id, content, created_at')
+    (supabase as any).from('messages').select('id, sender_id, content, created_at')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: true })
       .limit(50)
-      .then(({ data }) => {
+      .then(({ data }: { data: any[] | null }) => {
         if (cancelled || !data) return;
         setRealMessages(data.map((m: any) => ({
           sender: m.sender_id?.slice(0, 8) || 'User',
@@ -71,7 +71,7 @@ export default function AtendimentoDetalheScreen() {
 
   const handleCloseConversation = useCallback(async () => {
     if (!isSupabaseConfigured || !conversationId) return;
-    await (supabase.from('conversations') as any).update({ status: 'closed', updated_at: new Date().toISOString() }).eq('id', conversationId);
+    await (supabase as any).from('conversations').update({ status: 'closed', updated_at: new Date().toISOString() }).eq('id', conversationId);
     setConvStatus('closed');
   }, [conversationId]);
 

@@ -125,7 +125,6 @@ export default function MotoristasScreen() {
   const [tblEmbarque, setTblEmbarque] = useState('');
   const [tblChegada, setTblChegada] = useState('');
   const [tblDataInicial, setTblDataInicial] = useState('01 de setembro');
-  const [tblFiltroStatus, setTblFiltroStatus] = useState('Em andamento');
   const [tblFiltroCategoria, setTblFiltroCategoria] = useState('Take Me');
 
   // ── Real data from Supabase ─────────────────────────────────────────
@@ -155,7 +154,35 @@ export default function MotoristasScreen() {
 
   const topDrivers = motoristasData.slice(0, 5).map((m) => ({ viagens: m.totalViagens, nome: m.nome }));
 
-  const tableRowsAll: MotoristaRow[] = tableData.map((t) => ({
+  const filteredTableData = tableData.filter((t) => {
+    if (search) {
+      const q = search.toLowerCase();
+      if (!t.nome.toLowerCase().includes(q) && !t.origem.toLowerCase().includes(q) && !t.destino.toLowerCase().includes(q)) return false;
+    }
+    const nn = tblNomeMotorista.trim().toLowerCase();
+    if (nn && !t.nome.toLowerCase().includes(nn)) return false;
+    const oo = tblOrigem.trim().toLowerCase();
+    if (oo && !t.origem.toLowerCase().includes(oo)) return false;
+    const dd = tblDestino.trim().toLowerCase();
+    if (dd && !t.destino.toLowerCase().includes(dd)) return false;
+    const he = tblEmbarque.trim().toLowerCase();
+    if (he && !t.embarque.toLowerCase().includes(he)) return false;
+    const hc = tblChegada.trim().toLowerCase();
+    if (hc && !t.chegada.toLowerCase().includes(hc)) return false;
+    const vid = tblIdViagem.trim().toLowerCase().replace(/#/g, '');
+    if (vid && !t.tripId.toLowerCase().includes(vid) && !t.data.toLowerCase().includes(vid)) return false;
+    const mid = tblIdMotorista.trim().toLowerCase().replace(/#/g, '');
+    if (mid && !t.driverId.toLowerCase().includes(mid) && !t.nome.toLowerCase().includes(mid)) return false;
+
+    if (filtroStatus === 'em_andamento' && t.status !== 'Em andamento') return false;
+    if (filtroStatus === 'agendadas' && t.status !== 'Agendado') return false;
+    if (filtroStatus === 'concluidas' && t.status !== 'Concluído') return false;
+    if (filtroStatus === 'canceladas' && t.status !== 'Cancelado') return false;
+
+    return true;
+  });
+
+  const tableRows: MotoristaRow[] = filteredTableData.map((t) => ({
     nome: t.nome,
     origem: t.origem,
     destino: t.destino,
@@ -164,20 +191,6 @@ export default function MotoristasScreen() {
     chegada: t.chegada,
     status: t.status,
   }));
-
-  // Apply filters
-  const tableRows = tableRowsAll.filter((row) => {
-    if (search) {
-      const q = search.toLowerCase();
-      if (!row.nome.toLowerCase().includes(q) && !row.origem.toLowerCase().includes(q) && !row.destino.toLowerCase().includes(q)) return false;
-    }
-    const statusLower = row.status.toLowerCase();
-    if (filtroStatus === 'em_andamento' && !statusLower.includes('andamento') && !statusLower.includes('active')) return false;
-    if (filtroStatus === 'agendadas' && !statusLower.includes('agendad')) return false;
-    if (filtroStatus === 'concluidas' && !statusLower.includes('conclu') && !statusLower.includes('completed')) return false;
-    if (filtroStatus === 'canceladas' && !statusLower.includes('cancel')) return false;
-    return true;
-  });
 
   // ── Search row ────────────────────────────────────────────────────────
   const searchRow = React.createElement('div', {
@@ -213,6 +226,7 @@ export default function MotoristasScreen() {
     React.createElement('button', {
       type: 'button',
       onClick: () => setFiltroOpen(true),
+      'data-testid': 'motoristas-open-page-filter',
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#f1f1f1', border: 'none', borderRadius: 999,
@@ -277,6 +291,7 @@ export default function MotoristasScreen() {
     React.createElement('button', {
       type: 'button',
       onClick: () => setTblFilterOpen(true),
+      'data-testid': 'motoristas-open-table-filter',
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 40, padding: '8px 24px',
         background: '#fff', border: 'none', borderRadius: 999, cursor: 'pointer',
@@ -298,12 +313,14 @@ export default function MotoristasScreen() {
 
   // Table rows
   const tableRowEls = tableRows.map((row, idx) => {
+    const trip = filteredTableData[idx];
     const initial = row.nome.charAt(0);
     const avatarBg = avatarColors[initial] || '#999';
     const st = statusStyles[row.status] || { bg: '#eee', color: '#333' };
 
     return React.createElement('div', {
-      key: idx,
+      key: trip?.tripId ?? idx,
+      'data-testid': 'motorista-table-row',
       style: {
         display: 'flex', height: 64, alignItems: 'center', padding: '0 16px',
         borderBottom: '1px solid #d9d9d9', background: '#f6f6f6',
@@ -344,10 +361,11 @@ export default function MotoristasScreen() {
         style: { flex: tableCols[7].flex, minWidth: tableCols[7].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
       },
         React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar', onClick: () => {
-          const t = tableData[idx];
-          if (t) navigate(`/motoristas/${t.driverId || '0'}/viagem/${idx}`, { state: { trip: { passageiro: t.nome, origem: t.origem, destino: t.destino, data: t.data, embarque: t.embarque, chegada: t.chegada, status: t.status === 'Concluído' ? 'concluído' : t.status === 'Cancelado' ? 'cancelado' : t.status === 'Agendado' ? 'agendado' : 'em_andamento' } } });
+          const t = trip;
+          if (!t) return;
+          navigate(`/motoristas/${t.driverId}/viagem/${t.tripId}`, { state: { trip: { passageiro: t.nome, origem: t.origem, destino: t.destino, data: t.data, embarque: t.embarque, chegada: t.chegada, status: t.status === 'Concluído' ? 'concluído' : t.status === 'Cancelado' ? 'cancelado' : t.status === 'Agendado' ? 'agendado' : 'em_andamento' } } });
         } }, eyeActionSvg),
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => navigate(`/motoristas/${tableData[idx]?.driverId || ''}/editar`) }, pencilActionSvg)));
+        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => { if (trip) navigate(`/motoristas/${trip.driverId}/editar`); } }, pencilActionSvg)));
   });
 
   const tableSection = React.createElement('div', {
@@ -505,6 +523,9 @@ export default function MotoristasScreen() {
       background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
     },
     onClick: () => setFiltroOpen(false),
+    role: 'dialog' as const,
+    'aria-modal': true,
+    'aria-labelledby': 'motoristas-filtro-pagina-titulo',
   },
     React.createElement('div', {
       style: {
@@ -516,7 +537,7 @@ export default function MotoristasScreen() {
     },
       // Header
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro'),
+        React.createElement('h2', { id: 'motoristas-filtro-pagina-titulo', style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro'),
         React.createElement('button', {
           type: 'button', onClick: () => setFiltroOpen(false),
           style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
@@ -584,6 +605,9 @@ export default function MotoristasScreen() {
   const tblFilterModal = tblFilterOpen ? React.createElement('div', {
     style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
     onClick: () => setTblFilterOpen(false),
+    role: 'dialog' as const,
+    'aria-modal': true,
+    'aria-labelledby': 'motoristas-filtro-tabela-titulo',
   },
     React.createElement('div', {
       style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 480, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 16, boxShadow: '0 20px 60px rgba(0,0,0,.15)', maxHeight: '90vh', overflowY: 'auto' as const },
@@ -591,7 +615,7 @@ export default function MotoristasScreen() {
     },
       // Header
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro da tabela'),
+        React.createElement('h2', { id: 'motoristas-filtro-tabela-titulo', style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro da tabela'),
         React.createElement('button', {
           type: 'button', onClick: () => setTblFilterOpen(false),
           style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
@@ -615,8 +639,13 @@ export default function MotoristasScreen() {
       // Status da viagem
       React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Status da viagem'),
       React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
-        ...['Em andamento', 'Agendadas', 'Concluídas', 'Canceladas'].map((s) =>
-          tblChip(s, tblFiltroStatus === s, () => setTblFiltroStatus(s)))),
+        ...([
+          { id: 'em_andamento' as const, label: 'Em andamento' },
+          { id: 'agendadas' as const, label: 'Agendadas' },
+          { id: 'concluidas' as const, label: 'Concluídas' },
+          { id: 'canceladas' as const, label: 'Canceladas' },
+        ].map((o) =>
+          tblChip(o.label, filtroStatus === o.id, () => setFiltroStatus(o.id))))),
       // Categoria
       React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Categoria'),
       React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },

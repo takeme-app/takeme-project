@@ -46,11 +46,12 @@ export default function MotoristaEditScreen() {
     if (!id) return;
     let cancelled = false;
 
+    const db = supabase as any;
     Promise.all([
       supabase.from('profiles').select('*').eq('id', id).single(),
-      supabase.from('worker_profiles').select('*').eq('id', id).single(),
-      supabase.from('vehicles').select('*').eq('worker_id', id).order('created_at', { ascending: false }),
-      supabase.from('worker_routes').select('*').eq('worker_id', id).order('created_at', { ascending: false }),
+      db.from('worker_profiles').select('*').eq('id', id).single(),
+      db.from('vehicles').select('*').eq('worker_id', id).order('created_at', { ascending: false }),
+      db.from('worker_routes').select('*').eq('worker_id', id).order('created_at', { ascending: false }),
       supabase.from('scheduled_trips').select('*').eq('driver_id', id).order('departure_at', { ascending: false }).limit(20),
     ]).then(([pRes, wRes, vRes, rRes, tRes]) => {
       if (cancelled) return;
