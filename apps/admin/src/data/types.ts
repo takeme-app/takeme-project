@@ -112,6 +112,11 @@ export interface BookingDetailForAdmin {
   listItem: ViagemListItem;
   originFull: string;
   destinationFull: string;
+  /** Coordenadas salvas na reserva (`bookings`), quando existirem. */
+  originLat: number | null;
+  originLng: number | null;
+  destinationLat: number | null;
+  destinationLng: number | null;
   amountCents: number;
   passengerCount: number;
   bagsCount: number;

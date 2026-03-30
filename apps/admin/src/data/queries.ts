@@ -318,7 +318,8 @@ export function findPreparadorEncomendaIdBySlug(slug: string, preparadores: Prep
 export async function fetchBookingDetailForAdmin(bookingOrTripId: string): Promise<BookingDetailForAdmin | null> {
   if (!isSupabaseConfigured) return null;
   const sel = `
-    id, user_id, origin_address, destination_address, status, created_at,
+    id, user_id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng,
+    status, created_at,
     passenger_count, bags_count, passenger_data, amount_cents, scheduled_trip_id,
     scheduled_trips ( id, departure_at, arrival_at, driver_id, status, seats_available, bags_available, trunk_occupancy_pct )
   `;
@@ -359,10 +360,19 @@ export async function fetchBookingDetailForAdmin(bookingOrTripId: string): Promi
 
   const listItem = listItemFromBookingJoin(row, profileMap, driverNameMap, driverPartnerMap);
   const trunk = Number(trip?.trunk_occupancy_pct);
+  const numOrNull = (v: unknown): number | null => {
+    if (v == null) return null;
+    const n = typeof v === 'number' ? v : parseFloat(String(v));
+    return Number.isFinite(n) ? n : null;
+  };
   return {
     listItem,
     originFull: row.origin_address ?? '',
     destinationFull: row.destination_address ?? '',
+    originLat: numOrNull(row.origin_lat),
+    originLng: numOrNull(row.origin_lng),
+    destinationLat: numOrNull(row.destination_lat),
+    destinationLng: numOrNull(row.destination_lng),
     amountCents: Number(row.amount_cents ?? 0),
     passengerCount: Number(row.passenger_count ?? 1),
     bagsCount: Number(row.bags_count ?? 0),
@@ -443,6 +453,10 @@ export async function updateBookingFields(
   fields: {
     origin_address?: string;
     destination_address?: string;
+    origin_lat?: number;
+    origin_lng?: number;
+    destination_lat?: number;
+    destination_lng?: number;
     passenger_count?: number;
     bags_count?: number;
     passenger_data?: unknown;
@@ -451,21 +465,30 @@ export async function updateBookingFields(
   if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
   const { data: existing, error: fe } = await supabase
     .from('bookings')
-    .select('origin_lat, origin_lng, destination_lat, destination_lng')
+    .select('id')
     .eq('id', bookingId)
     .maybeSingle();
   if (fe || !existing) return { error: fe?.message || 'Reserva não encontrada' };
-  const ex = existing as any;
   const upd: any = { updated_at: new Date().toISOString() };
-  if (fields.origin_address != null) {
-    upd.origin_address = fields.origin_address;
-    upd.origin_lat = ex.origin_lat ?? 0;
-    upd.origin_lng = ex.origin_lng ?? 0;
+  if (fields.origin_address != null) upd.origin_address = fields.origin_address;
+  if (fields.destination_address != null) upd.destination_address = fields.destination_address;
+  if (
+    fields.origin_lat != null &&
+    fields.origin_lng != null &&
+    Number.isFinite(fields.origin_lat) &&
+    Number.isFinite(fields.origin_lng)
+  ) {
+    upd.origin_lat = fields.origin_lat;
+    upd.origin_lng = fields.origin_lng;
   }
-  if (fields.destination_address != null) {
-    upd.destination_address = fields.destination_address;
-    upd.destination_lat = ex.destination_lat ?? 0;
-    upd.destination_lng = ex.destination_lng ?? 0;
+  if (
+    fields.destination_lat != null &&
+    fields.destination_lng != null &&
+    Number.isFinite(fields.destination_lat) &&
+    Number.isFinite(fields.destination_lng)
+  ) {
+    upd.destination_lat = fields.destination_lat;
+    upd.destination_lng = fields.destination_lng;
   }
   if (fields.passenger_count != null) upd.passenger_count = fields.passenger_count;
   if (fields.bags_count != null) upd.bags_count = fields.bags_count;
