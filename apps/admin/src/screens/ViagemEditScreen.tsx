@@ -139,6 +139,23 @@ export default function ViagemEditScreen() {
   const [addPassageiroData, setAddPassageiroData] = useState({ id: '', nome: '', contato: '', mala: '', valor: '' });
   const [malaDropdownOpen, setMalaDropdownOpen] = useState(false);
 
+  // Busca de passageiro no banco
+  const [passengerSearch, setPassengerSearch] = useState('');
+  const [passengerResults, setPassengerResults] = useState<any[]>([]);
+  const [passengerSearching, setPassengerSearching] = useState(false);
+  const searchPassengers = useCallback(async (query: string) => {
+    if (query.trim().length < 2) { setPassengerResults([]); return; }
+    setPassengerSearching(true);
+    const q = query.trim().toLowerCase();
+    const { data } = await (supabase as any)
+      .from('profiles')
+      .select('id, full_name, cpf, phone')
+      .or(`full_name.ilike.%${q}%,cpf.ilike.%${q}%,phone.ilike.%${q}%`)
+      .limit(8);
+    setPassengerResults(data || []);
+    setPassengerSearching(false);
+  }, []);
+
   // ── Mapa e Veículo ───────────────────────────────────────────────────
   const [tripCoords, setTripCoords] = useTripMapCoords(detail);
   const [vehicleInfo, setVehicleInfo] = useState<{ model: string; plate: string; year: number | null } | null>(null);
@@ -582,9 +599,22 @@ export default function ViagemEditScreen() {
           React.createElement('button', { type: 'button', style: { width: 40, height: 40, borderRadius: '50%', background: '#ffefc2', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' } }, headsetSvg),
           React.createElement('button', {
             type: 'button',
-            disabled: true,
-            title: 'Alteração de passageiros não disponível nesta versão',
-            style: { width: 40, height: 40, borderRadius: '50%', background: 'transparent', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'not-allowed', opacity: 0.35 },
+            title: 'Remover passageiro',
+            onClick: async () => {
+              if (!detail?.listItem?.bookingId) return;
+              const currentData = detail.passengerData || [];
+              const newData = currentData.filter((_: any, i: number) => i !== idx);
+              const { error } = await updateBookingFields(detail.listItem.bookingId, {
+                passenger_data: newData,
+                passenger_count: newData.length,
+              } as any);
+              if (error) { showToast(error); } else {
+                showToast('Passageiro removido');
+                const d2 = await fetchBookingDetailForAdmin(detail.listItem.bookingId);
+                if (d2) setDetail(d2);
+              }
+            },
+            style: { width: 40, height: 40, borderRadius: '50%', background: 'transparent', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' },
           }, trashSvg))),
       React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', paddingTop: 4 } },
         React.createElement('div', null,
@@ -600,9 +630,8 @@ export default function ViagemEditScreen() {
       ...passageiros.map(passageiroCard),
       React.createElement('button', {
         type: 'button',
-        disabled: true,
-        title: 'Adicionar passageiro não está ligado ao banco nesta tela',
-        style: { background: 'none', border: 'none', cursor: 'not-allowed', fontSize: 14, fontWeight: 600, color: '#767676', textDecoration: 'underline', alignSelf: 'flex-start', padding: 0, ...font },
+        onClick: () => { setAddPassageiroOpen(true); setAddPassageiroData({ id: '', nome: '', contato: '', mala: '', valor: '' }); },
+        style: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#0d0d0d', textDecoration: 'underline', alignSelf: 'flex-start', padding: 0, ...font },
       }, '+ Adicionar')));
 
   const encomendas: { name: string; recolha: string; entrega: string; destinatario: string; observacoes: string; valor: string }[] = [];
@@ -633,9 +662,8 @@ export default function ViagemEditScreen() {
         : React.createElement(React.Fragment, null, ...encomendas.map(encomendaCard)),
       React.createElement('button', {
         type: 'button',
-        disabled: true,
-        title: 'Sem fluxo de criação ligado ao banco nesta tela',
-        style: { background: 'none', border: 'none', cursor: 'not-allowed', fontSize: 14, fontWeight: 600, color: '#767676', textDecoration: 'underline', alignSelf: 'flex-start', padding: 0, ...font },
+        onClick: () => { setAddEncomendaOpen(true); setAddEncomendaData({ cliente: '', recolha: '', entrega: '', destinatario: '', contato: '', valor: '', observacoes: '' }); },
+        style: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#0d0d0d', textDecoration: 'underline', alignSelf: 'flex-start', padding: 0, ...font },
       }, '+ Adicionar')));
 
   const passageirosEncomendasRow = React.createElement('div', { style: { display: 'flex', gap: 24, width: '100%' } },
@@ -856,7 +884,26 @@ export default function ViagemEditScreen() {
           // Buttons
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, marginTop: 24, flexShrink: 0 } },
             React.createElement('button', {
-              type: 'button', onClick: () => { setAddEncomendaOpen(false); showToast('Encomenda adicionada com sucesso'); },
+              type: 'button', onClick: async () => {
+                if (!addEncomendaData.destinatario.trim()) { showToast('Preencha ao menos o destinatário.'); return; }
+                const { error } = await (supabase as any).from('shipments').insert({
+                  user_id: detail?.userId || detail?.listItem?.bookingId,
+                  origin_address: addEncomendaData.recolha.trim() || origem,
+                  destination_address: addEncomendaData.entrega.trim() || destino,
+                  recipient_name: addEncomendaData.destinatario.trim(),
+                  recipient_phone: addEncomendaData.contato.trim() || null,
+                  instructions: addEncomendaData.observacoes.trim() || null,
+                  amount_cents: Math.round(parseFloat(addEncomendaData.valor.replace(/[^\d.,]/g, '').replace(',', '.') || '0') * 100),
+                  package_size: 'medio',
+                  status: 'confirmed',
+                  when_option: 'now',
+                  payment_method: 'pix',
+                });
+                if (error) { showToast(error.message || 'Erro ao criar encomenda'); } else {
+                  showToast('Encomenda adicionada com sucesso');
+                }
+                setAddEncomendaOpen(false);
+              },
               style: { width: '100%', height: 48, background: '#0d0d0d', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 16, fontWeight: 500, color: '#fff', ...font },
             }, 'Adicionar encomenda'),
             React.createElement('button', {
@@ -937,7 +984,43 @@ export default function ViagemEditScreen() {
               React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))),
           // Fields
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, flex: 1 } },
-            addPassageiroField('ID do passageiro', 'id', 'ID do passageiro'),
+            // Busca de passageiro existente
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%', position: 'relative' as const } },
+              React.createElement('label', { style: labelStyle }, 'Buscar passageiro'),
+              React.createElement('input', {
+                type: 'text', value: passengerSearch, placeholder: 'CPF, nome ou telefone...',
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+                  setPassengerSearch(e.target.value);
+                  searchPassengers(e.target.value);
+                },
+                style: { ...inputStyle, color: passengerSearch ? '#3a3a3a' : '#767676' },
+              }),
+              passengerResults.length > 0 ? React.createElement('div', {
+                style: {
+                  position: 'absolute' as const, top: 76, left: 0, right: 0, background: '#fff',
+                  borderRadius: 12, boxShadow: '0 8px 24px rgba(0,0,0,0.15)', zIndex: 50,
+                  maxHeight: 200, overflowY: 'auto' as const,
+                },
+              },
+                ...passengerResults.map((p: any) =>
+                  React.createElement('button', {
+                    key: p.id, type: 'button',
+                    onClick: () => {
+                      setAddPassageiroData(prev => ({ ...prev, id: p.cpf || p.id, nome: p.full_name || '' }));
+                      setPassengerSearch('');
+                      setPassengerResults([]);
+                    },
+                    style: {
+                      display: 'flex', flexDirection: 'column' as const, gap: 2, width: '100%',
+                      padding: '10px 16px', background: 'none', border: 'none', borderBottom: '1px solid #e2e2e2',
+                      cursor: 'pointer', textAlign: 'left' as const, ...font,
+                    },
+                  },
+                    React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d' } }, p.full_name || 'Sem nome'),
+                    React.createElement('span', { style: { fontSize: 12, color: '#767676' } },
+                      [p.cpf && `CPF: ${p.cpf}`, p.phone && `Tel: ${p.phone}`].filter(Boolean).join(' • '))))) : null,
+              passengerSearching ? React.createElement('span', { style: { fontSize: 12, color: '#767676', marginTop: 4, ...font } }, 'Buscando...') : null),
+            addPassageiroField('ID do passageiro', 'id', 'CPF ou ID do passageiro'),
             addPassageiroField('Nome completo', 'nome', 'Nome do passageiro'),
             addPassageiroField('Contato', 'contato', 'Ex: (21) 98888-7777'),
             malaDropdown,
@@ -945,7 +1028,23 @@ export default function ViagemEditScreen() {
           // Buttons
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, marginTop: 24, flexShrink: 0 } },
             React.createElement('button', {
-              type: 'button', onClick: () => { setAddPassageiroOpen(false); setMalaDropdownOpen(false); showToast('Passageiro adicionado com sucesso'); },
+              type: 'button', onClick: async () => {
+                if (!detail?.listItem?.bookingId || !addPassageiroData.nome.trim()) { showToast('Preencha ao menos o nome.'); return; }
+                const currentData = detail.passengerData || [];
+                const bags = addPassageiroData.mala === 'Grande' ? 3 : addPassageiroData.mala === 'Média' ? 2 : 1;
+                const newPassenger = { name: addPassageiroData.nome.trim(), cpf: addPassageiroData.id.trim() || '', bags };
+                const newData = [...currentData, newPassenger];
+                const { error } = await updateBookingFields(detail.listItem.bookingId, {
+                  passenger_data: newData,
+                  passenger_count: newData.length,
+                } as any);
+                if (error) { showToast(error); } else {
+                  showToast('Passageiro adicionado com sucesso');
+                  const d2 = await fetchBookingDetailForAdmin(detail.listItem.bookingId);
+                  if (d2) setDetail(d2);
+                }
+                setAddPassageiroOpen(false); setMalaDropdownOpen(false);
+              },
               style: { width: '100%', height: 48, background: '#0d0d0d', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 16, fontWeight: 500, color: '#fff', ...font },
             }, 'Adicionar passageiro'),
             React.createElement('button', {
