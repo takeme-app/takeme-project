@@ -169,102 +169,85 @@ export default function HomeScreen() {
       React.createElement('span', { style: { ...webStyles.statCardChange, ...(s.positive ? webStyles.statCardChangePos : webStyles.statCardChangeNeg) } }, s.change),
       React.createElement('span', { style: webStyles.statCardValue, 'data-testid': s.testId }, s.value)));
 
-  // Revenue category filter
-  const [revenueCategory, setRevenueCategory] = useState<'todos' | 'passageiros' | 'encomendas'>('todos');
-
-  const [chartHover, setChartHover] = useState<string | null>(null);
-
-  const chartTitle = isEncomendas ? 'Distribuição de valores das encomendas concluídas' : 'Distribuição de receitas';
-  const chartDesc = 'Valores consolidados de payouts no projeto (não filtrados pelo modal; os cartões acima refletem o filtro aplicado).';
-
-  // Selecionar dados do gráfico com base no filtro de categoria de receita
-  const activeChart = revenueCategory === 'passageiros' ? pagByCategory?.chartPassageiros
-    : revenueCategory === 'encomendas' ? pagByCategory?.chartEncomendas
-    : pagByCategory?.chartAll;
-
-  const grossCents = activeChart?.grossCents ?? 0;
-  const adminCents = activeChart?.adminCents ?? 0;
-  const workerCents = activeChart?.workerCents ?? 0;
-  const otherCents = Math.max(0, grossCents - adminCents - workerCents);
-  const totalCents = grossCents || 1;
-  const adminPct = Math.round((adminCents / totalCents) * 100);
-  const workerPct = Math.round((workerCents / totalCents) * 100);
-  const otherPct = 100 - adminPct - workerPct;
-  const adminDeg = Math.round((adminPct / 100) * 360);
-  const workerDeg = adminDeg + Math.round((workerPct / 100) * 360);
   const fmtBRL = (c: number) => `R$ ${(c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
-  const revCatChip = (label: string, value: 'todos' | 'passageiros' | 'encomendas') => {
-    const active = revenueCategory === value;
-    return React.createElement('button', {
-      key: value,
-      type: 'button',
-      onClick: () => setRevenueCategory(value),
-      style: {
-        padding: '6px 16px', borderRadius: 999, border: active ? 'none' : '1px solid #e2e2e2',
-        background: active ? '#0d0d0d' : '#fff', color: active ? '#fff' : '#545454',
-        fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
+  const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
+
+  // ── Gráfico conforme Figma: 3 fatias (Taxas, Valor líquido, Despesas) ──
+  // Taxas = admin_amount (gold), Valor líquido = worker_amount (gray), Despesas = surcharges/outros (black)
+  const buildChartSection = (
+    title: string,
+    desc: string,
+    chart: { grossCents: number; adminCents: number; workerCents: number } | undefined,
+  ) => {
+    const gross = chart?.grossCents ?? 0;
+    const taxas = chart?.adminCents ?? 0; // plataforma
+    const liquido = chart?.workerCents ?? 0; // motoristas/preparadores
+    const despesas = Math.max(0, gross - taxas - liquido); // surcharges e outros
+    const total = gross || 1;
+    const taxasPct = Math.round((taxas / total) * 100);
+    const liquidoPct = Math.round((liquido / total) * 100);
+    const despesasPct = 100 - taxasPct - liquidoPct;
+    const taxasDeg = Math.round((taxasPct / 100) * 360);
+    const liquidoDeg = taxasDeg + Math.round((liquidoPct / 100) * 360);
+
+    // Legenda dot style (20px circle como no Figma)
+    const dot = (bg: string): React.CSSProperties => ({ width: 20, height: 20, borderRadius: 999, background: bg, flexShrink: 0 });
+    const legendText: React.CSSProperties = { fontSize: 16, fontWeight: 400, color: '#0d0d0d', ...font };
+
+    return React.createElement('div', {
+      style: { display: 'flex', flexDirection: 'column' as const, gap: 40, padding: 24, borderRadius: 16, background: '#f6f6f6', width: '100%', boxSizing: 'border-box' as const },
+    },
+      // Header
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+        React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font } }, title),
+        React.createElement('p', { style: { fontSize: 14, fontWeight: 400, color: '#767676', margin: 0, lineHeight: 1.5, ...font } }, desc)),
+      // Chart + Legend row
+      React.createElement('div', {
+        style: { display: 'flex', gap: 56, alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' as const, width: '100%' },
       },
-    }, label);
+        // Pizza chart (260px como no Figma, com labels dentro)
+        React.createElement('div', { style: { width: 260, height: 260, position: 'relative' as const, flexShrink: 0 } },
+          React.createElement('div', {
+            style: {
+              width: 260, height: 260, borderRadius: '50%',
+              background: `conic-gradient(#cba04b 0deg ${taxasDeg}deg, #545454 ${taxasDeg}deg ${liquidoDeg}deg, #0d0d0d ${liquidoDeg}deg 360deg)`,
+            },
+          }),
+          // Labels dentro do gráfico
+          React.createElement('span', {
+            style: { position: 'absolute' as const, top: '32%', left: '45%', fontSize: 12, color: '#0d0d0d', ...font, pointerEvents: 'none' as const },
+          }, `${taxasPct}% Taxas`),
+          React.createElement('span', {
+            style: { position: 'absolute' as const, top: '58%', left: '15%', fontSize: 12, color: '#fff', ...font, pointerEvents: 'none' as const },
+          }, `${liquidoPct}% Valor líquido`),
+          React.createElement('span', {
+            style: { position: 'absolute' as const, top: '68%', left: '50%', fontSize: 12, color: '#fff', ...font, pointerEvents: 'none' as const },
+          }, `${despesasPct}% Despesas`)),
+        // Legenda (direita)
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 40 } },
+          React.createElement('p', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } },
+            `Faturamento total: ${fmtBRL(gross)}`),
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, maxWidth: 340 } },
+            React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+              React.createElement('div', { style: dot('#cba04b') }),
+              React.createElement('span', { style: legendText }, `${taxasPct}% Taxas`)),
+            React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+              React.createElement('div', { style: dot('#545454') }),
+              React.createElement('span', { style: legendText }, `${liquidoPct}% Valor líquido`)),
+            React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+              React.createElement('div', { style: dot('#0d0d0d') }),
+              React.createElement('span', { style: legendText }, `${despesasPct}% Despesas`))))));
   };
-  const revCatRow = React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
-    revCatChip('Todos', 'todos'), revCatChip('Passageiros', 'passageiros'), revCatChip('Encomendas', 'encomendas'));
 
-  const chartCardEl = React.createElement('div', { style: webStyles.chartCard },
-    React.createElement('h3', { style: webStyles.chartCardTitle }, chartTitle),
-    React.createElement('p', { style: webStyles.chartCardDesc }, chartDesc),
-    revCatRow,
-    React.createElement('div', { style: webStyles.chartRow },
-      // Gráfico de pizza interativo com hover
-      React.createElement('div', { style: { width: 200, height: 200, flexShrink: 0, position: 'relative' as const } },
-        React.createElement('div', { style: { width: 200, height: 200, borderRadius: '50%', background: `conic-gradient(#cba04b 0deg ${adminDeg}deg, #545454 ${adminDeg}deg ${workerDeg}deg, #0d0d0d ${workerDeg}deg 360deg)`, overflow: 'hidden' } },
-          // Áreas clicáveis invisíveis para hover (3 setores)
-          React.createElement('div', {
-            onMouseEnter: () => setChartHover('admin'),
-            onMouseLeave: () => setChartHover(null),
-            style: { position: 'absolute' as const, top: 0, left: 0, right: 0, bottom: '50%', cursor: 'pointer' },
-          }),
-          React.createElement('div', {
-            onMouseEnter: () => setChartHover('workers'),
-            onMouseLeave: () => setChartHover(null),
-            style: { position: 'absolute' as const, top: '50%', left: 0, right: '50%', bottom: 0, cursor: 'pointer' },
-          }),
-          React.createElement('div', {
-            onMouseEnter: () => setChartHover('outros'),
-            onMouseLeave: () => setChartHover(null),
-            style: { position: 'absolute' as const, top: '50%', left: '50%', right: 0, bottom: 0, cursor: 'pointer' },
-          })),
-        // Tooltip flutuante
-        chartHover ? React.createElement('div', {
-          style: {
-            position: 'absolute' as const, top: -40, left: '50%', transform: 'translateX(-50%)',
-            background: '#0d0d0d', color: '#fff', padding: '8px 14px', borderRadius: 8,
-            fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' as const, zIndex: 10,
-            fontFamily: 'Inter, sans-serif', boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-          },
-        }, chartHover === 'admin' ? `Admin: ${adminPct}% (${fmtBRL(adminCents)})`
-          : chartHover === 'workers' ? `Workers: ${workerPct}% (${fmtBRL(workerCents)})`
-          : `Outros: ${otherPct}% (${fmtBRL(otherCents)})`) : null),
-      React.createElement('div', { style: webStyles.chartLegend },
-        React.createElement('p', { style: webStyles.chartTotal }, `Faturamento total: ${fmtBRL(grossCents)}`),
-        React.createElement('div', {
-          style: { ...webStyles.chartLegendItem, cursor: 'pointer', opacity: chartHover === 'admin' ? 1 : chartHover ? 0.5 : 1, transition: 'opacity 0.2s' },
-          onMouseEnter: () => setChartHover('admin'), onMouseLeave: () => setChartHover(null),
-        },
-          React.createElement('span', { style: { ...webStyles.chartLegendDot, background: '#cba04b' } }),
-          React.createElement('span', { style: webStyles.chartLegendText }, `${adminPct}% Admin (taxas) — ${fmtBRL(adminCents)}`)),
-        React.createElement('div', {
-          style: { ...webStyles.chartLegendItem, cursor: 'pointer', opacity: chartHover === 'workers' ? 1 : chartHover ? 0.5 : 1, transition: 'opacity 0.2s' },
-          onMouseEnter: () => setChartHover('workers'), onMouseLeave: () => setChartHover(null),
-        },
-          React.createElement('span', { style: { ...webStyles.chartLegendDot, background: '#545454' } }),
-          React.createElement('span', { style: webStyles.chartLegendText }, `${workerPct}% Motoristas/Preparadores — ${fmtBRL(workerCents)}`)),
-        React.createElement('div', {
-          style: { ...webStyles.chartLegendItem, cursor: 'pointer', opacity: chartHover === 'outros' ? 1 : chartHover ? 0.5 : 1, transition: 'opacity 0.2s' },
-          onMouseEnter: () => setChartHover('outros'), onMouseLeave: () => setChartHover(null),
-        },
-          React.createElement('span', { style: { ...webStyles.chartLegendDot, background: '#0d0d0d' } }),
-          React.createElement('span', { style: webStyles.chartLegendText }, `${otherPct}% Outros — ${fmtBRL(otherCents)}`)))));
-
+  const chartCardEl = isEncomendas
+    ? buildChartSection(
+        'Distribuição de valores das encomendas concluídas',
+        'Distribuição de valores das encomendas concluídas no período filtrado.',
+        pagByCategory?.chartEncomendas)
+    : buildChartSection(
+        'Distribuição de receitas',
+        'A receita total inclui todas as viagens concluídas no período filtrado.',
+        pagByCategory?.chartPassageiros);
 
   // Modal Filtro Início (Figma 756-19720)
   const statusOptions: { id: 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'; label: string }[] = [
