@@ -23,6 +23,8 @@ import {
   GoogleMapsMap,
   MapMarker,
   MapPolyline,
+  MapZoomControls,
+  type GoogleMapsMapRef,
   regionFromLatLngPoints,
   isValidGlobeCoordinate,
   sanitizeMapRegion,
@@ -387,6 +389,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const [startLoading, setStartLoading] = useState(false);
 
   const [expenseDoc, setExpenseDoc] = useState<DocumentAsset | null>(null);
+  const tripDetailMapRef = useRef<GoogleMapsMapRef>(null);
 
   // ── Data loading ─────────────────────────────────────────────────────────────
 
@@ -639,31 +642,39 @@ export function TripDetailScreen({ route, navigation }: Props) {
               <Text style={styles.mapLoadingText}>Carregando mapa…</Text>
             </View>
           ) : (
-            <GoogleMapsMap initialRegion={initialRegion} style={styles.map} scrollEnabled={false}>
-              {routeCoords.length >= 2 && (
-                <MapPolyline coordinates={routeCoords} strokeColor={GOLD} strokeWidth={4} />
-              )}
+            <>
+              <GoogleMapsMap
+                ref={tripDetailMapRef}
+                initialRegion={initialRegion}
+                style={styles.map}
+                scrollEnabled={false}
+              >
+                {routeCoords.length >= 2 && (
+                  <MapPolyline coordinates={routeCoords} strokeColor={GOLD} strokeWidth={4} />
+                )}
 
-              {tripOriginLL && (
-                <MapMarker
-                  id="origin"
-                  coordinate={tripOriginLL}
-                  anchor={{ x: 0.5, y: 0.5 }}
-                >
-                  <View style={styles.markerOrigin} />
-                </MapMarker>
-              )}
+                {tripOriginLL && (
+                  <MapMarker
+                    id="origin"
+                    coordinate={tripOriginLL}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                  >
+                    <View style={styles.markerOrigin} />
+                  </MapMarker>
+                )}
 
-              {tripDestLL && (
-                <MapMarker
-                  id="destination"
-                  coordinate={tripDestLL}
-                  anchor={{ x: 0.5, y: 0.5 }}
-                >
-                  <View style={styles.markerDest} />
-                </MapMarker>
-              )}
-            </GoogleMapsMap>
+                {tripDestLL && (
+                  <MapMarker
+                    id="destination"
+                    coordinate={tripDestLL}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                  >
+                    <View style={styles.markerDest} />
+                  </MapMarker>
+                )}
+              </GoogleMapsMap>
+              <MapZoomControls mapRef={tripDetailMapRef} style={styles.tripDetailMapZoom} />
+            </>
           )}
         </View>
 
@@ -975,7 +986,12 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 17, fontWeight: '700', color: '#111827' },
 
   // Map
-  mapContainer: { height: 220, backgroundColor: '#E5E7EB' },
+  mapContainer: { position: 'relative', height: 220, backgroundColor: '#E5E7EB' },
+  tripDetailMapZoom: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+  },
   mapLoading: {
     flex: 1,
     alignItems: 'center',

@@ -150,29 +150,33 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
     if (!priceCents || priceCents <= 0) { showAlert('Atenção', 'Informe um valor válido.'); return; }
 
     const apiKey = getGoogleMapsApiKey();
+    let oGeo = originPlace;
+    let dGeo = destinationPlace;
+
+    if (!oGeo || !dGeo) {
+      if (!apiKey) {
+        showAlert(
+          'Google Maps',
+          'Não encontramos a chave da API nesta sessão. Confirme EXPO_PUBLIC_GOOGLE_MAPS_API_KEY no .env na raiz, rode npm run prestart (ou copie o .env para apps/motorista) e reinicie o Metro com --clear. Em build nativo, altere a chave e rode prebuild de novo.',
+        );
+        return;
+      }
+    }
+
     setSaving(true);
     try {
-      let oGeo = originPlace;
-      let dGeo = destinationPlace;
       if (!oGeo || !dGeo) {
-        if (!apiKey) {
-          showAlert(
-            'Mapas',
-            'Escolha origem e destino na lista de sugestões ou configure EXPO_PUBLIC_GOOGLE_MAPS_API_KEY.',
-          );
-          return;
-        }
         if (!oGeo) {
           oGeo = await googleForwardGeocode(`${origin.trim()}, Brasil`, apiKey);
           if (!oGeo) {
-            showAlert('Origem', 'Não encontramos esse local. Toque em uma sugestão da lista ou refine o texto.');
+            showAlert('Origem', 'Não encontramos esse local. Escolha uma sugestão da lista ou ajuste o texto.');
             return;
           }
         }
         if (!dGeo) {
           dGeo = await googleForwardGeocode(`${destination.trim()}, Brasil`, apiKey);
           if (!dGeo) {
-            showAlert('Destino', 'Não encontramos esse local. Toque em uma sugestão da lista ou refine o texto.');
+            showAlert('Destino', 'Não encontramos esse local. Escolha uma sugestão da lista ou ajuste o texto.');
             return;
           }
         }
@@ -285,6 +289,7 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
                 }}
                 onSelectPlace={setOriginPlace}
                 hasResolvedCoords={originPlace != null}
+                suppressKeyWarning
               />
 
               <GooglePlacesAutocomplete
@@ -297,6 +302,7 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
                 }}
                 onSelectPlace={setDestinationPlace}
                 hasResolvedCoords={destinationPlace != null}
+                suppressKeyWarning
               />
 
               <Text style={styles.fieldLabel}>Valor por pessoa</Text>

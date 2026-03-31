@@ -1,4 +1,5 @@
 export { GoogleMapsMap, type GoogleMapsMapRef } from './GoogleMapsMap';
+export { MapZoomControls } from './MapZoomControls';
 export { MapMarker } from './MapMarker';
 export { MapPolyline } from './MapPolyline';
 export type { MapCameraSetConfig, MapCameraStop } from './mapCameraTypes';

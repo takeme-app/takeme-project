@@ -21,6 +21,8 @@ type Props = {
   onChangeText: (text: string) => void;
   onSelectPlace: (place: GoogleGeocodeResult) => void;
   hasResolvedCoords: boolean;
+  /** Quando o ecrã já mostra aviso global (ex.: modal de rotas), esconde o texto duplicado. */
+  suppressKeyWarning?: boolean;
 };
 
 /** Autocomplete de endereço via Google Geocoding API. */
@@ -31,6 +33,7 @@ export function GooglePlacesAutocomplete({
   onChangeText,
   onSelectPlace,
   hasResolvedCoords,
+  suppressKeyWarning = false,
 }: Props) {
   const [suggestions, setSuggestions] = useState<GoogleGeocodeResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -125,7 +128,7 @@ export function GooglePlacesAutocomplete({
           ))}
         </ScrollView>
       ) : null}
-      {!apiKey ? (
+      {!apiKey && !suppressKeyWarning ? (
         <Text style={styles.warn}>Configure EXPO_PUBLIC_GOOGLE_MAPS_API_KEY para buscar endereços.</Text>
       ) : null}
     </View>
