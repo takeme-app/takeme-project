@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -19,8 +19,12 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
-import { MapboxMap, MapboxMarker, MapboxPolyline } from '../components/mapbox';
-import type { MapRegion } from '../components/mapbox';
+import { GoogleMapsMap as MapboxMap } from '../components/googleMaps/GoogleMapsMap';
+import { MapMarker as MapboxMarker } from '../components/googleMaps/MapMarker';
+import { MapPolyline as MapboxPolyline } from '../components/googleMaps/MapPolyline';
+import { MapZoomControls } from '../components/googleMaps/MapZoomControls';
+import type { GoogleMapsMapRef } from '../components/googleMaps/GoogleMapsMap';
+import type { MapRegion } from '../components/googleMaps/geometry';
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Home'>,
@@ -86,6 +90,7 @@ function shortAddr(addr: string): string {
 }
 
 export function HomeScreen({ navigation }: Props) {
+  const homeMapRef = useRef<GoogleMapsMapRef>(null);
   const [loading, setLoading] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
   const [cnhOk, setCnhOk] = useState(false);
@@ -172,11 +177,12 @@ export function HomeScreen({ navigation }: Props) {
       };
       const { data: bkgs } = await supabase
         .from('bookings')
-        .select('passenger_count, bags_count')
+        .select('passenger_count')
         .eq('scheduled_trip_id', t.id)
         .in('status', ['confirmed', 'paid']);
       const passengerCount = ((bkgs ?? []) as { passenger_count?: number }[]).reduce((s, b) => s + (b.passenger_count ?? 0), 0);
-      const bagsCount = ((bkgs ?? []) as { bags_count?: number }[]).reduce((s, b) => s + (b.bags_count ?? 0), 0);
+      // Nesta versão o Home não expõe encomendas — mantém campo para reativar depois
+      const bagsCount = 0;
       setActiveTrip({
         ...t,
         passengerCount,
@@ -318,6 +324,7 @@ export function HomeScreen({ navigation }: Props) {
                   <Text style={styles.metaValue}>{activeTrip.passengerCount}</Text>
                 </View>
               </View>
+              {/* Encomendas — desativado nesta versão (reativar metaItem + bags_count na query)
               <View style={styles.metaItem}>
                 <MaterialIcons name="inventory-2" size={18} color="#6B7280" />
                 <View>
@@ -325,6 +332,7 @@ export function HomeScreen({ navigation }: Props) {
                   <Text style={styles.metaValue}>{activeTrip.bagsCount}</Text>
                 </View>
               </View>
+              */}
             </View>
 
             {/* Bagageiro */}
@@ -359,6 +367,7 @@ export function HomeScreen({ navigation }: Props) {
             {/* Mapa da viagem ativa — largura total (evita w=0 com alignItems:center no ScrollView) */}
             <View style={styles.mapWrap}>
               <MapboxMap
+                ref={homeMapRef}
                 key={`home-map-${activeTrip.id}`}
                 style={styles.mapInner}
                 initialRegion={mapRegionForTrip(activeTrip)}
@@ -393,6 +402,7 @@ export function HomeScreen({ navigation }: Props) {
                   />
                 )}
               </MapboxMap>
+              <MapZoomControls mapRef={homeMapRef} style={styles.homeMapZoom} />
             </View>
 
             <TouchableOpacity style={styles.mapBtn} activeOpacity={0.85} onPress={() => activeTrip && navigation.navigate('ActiveTrip', { tripId: activeTrip.id })}>
@@ -530,6 +540,7 @@ const styles = StyleSheet.create({
   metaLabel: { fontSize: 12, color: '#9CA3AF' },
   metaValue: { fontSize: 16, fontWeight: '700', color: '#111827' },
   mapWrap: {
+    position: 'relative',
     height: 200,
     width: '100%',
     alignSelf: 'stretch',
@@ -537,6 +548,11 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     overflow: 'hidden',
     backgroundColor: '#E5E7EB',
+  },
+  homeMapZoom: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
   },
   mapInner: {
     width: '100%',

@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { MaterialIcons } from '@expo/vector-icons';
+import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { CommonActions } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -21,6 +21,7 @@ import {
   GoogleMapsMap,
   MapMarker,
   MapPolyline,
+  MapZoomControls,
   type GoogleMapsMapRef,
   type LatLng,
   type MapRegion,
@@ -119,6 +120,19 @@ function remainingStopLatLngs(stops: Stop[], fromIndex: number): LatLng[] {
   return dedupeConsecutivePoints(pts);
 }
 
+/** Paradas de passageiro restantes (mapa sem rota de encomenda). */
+function remainingPassengerStopLatLngs(stops: Stop[], fromIndex: number): LatLng[] {
+  const pts: LatLng[] = [];
+  for (let i = Math.max(0, fromIndex); i < stops.length; i++) {
+    const s = stops[i];
+    if (!isPassenger(s)) continue;
+    if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
+      pts.push({ latitude: s.lat, longitude: s.lng });
+    }
+  }
+  return dedupeConsecutivePoints(pts);
+}
+
 function appendTripDestinationIfNeeded(pts: LatLng[], tdest: LatLng | undefined): LatLng[] {
   if (!tdest) return pts;
   const last = pts[pts.length - 1];
@@ -130,6 +144,23 @@ function appendTripDestinationIfNeeded(pts: LatLng[], tdest: LatLng | undefined)
     return pts;
   }
   return dedupeConsecutivePoints([...pts, tdest]);
+}
+
+/** Próximo índice de embarque de passageiro a partir da posição atual do roteiro. */
+function nextPassengerPickupIndex(stops: Stop[], fromIndex: number): number {
+  for (let i = fromIndex; i < stops.length; i++) {
+    if (stops[i].stopType === 'passenger_pickup') return i;
+  }
+  return -1;
+}
+
+/** Próximo desembarque de passageiro (fase “rota”) com coordenadas válidas. */
+function nextPassengerDropoffCoord(stops: Stop[], fromIndex: number): LatLng | undefined {
+  for (let i = fromIndex; i < stops.length; i++) {
+    if (stops[i].stopType !== 'passenger_dropoff') continue;
+    return pickStopCoord(stops[i].lat, stops[i].lng);
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -312,10 +343,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     };
   }, [currentStop, trip]);
 
-  /** Último ponto válido do roteiro (entrega final / última parada) ou destino da viagem. */
+  /** Último ponto do mapa só para passageiro (sem encomenda) ou destino da viagem. */
   const finalDestination = useMemo((): LatLng | null => {
     for (let i = stops.length - 1; i >= 0; i--) {
       const s = stops[i];
+      if (!isPassenger(s)) continue;
       if (
         s.lat != null &&
         s.lng != null &&
@@ -348,11 +380,37 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     [trip?.destination_lat, trip?.destination_lng, trip?.id],
   );
 
+  /** Fluxo de pré-rotas (só passageiro): 1) buscar cliente 2) rota até destino. Encomendas não entram neste indicador. */
+  const hasPassengerPickupStops = useMemo(
+    () => stops.some((s) => s.stopType === 'passenger_pickup'),
+    [stops],
+  );
+  const inPickupPreRoute = useMemo(() => {
+    if (!hasPassengerPickupStops) return false;
+    return stops.some((s, i) => i >= currentStopIndex && s.stopType === 'passenger_pickup');
+  }, [stops, currentStopIndex, hasPassengerPickupStops]);
   /**
-   * Rota dourada: sempre a partir da posição atual do motorista quando houver GPS —
-   * depois as paradas restantes em ordem (ex.: embarcar passageiro primeiro),
-   * e por fim o destino da viagem agendada se não for duplicado.
-   * Sem GPS, mostra só o trecho restante entre paradas (sem fingir sair da origem da oferta).
+   * Barra dourada no card: sempre 1/3…3/3 enquanto o sheet está visível.
+   * (Antes ficava vazio quando não havia embarques e totalStops === 0.)
+   */
+  const miniRouteProgressStep = useMemo((): 1 | 2 | 3 => {
+    if (!trip) return 1;
+    if (hasPassengerPickupStops) {
+      if (inPickupPreRoute) return 1;
+      if (totalStops > 0 && currentStopIndex >= totalStops - 1) return 3;
+      return 2;
+    }
+    if (totalStops === 0) return 2;
+    if (totalStops === 1) return 1;
+    const t = currentStopIndex / (totalStops - 1);
+    if (t < 1 / 3) return 1;
+    if (t < 2 / 3) return 2;
+    return 3;
+  }, [trip, hasPassengerPickupStops, inPickupPreRoute, totalStops, currentStopIndex]);
+
+  /**
+   * Rota dourada (só passageiro / cliente — sem trechos de encomenda no mapa).
+   * A partir do GPS quando houver; depois paradas de passageiro restantes; destino da viagem se preciso.
    */
   useEffect(() => {
     if (loading) return;
@@ -360,7 +418,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     const routeOpts = { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() };
 
     const tdest = trip ? pickStopCoord(trip.destination_lat, trip.destination_lng) : undefined;
-    const remaining = remainingStopLatLngs(stops, currentStopIndex);
+    const remaining = remainingPassengerStopLatLngs(stops, currentStopIndex);
     let waypointChain = appendTripDestinationIfNeeded(remaining, tdest);
     if (stops.length === 0 && tdest) {
       waypointChain = [tdest];
@@ -428,7 +486,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     tripDestLL,
   ]);
 
-  // Trecho escuro: GPS → parada atual (ou → destino final se não houver paradas com coordenada).
+  // Trecho escuro: GPS → próxima parada de passageiro (na encomenda atual, salta para o cliente no mapa).
   useEffect(() => {
     if (
       !driverPosition ||
@@ -438,16 +496,32 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     }
 
     const dest: LatLng | null = (() => {
-      if (stops.length > 0) {
-        const stop = stops[currentStopIndex];
-        if (
-          stop?.lat != null &&
-          stop?.lng != null &&
-          isValidGlobeCoordinate(stop.lat, stop.lng)
-        ) {
-          return { latitude: stop.lat, longitude: stop.lng };
+      if (stops.length === 0) return finalDestination;
+      const stop = stops[currentStopIndex];
+      if (stop && isPackage(stop)) {
+        for (let i = currentStopIndex + 1; i < stops.length; i++) {
+          const s = stops[i];
+          if (!isPassenger(s)) continue;
+          if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
+            return { latitude: s.lat, longitude: s.lng };
+          }
         }
-        return null;
+        return finalDestination;
+      }
+      if (
+        stop?.lat != null &&
+        stop?.lng != null &&
+        isValidGlobeCoordinate(stop.lat, stop.lng) &&
+        isPassenger(stop)
+      ) {
+        return { latitude: stop.lat, longitude: stop.lng };
+      }
+      for (let i = currentStopIndex + 1; i < stops.length; i++) {
+        const s = stops[i];
+        if (!isPassenger(s)) continue;
+        if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
+          return { latitude: s.lat, longitude: s.lng };
+        }
       }
       return finalDestination;
     })();
@@ -480,13 +554,14 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     }
     const pts: LatLng[] = [];
     for (const s of stops) {
+      if (!isPassenger(s)) continue;
       if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
         pts.push({ latitude: s.lat, longitude: s.lng });
       }
     }
     if (tripDestLL) pts.push(tripDestLL);
     return regionFromLatLngPoints(pts);
-  }, [trip?.id, tripOriginLL?.latitude, tripOriginLL?.longitude]);
+  }, [trip?.id, tripOriginLL?.latitude, tripOriginLL?.longitude, stops]);
 
   /** Sem GPS e sem nenhuma coordenada de viagem/paradas → não confundir com mapa “real” centrado no BR. */
   const activeTripMapReady = useMemo(() => {
@@ -499,6 +574,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     if (tripOriginLL || tripDestLL) return true;
     return stops.some(
       (s) =>
+        isPassenger(s) &&
         s.lat != null &&
         s.lng != null &&
         isValidGlobeCoordinate(s.lat, s.lng),
@@ -663,8 +739,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           />
         )}
 
-        {/* Stop markers */}
+        {/* Marcadores só de passageiro (encomendas não aparecem no mapa nesta versão) */}
         {stops.map((stop, idx) => {
+          if (!isPassenger(stop)) return null;
           const hasCoord =
             stop.lat != null &&
             stop.lng != null &&
@@ -685,10 +762,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               <View style={[styles.mapMarker, { backgroundColor: markerBg }]}>
                 {isCompleted ? (
                   <MaterialIcons name="check" size={18} color="#fff" />
-                ) : isPassenger(stop) ? (
-                  <MaterialIcons name="person" size={18} color="#fff" />
                 ) : (
-                  <MaterialIcons name="inventory-2" size={18} color="#fff" />
+                  <MaterialIcons name="person" size={18} color="#fff" />
                 )}
               </View>
             </MapMarker>
@@ -749,42 +824,82 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             <MaterialIcons name="my-location" size={22} color={DARK} />
           </TouchableOpacity>
 
-        {(stops.length > 0 || tripDestLL) && (
+          <MapZoomControls mapRef={mapRef} style={styles.mapZoomStack} />
+
+        {trip && (tripDestLL || hasPassengerPickupStops || stops.some(isPassenger)) && (
           <View style={styles.sidebar}>
-            {/* Linha conectora atrás dos botões */}
-            {(stops.length + (tripDestLL ? 1 : 0)) > 1 && (
-              <View style={styles.sidebarLine} pointerEvents="none" />
-            )}
+            <View style={styles.sidebarLine} pointerEvents="none" />
 
-            {stops.map((stop, idx) => {
-              const isCompleted = idx < currentStopIndex;
-              const isCurrent = idx === currentStopIndex;
-              const btnBg = isCompleted ? '#9CA3AF' : isCurrent ? STOP_TYPE_COLORS[stop.stopType] : '#E5E7EB';
-              const iconColor = isCompleted || isCurrent ? '#fff' : '#6B7280';
-              return (
-                <TouchableOpacity
-                  key={stop.id}
-                  style={[styles.sidebarBtn, { backgroundColor: btnBg }]}
-                  onPress={() => { if (idx === currentStopIndex) openDetail(); }}
-                  activeOpacity={0.8}
-                >
-                  {isCompleted ? (
-                    <MaterialIcons name="check" size={18} color={iconColor} />
-                  ) : isPassenger(stop) ? (
-                    <MaterialIcons name="person" size={18} color={iconColor} />
-                  ) : (
-                    <MaterialIcons name="inventory-2" size={18} color={iconColor} />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
+            {/* Etapa 1: buscar cliente (embarques) — sem ícone de encomenda */}
+            <TouchableOpacity
+              style={[
+                styles.sidebarBtn,
+                inPickupPreRoute && styles.sidebarBtnPhaseCurrent,
+                !inPickupPreRoute && styles.sidebarBtnPhaseDone,
+              ]}
+              onPress={() => {
+                const idx = nextPassengerPickupIndex(stops, currentStopIndex);
+                if (idx >= 0) {
+                  const ll = pickStopCoord(stops[idx].lat, stops[idx].lng);
+                  if (ll) {
+                    mapRef.current?.animateToRegion(
+                      { ...ll, latitudeDelta: 0.012, longitudeDelta: 0.012 },
+                      400,
+                    );
+                  }
+                  if (idx === currentStopIndex) openDetail();
+                  return;
+                }
+                if (tripOriginLL) {
+                  mapRef.current?.animateToRegion(
+                    { ...tripOriginLL, latitudeDelta: 0.012, longitudeDelta: 0.012 },
+                    400,
+                  );
+                }
+              }}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Buscar cliente"
+            >
+              {!inPickupPreRoute ? (
+                <MaterialCommunityIcons name="human-handsup" size={20} color="#fff" />
+              ) : (
+                <MaterialIcons name="person" size={18} color="#fff" />
+              )}
+            </TouchableOpacity>
 
-            {/* Ponto final: destino da viagem */}
-            {tripDestLL && (
-              <View style={[styles.sidebarBtn, styles.sidebarDestBtn]}>
-                <MaterialIcons name="flag" size={18} color={DARK} />
-              </View>
-            )}
+            {/* Etapa 2: rota da viagem até o destino */}
+            <TouchableOpacity
+              style={[
+                styles.sidebarBtn,
+                allDone && styles.sidebarBtnPhaseDone,
+                !allDone && inPickupPreRoute && styles.sidebarBtnPhaseUpcoming,
+                !allDone && !inPickupPreRoute && styles.sidebarBtnPhaseCurrent,
+              ]}
+              onPress={() => {
+                const drop = nextPassengerDropoffCoord(stops, currentStopIndex);
+                const target = drop ?? tripDestLL;
+                if (target) {
+                  mapRef.current?.animateToRegion(
+                    { ...target, latitudeDelta: 0.012, longitudeDelta: 0.012 },
+                    400,
+                  );
+                }
+              }}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Rota da viagem"
+            >
+              {allDone ? (
+                <MaterialCommunityIcons name="human-handsup" size={20} color="#fff" />
+              ) : (
+                <MaterialIcons
+                  name="flag"
+                  size={18}
+                  color={inPickupPreRoute && !allDone ? '#6B7280' : '#fff'}
+                />
+              )}
+            </TouchableOpacity>
           </View>
         )}
 
@@ -796,15 +911,28 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               disabled={!currentStop}
             >
               <View style={styles.miniSheetTopRow}>
-                <View style={[
-                  styles.stopTypePill,
-                  isPassenger(cardInfo) && styles.stopTypePillTrip,
-                ]}>
+                <View
+                  style={[
+                    styles.stopTypePill,
+                    inPickupPreRoute &&
+                      !(currentStop && isPackage(currentStop)) &&
+                      styles.stopTypePillBuscarCliente,
+                    !inPickupPreRoute && isPassenger(cardInfo) && styles.stopTypePillTrip,
+                  ]}
+                >
                   <View style={styles.stopTypeDot} />
                   <Text style={styles.stopTypePillText}>
-                    {isPassenger(cardInfo)
-                      ? 'Viagem'
-                      : isPickup(cardInfo) ? 'Coleta' : 'Entrega'}
+                    {currentStop && isPackage(currentStop)
+                      ? isPickup(currentStop)
+                        ? 'Coleta'
+                        : 'Entrega'
+                      : inPickupPreRoute
+                        ? 'Buscar cliente'
+                        : isPassenger(cardInfo)
+                          ? 'Viagem'
+                          : isPickup(cardInfo)
+                            ? 'Coleta'
+                            : 'Entrega'}
                   </Text>
                 </View>
                 {etaSeconds !== null && (
@@ -832,19 +960,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 </View>
               )}
 
-              {totalStops > 0 && (
-                <View style={styles.miniSheetFooter}>
-                  <View style={styles.progressBarContainer}>
-                    <View
-                      style={[
-                        styles.progressBarFill,
-                        { width: `${((currentStopIndex + 1) / Math.max(totalStops, 1)) * 100}%` as any },
-                      ]}
-                    />
-                  </View>
-                  <Text style={styles.progressText}>{currentStopIndex + 1}/{totalStops}</Text>
+              <View style={styles.miniSheetFooter}>
+                <View style={styles.progressBarContainer}>
+                  <View
+                    style={[
+                      styles.progressBarFill,
+                      { width: `${(miniRouteProgressStep / 3) * 100}%` as `${number}%` },
+                    ]}
+                  />
                 </View>
-              )}
+                <Text style={styles.progressTextGold}>{miniRouteProgressStep}/3</Text>
+              </View>
 
               {currentStop ? (
                 <Text style={styles.miniSheetTapHint}>Toque para ver detalhes da parada</Text>
@@ -925,7 +1051,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               <MaterialIcons name="close" size={20} color={DARK} />
             </TouchableOpacity>
             <Text style={styles.detailTitle}>
-              {currentStop && isPickup(currentStop) ? 'Detalhes da coleta' : `Entrega para ${currentStop?.label ?? ''}`}
+              {currentStop && isPickup(currentStop)
+                ? currentStop.stopType === 'passenger_pickup'
+                  ? 'Buscar passageiro'
+                  : 'Detalhes da coleta'
+                : `Entrega para ${currentStop?.label ?? ''}`}
             </Text>
             <TouchableOpacity style={styles.iconCircleBtn} activeOpacity={0.7}>
               <MaterialIcons name="phone" size={20} color={DARK} />
@@ -943,7 +1073,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 <Text style={styles.detailName}>{currentStop?.label}</Text>
                 <View style={styles.detailMetaRow}>
                 </View>
-                <Text style={styles.detailLabel}>Endereço da coleta</Text>
+                <Text style={styles.detailLabel}>
+                  {currentStop?.stopType === 'passenger_pickup' ? 'Ponto de embarque' : 'Endereço da coleta'}
+                </Text>
                 <Text style={styles.detailValue}>{currentStop?.address}</Text>
                 {currentStop?.notes ? (
                   <>
@@ -956,10 +1088,14 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmPickupVisible(true); }}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.actionBtnText}>Iniciar coleta</Text>
+                  <Text style={styles.actionBtnText}>
+                    {currentStop?.stopType === 'passenger_pickup' ? 'Confirmar embarque' : 'Iniciar coleta'}
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.cancelBtn} activeOpacity={0.7}>
-                  <Text style={styles.cancelBtnText}>Cancelar coleta</Text>
+                  <Text style={styles.cancelBtnText}>
+                    {currentStop?.stopType === 'passenger_pickup' ? 'Cancelar' : 'Cancelar coleta'}
+                  </Text>
                 </TouchableOpacity>
               </>
             ) : (
@@ -1005,11 +1141,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       >
         <View style={styles.centeredModalOverlay}>
           <View style={styles.centeredModal}>
-            <Text style={styles.centeredModalTitle}>Confirmar coleta</Text>
+            <Text style={styles.centeredModalTitle}>
+              {currentStop?.stopType === 'passenger_pickup' ? 'Confirmar embarque' : 'Confirmar coleta'}
+            </Text>
             <Text style={styles.centeredModalSubtitle}>
               {currentStop && isPackage(currentStop)
                 ? 'Insira o código de 4 dígitos informado pelo remetente.'
-                : 'Confirme a coleta do passageiro.'}
+                : currentStop?.stopType === 'passenger_pickup'
+                  ? 'Confirme que o passageiro embarcou no veículo.'
+                  : 'Confirme a coleta do passageiro.'}
             </Text>
             {currentStop && isPackage(currentStop) && (
               <>
@@ -1028,7 +1168,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             )}
             {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
             <TouchableOpacity style={styles.actionBtn} onPress={handleConfirmStop} activeOpacity={0.85}>
-              <Text style={styles.actionBtnText}>Confirmar coleta</Text>
+              <Text style={styles.actionBtnText}>
+                {currentStop?.stopType === 'passenger_pickup' ? 'Confirmar embarque' : 'Confirmar coleta'}
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.cancelBtn}
@@ -1315,6 +1457,12 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 5,
   },
+  /** + / − logo abaixo do botão “minha localização” (66 + 46 + 6) */
+  mapZoomStack: {
+    position: 'absolute',
+    left: 14,
+    top: 118,
+  },
 
   // ── Right sidebar ─────────────────────────────────────────
   sidebar: {
@@ -1345,8 +1493,14 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 4,
   },
-  sidebarDestBtn: {
-    backgroundColor: '#F3F4F6',
+  sidebarBtnPhaseCurrent: {
+    backgroundColor: GOLD,
+  },
+  sidebarBtnPhaseDone: {
+    backgroundColor: '#9CA3AF',
+  },
+  sidebarBtnPhaseUpcoming: {
+    backgroundColor: '#E5E7EB',
     borderWidth: 1.5,
     borderColor: '#D1D5DB',
   },
@@ -1393,6 +1547,9 @@ const styles = StyleSheet.create({
   },
   stopTypePillTrip: {
     backgroundColor: '#FEF3C7',
+  },
+  stopTypePillBuscarCliente: {
+    backgroundColor: '#F5F0E6',
   },
   stopTypeDot: {
     width: 7,
@@ -1468,6 +1625,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#374151',
+  },
+  progressTextGold: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: GOLD,
+    minWidth: 36,
+    textAlign: 'right',
   },
   miniSheetTapHint: {
     fontSize: 12,

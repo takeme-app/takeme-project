@@ -16,6 +16,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { storageUrl } from '../utils/storageUrl';
+import { useAppAlert } from '../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PendingRequests'>;
 
@@ -27,6 +28,8 @@ type RequestType = 'passageiro';
 type RequestItem = {
   id: string;
   type: RequestType;
+  /** Viagem agendada — necessário para regenerar paradas ao aceitar */
+  scheduledTripId: string;
   origin: string;
   destination: string;
   timeLabel: string;
@@ -72,7 +75,72 @@ function shortAddr(addr: string): string {
   return parts[0]?.trim() ?? addr;
 }
 
+async function fetchPassengerRequestsForDriver(driverId: string): Promise<RequestItem[]> {
+  const all: RequestItem[] = [];
+
+  const { data: bookings } = await supabase
+    .from('bookings')
+    .select('id, origin_address, destination_address, passenger_count, amount_cents, created_at, scheduled_trip_id, user_id, scheduled_trips!inner(departure_at, driver_id)')
+    .eq('status', 'pending')
+    .limit(50);
+
+  const bookingsFiltered = ((bookings ?? []) as unknown[]).filter((b: unknown) => {
+    const row = b as { scheduled_trips?: { driver_id?: string } };
+    return row.scheduled_trips?.driver_id === driverId;
+  });
+
+  for (const b of bookingsFiltered) {
+    const row = b as {
+      id: string;
+      scheduled_trip_id: string;
+      origin_address: string;
+      destination_address: string;
+      passenger_count: number;
+      amount_cents: number;
+      created_at: string;
+      user_id: string;
+      scheduled_trips: { departure_at: string };
+    };
+    const { data: prof } = await supabase
+      .from('profiles').select('full_name, avatar_url, rating').eq('id', row.user_id).maybeSingle();
+    const p = prof as { full_name?: string; avatar_url?: string; rating?: number } | null;
+    const depAt = row.scheduled_trips?.departure_at;
+    const expiresAt = depAt
+      ? new Date(new Date(depAt).getTime() - 30 * 60 * 1000)
+      : null;
+    all.push({
+      id: `booking_${row.id}`,
+      rawId: row.id,
+      scheduledTripId: row.scheduled_trip_id,
+      type: 'passageiro',
+      origin: row.origin_address,
+      destination: row.destination_address,
+      timeLabel: formatTime(depAt ?? null),
+      priceCents: row.amount_cents,
+      userName: p?.full_name ?? 'Passageiro',
+      userAvatar: p?.avatar_url ?? null,
+      userRating: p?.rating != null ? Number(p.rating) : null,
+      minutesAgo: minutesAgo(row.created_at),
+      extraLabel: `${row.passenger_count} ${row.passenger_count === 1 ? 'passageiro' : 'passageiros'}`,
+      expiresAt,
+    });
+  }
+
+  all.sort((a, b) => a.minutesAgo - b.minutesAgo);
+  return all;
+}
+
+async function regenerateTripStopsAfterAccept(scheduledTripId: string): Promise<void> {
+  const tryRpc = async (params: Record<string, string>) => {
+    const { error } = await supabase.rpc('generate_trip_stops', params as never);
+    return !error;
+  };
+  if (await tryRpc({ trip_id: scheduledTripId })) return;
+  await tryRpc({ p_trip_id: scheduledTripId });
+}
+
 export function PendingRequestsScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [items, setItems] = useState<RequestItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [actioning, setActioning] = useState<string | null>(null);
@@ -83,73 +151,57 @@ export function PendingRequestsScreen({ navigation }: Props) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user?.id) { setItems([]); setLoading(false); return; }
     setUserId(user.id);
-
-    const all: RequestItem[] = [];
-
-    // --- Passageiro: bookings pendentes nas viagens do motorista ---
-    const { data: bookings } = await supabase
-      .from('bookings')
-      .select('id, origin_address, destination_address, passenger_count, amount_cents, created_at, scheduled_trip_id, user_id, scheduled_trips!inner(departure_at, driver_id)')
-      .eq('status', 'pending')
-      .limit(50);
-
-    const bookingsFiltered = ((bookings ?? []) as unknown[]).filter((b: unknown) => {
-      const row = b as { scheduled_trips?: { driver_id?: string } };
-      return row.scheduled_trips?.driver_id === user.id;
-    });
-
-    for (const b of bookingsFiltered) {
-      const row = b as {
-        id: string; origin_address: string; destination_address: string;
-        passenger_count: number; amount_cents: number; created_at: string;
-        user_id: string;
-        scheduled_trips: { departure_at: string };
-      };
-      const { data: prof } = await supabase
-        .from('profiles').select('full_name, avatar_url, rating').eq('id', row.user_id).maybeSingle();
-      const p = prof as { full_name?: string; avatar_url?: string; rating?: number } | null;
-      const depAt = row.scheduled_trips?.departure_at;
-      const expiresAt = depAt
-        ? new Date(new Date(depAt).getTime() - 30 * 60 * 1000)
-        : null;
-      all.push({
-        id: `booking_${row.id}`,
-        rawId: row.id,
-        type: 'passageiro',
-        origin: row.origin_address,
-        destination: row.destination_address,
-        timeLabel: formatTime(depAt ?? null),
-        priceCents: row.amount_cents,
-        userName: p?.full_name ?? 'Passageiro',
-        userAvatar: p?.avatar_url ?? null,
-        userRating: p?.rating != null ? Number(p.rating) : null,
-        minutesAgo: minutesAgo(row.created_at),
-        extraLabel: `${row.passenger_count} ${row.passenger_count === 1 ? 'passageiro' : 'passageiros'}`,
-        expiresAt,
-      });
-    }
-
-    all.sort((a, b) => a.minutesAgo - b.minutesAgo);
-    setItems(all);
+    const list = await fetchPassengerRequestsForDriver(user.id);
+    setItems(list);
     setLoading(false);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const handleAction = async (item: RequestItem, accept: boolean) => {
-    if (!userId) return;
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    const uid = authUser?.id ?? null;
+    if (!uid) {
+      showAlert('Sessão', 'Inicie sessão novamente para responder solicitações.');
+      return;
+    }
+    if (uid !== userId) setUserId(uid);
+
     setActioning(item.id);
     const now = new Date().toISOString();
     try {
-      await supabase
-        .from('bookings')
-        .update({ status: accept ? 'confirmed' : 'cancelled', updated_at: now } as never)
-        .eq('id', item.rawId);
+      const { data: rpcRaw, error: rpcErr } = await supabase.rpc('driver_respond_booking', {
+        p_booking_id: item.rawId,
+        p_accept: accept,
+      } as never);
+
+      if (rpcErr) {
+        showAlert(
+          'Não foi possível atualizar',
+          rpcErr.message ?? 'Verifique conexão. Se o erro persistir, aplique a migração `driver_respond_booking` no Supabase (db push).',
+        );
+        return;
+      }
+
+      const rpc = rpcRaw as { ok?: boolean; error?: string; message?: string; current_status?: string } | null;
+      if (!rpc?.ok) {
+        const code = rpc?.error ?? '';
+        const msg =
+          code === 'not_trip_driver'
+            ? 'Esta solicitação não pertence a uma viagem sua.'
+            : code === 'booking_not_pending'
+              ? `Esta solicitação já foi respondida${rpc.current_status ? ` (status: ${rpc.current_status})` : ''}.`
+              : code === 'booking_not_found'
+                ? 'Reserva não encontrada.'
+                : rpc?.message ?? rpc?.error ?? 'Não foi possível atualizar a reserva.';
+        showAlert('Não foi possível atualizar', msg);
+        return;
+      }
 
       const { data: wa } = await supabase
         .from('worker_assignments')
         .select('id')
-        .eq('worker_id', userId)
+        .eq('worker_id', uid)
         .eq('entity_type', 'booking')
         .eq('entity_id', item.rawId)
         .maybeSingle();
@@ -157,13 +209,19 @@ export function PendingRequestsScreen({ navigation }: Props) {
         const waUpdate = accept
           ? { status: 'accepted' }
           : { status: 'rejected', rejected_at: now, rejection_reason: 'Recusado pelo motorista' };
-        await supabase
+        const { error: waErr } = await supabase
           .from('worker_assignments')
           .update(waUpdate as never)
           .eq('id', (wa as { id: string }).id);
+        if (waErr && __DEV__) console.warn('[PendingRequests] worker_assignments', waErr.message);
       }
 
-      setItems((prev) => prev.filter((i) => i.id !== item.id));
+      if (accept) {
+        await regenerateTripStopsAfterAccept(item.scheduledTripId);
+      }
+
+      const list = await fetchPassengerRequestsForDriver(uid);
+      setItems(list);
     } finally {
       setActioning(null);
     }

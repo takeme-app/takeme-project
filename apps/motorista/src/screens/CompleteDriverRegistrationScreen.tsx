@@ -21,6 +21,9 @@ import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext
 import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
 import { formatPhoneBR } from '../utils/formatPhone';
 import { formatCurrencyBRLInput } from '../utils/formatCurrency';
+import { GooglePlacesAutocomplete } from '../components/GooglePlacesAutocomplete';
+import { getGoogleMapsApiKey } from '../lib/googleMapsConfig';
+import { googleForwardGeocode } from '@take-me/shared';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CompleteDriverRegistration'>;
 
@@ -127,7 +130,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
     setRoutes((prev) => (prev.length <= 1 ? prev : prev.filter((r) => r.id !== id)));
   };
 
-  const validateAndSubmit = () => {
+  const validateAndSubmit = async () => {
     if (!credentialsReady || !email || !password) {
       showAlert('Atenção', 'Volte e informe e-mail e senha no cadastro inicial antes de enviar.');
       return;
@@ -217,6 +220,8 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       return;
     }
 
+    const apiKey = getGoogleMapsApiKey();
+    const resolvedRoutes: RouteFormEntry[] = [];
     for (let i = 0; i < routes.length; i++) {
       const r = routes[i];
       if (!r.origin.trim() || !r.destination.trim()) {
@@ -228,6 +233,46 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
         showAlert('Atenção', `Informe o valor sugerido por passageiro na rota ${i + 1}.`);
         return;
       }
+
+      let oGeo = r.originPlace;
+      let dGeo = r.destinationPlace;
+      if (!oGeo || !dGeo) {
+        if (!apiKey) {
+          showAlert(
+            'Google Maps',
+            'Toque numa sugestão em origem e destino ou defina EXPO_PUBLIC_GOOGLE_MAPS_API_KEY no .env na raiz e reinicie o Metro com --clear.',
+          );
+          return;
+        }
+        if (!oGeo) {
+          oGeo = await googleForwardGeocode(`${r.origin.trim()}, Brasil`, apiKey);
+          if (!oGeo) {
+            showAlert(
+              'Origem',
+              'Não encontramos esse local. Escolha um endereço na lista do Google ou ajuste o texto.',
+            );
+            return;
+          }
+        }
+        if (!dGeo) {
+          dGeo = await googleForwardGeocode(`${r.destination.trim()}, Brasil`, apiKey);
+          if (!dGeo) {
+            showAlert(
+              'Destino',
+              'Não encontramos esse local. Escolha um endereço na lista do Google ou ajuste o texto.',
+            );
+            return;
+          }
+        }
+      }
+
+      resolvedRoutes.push({
+        ...r,
+        origin: oGeo.placeName.trim() || r.origin.trim(),
+        destination: dGeo.placeName.trim() || r.destination.trim(),
+        originPlace: oGeo,
+        destinationPlace: dGeo,
+      });
     }
 
     if (!acceptedTerms) {
@@ -253,12 +298,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       licensePlate: licensePlate.trim().toUpperCase(),
       vehiclePhone: formatPhoneBR(vehiclePhone),
       passengerCapacity: onlyDigits(passengerCapacity),
-      routes: routes.map((r) => ({
-        ...r,
-        origin: r.origin.trim(),
-        destination: r.destination.trim(),
-        suggestedPrice: r.suggestedPrice,
-      })),
+      routes: resolvedRoutes,
       acceptedTerms,
       acceptedNotifications,
       willPresentCriminalRecord,
@@ -564,24 +604,26 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
                 </TouchableOpacity>
               ) : null}
             </View>
-            <FieldBlock label="Origem">
-              <TextInput
-                style={styles.input}
-                placeholder="Ex: São Paulo"
-                placeholderTextColor="#9CA3AF"
-                value={r.origin}
-                onChangeText={(t) => updateRoute(r.id, { origin: t })}
-              />
-            </FieldBlock>
-            <FieldBlock label="Destino">
-              <TextInput
-                style={styles.input}
-                placeholder="Ex: Interior"
-                placeholderTextColor="#9CA3AF"
-                value={r.destination}
-                onChangeText={(t) => updateRoute(r.id, { destination: t })}
-              />
-            </FieldBlock>
+            <GooglePlacesAutocomplete
+              label="Origem"
+              placeholder="Cidade, bairro ou endereço"
+              value={r.origin}
+              onChangeText={(t) => updateRoute(r.id, { origin: t, originPlace: null })}
+              onSelectPlace={(place) => updateRoute(r.id, { originPlace: place, origin: place.placeName })}
+              hasResolvedCoords={r.originPlace != null}
+              suppressKeyWarning
+            />
+            <GooglePlacesAutocomplete
+              label="Destino"
+              placeholder="Cidade, bairro ou endereço"
+              value={r.destination}
+              onChangeText={(t) => updateRoute(r.id, { destination: t, destinationPlace: null })}
+              onSelectPlace={(place) =>
+                updateRoute(r.id, { destinationPlace: place, destination: place.placeName })
+              }
+              hasResolvedCoords={r.destinationPlace != null}
+              suppressKeyWarning
+            />
             <FieldBlock label="Valor sugerido por passageiro">
               <TextInput
                 style={styles.input}
