@@ -408,7 +408,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
             'id, passenger_count, bags_count, status, amount_cents, profiles(full_name, avatar_url, rating)'
           )
           .eq('scheduled_trip_id', tripId)
-          .in('status', ['confirmed', 'paid']),
+          .in('status', ['pending', 'confirmed', 'paid']),
         supabase
           .from('shipments')
           .select(
@@ -495,9 +495,17 @@ export function TripDetailScreen({ route, navigation }: Props) {
 
   // ── Derived ───────────────────────────────────────────────────────────────────
 
-  const confirmedBookings = bookings.filter((b) => b.status === 'confirmed' || b.status === 'paid');
+  const isTripCompleted = trip?.status === 'completed';
+  /** Passageiros “de bordo”: só após aceite; `paid` na viagem concluída = legado / encerramento. */
+  const confirmedBookings = bookings.filter((b) => {
+    if (b.status === 'confirmed') return true;
+    if (b.status === 'paid') return isTripCompleted === true;
+    return false;
+  });
   const totalPax = confirmedBookings.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
-  const totalBags = bookings.reduce((s, b) => s + (b.bags_count ?? 0), 0);
+  const totalBags = bookings
+    .filter((b) => b.status === 'pending' || b.status === 'confirmed' || b.status === 'paid')
+    .reduce((s, b) => s + (b.bags_count ?? 0), 0);
   const totalRevenueCents = confirmedBookings.reduce((s, b) => s + (b.amount_cents ?? 0), 0);
 
   const bagsCapacity = trip?.bags_available ?? 0;

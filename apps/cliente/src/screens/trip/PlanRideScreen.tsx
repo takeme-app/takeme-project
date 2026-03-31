@@ -12,9 +12,9 @@ import { getCurrentPlace } from '../../lib/location';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
 import { addRecentDestination } from '../../lib/recentDestinations';
-import { supabase } from '../../lib/supabase';
-import { getUserErrorMessage } from '../../utils/errorMessage';
 import { ALL_TIME_SLOTS, getAvailableTimeSlots, toISODate, formatDateDisplayLabel } from '../../lib/dateTimeSlots';
+import { loadClientScheduledTrips } from '../../lib/clientScheduledTrips';
+import { formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
 import type { ScheduledTripItem } from './SearchTripScreen';
 
 function getInitials(name: string): string {
@@ -35,11 +35,6 @@ const DEFAULT_DESTINATION_COORDS = { latitude: -7.3305, longitude: -35.3335 };
 const EDIT_SHEET_SLIDE = 400;
 const TIME_SHEET_SLIDE = 450;
 const ROUTE_MATCH_DEGREES = 0.15;
-
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toTimeString().slice(0, 5);
-}
 
 /** Converte slot "09:00 - 09:30" em { startMinutes, endMinutes } (minutos desde meia-noite). */
 function parseTimeSlot(slot: string): { startMinutes: number; endMinutes: number } | null {
@@ -189,46 +184,14 @@ export function PlanRideScreen({ navigation, route }: Props) {
     setTripsLoading(true);
     setTripsError(null);
     (async () => {
-      const { data: trips, error: tripsErr } = await supabase
-        .from('scheduled_trips')
-        .select('id, title, driver_id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, departure_at, arrival_at, seats_available, bags_available, badge, amount_cents')
-        .eq('status', 'active')
-        .order('departure_at');
+      const { items, error } = await loadClientScheduledTrips();
       if (cancelled) return;
-      if (tripsErr) {
-        setTripsError(getUserErrorMessage(tripsErr, 'Não foi possível carregar as viagens.'));
+      if (error) {
+        setTripsError(error);
         setAllScheduledTrips([]);
-        setTripsLoading(false);
-        return;
+      } else {
+        setAllScheduledTrips(items);
       }
-      if (!trips?.length) {
-        setAllScheduledTrips([]);
-        setTripsLoading(false);
-        return;
-      }
-      const driverIds = [...new Set(trips.map((t) => t.driver_id))];
-      const { data: profiles } = await supabase.from('profiles').select('id, full_name, rating, avatar_url').in('id', driverIds);
-      if (cancelled) return;
-      const profileMap = new Map((profiles ?? []).map((p) => [p.id, p]));
-      const items: ScheduledTripItem[] = trips.map((t) => ({
-        id: t.id,
-        title: t.title ?? `${t.origin_address} → ${t.destination_address}`,
-        driverName: profileMap.get(t.driver_id)?.full_name ?? 'Motorista',
-        driverAvatarUrl: profileMap.get(t.driver_id)?.avatar_url ?? null,
-        rating: Number(profileMap.get(t.driver_id)?.rating ?? 0),
-        badge: t.badge ?? 'Take Me',
-        departure: formatTime(t.departure_at),
-        arrival: formatTime(t.arrival_at),
-        seats: t.seats_available,
-        bags: t.bags_available,
-        latitude: t.destination_lat,
-        longitude: t.destination_lng,
-        origin_lat: t.origin_lat,
-        origin_lng: t.origin_lng,
-        amount_cents: t.amount_cents ?? null,
-        departure_at: t.departure_at,
-      }));
-      setAllScheduledTrips(items);
       setTripsLoading(false);
     })();
     return () => { cancelled = true; };
@@ -325,6 +288,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
       destination: { address: destination.address, latitude: destination.latitude, longitude: destination.longitude },
       driver: {
         id: trip.id,
+        driver_id: trip.driver_id,
         name: trip.driverName,
         rating: trip.rating,
         badge: trip.badge,
@@ -333,6 +297,10 @@ export function PlanRideScreen({ navigation, route }: Props) {
         seats: trip.seats,
         bags: trip.bags,
         amount_cents: trip.amount_cents ?? 0,
+        vehicle_model: trip.vehicle_model,
+        vehicle_year: trip.vehicle_year,
+        vehicle_plate: trip.vehicle_plate,
+        avatar_url: trip.driverAvatarUrl,
       },
       immediateTrip: false,
     });
@@ -409,7 +377,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
               )}
               <View style={styles.tripCardDriverWrap}>
                 <Text style={styles.tripCardDriverName}>{trip.driverName}</Text>
-                <Text style={styles.tripCardRating}>★ {trip.rating}</Text>
+                <Text style={styles.tripCardRating}>★ {formatDriverRatingLabel(trip.rating)}</Text>
               </View>
               <View style={[styles.tripCardBadge, styles.tripCardBadgeBg]}>
                 <Text style={[styles.tripCardBadgeText, trip.badge === 'Take Me' ? styles.tripCardBadgeTakeMe : styles.tripCardBadgeParceiro]}>{trip.badge}</Text>

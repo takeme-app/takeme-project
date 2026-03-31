@@ -17,6 +17,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+
+const sb = supabase as { from: (table: string) => any };
 import { storageUrl } from '../utils/storageUrl';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'Chat'>;
@@ -82,7 +84,7 @@ export function ChatScreen({ navigation, route }: Props) {
   }, []);
 
   const loadMessages = useCallback(async () => {
-    const { data } = await supabase
+    const { data } = await sb
       .from('messages')
       .select('id, sender_id, content, created_at, read_at')
       .eq('conversation_id', conversationId)
@@ -92,7 +94,7 @@ export function ChatScreen({ navigation, route }: Props) {
   }, [conversationId]);
 
   const loadConversation = useCallback(async () => {
-    const { data } = await supabase
+    const { data } = await sb
       .from('conversations')
       .select('status')
       .eq('id', conversationId)
@@ -104,7 +106,6 @@ export function ChatScreen({ navigation, route }: Props) {
     loadMessages();
     loadConversation();
 
-    // Realtime subscription
     const channel = supabase
       .channel(`chat:${conversationId}`)
       .on(
@@ -117,7 +118,25 @@ export function ChatScreen({ navigation, route }: Props) {
             return [...prev, newMsg];
           });
           setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-        }
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversationId}` },
+        (payload) => {
+          const updated = payload.new as Message;
+          setMessages((prev) => prev.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)));
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'conversations', filter: `id=eq.${conversationId}` },
+        (payload) => {
+          const c = payload.new as { status?: string };
+          if (c.status === 'closed' || c.status === 'active') {
+            setConversationStatus(c.status as 'active' | 'closed');
+          }
+        },
       )
       .subscribe();
 
@@ -126,10 +145,10 @@ export function ChatScreen({ navigation, route }: Props) {
 
   const sendMessage = async () => {
     const text = inputText.trim();
-    if (!text || sending) return;
+    if (!text || sending || !myId) return;
     setSending(true);
     setInputText('');
-    await supabase.from('messages').insert({
+    await sb.from('messages').insert({
       conversation_id: conversationId,
       sender_id: myId,
       content: text,
@@ -236,9 +255,9 @@ export function ChatScreen({ navigation, route }: Props) {
               onSubmitEditing={sendMessage}
             />
             <TouchableOpacity
-              style={[styles.sendButton, (!inputText.trim() || sending) && styles.sendButtonDisabled]}
+              style={[styles.sendButton, (!inputText.trim() || sending || !myId) && styles.sendButtonDisabled]}
               onPress={sendMessage}
-              disabled={!inputText.trim() || sending}
+              disabled={!inputText.trim() || sending || !myId}
               activeOpacity={0.8}
             >
               {sending ? (

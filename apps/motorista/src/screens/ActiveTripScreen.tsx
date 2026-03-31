@@ -11,7 +11,7 @@ import {
   Pressable,
   Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import { CommonActions } from '@react-navigation/native';
@@ -82,13 +82,9 @@ function getInitials(name: string): string {
     .join('');
 }
 
-function formatDuration(startIso: string, endDate: Date): string {
-  const diffMs = endDate.getTime() - new Date(startIso).getTime();
-  const totalMin = Math.max(0, Math.floor(diffMs / 60000));
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  if (h > 0) return `${h}h ${m}min`;
-  return `${m}min`;
+function formatFullRouteLabel(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return '—';
+  return formatEta(seconds);
 }
 
 /** Ignora null, NaN e (0,0) — evita rotas para o Atlântico vindas do banco. */
@@ -111,6 +107,31 @@ function dedupeConsecutivePoints(pts: LatLng[]): LatLng[] {
   return out;
 }
 
+/** Paradas com coordenada válida a partir do índice atual (embarque do passageiro antes do desembarque, na ordem do roteiro). */
+function remainingStopLatLngs(stops: Stop[], fromIndex: number): LatLng[] {
+  const pts: LatLng[] = [];
+  for (let i = Math.max(0, fromIndex); i < stops.length; i++) {
+    const s = stops[i];
+    if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
+      pts.push({ latitude: s.lat, longitude: s.lng });
+    }
+  }
+  return dedupeConsecutivePoints(pts);
+}
+
+function appendTripDestinationIfNeeded(pts: LatLng[], tdest: LatLng | undefined): LatLng[] {
+  if (!tdest) return pts;
+  const last = pts[pts.length - 1];
+  if (
+    last &&
+    Math.abs(last.latitude - tdest.latitude) < 1e-5 &&
+    Math.abs(last.longitude - tdest.longitude) < 1e-5
+  ) {
+    return pts;
+  }
+  return dedupeConsecutivePoints([...pts, tdest]);
+}
+
 // ---------------------------------------------------------------------------
 // Main screen
 // ---------------------------------------------------------------------------
@@ -118,6 +139,7 @@ function dedupeConsecutivePoints(pts: LatLng[]): LatLng[] {
 export function ActiveTripScreen({ navigation, route }: Props) {
   const { tripId } = route.params;
   const { showAlert } = useAppAlert();
+  const insets = useSafeAreaInsets();
 
   // Data
   const [trip, setTrip] = useState<TripRow | null>(null);
@@ -132,6 +154,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const [driverRouteCoords, setDriverRouteCoords] = useState<LatLng[]>([]);
   const [stopsRouteCoords, setStopsRouteCoords] = useState<LatLng[]>([]);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
+  /** Duração estimada da rota completa (paradas + destino linha), Directions/Mapbox. */
+  const [fullRouteDurationSeconds, setFullRouteDurationSeconds] = useState<number | null>(null);
 
   // Driver position
   const [driverPosition, setDriverPosition] = useState<LatLng | null>(null);
@@ -147,6 +171,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const [confirmDeliveryVisible, setConfirmDeliveryVisible] = useState(false);
   const [finalizeVisible, setFinalizeVisible] = useState(false);
   const [completedVisible, setCompletedVisible] = useState(false);
+  /** Confirmação antes de abrir a folha de finalização (mesmo fluxo da Home). */
+  const [exitConfirmVisible, setExitConfirmVisible] = useState(false);
 
   // Confirm modal inputs
   const [confirmCode, setConfirmCode] = useState('');
@@ -257,7 +283,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
   const currentStop = stops[currentStopIndex] ?? null;
   const totalStops = stops.length;
-  const allDone = currentStopIndex >= totalStops && totalStops > 0;
+  /** Todas as paradas do roteiro concluídas (ou não há paradas numeradas). */
+  const stopsLegComplete = totalStops > 0 && currentStopIndex >= totalStops;
+  const allDone = stopsLegComplete;
 
   /**
    * Dados do card inferior.
@@ -321,64 +349,84 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   );
 
   /**
-   * Rota dourada (visão geral): paradas em ordem; se não der polyline multi,
-   * usa GPS → destino final (app de motorista: início = você).
+   * Rota dourada: sempre a partir da posição atual do motorista quando houver GPS —
+   * depois as paradas restantes em ordem (ex.: embarcar passageiro primeiro),
+   * e por fim o destino da viagem agendada se não for duplicado.
+   * Sem GPS, mostra só o trecho restante entre paradas (sem fingir sair da origem da oferta).
    */
   useEffect(() => {
     if (loading) return;
     let cancelled = false;
     const routeOpts = { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() };
 
-    const stopPts: LatLng[] = [];
-    for (const s of stops) {
-      if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
-        stopPts.push({ latitude: s.lat, longitude: s.lng });
-      }
+    const tdest = trip ? pickStopCoord(trip.destination_lat, trip.destination_lng) : undefined;
+    const remaining = remainingStopLatLngs(stops, currentStopIndex);
+    let waypointChain = appendTripDestinationIfNeeded(remaining, tdest);
+    if (stops.length === 0 && tdest) {
+      waypointChain = [tdest];
     }
-    const dedupStops = dedupeConsecutivePoints(stopPts);
+
+    const hasDriver =
+      driverPosition != null &&
+      isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude);
 
     (async () => {
-      if (dedupStops.length >= 2) {
-        const withDriver =
-          driverPosition &&
-          isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
-            ? dedupeConsecutivePoints([driverPosition, ...dedupStops])
-            : dedupStops;
-        const r = await getMultiPointRoute(withDriver, routeOpts);
-        if (!cancelled && r?.coordinates?.length) {
-          setStopsRouteCoords(r.coordinates);
-          return;
+      const applyRoute = (r: { coordinates: LatLng[]; durationSeconds: number } | null) => {
+        if (cancelled || !r?.coordinates?.length) return false;
+        setStopsRouteCoords(r.coordinates);
+        if (r.durationSeconds > 0) setFullRouteDurationSeconds(r.durationSeconds);
+        else setFullRouteDurationSeconds(null);
+        return true;
+      };
+
+      if (hasDriver && waypointChain.length >= 1) {
+        const fromDriver = dedupeConsecutivePoints([driverPosition!, ...waypointChain]);
+        if (fromDriver.length >= 2) {
+          const r = await getMultiPointRoute(fromDriver, routeOpts);
+          if (applyRoute(r)) return;
         }
+        const r = await getRouteWithDuration(driverPosition!, waypointChain[0]!, routeOpts);
+        if (applyRoute(r)) return;
       }
-      if (
-        driverPosition &&
-        isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) &&
-        dedupStops.length === 1
-      ) {
-        const r = await getRouteWithDuration(driverPosition, dedupStops[0]!, routeOpts);
-        if (!cancelled && r?.coordinates?.length) {
-          setStopsRouteCoords(r.coordinates);
-          return;
-        }
+
+      if (waypointChain.length >= 2) {
+        const r = await getMultiPointRoute(waypointChain, routeOpts);
+        if (applyRoute(r)) return;
       }
-      if (
-        driverPosition &&
-        isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) &&
-        finalDestination
-      ) {
-        const r = await getRouteWithDuration(driverPosition, finalDestination, routeOpts);
-        if (!cancelled && r?.coordinates?.length) {
-          setStopsRouteCoords(r.coordinates);
-          return;
-        }
+
+      if (hasDriver && waypointChain.length === 0 && finalDestination) {
+        const r = await getRouteWithDuration(driverPosition!, finalDestination, routeOpts);
+        if (applyRoute(r)) return;
       }
-      if (!cancelled) setStopsRouteCoords([]);
+
+      if (!hasDriver && tripOriginLL && tripDestLL && waypointChain.length === 0) {
+        const r = await getRouteWithDuration(tripOriginLL, tripDestLL, routeOpts);
+        if (applyRoute(r)) return;
+      }
+
+      if (!cancelled) {
+        setStopsRouteCoords([]);
+        setFullRouteDurationSeconds(null);
+      }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [loading, stops, finalDestination, driverPositionKey]);
+  }, [
+    loading,
+    stops,
+    currentStopIndex,
+    finalDestination,
+    driverPositionKey,
+    trip?.destination_lat,
+    trip?.destination_lng,
+    trip?.origin_lat,
+    trip?.origin_lng,
+    trip?.id,
+    tripOriginLL,
+    tripDestLL,
+  ]);
 
   // Trecho escuro: GPS → parada atual (ou → destino final se não houver paradas com coordenada).
   useEffect(() => {
@@ -670,25 +718,37 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         </View>
       )}
 
-      {/* ── Overlay UI ──────────────────────────────────────── */}
-      <SafeAreaView edges={['top', 'bottom']} style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
+      {/* ── Overlay UI: voltar flutuante + controlos sobre o mapa (sem faixa branca) ── */}
+      <SafeAreaView
+        edges={['top', 'bottom']}
+        style={[styles.overlayRoot, { paddingBottom: insets.bottom > 0 ? 0 : 8 }]}
+        pointerEvents="box-none"
+      >
+        <View style={styles.overlayBody} pointerEvents="box-none">
+          <TouchableOpacity
+            style={styles.backBtnFloat}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel="Voltar"
+          >
+            <MaterialIcons name="arrow-back" size={22} color={DARK} />
+          </TouchableOpacity>
 
-        {/* Botão centralizar no motorista — lado esquerdo */}
-        <TouchableOpacity
-          style={styles.myLocationBtn}
-          activeOpacity={0.8}
-          onPress={() => {
-            if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) return;
-            mapRef.current?.animateToRegion(
-              { latitude: driverPosition.latitude, longitude: driverPosition.longitude, latitudeDelta: 0.002, longitudeDelta: 0.002 },
-              400,
-            );
-          }}
-        >
-          <MaterialIcons name="my-location" size={22} color={DARK} />
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.myLocationBtn}
+            activeOpacity={0.8}
+            onPress={() => {
+              if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) return;
+              mapRef.current?.animateToRegion(
+                { latitude: driverPosition.latitude, longitude: driverPosition.longitude, latitudeDelta: 0.002, longitudeDelta: 0.002 },
+                400,
+              );
+            }}
+          >
+            <MaterialIcons name="my-location" size={22} color={DARK} />
+          </TouchableOpacity>
 
-        {/* Right sidebar — paradas + destino */}
         {(stops.length > 0 || tripDestLL) && (
           <View style={styles.sidebar}>
             {/* Linha conectora atrás dos botões */}
@@ -728,64 +788,131 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           </View>
         )}
 
-        {/* Mini bottom card — sempre visível quando há viagem ativa */}
         {cardInfo && !detailVisible && !allDone && (
-          <TouchableOpacity
-            style={styles.miniSheet}
-            onPress={currentStop ? openDetail : undefined}
-            activeOpacity={currentStop ? 0.95 : 1}
-          >
-            <View style={styles.miniSheetTopRow}>
-              <View style={[
-                styles.stopTypePill,
-                isPassenger(cardInfo) && styles.stopTypePillTrip,
-              ]}>
-                <View style={styles.stopTypeDot} />
-                <Text style={styles.stopTypePillText}>
-                  {isPassenger(cardInfo)
-                    ? 'Viagem'
-                    : isPickup(cardInfo) ? 'Coleta' : 'Entrega'}
-                </Text>
+          <View style={styles.miniSheet} pointerEvents="auto">
+            <TouchableOpacity
+              activeOpacity={currentStop ? 0.92 : 1}
+              onPress={() => { if (currentStop) openDetail(); }}
+              disabled={!currentStop}
+            >
+              <View style={styles.miniSheetTopRow}>
+                <View style={[
+                  styles.stopTypePill,
+                  isPassenger(cardInfo) && styles.stopTypePillTrip,
+                ]}>
+                  <View style={styles.stopTypeDot} />
+                  <Text style={styles.stopTypePillText}>
+                    {isPassenger(cardInfo)
+                      ? 'Viagem'
+                      : isPickup(cardInfo) ? 'Coleta' : 'Entrega'}
+                  </Text>
+                </View>
+                {etaSeconds !== null && (
+                  <View style={styles.etaBadge}>
+                    <Text style={styles.etaBadgeText}>{Math.max(1, Math.round(etaSeconds / 60))} min</Text>
+                  </View>
+                )}
               </View>
-              {etaSeconds !== null && (
-                <View style={styles.etaBadge}>
-                  <Text style={styles.etaBadgeText}>{Math.max(1, Math.round(etaSeconds / 60))} min</Text>
+
+              <Text style={styles.miniSheetName} numberOfLines={1}>
+                {totalStops > 0 ? cardInfo.label : (trip?.origin_address ?? cardInfo.label)}
+              </Text>
+
+              <View style={styles.addressRow}>
+                <MaterialIcons name="location-on" size={14} color="#6B7280" />
+                <Text style={styles.addressText} numberOfLines={1}>{cardInfo.address}</Text>
+              </View>
+
+              {fullRouteDurationSeconds != null && fullRouteDurationSeconds > 0 && (
+                <View style={styles.fullRouteRow}>
+                  <MaterialIcons name="route" size={14} color="#6B7280" />
+                  <Text style={styles.fullRouteText} numberOfLines={1}>
+                    Rota completa: {formatEta(fullRouteDurationSeconds)}
+                  </Text>
                 </View>
               )}
-            </View>
 
-            <Text style={styles.miniSheetName} numberOfLines={1}>
-              {totalStops > 0 ? cardInfo.label : (trip?.origin_address ?? cardInfo.label)}
-            </Text>
-
-            <View style={styles.addressRow}>
-              <MaterialIcons name="location-on" size={14} color="#6B7280" />
-              <Text style={styles.addressText} numberOfLines={1}>{cardInfo.address}</Text>
-            </View>
-
-            {totalStops > 0 && (
-              <View style={styles.miniSheetFooter}>
-                <View style={styles.progressBarContainer}>
-                  <View
-                    style={[
-                      styles.progressBarFill,
-                      { width: `${((currentStopIndex + 1) / Math.max(totalStops, 1)) * 100}%` as any },
-                    ]}
-                  />
+              {totalStops > 0 && (
+                <View style={styles.miniSheetFooter}>
+                  <View style={styles.progressBarContainer}>
+                    <View
+                      style={[
+                        styles.progressBarFill,
+                        { width: `${((currentStopIndex + 1) / Math.max(totalStops, 1)) * 100}%` as any },
+                      ]}
+                    />
+                  </View>
+                  <Text style={styles.progressText}>{currentStopIndex + 1}/{totalStops}</Text>
                 </View>
-                <Text style={styles.progressText}>{currentStopIndex + 1}/{totalStops}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
+              )}
+
+              {currentStop ? (
+                <Text style={styles.miniSheetTapHint}>Toque para ver detalhes da parada</Text>
+              ) : null}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.miniEndTripBtn}
+              onPress={() => setExitConfirmVisible(true)}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.miniEndTripBtnText}>Encerrar viagem</Text>
+            </TouchableOpacity>
+          </View>
         )}
 
-        {/* All done float button */}
         {allDone && !finalizeVisible && !completedVisible && (
-          <TouchableOpacity style={styles.finalizeFloatBtn} onPress={openFinalize} activeOpacity={0.85}>
+          <TouchableOpacity
+            style={styles.finalizeFloatBtn}
+            onPress={() => setExitConfirmVisible(true)}
+            activeOpacity={0.85}
+          >
             <Text style={styles.finalizeFloatBtnText}>Finalizar viagem</Text>
           </TouchableOpacity>
         )}
+        </View>
       </SafeAreaView>
+
+      <Modal
+        visible={exitConfirmVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setExitConfirmVisible(false)}
+      >
+        <View style={styles.exitModalRoot}>
+          <TouchableOpacity
+            style={styles.exitModalBackdrop}
+            activeOpacity={1}
+            onPress={() => setExitConfirmVisible(false)}
+          />
+          <View style={styles.exitModalCard}>
+            <View style={styles.exitModalIconWrap}>
+              <MaterialIcons name="flag" size={32} color={DARK} />
+            </View>
+            <Text style={styles.exitModalTitle}>Encerrar viagem?</Text>
+            <Text style={styles.exitModalBody}>
+              Ao continuar, você confirma o encerramento desta corrida e poderá enviar o resumo e marcar a viagem como concluída.
+            </Text>
+            <TouchableOpacity
+              style={styles.exitModalBtnConfirm}
+              onPress={() => {
+                setExitConfirmVisible(false);
+                openFinalize();
+              }}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.exitModalBtnConfirmText}>Continuar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.exitModalBtnCancel}
+              onPress={() => setExitConfirmVisible(false)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.exitModalBtnCancelText}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* ── Detail bottom sheet ─────────────────────────────── */}
       <Modal visible={detailVisible} transparent animationType="none" onRequestClose={closeDetail}>
@@ -962,9 +1089,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
           <View style={styles.finalizeSummaryCard}>
             <View style={styles.finalizeSummaryRow}>
-              <Text style={styles.finalizeSummaryLabel}>Tempo total</Text>
+              <Text style={styles.finalizeSummaryLabel}>Tempo total (rota)</Text>
               <Text style={styles.finalizeSummaryValue}>
-                {trip?.departure_at ? formatDuration(trip.departure_at, new Date()) : '—'}
+                {formatFullRouteLabel(fullRouteDurationSeconds)}
               </Text>
             </View>
             <View style={styles.finalizeDivider} />
@@ -1025,9 +1152,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             <View style={styles.completedStatsRow}>
               <View style={styles.completedStatItem}>
                 <Text style={styles.completedStatValue}>
-                  {trip?.departure_at ? formatDuration(trip.departure_at, new Date()) : '—'}
+                  {formatFullRouteLabel(fullRouteDurationSeconds)}
                 </Text>
-                <Text style={styles.completedStatLabel}>Tempo total</Text>
+                <Text style={styles.completedStatLabel}>Tempo estimado (rota)</Text>
               </View>
               <View style={styles.completedStatDivider} />
               <View style={styles.completedStatItem}>
@@ -1106,6 +1233,30 @@ const styles = StyleSheet.create({
   },
   mapCoordsLoadingText: { fontSize: 14, color: '#6B7280' },
 
+  overlayRoot: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 20,
+    elevation: Platform.OS === 'android' ? 12 : 0,
+  },
+  overlayBody: { flex: 1, position: 'relative' },
+  backBtnFloat: {
+    position: 'absolute',
+    left: 14,
+    top: 10,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 6,
+    zIndex: 5,
+  },
+
   // ── Map markers ──────────────────────────────────────────
   mapMarker: {
     width: 40,
@@ -1151,7 +1302,7 @@ const styles = StyleSheet.create({
   myLocationBtn: {
     position: 'absolute',
     left: 14,
-    top: 100,
+    top: 66,
     width: 46,
     height: 46,
     borderRadius: 23,
@@ -1169,7 +1320,7 @@ const styles = StyleSheet.create({
   sidebar: {
     position: 'absolute',
     right: 14,
-    top: 100,
+    top: 66,
     alignItems: 'center',
     gap: 6,
   },
@@ -1283,6 +1434,18 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     flex: 1,
   },
+  fullRouteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 8,
+  },
+  fullRouteText: {
+    fontSize: 13,
+    color: DARK,
+    fontWeight: '600',
+    flex: 1,
+  },
   miniSheetFooter: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1306,6 +1469,26 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#374151',
   },
+  miniSheetTapHint: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    marginTop: 10,
+    textAlign: 'center',
+  },
+  miniEndTripBtn: {
+    marginTop: 14,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  miniEndTripBtnText: {
+    color: '#EF4444',
+    fontSize: 15,
+    fontWeight: '700',
+  },
 
   // ── Finalize float button ────────────────────────────────
   finalizeFloatBtn: {
@@ -1323,6 +1506,53 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
   },
+
+  exitModalRoot: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.45)' },
+  exitModalBackdrop: { ...StyleSheet.absoluteFillObject },
+  exitModalCard: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 24,
+    paddingTop: 28,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 28,
+    alignItems: 'center',
+  },
+  exitModalIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  exitModalTitle: { fontSize: 20, fontWeight: '700', color: DARK, marginBottom: 10 },
+  exitModalBody: {
+    fontSize: 14,
+    color: '#6B7280',
+    lineHeight: 21,
+    textAlign: 'center',
+    marginBottom: 28,
+  },
+  exitModalBtnConfirm: {
+    width: '100%',
+    backgroundColor: DARK,
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  exitModalBtnConfirmText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
+  exitModalBtnCancel: {
+    width: '100%',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  exitModalBtnCancelText: { fontSize: 16, fontWeight: '600', color: '#374151' },
 
   // ── Overlay ───────────────────────────────────────────────
   overlay: {

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, type Dispatch, type SetStateAction } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -15,6 +15,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+
+const sb = supabase as { from: (table: string) => any };
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { storageUrl } from '../utils/storageUrl';
 
@@ -31,7 +33,7 @@ type ConversationRow = {
   participant_avatar: string | null;
   last_message: string | null;
   last_message_at: string | null;
-  unread_count: number;
+  unread_driver: number;
   status: string;
 };
 
@@ -60,6 +62,41 @@ function isSupport(name: string | null): boolean {
   return (name ?? '').toLowerCase().includes('suporte') || (name ?? '').toLowerCase().includes('take me');
 }
 
+function sortByLastMessage(a: ConversationRow, b: ConversationRow): number {
+  const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+  const tb = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+  return tb - ta;
+}
+
+/** Atualiza listas Recentes / Finalizadas a partir de um evento Realtime (INSERT/UPDATE/DELETE). */
+function mergeConversationRealtime(
+  payload: { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> },
+  setRecentes: Dispatch<SetStateAction<ConversationRow[]>>,
+  setFinalizadas: Dispatch<SetStateAction<ConversationRow[]>>,
+) {
+  if (payload.eventType === 'DELETE') {
+    const id = payload.old?.id as string | undefined;
+    if (!id) return;
+    setRecentes((p) => p.filter((c) => c.id !== id));
+    setFinalizadas((p) => p.filter((c) => c.id !== id));
+    return;
+  }
+
+  const raw = payload.new as ConversationRow;
+  if (!raw?.id) return;
+
+  setRecentes((prev) => {
+    const rest = prev.filter((c) => c.id !== raw.id);
+    if (raw.status !== 'active') return rest;
+    return [...rest, raw].sort(sortByLastMessage);
+  });
+  setFinalizadas((prev) => {
+    const rest = prev.filter((c) => c.id !== raw.id);
+    if (raw.status !== 'closed') return rest;
+    return [...rest, raw].sort(sortByLastMessage);
+  });
+}
+
 export function ConversationsScreen({ navigation }: Props) {
   const [tab, setTab] = useState<Tab>('recentes');
   const [recentes, setRecentes] = useState<ConversationRow[]>([]);
@@ -70,20 +107,61 @@ export function ConversationsScreen({ navigation }: Props) {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (user?.id) {
-      const { data } = await supabase
+      const { data } = await sb
         .from('conversations')
-        .select('id, participant_name, participant_avatar, last_message, last_message_at, unread_count, status')
+        .select('id, participant_name, participant_avatar, last_message, last_message_at, unread_driver, status')
         .eq('driver_id', user.id)
         .order('last_message_at', { ascending: false });
 
       const all = (data ?? []) as ConversationRow[];
-      setRecentes(all.filter((c) => c.status !== 'finalized'));
-      setFinalizadas(all.filter((c) => c.status === 'finalized'));
+      setRecentes(all.filter((c) => c.status === 'active'));
+      setFinalizadas(all.filter((c) => c.status === 'closed'));
     }
     setLoading(false);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  useEffect(() => {
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
+
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id || cancelled) return;
+
+      channel = supabase
+        .channel(`driver-conversations:${user.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'conversations',
+            filter: `driver_id=eq.${user.id}`,
+          },
+          (payload) => {
+            mergeConversationRealtime(
+              payload as { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> },
+              setRecentes,
+              setFinalizadas,
+            );
+          },
+        )
+        .subscribe((status, err) => {
+          if (!__DEV__) return;
+          if (status === 'SUBSCRIBED') console.log('[Conversations] Realtime: ligado');
+          if (status === 'CHANNEL_ERROR' || err) {
+            console.warn('[Conversations] Realtime:', status, err?.message ?? err);
+          }
+        });
+    })();
+
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, []);
 
   const active = tab === 'recentes' ? recentes : finalizadas;
 
@@ -146,15 +224,15 @@ export function ConversationsScreen({ navigation }: Props) {
                 <View style={styles.rowContent}>
                   <View style={styles.rowTop}>
                     <Text style={styles.name} numberOfLines={1}>{item.participant_name ?? 'Usuário'}</Text>
-                    <Text style={[styles.time, item.unread_count > 0 && styles.timeActive]}>
+                    <Text style={[styles.time, item.unread_driver > 0 && styles.timeActive]}>
                       {formatTime(item.last_message_at)}
                     </Text>
                   </View>
                   <View style={styles.rowBottom}>
                     <Text style={styles.preview} numberOfLines={2}>{item.last_message ?? ''}</Text>
-                    {item.unread_count > 0 && (
+                    {item.unread_driver > 0 && (
                       <View style={styles.badge}>
-                        <Text style={styles.badgeText}>{item.unread_count}</Text>
+                        <Text style={styles.badgeText}>{item.unread_driver}</Text>
                       </View>
                     )}
                   </View>

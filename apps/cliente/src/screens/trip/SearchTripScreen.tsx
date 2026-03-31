@@ -5,14 +5,7 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import {
-  MapboxMap,
-  MapboxMarker,
-  MapboxPolyline,
-  type MapboxMapRef,
-  sanitizeMapRegion,
-  isValidTripCoordinate,
-} from '../../components/mapbox';
+import { MapboxMap, MapboxMarker, MapboxPolyline, type MapboxMapRef } from '../../components/mapbox';
 import { getCurrentPlace, requestLocationPermission, getCurrentPosition } from '../../lib/location';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
@@ -20,11 +13,13 @@ import { AddressAutocomplete } from '../../components/AddressAutocomplete';
 import { DriverMarkerIcon } from '../../components/DriverMarkerIcon';
 import { MyLocationMarkerIcon } from '../../components/MyLocationMarkerIcon';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { TripStackParamList, TripDriverParam } from '../../navigation/types';
+import type { TripStackParamList } from '../../navigation/types';
 import { getRecentDestinations, addRecentDestination, formatRecentDestinationDisplay, type RecentDestination } from '../../lib/recentDestinations';
 import { getRoutePolyline, type RoutePoint } from '../../lib/route';
 import { supabase } from '../../lib/supabase';
 import { getUserErrorMessage } from '../../utils/errorMessage';
+import { loadClientScheduledTrips, type ClientScheduledTripItem } from '../../lib/clientScheduledTrips';
+import { formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
 
 type Place = { address: string; latitude: number; longitude: number };
 
@@ -32,25 +27,7 @@ type Place = { address: string; latitude: number; longitude: number };
 const ROUTE_MATCH_DEGREES = 0.15;
 
 /** Item de viagem agendada no formato da lista (motorista, horários, assentos, malas) */
-export type ScheduledTripItem = {
-  id: string;
-  title: string;
-  driverName: string;
-  driverAvatarUrl: string | null;
-  rating: number;
-  badge: string;
-  departure: string;
-  arrival: string;
-  seats: number;
-  bags: number;
-  latitude: number;
-  longitude: number;
-  origin_lat: number;
-  origin_lng: number;
-  amount_cents: number | null;
-  /** ISO string para filtrar por data/hora (ex.: PlanRide) */
-  departure_at?: string;
-};
+export type ScheduledTripItem = ClientScheduledTripItem;
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SHEET_HIDDEN_OFFSET = SCREEN_HEIGHT;
@@ -67,11 +44,6 @@ const COLORS = {
 };
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
-
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toTimeString().slice(0, 5);
-}
 
 /** Iniciais do nome: "Diego Barbosa" -> "DB", "Maria" -> "MA". */
 function getInitials(name: string): string {
@@ -147,8 +119,6 @@ export function SearchTripScreen({ navigation, route }: Props) {
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editOrigin, setEditOrigin] = useState(origin.address);
   const [editDestination, setEditDestination] = useState(destination?.address ?? '');
-  // Texto do campo inline "Para onde?" — sincroniza quando destination muda externamente
-  const [destinationText, setDestinationText] = useState(destination?.address ?? '');
   const [locationLoading, setLocationLoading] = useState(false);
   const [mapCentering, setMapCentering] = useState(false);
   const [userLocationCoords, setUserLocationCoords] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -196,20 +166,17 @@ export function SearchTripScreen({ navigation, route }: Props) {
   const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
   const sheetTranslateY = useRef(new Animated.Value(0)).current;
 
-  // Mapa: localização válida ou fallback BR — nunca (0,0) antes dos dados.
+  // Mapa nasce centralizado na localização atual quando disponível (contexto pré-carregado)
   const initialMapRegion = useMemo(() => {
-    if (
-      currentPlace &&
-      isValidTripCoordinate(currentPlace.latitude, currentPlace.longitude)
-    ) {
-      return sanitizeMapRegion({
+    if (currentPlace) {
+      return {
         latitude: currentPlace.latitude,
         longitude: currentPlace.longitude,
         latitudeDelta: 0.008,
         longitudeDelta: 0.008,
-      });
+      };
     }
-    return sanitizeMapRegion(DEFAULT_REGION);
+    return DEFAULT_REGION;
   }, [currentPlace?.latitude, currentPlace?.longitude]);
   const lastTranslateY = useRef(0);
   const editOverlayOpacity = useRef(new Animated.Value(0)).current;
@@ -277,46 +244,14 @@ export function SearchTripScreen({ navigation, route }: Props) {
     setTripsLoading(true);
     setTripsError(null);
     (async () => {
-      const { data: trips, error: tripsErr } = await supabase
-        .from('scheduled_trips')
-        .select('id, title, driver_id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, departure_at, arrival_at, seats_available, bags_available, badge, amount_cents')
-        .eq('status', 'active')
-        .order('departure_at');
+      const { items, error } = await loadClientScheduledTrips();
       if (cancelled) return;
-      if (tripsErr) {
-        setTripsError(getUserErrorMessage(tripsErr, 'Não foi possível carregar as viagens.'));
+      if (error) {
+        setTripsError(error);
         setAllScheduledTrips([]);
-        setTripsLoading(false);
-        return;
+      } else {
+        setAllScheduledTrips(items);
       }
-      if (!trips?.length) {
-        setAllScheduledTrips([]);
-        setTripsLoading(false);
-        return;
-      }
-      const driverIds = [...new Set(trips.map((t) => t.driver_id))];
-      const { data: profiles } = await supabase.from('profiles').select('id, full_name, rating, avatar_url').in('id', driverIds);
-      if (cancelled) return;
-      const profileMap = new Map((profiles ?? []).map((p) => [p.id, p]));
-      const items: ScheduledTripItem[] = trips.map((t) => ({
-        id: t.id,
-        title: t.title ?? `${t.origin_address} → ${t.destination_address}`,
-        driverName: profileMap.get(t.driver_id)?.full_name ?? 'Motorista',
-        driverAvatarUrl: profileMap.get(t.driver_id)?.avatar_url ?? null,
-        rating: Number(profileMap.get(t.driver_id)?.rating ?? 0),
-        badge: t.badge ?? 'Take Me',
-        departure: formatTime(t.departure_at),
-        arrival: formatTime(t.arrival_at),
-        seats: t.seats_available,
-        bags: t.bags_available,
-        latitude: t.destination_lat,
-        longitude: t.destination_lng,
-        origin_lat: t.origin_lat,
-        origin_lng: t.origin_lng,
-        amount_cents: t.amount_cents ?? null,
-        departure_at: t.departure_at,
-      }));
-      setAllScheduledTrips(items);
       setTripsLoading(false);
     })();
     return () => { cancelled = true; };
@@ -352,7 +287,6 @@ export function SearchTripScreen({ navigation, route }: Props) {
   useEffect(() => {
     setEditOrigin(origin.address);
     setEditDestination(destination?.address ?? '');
-    setDestinationText(destination?.address ?? '');
   }, [origin.address, destination?.address]);
 
   useEffect(() => {
@@ -557,18 +491,29 @@ export function SearchTripScreen({ navigation, route }: Props) {
               <Text style={styles.routeAddress} numberOfLines={1}>{origin.address}</Text>
               <View style={styles.routeAddressDivider} />
               <AddressAutocomplete
-                value={destinationText}
-                onChangeText={setDestinationText}
-                onSelectPlace={(place) =>
-                  setDestination({ address: place.address, latitude: place.latitude, longitude: place.longitude })
-                }
+                value={editDestination}
+                onChangeText={setEditDestination}
+                onSelectPlace={(place) => {
+                  setDestination({
+                    address: place.address,
+                    latitude: place.latitude,
+                    longitude: place.longitude,
+                  });
+                  setEditDestination(place.address);
+                }}
                 placeholder="Para onde?"
-                inputStyle={styles.routeAddressInput}
-                style={styles.routeAddressAutocomplete}
+                style={styles.routeDestinationAutocomplete}
+                inputStyle={styles.routeDestinationInput}
               />
             </View>
-            <TouchableOpacity onPress={openEditModal} hitSlop={8} activeOpacity={0.7}>
-              <MaterialIcons name="edit" size={20} color={COLORS.neutral700} style={styles.editIcon} />
+            <TouchableOpacity
+              onPress={openEditModal}
+              style={styles.editIconButton}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessibilityLabel="Editar origem e destino"
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="edit" size={20} color={COLORS.neutral700} />
             </TouchableOpacity>
           </View>
           <ScrollView
@@ -677,9 +622,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
             pinColor="#dc2626"
           />
         )}
-        {scheduledTrips
-          .filter((trip) => isValidTripCoordinate(trip.origin_lat, trip.origin_lng))
-          .map((trip) => (
+        {scheduledTrips.map((trip) => (
           <MapboxMarker
             key={trip.id}
             id={`trip-${trip.id}`}
@@ -693,8 +636,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
           </MapboxMarker>
         ))}
         {/* Balão preso ao ícone: MarkerView na mesma coordenada, anchor no pé do balão para acompanhar o mapa */}
-        {tripCallout &&
-          isValidTripCoordinate(tripCallout.origin_lat, tripCallout.origin_lng) && (
+        {tripCallout && (
           <MapboxMarker
             id="trip-callout"
             coordinate={{ latitude: tripCallout.origin_lat, longitude: tripCallout.origin_lng }}
@@ -711,7 +653,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
               </TouchableOpacity>
               <Text style={styles.tripCalloutBubbleDriver} numberOfLines={1}>{tripCallout.driverName}</Text>
               <Text style={styles.tripCalloutBubbleTime} numberOfLines={1}>
-                ★ {tripCallout.rating} · {tripCallout.departure} – {tripCallout.arrival} · {tripCallout.seats} lug. · {tripCallout.bags} malas
+                ★ {formatDriverRatingLabel(tripCallout.rating)} · {tripCallout.departure} – {tripCallout.arrival} · {tripCallout.seats} lug. · {tripCallout.bags} malas
               </Text>
               <TouchableOpacity
                 style={styles.tripCalloutBubbleSelect}
@@ -800,11 +742,11 @@ export function SearchTripScreen({ navigation, route }: Props) {
           style={styles.sheetScroll}
           contentContainerStyle={styles.sheetScrollContent}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
           onScroll={handleSheetScroll}
           scrollEventThrottle={16}
-          keyboardShouldPersistTaps="handled"
         >
-          {/* Partida e destino — origem clicável via lápis; destino digitável inline */}
+          {/* Partida e destino — layout Figma: fundo escuro, ícone origem (círculo+ponto), linha, ícone destino (quadrado), endereços, lápis */}
           <View style={styles.routeCard}>
             <View style={styles.routeIconsColumn}>
               <View style={styles.routeIconOrigin}>
@@ -817,16 +759,29 @@ export function SearchTripScreen({ navigation, route }: Props) {
               <Text style={styles.routeAddress} numberOfLines={1}>{origin.address}</Text>
               <View style={styles.routeAddressDivider} />
               <AddressAutocomplete
-                value={destinationText}
-                onChangeText={setDestinationText}
-                onSelectPlace={(place) => setDestination({ address: place.address, latitude: place.latitude, longitude: place.longitude })}
+                value={editDestination}
+                onChangeText={setEditDestination}
+                onSelectPlace={(place) => {
+                  setDestination({
+                    address: place.address,
+                    latitude: place.latitude,
+                    longitude: place.longitude,
+                  });
+                  setEditDestination(place.address);
+                }}
                 placeholder="Para onde?"
-                inputStyle={styles.routeAddressInput}
-                style={styles.routeAddressAutocomplete}
+                style={styles.routeDestinationAutocomplete}
+                inputStyle={styles.routeDestinationInput}
               />
             </View>
-            <TouchableOpacity onPress={openEditModal} hitSlop={8} activeOpacity={0.7}>
-              <MaterialIcons name="edit" size={20} color={COLORS.neutral700} style={styles.editIcon} />
+            <TouchableOpacity
+              onPress={openEditModal}
+              style={styles.editIconButton}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessibilityLabel="Editar origem e destino"
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="edit" size={20} color={COLORS.neutral700} />
             </TouchableOpacity>
           </View>
 
@@ -918,7 +873,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
                     )}
                     <View style={styles.tripCardDriverWrap}>
                       <Text style={styles.tripCardDriverName}>{trip.driverName}</Text>
-                      <Text style={styles.tripCardRating}>★ {trip.rating}</Text>
+                      <Text style={styles.tripCardRating}>★ {formatDriverRatingLabel(trip.rating)}</Text>
                     </View>
                     <View style={[styles.tripCardBadge, styles.tripCardBadgeBg]}>
                       <Text style={[styles.tripCardBadgeText, trip.badge === 'Take Me' ? styles.tripCardBadgeTakeMe : styles.tripCardBadgeParceiro]}>{trip.badge}</Text>
@@ -958,7 +913,22 @@ export function SearchTripScreen({ navigation, route }: Props) {
               const trip = scheduledTrips.find((t) => t.id === selectedTripId);
               if (!trip) return;
               navigation.navigate('ConfirmDetails', {
-                driver: { id: trip.id, name: trip.driverName, rating: trip.rating, badge: trip.badge, departure: trip.departure, arrival: trip.arrival, seats: trip.seats, bags: trip.bags, amount_cents: trip.amount_cents ?? undefined },
+                driver: {
+                  id: trip.id,
+                  driver_id: trip.driver_id,
+                  name: trip.driverName,
+                  rating: trip.rating,
+                  badge: trip.badge,
+                  departure: trip.departure,
+                  arrival: trip.arrival,
+                  seats: trip.seats,
+                  bags: trip.bags,
+                  amount_cents: trip.amount_cents ?? undefined,
+                  vehicle_model: trip.vehicle_model,
+                  vehicle_year: trip.vehicle_year,
+                  vehicle_plate: trip.vehicle_plate,
+                  avatar_url: trip.driverAvatarUrl,
+                },
                 origin: { address: origin.address, latitude: origin.latitude, longitude: origin.longitude },
                 destination: destination ? { address: destination.address, latitude: destination.latitude, longitude: destination.longitude } : undefined,
                 scheduled_trip_id: trip.id,
@@ -990,19 +960,24 @@ export function SearchTripScreen({ navigation, route }: Props) {
 
       {/* Modal: editar ponto de partida e destino — mesma animação do sheet da Home */}
       <Modal visible={editModalVisible} transparent animationType="none" onRequestClose={closeEditModal}>
-        <View style={styles.editModalOverlayContainer}>
+        <KeyboardAvoidingView
+          style={styles.editModalOverlayContainer}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+        >
           <Animated.View style={[styles.editModalOverlay, { opacity: editOverlayOpacity }]} />
           <Pressable style={StyleSheet.absoluteFill} onPress={closeEditModal} />
-          {/* KAV envolve apenas o card, não o backdrop — evita reflow no Android ao abrir teclado */}
-          <KeyboardAvoidingView
-            behavior="padding"
-            style={styles.editModalKav}
+          <Animated.View
+            style={[styles.modalContent, { transform: [{ translateY: editSheetTranslateY }] }]}
           >
-            <Animated.View
-              style={[styles.modalContent, { transform: [{ translateY: editSheetTranslateY }] }]}
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>Alterar endereços</Text>
+            <ScrollView
+              style={styles.modalScroll}
+              contentContainerStyle={styles.modalScrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
             >
-              <View style={styles.modalHandle} />
-              <Text style={styles.modalTitle}>Alterar endereços</Text>
               <Text style={styles.modalLabel}>Ponto de partida</Text>
               <AddressAutocomplete
                 value={editOrigin}
@@ -1041,9 +1016,9 @@ export function SearchTripScreen({ navigation, route }: Props) {
                   <Text style={styles.modalButtonPrimaryText}>Salvar</Text>
                 </TouchableOpacity>
               </View>
-            </Animated.View>
-          </KeyboardAvoidingView>
-        </View>
+            </ScrollView>
+          </Animated.View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -1069,7 +1044,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
-  planPageScroll: { flex: 1 },
+  planPageScroll: { flex: 1, zIndex: 0 },
   planPageScrollContent: { paddingBottom: 24 },
   recentListPageRow: {
     flexDirection: 'row',
@@ -1237,7 +1212,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   expandButtonText: { fontSize: 16, fontWeight: '600', color: COLORS.black },
-  sheetScroll: { flex: 1 },
+  sheetScroll: { flex: 1, zIndex: 0 },
   sheetScrollContent: { paddingHorizontal: 24, paddingBottom: 24 },
   routeCard: {
     flexDirection: 'row',
@@ -1248,6 +1223,9 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     borderWidth: 1,
     borderColor: COLORS.neutral400,
+    zIndex: 2,
+    overflow: 'visible',
+    elevation: 3,
   },
   routeIconsColumn: {
     alignItems: 'center',
@@ -1279,28 +1257,25 @@ const styles = StyleSheet.create({
     height: 10,
     backgroundColor: COLORS.neutral700,
   },
-  routeAddresses: { flex: 1 },
+  routeAddresses: { flex: 1, minWidth: 0 },
   routeAddress: { fontSize: 14, fontWeight: '500', color: COLORS.black },
-  /** Wrapper do AddressAutocomplete inline — sem padding extra */
-  routeAddressAutocomplete: {},
-  /** Sobrescreve o TextInput do AddressAutocomplete para parecer igual ao routeAddress */
-  routeAddressInput: {
-    borderWidth: 0,
-    borderRadius: 0,
-    paddingHorizontal: 0,
-    paddingVertical: 0,
-    paddingRight: 0,
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#0d0d0d',
-  },
-  routeAddressPlaceholder: { color: COLORS.neutral700 },
   routeAddressDivider: {
     height: 1,
     backgroundColor: COLORS.neutral400,
     marginVertical: 10,
   },
-  editIcon: { padding: 4, marginLeft: 4, marginTop: 2 },
+  routeDestinationAutocomplete: { zIndex: 3, marginTop: -2 },
+  routeDestinationInput: {
+    borderWidth: 0,
+    borderRadius: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    paddingRight: 32,
+    fontSize: 14,
+    fontWeight: '500',
+    minHeight: 22,
+  },
+  editIconButton: { padding: 4, marginLeft: 4, marginTop: 2 },
   recentCard: {
     borderWidth: 1,
     borderColor: COLORS.neutral400,
@@ -1491,9 +1466,6 @@ const styles = StyleSheet.create({
   editModalOverlayContainer: {
     flex: 1,
     justifyContent: 'flex-end',
-  },
-  editModalKav: {
-    width: '100%',
   },
   editModalOverlay: {
     ...StyleSheet.absoluteFillObject,

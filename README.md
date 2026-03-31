@@ -1,13 +1,13 @@
 # Take Me
 
-Monorepo do Take Me — app tipo Uber com 5 ambientes: Cliente, Motorista, Preparador de Encomendas, Preparador de Excursões e Admin (web).
+Monorepo do Take Me — app tipo Uber com 3 apps: Cliente, Motorista e Admin (web). O cadastro de preparadores (encomendas e excursões) permanece no fluxo do app motorista.
 
 - **Repositório:** [github.com/FraktalSoftwares/take_me](https://github.com/FraktalSoftwares/take_me)
 - **Supabase (projeto):** [Dashboard](https://supabase.com/dashboard/project/xdxzxyzdgwpucwuaxvik) — ID do projeto: `xdxzxyzdgwpucwuaxvik`
 
 ## Para novos desenvolvedores
 
-O **Take Me** é uma plataforma de mobilidade e serviços que conecta passageiros, motoristas e preparadores: agendamento de viagens (rotas regulares), envio de encomendas, envio de dependentes e solicitação de excursões. O monorepo reúne o app do **cliente** (passageiro), o app do **motorista**, os apps dos **preparadores** (encomendas e excursões) e o **admin** (painel web). Backend e autenticação ficam no **Supabase**. Se você está entrando no projeto, leia o [relatório de situação atual](docs/ESTADO_DO_PROJETO.md) para visão geral, stack, configuração local e estado do Supabase.
+O **Take Me** é uma plataforma de mobilidade e serviços que conecta passageiros, motoristas e preparadores: agendamento de viagens (rotas regulares), envio de encomendas, envio de dependentes e solicitação de excursões. O monorepo reúne o app do **cliente** (passageiro), o app do **motorista** (incluindo cadastro como preparador de encomendas ou excursões) e o **admin** (painel web). Backend e autenticação ficam no **Supabase**. Se você está entrando no projeto, leia o [relatório de situação atual](docs/ESTADO_DO_PROJETO.md) para visão geral, stack, configuração local e estado do Supabase.
 
 ## Branches e trabalho em equipe
 
@@ -17,8 +17,6 @@ Vários devs podem trabalhar em paralelo (admin, cliente, motorista, etc.). Veja
 
 - **apps/cliente** — Ambiente Cliente (Expo, mobile)
 - **apps/motorista** — Ambiente Motorista (Expo, mobile)
-- **apps/preparador-encomendas** — Preparador de Encomendas (Expo, mobile)
-- **apps/preparador-excursoes** — Preparador de Excursões (Expo, mobile)
 - **apps/admin** — Ambiente Administrativo (Expo Web, desktop)
 - **packages/shared** — Tipos, cliente Supabase e utilitários compartilhados
 
@@ -72,8 +70,6 @@ Na raiz:
 # Mobile (Expo Go)
 npm run cliente
 npm run motorista
-npm run preparador-encomendas
-npm run preparador-excursoes
 
 # Admin (web)
 npm run admin

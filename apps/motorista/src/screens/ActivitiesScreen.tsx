@@ -108,8 +108,9 @@ function formatDateDisplay(dateStr: string): string {
 }
 
 function buildTripRow(raw: RawTrip): TripRow {
+  const tripDone = raw.status === 'completed';
   const confirmedBookings = (raw.bookings ?? []).filter(
-    (b) => b.status === 'confirmed' || b.status === 'paid',
+    (b) => b.status === 'confirmed' || (tripDone && b.status === 'paid'),
   );
   const passengerCount = confirmedBookings.reduce(
     (s, b) => s + (b.passenger_count ?? 0),

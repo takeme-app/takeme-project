@@ -75,6 +75,7 @@ type BookingDetail = {
   arrival_time: string;
   driver_name: string;
   driver_avatar_url: string | null;
+  driver_id: string | null;
 };
 
 export function TripDetailScreen({ navigation, route }: Props) {
@@ -159,6 +160,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
         arrival_time: arrTime,
         driver_name: driverName,
         driver_avatar_url: driverAvatarUrl,
+        driver_id: trip?.driver_id ?? null,
       });
       setLoading(false);
     })();
@@ -202,7 +204,8 @@ export function TripDetailScreen({ navigation, route }: Props) {
 
   const isInProgress = detail?.status && !['paid', 'cancelled'].includes(detail.status);
   const isCompleted = detail?.status === 'paid';
-  const driverOnWay = detail?.status && ['confirmed', 'in_progress'].includes(detail.status);
+  /** Só após o motorista aceitar (confirmed); pending = pago mas ainda sem aceite. */
+  const driverOnWay = detail?.status === 'confirmed';
 
   if (loading) {
     return (
@@ -465,7 +468,18 @@ export function TripDetailScreen({ navigation, route }: Props) {
         visible={supportSheetVisible}
         onClose={() => setSupportSheetVisible(false)}
         showDriverChat={detail?.status != null && !['completed', 'cancelled'].includes(detail.status)}
-        onOpenDriverChat={() => navigation.navigate('Chat', { contactName: 'Motorista' })}
+        onOpenDriverChat={() => {
+          if (detail?.driver_id) {
+            navigation.navigate('Chat', {
+              contactName: detail.driver_name,
+              driverId: detail.driver_id,
+              bookingId: detail.id,
+              participantAvatarKey: detail.driver_avatar_url,
+            });
+            return;
+          }
+          navigation.navigate('Chat', { contactName: detail?.driver_name ?? 'Motorista' });
+        }}
         onOpenSupportChat={() => navigation.navigate('Chat', { contactName: 'Suporte Take Me' })}
       />
     </SafeAreaView>

@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { View, StyleSheet, TouchableOpacity, ScrollView, Image, type ImageSourcePropType } from 'react-native';
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -242,9 +243,11 @@ export function ActivitiesScreen({ navigation }: Props) {
     setLoading(false);
   }, []);
 
-  useEffect(() => {
-    loadActivities();
-  }, [loadActivities]);
+  useFocusEffect(
+    useCallback(() => {
+      loadActivities();
+    }, [loadActivities])
+  );
 
   useEffect(() => {
     loadFilterPreferences();

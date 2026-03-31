@@ -1,5 +1,15 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { View, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import {
+  View,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  ScrollView,
+  type StyleProp,
+  type TextStyle,
+  type ViewStyle,
+} from 'react-native';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { searchAddress, type AddressSuggestion } from '../lib/location';
@@ -19,9 +29,8 @@ type Props = {
   onSelectPlace: (place: AddressSuggestion) => void;
   placeholder?: string;
   editable?: boolean;
-  style?: object;
-  /** Sobrescreve o estilo do TextInput interno (ex: modo inline sem borda) */
-  inputStyle?: object;
+  style?: StyleProp<ViewStyle>;
+  inputStyle?: StyleProp<TextStyle>;
 };
 
 export function AddressAutocomplete({
@@ -96,7 +105,7 @@ export function AddressAutocomplete({
           placeholderTextColor={COLORS.neutral700}
           editable={editable}
           onFocus={() => value.trim().length >= 2 && suggestions.length > 0 && setShowList(true)}
-          onBlur={() => setTimeout(() => setShowList(false), 150)}
+          onBlur={() => setTimeout(() => setShowList(false), 200)}
         />
         {loading && (
           <View style={styles.loaderWrap}>
@@ -104,23 +113,27 @@ export function AddressAutocomplete({
           </View>
         )}
       </View>
-      {/* Lista inline — evita clipping do position:absolute dentro de ScrollView no Android */}
       {showList && suggestions.length > 0 && (
         <View style={styles.listWrap}>
-          {suggestions.slice(0, 5).map((item, index) => (
-            <TouchableOpacity
-              key={`${index}-${item.latitude}-${item.longitude}`}
-              style={[
-                styles.suggestionRow,
-                index === suggestions.slice(0, 5).length - 1 && styles.suggestionRowLast,
-              ]}
-              onPress={() => handleSelect(item)}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons name="place" size={20} color={COLORS.neutral700} />
-              <Text style={styles.suggestionText} numberOfLines={2}>{item.address}</Text>
-            </TouchableOpacity>
-          ))}
+          <ScrollView
+            style={styles.listScroll}
+            nestedScrollEnabled
+            keyboardShouldPersistTaps="handled"
+            bounces={false}
+            showsVerticalScrollIndicator={true}
+          >
+            {suggestions.slice(0, 15).map((item, index) => (
+              <TouchableOpacity
+                key={`${index}-${item.latitude}-${item.longitude}`}
+                style={styles.suggestionRow}
+                onPress={() => handleSelect(item)}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="place" size={20} color={COLORS.neutral700} />
+                <Text style={styles.suggestionText} numberOfLines={2}>{item.address}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </View>
       )}
     </View>
@@ -148,11 +161,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   listWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: '100%',
     marginTop: 4,
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: COLORS.neutral400,
+    maxHeight: 260,
     overflow: 'hidden',
     elevation: 4,
     shadowColor: '#000',
@@ -160,6 +178,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.12,
     shadowRadius: 4,
   },
+  listScroll: { maxHeight: 256 },
   suggestionRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -170,5 +189,4 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.neutral300,
   },
   suggestionText: { flex: 1, fontSize: 14, color: COLORS.black },
-  suggestionRowLast: { borderBottomWidth: 0 },
 });
