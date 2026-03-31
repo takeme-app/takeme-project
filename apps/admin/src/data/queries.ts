@@ -1369,16 +1369,20 @@ export async function fetchPreparadores(): Promise<PreparadorListItem[]> {
   const profileMap: Record<string, string> = {};
   (profilesData ?? []).forEach((p: any) => { profileMap[p.id] = p.full_name ?? 'Preparador'; });
 
-  return data.map((e: any) => ({
-    id: e.id,
-    nome: profileMap[e.preparer_id] ?? 'Preparador',
-    origem: '—',
-    destino: e.destination,
-    dataInicio: e.scheduled_departure_at ? `${fmtDate(e.scheduled_departure_at)}\n${fmtTime(e.scheduled_departure_at)}` : fmtDate(e.excursion_date),
-    previsao: '—',
-    avaliacao: null,
-    status: mapPreparadorStatus(e.status),
-  }));
+  return data.map((e: any) => {
+    const dateIso: string = (e.scheduled_departure_at || e.excursion_date || '');
+    return {
+      id: e.id,
+      nome: profileMap[e.preparer_id] ?? 'Preparador',
+      origem: '—',
+      destino: e.destination,
+      dataInicio: dateIso ? `${fmtDate(dateIso)}\n${fmtTime(dateIso)}` : '—',
+      rawDate: dateIso ? dateIso.slice(0, 10) : '',
+      previsao: '—',
+      avaliacao: null,
+      status: mapPreparadorStatus(e.status),
+    };
+  });
 }
 
 export async function fetchPreparadorById(id: string): Promise<PreparadorListItem | null> {
@@ -1398,12 +1402,14 @@ export async function fetchPreparadorById(id: string): Promise<PreparadorListIte
       .from('profiles').select('full_name').eq('id', e.preparer_id).maybeSingle();
     if (prof?.full_name) nome = prof.full_name;
   }
+  const dateIso: string = (e.scheduled_departure_at || e.excursion_date || '');
   return {
     id: e.id,
     nome,
     origem: '—',
     destino: e.destination,
-    dataInicio: e.scheduled_departure_at ? `${fmtDate(e.scheduled_departure_at)}\n${fmtTime(e.scheduled_departure_at)}` : fmtDate(e.excursion_date),
+    dataInicio: dateIso ? `${fmtDate(dateIso)}\n${fmtTime(dateIso)}` : '—',
+    rawDate: dateIso ? dateIso.slice(0, 10) : '',
     previsao: '—',
     avaliacao: null,
     status: mapPreparadorStatus(e.status),

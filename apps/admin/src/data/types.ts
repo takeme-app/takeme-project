@@ -227,6 +227,7 @@ export interface PreparadorListItem {
   origem: string;
   destino: string;
   dataInicio: string;
+  rawDate: string; // ISO YYYY-MM-DD for date filtering
   previsao: string;
   avaliacao: number | null;
   status: 'Em andamento' | 'Agendado' | 'Cancelado' | 'Concluído';
