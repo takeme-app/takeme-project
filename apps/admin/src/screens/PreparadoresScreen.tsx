@@ -230,7 +230,7 @@ export default function PreparadoresScreen() {
     return () => { cancelled = true; };
   }, []);
 
-  const tableRows: PrepRow[] = preparadoresData.map((p) => ({
+  const tableRows: PrepRow[] = useMemo(() => preparadoresData.map((p) => ({
     id: p.id,
     nome: p.nome,
     origem: p.origem,
@@ -240,31 +240,25 @@ export default function PreparadoresScreen() {
     previsao: p.previsao,
     avaliacao: p.avaliacao ?? 0,
     status: p.status,
-  }));
+  })), [preparadoresData]);
 
   // ── filteredData: base for KPIs and chart ───────────────────────────
   const filteredData = useMemo(() => {
-    return preparadoresData.filter((p) => {
+    return tableRows.filter((r) => {
       if (appliedStatusPagina !== 'todos') {
         const expected = statusChipParaRow[appliedStatusPagina as Exclude<FiltroStatusChip, 'todos'>];
-        if (p.status !== expected) return false;
+        if (r.status !== expected) return false;
       }
+      if (appliedDataInicialPagina && r.rawDate && r.rawDate < appliedDataInicialPagina) return false;
+      if (appliedDataFinalPagina && r.rawDate && r.rawDate > appliedDataFinalPagina) return false;
       return true;
     });
-  }, [preparadoresData, appliedStatusPagina]);
+  }, [tableRows, appliedStatusPagina, appliedDataInicialPagina, appliedDataFinalPagina]);
 
   // ── tableRowsFiltered ───────────────────────────────────────────────
   const tableRowsFiltered = useMemo(() => {
-    let rows = [...tableRows];
-    // Page filter: status
-    if (appliedStatusPagina !== 'todos') {
-      const expected = statusChipParaRow[appliedStatusPagina as Exclude<FiltroStatusChip, 'todos'>];
-      rows = rows.filter((r) => r.status === expected);
-    }
-    // Page filter: date range (ISO YYYY-MM-DD)
-    if (appliedDataInicialPagina) rows = rows.filter((r) => !r.rawDate || r.rawDate >= appliedDataInicialPagina);
-    if (appliedDataFinalPagina) rows = rows.filter((r) => !r.rawDate || r.rawDate <= appliedDataFinalPagina);
-    // Table filter: status
+    let rows = [...filteredData];
+    // Table filter: status (overrides page filter if set)
     if (appliedStatusTabela !== 'todos') {
       rows = rows.filter((r) => r.status === statusChipParaRow[appliedStatusTabela as Exclude<FiltroStatusChip, 'todos'>]);
     }
@@ -278,7 +272,7 @@ export default function PreparadoresScreen() {
     const diTab = appliedDataInicialTabela.trim();
     if (diTab) rows = rows.filter((r) => !r.rawDate || r.rawDate >= diTab);
     return rows;
-  }, [tableRows, appliedStatusPagina, appliedStatusTabela, appliedDataInicialPagina, appliedDataFinalPagina, appliedNomeModal, appliedOrigemModal, appliedDestinoModal, appliedHoraEmbarque, appliedHoraChegada, appliedDataInicialTabela]);
+  }, [filteredData, appliedStatusTabela, appliedNomeModal, appliedOrigemModal, appliedDestinoModal, appliedDataInicialTabela]);
 
   // ── KPIs from filteredData ──────────────────────────────────────────
   const isExcursoes = activeTab === 'excursoes';
