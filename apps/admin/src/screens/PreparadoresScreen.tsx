@@ -44,6 +44,7 @@ type PrepRow = {
   origem: string;
   destino: string;
   dataInicio: string;
+  rawDate: string; // ISO date for filtering (YYYY-MM-DD)
   previsao: string;
   avaliacao: number;
   status: 'Em andamento' | 'Agendado' | 'Cancelado' | 'Concluído';
@@ -235,6 +236,7 @@ export default function PreparadoresScreen() {
     origem: p.origem,
     destino: p.destino,
     dataInicio: p.dataInicio,
+    rawDate: p.rawDate ?? '',
     previsao: p.previsao,
     avaliacao: p.avaliacao ?? 0,
     status: p.status,
@@ -253,39 +255,30 @@ export default function PreparadoresScreen() {
 
   // ── tableRowsFiltered ───────────────────────────────────────────────
   const tableRowsFiltered = useMemo(() => {
-    let rows = appliedStatusTabela === 'todos'
-      ? [...tableRows]
-      : tableRows.filter((r) => r.status === statusChipParaRow[appliedStatusTabela as Exclude<FiltroStatusChip, 'todos'>]);
-    const diPag = appliedDataInicialPagina.trim().toLowerCase();
-    if (diPag) {
-      rows = rows.filter((r) =>
-        r.dataInicio.toLowerCase().includes(diPag)
-        || r.previsao.toLowerCase().includes(diPag));
+    let rows = [...tableRows];
+    // Page filter: status
+    if (appliedStatusPagina !== 'todos') {
+      const expected = statusChipParaRow[appliedStatusPagina as Exclude<FiltroStatusChip, 'todos'>];
+      rows = rows.filter((r) => r.status === expected);
     }
-    const dfPag = appliedDataFinalPagina.trim().toLowerCase();
-    if (dfPag) {
-      rows = rows.filter((r) =>
-        r.dataInicio.toLowerCase().includes(dfPag)
-        || r.previsao.toLowerCase().includes(dfPag));
+    // Page filter: date range (ISO YYYY-MM-DD)
+    if (appliedDataInicialPagina) rows = rows.filter((r) => !r.rawDate || r.rawDate >= appliedDataInicialPagina);
+    if (appliedDataFinalPagina) rows = rows.filter((r) => !r.rawDate || r.rawDate <= appliedDataFinalPagina);
+    // Table filter: status
+    if (appliedStatusTabela !== 'todos') {
+      rows = rows.filter((r) => r.status === statusChipParaRow[appliedStatusTabela as Exclude<FiltroStatusChip, 'todos'>]);
     }
+    // Table filter: text fields
     const n = appliedNomeModal.trim().toLowerCase();
     if (n) rows = rows.filter((r) => r.nome.toLowerCase().includes(n));
     const o = appliedOrigemModal.trim().toLowerCase();
     if (o) rows = rows.filter((r) => r.origem.toLowerCase().includes(o));
     const d = appliedDestinoModal.trim().toLowerCase();
     if (d) rows = rows.filter((r) => r.destino.toLowerCase().includes(d));
-    const he = appliedHoraEmbarque.trim().toLowerCase();
-    if (he) rows = rows.filter((r) => r.dataInicio.toLowerCase().includes(he));
-    const hc = appliedHoraChegada.trim().toLowerCase();
-    if (hc) rows = rows.filter((r) => r.previsao.toLowerCase().includes(hc));
-    const diTab = appliedDataInicialTabela.trim().toLowerCase();
-    if (diTab) {
-      rows = rows.filter((r) =>
-        r.dataInicio.toLowerCase().includes(diTab)
-        || r.previsao.toLowerCase().includes(diTab));
-    }
+    const diTab = appliedDataInicialTabela.trim();
+    if (diTab) rows = rows.filter((r) => !r.rawDate || r.rawDate >= diTab);
     return rows;
-  }, [tableRows, appliedStatusTabela, appliedDataInicialPagina, appliedDataFinalPagina, appliedNomeModal, appliedOrigemModal, appliedDestinoModal, appliedHoraEmbarque, appliedHoraChegada, appliedDataInicialTabela]);
+  }, [tableRows, appliedStatusPagina, appliedStatusTabela, appliedDataInicialPagina, appliedDataFinalPagina, appliedNomeModal, appliedOrigemModal, appliedDestinoModal, appliedHoraEmbarque, appliedHoraChegada, appliedDataInicialTabela]);
 
   // ── KPIs from filteredData ──────────────────────────────────────────
   const isExcursoes = activeTab === 'excursoes';
@@ -619,10 +612,10 @@ export default function PreparadoresScreen() {
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, borderRadius: 8, background: '#f1f1f1', paddingLeft: 16, overflow: 'hidden', width: '100%', boxSizing: 'border-box' as const } },
         calendarSvgLg,
         React.createElement('input', {
-          type: 'text',
+          type: 'date',
           value: valor,
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
-          placeholder: '01 de setembro',
+          placeholder: '',
           style: { ...inputTabelaStyle, color: valor ? '#0d0d0d' : '#767676' },
         })));
 
@@ -634,10 +627,9 @@ export default function PreparadoresScreen() {
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, borderRadius: 8, background: '#f1f1f1', paddingLeft: 16, overflow: 'hidden', width: '100%', boxSizing: 'border-box' as const } },
         calendarSvgLg,
         React.createElement('input', {
-          type: 'text',
+          type: 'date',
           value: valor,
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
-          placeholder: rotulo,
           style: { ...inputTabelaStyle, color: valor ? '#0d0d0d' : '#767676' },
         })));
 
