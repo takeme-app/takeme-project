@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -7,7 +7,6 @@ import {
   ActivityIndicator,
   Switch,
   Modal,
-  Platform,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -20,21 +19,8 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
-import {
-  GoogleMapsMap,
-  MapMarker,
-  regionFromLatLngPoints,
-  isValidGlobeCoordinate,
-  latLngFromDbColumns,
-} from '../components/googleMaps';
-import type { LatLng } from '../components/googleMaps';
-
-let LocationMod: typeof import('expo-location') | null = null;
-try {
-  LocationMod = require('expo-location');
-} catch {
-  /* native rebuild */
-}
+import { MapboxMap, MapboxMarker, MapboxPolyline } from '../components/mapbox';
+import type { MapRegion } from '../components/mapbox';
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Home'>,
@@ -55,6 +41,40 @@ type ActiveTrip = {
   destination_lng: number | null;
 };
 
+/** Região inicial do mapa a partir de origem/destino (fallback PB). */
+function mapRegionForTrip(t: ActiveTrip): MapRegion {
+  const oLat = t.origin_lat;
+  const oLng = t.origin_lng;
+  const dLat = t.destination_lat;
+  const dLng = t.destination_lng;
+  const oOk = oLat != null && oLng != null && Number.isFinite(oLat) && Number.isFinite(oLng);
+  const dOk = dLat != null && dLng != null && Number.isFinite(dLat) && Number.isFinite(dLng);
+  if (oOk && dOk) {
+    const minLat = Math.min(oLat!, dLat!);
+    const maxLat = Math.max(oLat!, dLat!);
+    const minLng = Math.min(oLng!, dLng!);
+    const maxLng = Math.max(oLng!, dLng!);
+    const midLat = (minLat + maxLat) / 2;
+    const midLng = (minLng + maxLng) / 2;
+    const pad = 1.4;
+    const latSpan = Math.max(0.008, (maxLat - minLat) * pad);
+    const lngSpan = Math.max(0.008, (maxLng - minLng) * pad);
+    return {
+      latitude: midLat,
+      longitude: midLng,
+      latitudeDelta: Math.max(latSpan, 0.04),
+      longitudeDelta: Math.max(lngSpan, 0.04),
+    };
+  }
+  if (oOk) {
+    return { latitude: oLat!, longitude: oLng!, latitudeDelta: 0.06, longitudeDelta: 0.06 };
+  }
+  if (dOk) {
+    return { latitude: dLat!, longitude: dLng!, latitudeDelta: 0.06, longitudeDelta: 0.06 };
+  }
+  return { latitude: -7.23, longitude: -35.88, latitudeDelta: 0.12, longitudeDelta: 0.12 };
+}
+
 function formatTime(iso: string): string {
   try { return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
   catch { return '—'; }
@@ -67,73 +87,16 @@ function shortAddr(addr: string): string {
 
 export function HomeScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
-  const [routesCount, setRoutesCount] = useState(0);
   const [pendingCount, setPendingCount] = useState(0);
   const [cnhOk, setCnhOk] = useState(false);
   const [cnhBackOk, setCnhBackOk] = useState(false);
-  const [pixOk, setPixOk] = useState(false);
-  const [hasCompleteVehicle, setHasCompleteVehicle] = useState(false);
+  /** Veículo com dados obrigatórios preenchidos mas sem CRLV/documento anexado. */
+  const [missingVehicleDocument, setMissingVehicleDocument] = useState(false);
   const [available, setAvailable] = useState(false);
   const [toggleLoading, setToggleLoading] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [activeTrip, setActiveTrip] = useState<ActiveTrip | null>(null);
   const [showEndTripModal, setShowEndTripModal] = useState(false);
-  const [mapUserLL, setMapUserLL] = useState<LatLng | null>(null);
-
-  useEffect(() => {
-    if (!LocationMod) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const { status } = await LocationMod.requestForegroundPermissionsAsync();
-        if (status !== 'granted' || cancelled) return;
-        const pos = await LocationMod.getCurrentPositionAsync({
-          accuracy: LocationMod.Accuracy?.Balanced ?? LocationMod.Accuracy.Balanced,
-        });
-        if (!cancelled && pos?.coords) {
-          setMapUserLL({
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-          });
-        }
-      } catch {
-        /* GPS off / timeout */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const homeTripMapRegion = useMemo(() => {
-    // Prioridade: GPS do motorista → origem da viagem → destino.
-    // Usa zoom de rua (0.04°) para não ficar parecendo oceano em cidades costeiras.
-    if (mapUserLL && isValidGlobeCoordinate(mapUserLL.latitude, mapUserLL.longitude)) {
-      return { latitude: mapUserLL.latitude, longitude: mapUserLL.longitude, latitudeDelta: 0.04, longitudeDelta: 0.04 };
-    }
-    if (activeTrip) {
-      const originLL = latLngFromDbColumns(activeTrip.origin_lat, activeTrip.origin_lng);
-      if (originLL) return { latitude: originLL.latitude, longitude: originLL.longitude, latitudeDelta: 0.04, longitudeDelta: 0.04 };
-      const destLL = latLngFromDbColumns(activeTrip.destination_lat, activeTrip.destination_lng);
-      if (destLL) return { latitude: destLL.latitude, longitude: destLL.longitude, latitudeDelta: 0.04, longitudeDelta: 0.04 };
-    }
-    return regionFromLatLngPoints([]);
-  }, [
-    mapUserLL,
-    activeTrip?.origin_lat,
-    activeTrip?.origin_lng,
-    activeTrip?.destination_lat,
-    activeTrip?.destination_lng,
-  ]);
-
-  /** Sem GPS e sem nenhuma coordenada válida da viagem → não montar MapView (evita 0,0 / oceano). */
-  const homeMapReady = useMemo(() => {
-    if (!activeTrip) return true;
-    if (mapUserLL && isValidGlobeCoordinate(mapUserLL.latitude, mapUserLL.longitude)) return true;
-    const oOk = latLngFromDbColumns(activeTrip.origin_lat, activeTrip.origin_lng) !== null;
-    const dOk = latLngFromDbColumns(activeTrip.destination_lat, activeTrip.destination_lng) !== null;
-    return oOk || dOk;
-  }, [activeTrip, mapUserLL]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -144,34 +107,44 @@ export function HomeScreen({ navigation }: Props) {
     // Worker profile
     const { data: wr } = await supabase
       .from('worker_profiles')
-      .select('cnh_document_url, cnh_document_back_url, pix_key, is_available_for_requests')
+      .select('cnh_document_url, cnh_document_back_url, is_available_for_requests')
       .eq('id', user.id)
       .maybeSingle();
     const w = wr as {
       cnh_document_url?: string | null;
       cnh_document_back_url?: string | null;
-      pix_key?: string | null;
       is_available_for_requests?: boolean | null;
     } | null;
     setCnhOk(Boolean(w?.cnh_document_url?.trim()));
     setCnhBackOk(Boolean(w?.cnh_document_back_url?.trim()));
-    setPixOk(Boolean(w?.pix_key?.trim()));
     setAvailable(w?.is_available_for_requests ?? false);
 
-    // Routes count
-    const { count: rCount } = await supabase
-      .from('worker_routes').select('id', { count: 'exact', head: true }).eq('worker_id', user.id).eq('is_active', true);
-    setRoutesCount(rCount ?? 0);
-
-    // Complete vehicle check (at least one active vehicle with all required fields)
+    // Documento do veículo (CRLV): só sinaliza se já existe veículo “completo” nos campos básicos mas sem arquivo
     const { data: vehicles } = await supabase
       .from('vehicles')
-      .select('model, plate, year, passenger_capacity')
+      .select('model, plate, year, passenger_capacity, vehicle_document_url')
       .eq('worker_id', user.id)
       .eq('is_active', true);
-    const completeVehicle = ((vehicles ?? []) as { model?: string | null; plate?: string | null; year?: number | null; passenger_capacity?: number | null }[])
-      .some(v => Boolean(v.model?.trim()) && Boolean(v.plate?.trim()) && Boolean(v.year) && Boolean(v.passenger_capacity));
-    setHasCompleteVehicle(completeVehicle);
+    const vRows = (vehicles ?? []) as {
+      model?: string | null;
+      plate?: string | null;
+      year?: number | null;
+      passenger_capacity?: number | null;
+      vehicle_document_url?: string | null;
+    }[];
+    let missingVDoc = false;
+    for (const v of vRows) {
+      const structOk =
+        Boolean(v.model?.trim()) &&
+        Boolean(v.plate?.trim()) &&
+        Boolean(v.year) &&
+        Boolean(v.passenger_capacity);
+      if (structOk && !v.vehicle_document_url?.trim()) {
+        missingVDoc = true;
+        break;
+      }
+    }
+    setMissingVehicleDocument(missingVDoc);
 
     // Active trip
     const { data: tripData } = await supabase
@@ -192,10 +165,10 @@ export function HomeScreen({ navigation }: Props) {
         destination_address: string;
         departure_at: string;
         trunk_occupancy_pct: number | null;
-        origin_lat?: number | null;
-        origin_lng?: number | null;
-        destination_lat?: number | null;
-        destination_lng?: number | null;
+        origin_lat: number | null;
+        origin_lng: number | null;
+        destination_lat: number | null;
+        destination_lng: number | null;
       };
       const { data: bkgs } = await supabase
         .from('bookings')
@@ -205,10 +178,7 @@ export function HomeScreen({ navigation }: Props) {
       const passengerCount = ((bkgs ?? []) as { passenger_count?: number }[]).reduce((s, b) => s + (b.passenger_count ?? 0), 0);
       const bagsCount = ((bkgs ?? []) as { bags_count?: number }[]).reduce((s, b) => s + (b.bags_count ?? 0), 0);
       setActiveTrip({
-        id: t.id,
-        origin_address: t.origin_address,
-        destination_address: t.destination_address,
-        departure_at: t.departure_at,
+        ...t,
         passengerCount,
         bagsCount,
         trunkPct: t.trunk_occupancy_pct ?? 0,
@@ -221,20 +191,13 @@ export function HomeScreen({ navigation }: Props) {
       setActiveTrip(null);
     }
 
-    // Pending requests count (bookings on own trips + pending_review shipments)
+    // Pendentes só de viagem: bookings `pending` nas viagens deste motorista
     const { count: bCount } = await supabase
       .from('bookings')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'pending');
-    const { count: sCount } = await supabase
-      .from('shipments')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'pending_review');
-    const { count: eCount } = await supabase
-      .from('excursion_requests')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'pending');
-    setPendingCount((bCount ?? 0) + (sCount ?? 0) + (eCount ?? 0));
+      .select('id, scheduled_trips!inner(driver_id)', { count: 'exact', head: true })
+      .eq('status', 'pending')
+      .eq('scheduled_trips.driver_id', user.id);
+    setPendingCount(bCount ?? 0);
 
     setLoading(false);
   }, []);
@@ -276,6 +239,19 @@ export function HomeScreen({ navigation }: Props) {
   const goSchedule = () => navigation.navigate('Profile', { screen: 'TripSchedule', params: { fromHome: true } });
   const goPending = () => navigation.navigate('PendingRequests');
 
+  const goDocumentsBanner = () => {
+    if (!cnhOk || !cnhBackOk) {
+      navigation.navigate('Profile', { screen: 'PersonalInfo' });
+      return;
+    }
+    if (missingVehicleDocument) {
+      navigation.navigate('Profile', { screen: 'WorkerVehicles' });
+    }
+  };
+
+  /** Só documentação pendente (CNH frente/verso ou CRLV do veículo); não PIX nem rotas. */
+  const showDocumentsBanner = !cnhOk || !cnhBackOk || missingVehicleDocument;
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
@@ -285,27 +261,22 @@ export function HomeScreen({ navigation }: Props) {
     );
   }
 
-  const showBanner = !cnhOk || !pixOk || !hasCompleteVehicle || routesCount < 1;
-
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
 
-        {/* Banner de onboarding */}
-        {showBanner && (
-          <TouchableOpacity style={styles.banner} onPress={goRoutes} activeOpacity={0.85}>
+        {showDocumentsBanner && (
+          <TouchableOpacity style={styles.banner} onPress={goDocumentsBanner} activeOpacity={0.85}>
             <Text style={styles.bannerText}>
               {!cnhOk
-                ? 'Adicione seus documentos (CNH) para começar a receber solicitações.'
-                : !pixOk
-                ? 'Cadastre sua chave PIX para começar a receber solicitações.'
-                : !hasCompleteVehicle
-                ? 'Cadastre um veículo para começar a receber solicitações.'
-                : 'Cadastre ao menos uma rota para começar a receber solicitações.'}
+                ? 'Adicione a foto da CNH (frente) para concluir seus documentos.'
+                : !cnhBackOk
+                  ? 'Adicione a foto da CNH (verso) para concluir seus documentos.'
+                  : 'Anexe o documento do veículo (CRLV) para concluir o cadastro.'}
             </Text>
             <View style={styles.bannerArrow}>
-              <MaterialIcons name="arrow-forward" size={20} color="#92400E" />
+              <MaterialIcons name="arrow-forward" size={20} color="#5C3D2E" />
             </View>
           </TouchableOpacity>
         )}
@@ -385,42 +356,43 @@ export function HomeScreen({ navigation }: Props) {
               </View>
             </View>
 
-            {/* Mapa da viagem ativa */}
-            <View style={styles.mapPlaceholder} collapsable={false}>
-              {!homeMapReady ? (
-                <View style={styles.mapPreviewLoading}>
-                  <ActivityIndicator size="large" color="#111827" />
-                  <Text style={styles.mapPreviewLoadingText}>Carregando mapa…</Text>
-                </View>
-              ) : (
-                <GoogleMapsMap
-                  style={styles.mapPreviewInner}
-                  initialRegion={homeTripMapRegion}
-                  scrollEnabled={false}
-                  showsUserLocation={Boolean(mapUserLL)}
-                >
-                  {(() => {
-                    const originLL = latLngFromDbColumns(activeTrip.origin_lat, activeTrip.origin_lng);
-                    return originLL ? (
-                      <MapMarker
-                        id="origin"
-                        coordinate={originLL}
-                        pinColor="#111827"
-                      />
-                    ) : null;
-                  })()}
-                  {(() => {
-                    const destLL = latLngFromDbColumns(activeTrip.destination_lat, activeTrip.destination_lng);
-                    return destLL ? (
-                      <MapMarker
-                        id="dest"
-                        coordinate={destLL}
-                        pinColor="#C9A227"
-                      />
-                    ) : null;
-                  })()}
-                </GoogleMapsMap>
-              )}
+            {/* Mapa da viagem ativa — largura total (evita w=0 com alignItems:center no ScrollView) */}
+            <View style={styles.mapWrap}>
+              <MapboxMap
+                key={`home-map-${activeTrip.id}`}
+                style={styles.mapInner}
+                initialRegion={mapRegionForTrip(activeTrip)}
+                scrollEnabled={false}
+              >
+                {activeTrip.origin_lat != null &&
+                  activeTrip.origin_lng != null &&
+                  activeTrip.destination_lat != null &&
+                  activeTrip.destination_lng != null && (
+                    <MapboxPolyline
+                      id="home-preview"
+                      coordinates={[
+                        { latitude: activeTrip.origin_lat, longitude: activeTrip.origin_lng },
+                        { latitude: activeTrip.destination_lat, longitude: activeTrip.destination_lng },
+                      ]}
+                      strokeColor="#C9A227"
+                      strokeWidth={4}
+                    />
+                  )}
+                {activeTrip.origin_lat != null && activeTrip.origin_lng != null && (
+                  <MapboxMarker
+                    id="origin"
+                    coordinate={{ latitude: activeTrip.origin_lat, longitude: activeTrip.origin_lng }}
+                    pinColor="#111827"
+                  />
+                )}
+                {activeTrip.destination_lat != null && activeTrip.destination_lng != null && (
+                  <MapboxMarker
+                    id="dest"
+                    coordinate={{ latitude: activeTrip.destination_lat, longitude: activeTrip.destination_lng }}
+                    pinColor="#C9A227"
+                  />
+                )}
+              </MapboxMap>
             </View>
 
             <TouchableOpacity style={styles.mapBtn} activeOpacity={0.85} onPress={() => activeTrip && navigation.navigate('ActiveTrip', { tripId: activeTrip.id })}>
@@ -441,7 +413,7 @@ export function HomeScreen({ navigation }: Props) {
               <MaterialIcons name="description" size={28} color="#111827" />
               {pendingCount > 0 && <View style={styles.dot} />}
             </View>
-            <Text style={styles.quickLabel}>Solicitações{'\n'}pendentes</Text>
+            <Text style={styles.quickLabel}>Viagens{'\n'}pendentes</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.quickCard} onPress={goSchedule} activeOpacity={0.85}>
@@ -514,15 +486,25 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scroll: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 12 + SCREEN_TOP_EXTRA_PADDING },
   banner: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#FEF9C3', borderWidth: 1, borderColor: '#EAB308',
-    borderRadius: 12, paddingVertical: 14, paddingHorizontal: 16,
-    marginBottom: 20, gap: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FAF6EA',
+    borderWidth: 1,
+    borderColor: '#D4A84B',
+    borderRadius: 20,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    marginBottom: 20,
+    gap: 14,
   },
-  bannerText: { flex: 1, fontSize: 14, color: '#78350F', lineHeight: 20, fontWeight: '500' },
+  bannerText: { flex: 1, fontSize: 14, color: '#5C3D2E', lineHeight: 20, fontWeight: '600' },
   bannerArrow: {
-    width: 36, height: 36, borderRadius: 18, backgroundColor: '#FDE68A',
-    alignItems: 'center', justifyContent: 'center',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F3D565',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   // Trip card
@@ -547,33 +529,19 @@ const styles = StyleSheet.create({
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   metaLabel: { fontSize: 12, color: '#9CA3AF' },
   metaValue: { fontSize: 16, fontWeight: '700', color: '#111827' },
-  mapPlaceholder: {
-    height: 160,
+  mapWrap: {
+    height: 200,
     width: '100%',
-    backgroundColor: '#E5E7EB',
+    alignSelf: 'stretch',
     borderRadius: 12,
     marginBottom: 14,
     overflow: 'hidden',
-    position: 'relative',
-  },
-  mapPreviewInner: { width: '100%', height: '100%', borderRadius: 12 },
-  mapPreviewLoading: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
     backgroundColor: '#E5E7EB',
   },
-  mapPreviewLoadingText: { fontSize: 13, color: '#6B7280' },
-  mapCarBubble: {
-    width: 48, height: 48, borderRadius: 24, backgroundColor: '#111827',
-    alignItems: 'center', justifyContent: 'center',
-    position: 'absolute', left: '35%', top: '35%',
-  },
-  mapDestDot: {
-    width: 16, height: 16, borderRadius: 8, backgroundColor: '#3B82F6',
-    borderWidth: 3, borderColor: '#FFFFFF',
-    position: 'absolute', right: '28%', top: '40%',
+  mapInner: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 12,
   },
   mapBtn: {
     borderWidth: 1.5, borderColor: '#D1D5DB', borderRadius: 12,

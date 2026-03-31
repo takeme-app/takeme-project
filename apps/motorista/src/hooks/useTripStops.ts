@@ -136,44 +136,64 @@ async function buildStopsManually(tripId: string): Promise<TripStop[]> {
   const result: TripStop[] = [];
   let seq = 1;
 
+  const sb = supabase as { from: (table: string) => any };
   // Bookings (passenger pickup + dropoff)
-  const { data: bookings } = await supabase
+  const { data: bookingsRaw } = await sb
     .from('bookings')
     .select(`
       id,
       passenger_count,
       notes,
+      origin_address,
+      origin_lat,
+      origin_lng,
+      destination_address,
+      destination_lat,
+      destination_lng,
       profiles ( full_name )
     `)
     .eq('scheduled_trip_id', tripId)
-    .in('status', ['confirmed', 'in_progress']);
+    .eq('status', 'confirmed');
 
-  for (const b of bookings ?? []) {
-    const name = (b.profiles as any)?.full_name ?? 'Passageiro';
-    // We don't have per-booking addresses here — use trip origin/dest as placeholder
+  type BookingStopRow = {
+    id: string;
+    notes?: string | null;
+    origin_address?: string | null;
+    origin_lat?: number | null;
+    origin_lng?: number | null;
+    destination_address?: string | null;
+    destination_lat?: number | null;
+    destination_lng?: number | null;
+    profiles?: { full_name?: string | null } | null;
+  };
+
+  for (const raw of (bookingsRaw ?? []) as BookingStopRow[]) {
+    const name = raw.profiles?.full_name?.trim() || 'Passageiro';
+    const oAddr = raw.origin_address?.trim() || 'Embarque do passageiro';
+    const dAddr = raw.destination_address?.trim() || 'Desembarque do passageiro';
     result.push({
-      id: `booking-pickup-${b.id}`,
+      id: `booking-pickup-${raw.id}`,
       scheduledTripId: tripId,
       stopType: 'passenger_pickup',
-      entityId: b.id,
+      entityId: raw.id,
       label: name,
-      address: 'Ponto de embarque',
-      lat: null,
-      lng: null,
+      address: oAddr,
+      lat: raw.origin_lat ?? null,
+      lng: raw.origin_lng ?? null,
       sequenceOrder: seq++,
       status: 'pending',
-      notes: b.notes ?? null,
+      notes: raw.notes ?? null,
       code: null,
     });
     result.push({
-      id: `booking-dropoff-${b.id}`,
+      id: `booking-dropoff-${raw.id}`,
       scheduledTripId: tripId,
       stopType: 'passenger_dropoff',
-      entityId: b.id,
+      entityId: raw.id,
       label: name,
-      address: 'Ponto de desembarque',
-      lat: null,
-      lng: null,
+      address: dAddr,
+      lat: raw.destination_lat ?? null,
+      lng: raw.destination_lng ?? null,
       sequenceOrder: seq++,
       status: 'pending',
       notes: null,
@@ -182,7 +202,7 @@ async function buildStopsManually(tripId: string): Promise<TripStop[]> {
   }
 
   // Shipments (package pickup + dropoff)
-  const { data: shipments } = await supabase
+  const { data: shipments } = await sb
     .from('shipments')
     .select(`
       id,

@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MapboxMap, MapboxMarker, MapboxPolyline, sanitizeMapRegion } from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList } from '../../navigation/types';
+import { formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { CodeConfirmModal } from '../../components/CodeConfirmModal';
 import { AnimatedBottomSheet } from '../../components/AnimatedBottomSheet';
@@ -80,7 +81,14 @@ const DEFAULT_REGION = {
   longitudeDelta: 0.03,
 };
 
-export function TripInProgressScreen({ navigation }: Props) {
+export function TripInProgressScreen({ navigation, route }: Props) {
+  const live = route.params;
+  const driverName = live?.driverName ?? 'Motorista';
+  const ratingLabel = formatDriverRatingLabel(live?.rating ?? 0);
+  const vehicleLabel = live?.vehicleLabel ?? 'Veículo a confirmar';
+  const fareFormatted =
+    live?.amountCents != null ? `R$ ${(live.amountCents / 100).toFixed(2).replace('.', ',')}` : 'R$ —';
+
   const [steps, setSteps] = useState<Step[]>(MOCK_STEPS);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [showColetaSheet, setShowColetaSheet] = useState(false);
@@ -138,7 +146,7 @@ export function TripInProgressScreen({ navigation }: Props) {
 
   const handleFinalizarViagem = () => {
     setShowFinalizarSheet(false);
-    navigation.navigate('RateTrip');
+    navigation.navigate('RateTrip', { bookingId: live?.bookingId });
   };
 
   return (
@@ -232,11 +240,11 @@ export function TripInProgressScreen({ navigation }: Props) {
             <View style={styles.driverRow}>
               <View style={styles.driverAvatar} />
               <View style={styles.driverInfo}>
-                <Text style={styles.driverName}>Carlos Silva</Text>
-                <Text style={styles.driverRating}>★ 4.8</Text>
-                <Text style={styles.carText}>Argo Sedan • Placa RIO 2877</Text>
+                <Text style={styles.driverName}>{driverName}</Text>
+                <Text style={styles.driverRating}>★ {ratingLabel}</Text>
+                <Text style={styles.carText}>{vehicleLabel}</Text>
               </View>
-              <Text style={styles.fare}>R$ 64,00</Text>
+              <Text style={styles.fare}>{fareFormatted}</Text>
             </View>
           </View>
           <TouchableOpacity style={styles.primaryButton} onPress={openCurrentSheet} activeOpacity={0.8}>

@@ -1,6 +1,6 @@
 /**
- * Monorepo: delega ao metro.config.js da raiz (watchFolders, blockList, uma única cópia de React).
- * Sem este arquivo o Metro usa só o default do Expo e ignora a config compartilhada.
+ * Fixa o subpath do app no monorepo quando o Metro sobe sem EXPO_APP_SUBPATH
+ * (evita resolver o projeto errado e ajuda o binário iOS a achar o packager).
  */
 const path = require('path');
 

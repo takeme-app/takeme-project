@@ -8,6 +8,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -16,6 +17,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../navigation/ActivitiesStackTypes';
 import { supabase } from '../lib/supabase';
+import { ensureDriverClientConversation, markConversationReadByClient } from '../lib/chatConversations';
+import { storageUrl } from '../utils/storageUrl';
+
+const sb = supabase as { from: (table: string) => any };
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'Chat'>;
 
@@ -61,17 +66,33 @@ function groupByDate(messages: Message[]): Array<Message | { type: 'separator'; 
   return result;
 }
 
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 export function ChatScreen({ navigation, route }: Props) {
   const contactName = route.params?.contactName ?? 'Suporte Take Me';
-  const conversationId = route.params?.conversationId;
+  const routeConversationId = route.params?.conversationId;
+  const driverId = route.params?.driverId;
+  const bookingId = route.params?.bookingId ?? null;
+  const participantAvatarKey = route.params?.participantAvatarKey ?? null;
 
+  const [resolvedConversationId, setResolvedConversationId] = useState<string | null>(null);
+  const [resolveError, setResolveError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [loading, setLoading] = useState(!!conversationId);
+  const [loading, setLoading] = useState(
+    () => !!(routeConversationId || driverId)
+  );
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [conversationStatus, setConversationStatus] = useState<'active' | 'closed'>('active');
   const [myId, setMyId] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
+
+  const conversationId = routeConversationId ?? resolvedConversationId;
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -79,9 +100,42 @@ export function ChatScreen({ navigation, route }: Props) {
     });
   }, []);
 
+  useEffect(() => {
+    if (routeConversationId) {
+      markConversationReadByClient(routeConversationId);
+    }
+  }, [routeConversationId]);
+
+  useEffect(() => {
+    if (routeConversationId || !driverId) return;
+    let cancelled = false;
+    (async () => {
+      setResolveError(null);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || cancelled) {
+        setLoading(false);
+        return;
+      }
+      const { conversationId: cid, error } = await ensureDriverClientConversation({
+        clientId: user.id,
+        driverId,
+        bookingId,
+      });
+      if (cancelled) return;
+      if (error || !cid) {
+        setResolveError(error?.message ?? 'Não foi possível abrir a conversa.');
+        setLoading(false);
+        return;
+      }
+      setResolvedConversationId(cid);
+      await markConversationReadByClient(cid);
+    })();
+    return () => { cancelled = true; };
+  }, [routeConversationId, driverId, bookingId]);
+
   const loadMessages = useCallback(async () => {
     if (!conversationId) return;
-    const { data } = await supabase
+    const { data } = await sb
       .from('messages')
       .select('id, sender_id, content, created_at, read_at')
       .eq('conversation_id', conversationId)
@@ -92,7 +146,7 @@ export function ChatScreen({ navigation, route }: Props) {
 
   const loadConversation = useCallback(async () => {
     if (!conversationId) return;
-    const { data } = await supabase
+    const { data } = await sb
       .from('conversations')
       .select('status')
       .eq('id', conversationId)
@@ -101,7 +155,11 @@ export function ChatScreen({ navigation, route }: Props) {
   }, [conversationId]);
 
   useEffect(() => {
-    if (!conversationId) return;
+    if (!conversationId) {
+      if (!driverId && !routeConversationId) setLoading(false);
+      return;
+    }
+    setLoading(true);
     loadMessages();
     loadConversation();
 
@@ -122,15 +180,15 @@ export function ChatScreen({ navigation, route }: Props) {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [conversationId, loadMessages, loadConversation]);
+  }, [conversationId, driverId, routeConversationId, loadMessages, loadConversation]);
 
   const sendMessage = async () => {
     const text = inputText.trim();
-    if (!text || sending) return;
-    if (!conversationId || !myId) return;
+    if (!text || sending || !myId) return;
+    if (!conversationId) return;
     setSending(true);
     setInputText('');
-    await supabase.from('messages').insert({
+    await sb.from('messages').insert({
       conversation_id: conversationId,
       sender_id: myId,
       content: text,
@@ -139,6 +197,7 @@ export function ChatScreen({ navigation, route }: Props) {
   };
 
   const items = groupByDate(messages);
+  const headerAvatarUri = storageUrl('avatars', participantAvatarKey);
 
   const renderItem = ({ item }: { item: typeof items[number] }) => {
     if ('type' in item && item.type === 'separator') {
@@ -180,7 +239,13 @@ export function ChatScreen({ navigation, route }: Props) {
         <TouchableOpacity style={styles.headerBack} onPress={() => navigation.goBack()} hitSlop={12}>
           <MaterialIcons name="arrow-back" size={24} color={COLORS.black} />
         </TouchableOpacity>
-        <View style={styles.headerAvatarPlaceholder} />
+        {headerAvatarUri ? (
+          <Image source={{ uri: headerAvatarUri }} style={styles.headerAvatar} />
+        ) : (
+          <View style={styles.headerAvatarPlaceholder}>
+            <Text style={styles.headerAvatarText}>{getInitials(contactName)}</Text>
+          </View>
+        )}
         <Text style={styles.headerName} numberOfLines={1}>{contactName}</Text>
         <View style={styles.headerSpacer} />
       </View>
@@ -190,7 +255,11 @@ export function ChatScreen({ navigation, route }: Props) {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
-        {loading ? (
+        {resolveError ? (
+          <View style={styles.center}>
+            <Text style={styles.errorText}>{resolveError}</Text>
+          </View>
+        ) : loading ? (
           <View style={styles.center}>
             <ActivityIndicator size="large" color={COLORS.black} />
           </View>
@@ -198,11 +267,18 @@ export function ChatScreen({ navigation, route }: Props) {
           <FlatList
             ref={flatListRef}
             data={items}
-            keyExtractor={(item) => ('id' in item ? item.id : (item as any).id)}
+            keyExtractor={(item) => ('id' in item ? item.id : (item as { id: string }).id)}
             renderItem={renderItem}
             contentContainerStyle={styles.messagesContent}
             showsVerticalScrollIndicator={false}
             onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+            ListEmptyComponent={
+              !conversationId ? (
+                <Text style={styles.hintText}>
+                  {driverId ? 'Abrindo conversa…' : 'Selecione uma conversa ou fale com o motorista a partir de uma viagem com motorista atribuído.'}
+                </Text>
+              ) : undefined
+            }
             ListFooterComponent={
               conversationStatus === 'closed' ? (
                 <Text style={styles.closedText}>Conversa encerrada</Text>
@@ -211,7 +287,7 @@ export function ChatScreen({ navigation, route }: Props) {
           />
         )}
 
-        {conversationStatus === 'active' && (
+        {!resolveError && conversationStatus === 'active' && (
           <View style={styles.inputRow}>
             <TouchableOpacity style={styles.inputAction}>
               <MaterialIcons name="attach-file" size={24} color={COLORS.neutral700} />
@@ -233,9 +309,9 @@ export function ChatScreen({ navigation, route }: Props) {
               <MaterialIcons name="mic" size={24} color={COLORS.neutral700} />
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.sendButton, (!inputText.trim() || sending) && styles.sendButtonDisabled]}
+              style={[styles.sendButton, (!inputText.trim() || sending || !myId) && styles.sendButtonDisabled]}
               onPress={sendMessage}
-              disabled={!inputText.trim() || sending || !conversationId}
+              disabled={!inputText.trim() || sending || !conversationId || !myId}
               activeOpacity={0.8}
             >
               {sending ? (
@@ -254,7 +330,9 @@ export function ChatScreen({ navigation, route }: Props) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   flex: { flex: 1 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 },
+  errorText: { color: '#B91C1C', fontSize: 15, textAlign: 'center' },
+  hintText: { color: COLORS.neutral700, fontSize: 14, textAlign: 'center', paddingVertical: 32, paddingHorizontal: 16 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -264,14 +342,17 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.neutral300,
   },
   headerBack: { padding: 8 },
+  headerAvatar: { width: 40, height: 40, borderRadius: 20, marginLeft: 4, backgroundColor: COLORS.neutral300 },
   headerAvatarPlaceholder: {
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: COLORS.neutral300, marginLeft: 4,
+    alignItems: 'center', justifyContent: 'center',
   },
+  headerAvatarText: { color: COLORS.black, fontSize: 15, fontWeight: '700' },
   headerName: { flex: 1, fontSize: 18, fontWeight: '600', color: COLORS.black, marginLeft: 12 },
   headerSpacer: { width: 40 },
 
-  messagesContent: { padding: 16, paddingBottom: 8 },
+  messagesContent: { padding: 16, paddingBottom: 8, flexGrow: 1 },
 
   separatorRow: { alignItems: 'center', marginVertical: 12 },
   separatorPill: {

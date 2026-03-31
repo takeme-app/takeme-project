@@ -24,7 +24,7 @@ export function WhenNeededScreen({ navigation }: Props) {
     if (selected === 'now') {
       navigation.navigate('SearchTrip', { immediateTrip: true });
     } else if (selected === 'later') {
-      navigation.navigate('PlanRide');
+      navigation.navigate('PlanRide', {});
     }
   };
 

@@ -116,7 +116,9 @@ export type DependentShipmentStackParamList = {
 
 /** Dados do motorista/viagem selecionada (Procurando viagem → Confirmação → Checkout) */
 export type TripDriverParam = {
+  /** ID da linha em `scheduled_trips` (histórico: também estava em `id`) */
   id: string;
+  driver_id: string;
   name: string;
   rating: number;
   badge: string;
@@ -126,6 +128,10 @@ export type TripDriverParam = {
   bags: number;
   /** Valor em centavos (ex.: 6400 = R$ 64,00) */
   amount_cents?: number;
+  vehicle_model?: string | null;
+  vehicle_year?: number | null;
+  vehicle_plate?: string | null;
+  avatar_url?: string | null;
 };
 
 /** Ponto de partida ou destino para exibir no mapa (Checkout) */
@@ -149,6 +155,15 @@ export type PaymentConfirmedBookingParam = {
   driver_name: string;
 };
 
+/** Dados exibidos no acompanhamento da viagem após o pagamento */
+export type TripLiveDriverDisplay = {
+  driverName: string;
+  rating: number;
+  vehicleLabel: string;
+  amountCents: number;
+  bookingId?: string;
+};
+
 export type TripStackParamList = {
   WhenNeeded: undefined;
   PlanTrip: undefined;
@@ -157,8 +172,12 @@ export type TripStackParamList = {
   SearchTrip: { destination?: { address: string; city?: string; latitude?: number; longitude?: number }; immediateTrip?: boolean };
   ConfirmDetails: { driver?: TripDriverParam; origin?: TripPlaceParam; destination?: TripPlaceParam; scheduled_trip_id?: string; immediateTrip?: boolean };
   Checkout: { driver?: TripDriverParam; origin?: TripPlaceParam; destination?: TripPlaceParam; scheduled_trip_id?: string; passengers?: TripPassengerParam[]; bags_count?: number; immediateTrip?: boolean };
-  PaymentConfirmed: { booking?: PaymentConfirmedBookingParam; immediateTrip?: boolean };
-  DriverOnTheWay: undefined;
-  TripInProgress: undefined;
+  PaymentConfirmed: {
+    booking?: PaymentConfirmedBookingParam;
+    immediateTrip?: boolean;
+    tripLive?: TripLiveDriverDisplay;
+  };
+  DriverOnTheWay: TripLiveDriverDisplay | undefined;
+  TripInProgress: TripLiveDriverDisplay | undefined;
   RateTrip: { bookingId?: string };
 };
