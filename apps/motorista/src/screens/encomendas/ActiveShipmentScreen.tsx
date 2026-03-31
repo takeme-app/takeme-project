@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -17,9 +17,15 @@ import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ColetasEncomendasStackParamList } from '../../navigation/ColetasEncomendasStack';
 import { supabase } from '../../lib/supabase';
-import { MapboxMap, type MapboxMapRef } from '../../components/mapbox/MapboxMap';
-import { MapboxMarker } from '../../components/mapbox/MapboxMarker';
-import { MapboxPolyline } from '../../components/mapbox/MapboxPolyline';
+import {
+  GoogleMapsMap,
+  MapMarker,
+  MapPolyline,
+  latLngFromDbColumns,
+  regionFromLatLngPoints,
+  type GoogleMapsMapRef,
+} from '../../components/googleMaps';
+import { getGoogleMapsApiKey, getMapboxAccessToken } from '../../lib/googleMapsConfig';
 import { getRouteWithDuration, formatEta } from '../../lib/route';
 
 let Location: any = null;
@@ -91,9 +97,17 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
   const [ratingComment, setRatingComment] = useState('');
   const [summaryLoading, setSummaryLoading] = useState(false);
 
-  const mapRef = useRef<MapboxMapRef>(null);
+  const mapRef = useRef<GoogleMapsMapRef>(null);
   const locationSubRef = useRef<any>(null);
   const startTimeRef = useRef(Date.now());
+
+  const mapInitialRegion = useMemo(() => {
+    if (!shipment) return regionFromLatLngPoints([]);
+    const pts: Coord[] = [];
+    if (driverPos) pts.push(driverPos);
+    pts.push(shipment.originCoord, shipment.destCoord);
+    return regionFromLatLngPoints(pts);
+  }, [shipment, driverPos]);
 
   // Load shipment
   useEffect(() => {
@@ -116,13 +130,15 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         .maybeSingle();
       const p = prof as { full_name?: string | null } | null;
 
+      const oLL = latLngFromDbColumns(row.origin_lat, row.origin_lng);
+      const dLL = latLngFromDbColumns(row.destination_lat, row.destination_lng);
       const s: Shipment = {
         id: row.id,
         clientName: p?.full_name ?? 'Cliente',
         originAddress: row.origin_address ?? '',
         destinationAddress: row.destination_address ?? '',
-        originCoord: { latitude: row.origin_lat ?? -23.5, longitude: row.origin_lng ?? -46.6 },
-        destCoord: { latitude: row.destination_lat ?? -23.51, longitude: row.destination_lng ?? -46.61 },
+        originCoord: oLL ?? { latitude: -23.5, longitude: -46.6 },
+        destCoord: dLL ?? { latitude: -23.51, longitude: -46.61 },
         amountCents: row.amount_cents ?? 0,
         confirmedAt: row.created_at,
       };
@@ -130,7 +146,8 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
 
       if (row.status === 'picked_up') setStep('to_delivery');
 
-      const fullRoute = await getRouteWithDuration(s.originCoord, s.destCoord);
+      const routeOpts = { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() };
+      const fullRoute = await getRouteWithDuration(s.originCoord, s.destCoord, routeOpts);
       if (fullRoute) setFullRouteCoords(fullRoute.coordinates);
 
       setLoading(false);
@@ -163,7 +180,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (!driverPos || !shipment) return;
     const target = step === 'to_pickup' ? shipment.originCoord : shipment.destCoord;
-    getRouteWithDuration(driverPos, target).then((r) => {
+    getRouteWithDuration(driverPos, target, { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() }).then((r) => {
       if (r) {
         setDriverRouteCoords(r.coordinates);
         setEtaSeconds(r.durationSeconds);
@@ -261,46 +278,39 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     { key: 'delivery', coord: shipment.destCoord, done: false },
   ];
 
-  const mapInitialRegion = {
-    latitude: (shipment.originCoord.latitude + shipment.destCoord.latitude) / 2,
-    longitude: (shipment.originCoord.longitude + shipment.destCoord.longitude) / 2,
-    latitudeDelta: Math.max(0.02, Math.abs(shipment.originCoord.latitude - shipment.destCoord.latitude) * 2.5),
-    longitudeDelta: Math.max(0.02, Math.abs(shipment.originCoord.longitude - shipment.destCoord.longitude) * 2.5),
-  };
-
   return (
     <View style={styles.root}>
       <StatusBar style="dark" />
 
       {/* Full-screen map */}
-      <MapboxMap ref={mapRef} style={styles.map} initialRegion={mapInitialRegion}>
+      <GoogleMapsMap ref={mapRef} style={styles.map} initialRegion={mapInitialRegion}>
         {/* Full route — gold */}
         {fullRouteCoords.length > 1 && (
-          <MapboxPolyline id="full" coordinates={fullRouteCoords} strokeColor={GOLD} strokeWidth={4} />
+          <MapPolyline id="full" coordinates={fullRouteCoords} strokeColor={GOLD} strokeWidth={4} />
         )}
         {/* Driver → current stop — dark */}
         {driverRouteCoords.length > 1 && (
-          <MapboxPolyline id="driver" coordinates={driverRouteCoords} strokeColor={DARK} strokeWidth={3} />
+          <MapPolyline id="driver" coordinates={driverRouteCoords} strokeColor={DARK} strokeWidth={3} />
         )}
         {/* Stop markers */}
         {stops.map((s) => (
-          <MapboxMarker key={s.key} id={`stop-${s.key}`} coordinate={s.coord} anchor={{ x: 0.5, y: 0.5 }}>
+          <MapMarker key={s.key} id={`stop-${s.key}`} coordinate={s.coord} anchor={{ x: 0.5, y: 0.5 }}>
             <View style={[styles.stopMarker, s.done && styles.stopMarkerDone]}>
               <MaterialIcons name={s.done ? 'check' : 'inventory-2'} size={18} color="#FFF" />
             </View>
-          </MapboxMarker>
+          </MapMarker>
         ))}
         {/* Driver marker */}
         {driverPos && (
-          <MapboxMarker id="driver-pos" coordinate={driverPos} anchor={{ x: 0.5, y: 0.5 }}>
+          <MapMarker id="driver-pos" coordinate={driverPos} anchor={{ x: 0.5, y: 0.5 }}>
             <View style={styles.driverPulse}>
               <View style={styles.driverDot}>
                 <MaterialIcons name="play-arrow" size={18} color="#FFF" />
               </View>
             </View>
-          </MapboxMarker>
+          </MapMarker>
         )}
-      </MapboxMap>
+      </GoogleMapsMap>
 
       {/* Back button */}
       <SafeAreaView style={styles.backSafe} edges={['top']} pointerEvents="box-none">

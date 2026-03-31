@@ -24,6 +24,10 @@ import type { ProfileStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { useAppAlert } from '../contexts/AppAlertContext';
+import {
+  latLngFromDbColumns,
+  DEFAULT_MAP_REGION_BR,
+} from '../components/googleMaps';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'RouteSchedule'>;
 
@@ -53,6 +57,56 @@ type PriceAdjust = {
 
 function formatCents(cents: number): string {
   return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+/**
+ * Coordenadas para `scheduled_trips` (colunas NOT NULL): copia de `worker_routes` quando válidas;
+ * senão fallback no Brasil (nunca 0,0 — evita mapa no Atlântico).
+ */
+function coordsForScheduledTripFromRoute(row: {
+  origin_lat?: number | null;
+  origin_lng?: number | null;
+  destination_lat?: number | null;
+  destination_lng?: number | null;
+}): {
+  origin_lat: number;
+  origin_lng: number;
+  destination_lat: number;
+  destination_lng: number;
+} {
+  const o = latLngFromDbColumns(row.origin_lat, row.origin_lng);
+  const d = latLngFromDbColumns(row.destination_lat, row.destination_lng);
+  if (o && d) {
+    return {
+      origin_lat: o.latitude,
+      origin_lng: o.longitude,
+      destination_lat: d.latitude,
+      destination_lng: d.longitude,
+    };
+  }
+  if (o && !d) {
+    return {
+      origin_lat: o.latitude,
+      origin_lng: o.longitude,
+      destination_lat: o.latitude + 0.04,
+      destination_lng: o.longitude + 0.04,
+    };
+  }
+  if (!o && d) {
+    return {
+      origin_lat: d.latitude - 0.04,
+      origin_lng: d.longitude - 0.04,
+      destination_lat: d.latitude,
+      destination_lng: d.longitude,
+    };
+  }
+  const c = DEFAULT_MAP_REGION_BR;
+  return {
+    origin_lat: c.latitude,
+    origin_lng: c.longitude,
+    destination_lat: c.latitude + 0.05,
+    destination_lng: c.longitude + 0.05,
+  };
 }
 
 function totalValue(base: number, count: number, adjust: PriceAdjust, dayIdx: number): number {
@@ -174,10 +228,11 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user?.id) throw new Error('Não autenticado.');
 
-      // Buscar endereços e preço da rota (worker_routes não tem lat/lng)
       const { data: routeData, error: routeErr } = await supabase
         .from('worker_routes')
-        .select('origin_address, destination_address, price_per_person_cents')
+        .select(
+          'origin_address, destination_address, price_per_person_cents, origin_lat, origin_lng, destination_lat, destination_lng',
+        )
         .eq('id', routeId)
         .single();
       if (routeErr || !routeData) throw new Error('Não foi possível carregar os dados da rota.');
@@ -186,7 +241,13 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         origin_address: string;
         destination_address: string;
         price_per_person_cents: number;
+        origin_lat?: number | null;
+        origin_lng?: number | null;
+        destination_lat?: number | null;
+        destination_lng?: number | null;
       };
+
+      const geo = coordsForScheduledTripFromRoute(r);
 
       // dayNum: 0=Dom, 1=Seg … 6=Sáb (mesmo que JS Date.getDay())
       const dayNum = addingDayIdx === 6 ? 0 : addingDayIdx + 1;
@@ -226,10 +287,10 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         origin_address: r.origin_address,
         destination_address: r.destination_address,
         price_per_person_cents: r.price_per_person_cents,
-        origin_lat: 0,
-        origin_lng: 0,
-        destination_lat: 0,
-        destination_lng: 0,
+        origin_lat: geo.origin_lat,
+        origin_lng: geo.origin_lng,
+        destination_lat: geo.destination_lat,
+        destination_lng: geo.destination_lng,
       });
       if (error) throw error;
       closeModal();

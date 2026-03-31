@@ -12,6 +12,7 @@ import {
   Platform,
   ActivityIndicator,
 } from 'react-native';
+import { mapboxForwardGeocode } from '@take-me/shared';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -20,6 +21,11 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { CalendarPicker } from '../../components/CalendarPicker';
+import {
+  EXCURSION_DESTINATION_PRESETS,
+  EXCURSION_PRESET_OTHER_ID,
+  type ExcursionDestinationPreset,
+} from '../../data/excursionDestinationPresets';
 
 type Props = NativeStackScreenProps<ExcursionStackParamList, 'ExcursionRequestForm'>;
 
@@ -63,6 +69,9 @@ function formatDisplayDate(iso: string): string {
 export function ExcursionRequestFormScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
   const [destination, setDestination] = useState('');
+  /** Coordenadas quando o usuário escolhe um destino da lista (evita geocode no envio). */
+  const [presetDestCoords, setPresetDestCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [destChipFocus, setDestChipFocus] = useState<string | null>(null);
   const [excursionDate, setExcursionDate] = useState<Date | null>(null);
   const [dateModalVisible, setDateModalVisible] = useState(false);
   const [peopleCount, setPeopleCount] = useState(2);
@@ -115,12 +124,40 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
       showAlert('Erro', 'Sessão expirada.');
       return;
     }
+
+    let destinationLat: number | null = presetDestCoords?.lat ?? null;
+    let destinationLng: number | null = presetDestCoords?.lng ?? null;
+    if (destinationLat == null || destinationLng == null) {
+      const token = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN?.trim();
+      if (!token) {
+        setSubmitting(false);
+        showAlert(
+          'Destino no mapa',
+          'Escolha um destino da lista ou configure EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN para localizar endereços digitados.',
+        );
+        return;
+      }
+      const geo = await mapboxForwardGeocode(`${dest}, Brasil`, token);
+      if (!geo) {
+        setSubmitting(false);
+        showAlert(
+          'Destino',
+          'Não encontramos esse local. Tente “Cidade, UF” ou escolha um destino da lista.',
+        );
+        return;
+      }
+      destinationLat = geo.latitude;
+      destinationLng = geo.longitude;
+    }
+
     const recreationItemsPayload = recreationItems
       .filter((r) => r.itemType.trim())
       .map((r) => ({ itemType: r.itemType.trim(), quantity: (r.quantity || '').trim() }));
     const payload = {
       user_id: user.id,
       destination: dest,
+      destination_lat: destinationLat,
+      destination_lng: destinationLng,
       excursion_date: toISODate(excursionDate),
       people_count: peopleCount,
       fleet_type: fleetType,
@@ -157,6 +194,7 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
     observations,
     navigation,
     showAlert,
+    presetDestCoords,
   ]);
 
   const today = new Date();
@@ -185,11 +223,64 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
           </Text>
 
           <Text style={styles.label}>Destino da excursão</Text>
+          <Text style={styles.destHint}>
+            Escolha um local frequente (coordenadas já definidas) ou toque em “Outro” e digite cidade e UF; o app localiza no mapa ao enviar.
+          </Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.chipsScroll}
+            contentContainerStyle={styles.chipsContent}
+          >
+            {EXCURSION_DESTINATION_PRESETS.map((p: ExcursionDestinationPreset) => {
+              const selected =
+                destChipFocus === p.id ||
+                (presetDestCoords != null &&
+                  presetDestCoords.lat === p.lat &&
+                  presetDestCoords.lng === p.lng &&
+                  destination.trim() === p.destinationText);
+              return (
+                <TouchableOpacity
+                  key={p.id}
+                  style={[styles.destChip, selected && styles.destChipSelected]}
+                  onPress={() => {
+                    setDestChipFocus(p.id);
+                    setDestination(p.destinationText);
+                    setPresetDestCoords({ lat: p.lat, lng: p.lng });
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Text style={[styles.destChipText, selected && styles.destChipTextSelected]}>{p.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+            <TouchableOpacity
+              style={[styles.destChip, destChipFocus === EXCURSION_PRESET_OTHER_ID && styles.destChipSelected]}
+              onPress={() => {
+                setDestChipFocus(EXCURSION_PRESET_OTHER_ID);
+                setPresetDestCoords(null);
+              }}
+              activeOpacity={0.85}
+            >
+              <Text
+                style={[
+                  styles.destChipText,
+                  destChipFocus === EXCURSION_PRESET_OTHER_ID && styles.destChipTextSelected,
+                ]}
+              >
+                Outro
+              </Text>
+            </TouchableOpacity>
+          </ScrollView>
           <TextInput
             style={styles.input}
             value={destination}
-            onChangeText={setDestination}
-            placeholder="Digite o destino"
+            onChangeText={(t) => {
+              setDestination(t);
+              setPresetDestCoords(null);
+              setDestChipFocus(EXCURSION_PRESET_OTHER_ID);
+            }}
+            placeholder="Ex.: Bacabal, MA ou nome do município"
             placeholderTextColor={COLORS.neutral700}
           />
 
@@ -374,6 +465,19 @@ const styles = StyleSheet.create({
   title: { fontSize: 20, fontWeight: '700', color: COLORS.black, marginTop: 40, marginBottom: 8 },
   subtitle: { fontSize: 14, color: COLORS.neutral700, marginBottom: 24 },
   label: { fontSize: 15, fontWeight: '500', color: COLORS.black, marginBottom: 8 },
+  destHint: { fontSize: 13, color: COLORS.neutral700, marginBottom: 10, lineHeight: 18 },
+  chipsScroll: { marginBottom: 10, maxHeight: 44 },
+  chipsContent: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
+  destChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: COLORS.neutral300,
+    marginRight: 8,
+  },
+  destChipSelected: { backgroundColor: COLORS.black },
+  destChipText: { fontSize: 13, fontWeight: '600', color: COLORS.black },
+  destChipTextSelected: { color: '#FFF' },
   labelSecondary: { fontSize: 14, color: COLORS.neutral700, marginBottom: 8 },
   optionalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   optional: { fontSize: 13, color: COLORS.neutral700 },

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Switch,
   Modal,
+  Platform,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -19,7 +20,21 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
-import { MapboxMap, MapboxMarker } from '../components/mapbox';
+import {
+  GoogleMapsMap,
+  MapMarker,
+  regionFromLatLngPoints,
+  isValidGlobeCoordinate,
+  latLngFromDbColumns,
+} from '../components/googleMaps';
+import type { LatLng } from '../components/googleMaps';
+
+let LocationMod: typeof import('expo-location') | null = null;
+try {
+  LocationMod = require('expo-location');
+} catch {
+  /* native rebuild */
+}
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Home'>,
@@ -34,6 +49,10 @@ type ActiveTrip = {
   passengerCount: number;
   bagsCount: number;
   trunkPct: number;
+  origin_lat: number | null;
+  origin_lng: number | null;
+  destination_lat: number | null;
+  destination_lng: number | null;
 };
 
 function formatTime(iso: string): string {
@@ -59,6 +78,62 @@ export function HomeScreen({ navigation }: Props) {
   const [userId, setUserId] = useState<string | null>(null);
   const [activeTrip, setActiveTrip] = useState<ActiveTrip | null>(null);
   const [showEndTripModal, setShowEndTripModal] = useState(false);
+  const [mapUserLL, setMapUserLL] = useState<LatLng | null>(null);
+
+  useEffect(() => {
+    if (!LocationMod) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { status } = await LocationMod.requestForegroundPermissionsAsync();
+        if (status !== 'granted' || cancelled) return;
+        const pos = await LocationMod.getCurrentPositionAsync({
+          accuracy: LocationMod.Accuracy?.Balanced ?? LocationMod.Accuracy.Balanced,
+        });
+        if (!cancelled && pos?.coords) {
+          setMapUserLL({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          });
+        }
+      } catch {
+        /* GPS off / timeout */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const homeTripMapRegion = useMemo(() => {
+    // Prioridade: GPS do motorista → origem da viagem → destino.
+    // Usa zoom de rua (0.04°) para não ficar parecendo oceano em cidades costeiras.
+    if (mapUserLL && isValidGlobeCoordinate(mapUserLL.latitude, mapUserLL.longitude)) {
+      return { latitude: mapUserLL.latitude, longitude: mapUserLL.longitude, latitudeDelta: 0.04, longitudeDelta: 0.04 };
+    }
+    if (activeTrip) {
+      const originLL = latLngFromDbColumns(activeTrip.origin_lat, activeTrip.origin_lng);
+      if (originLL) return { latitude: originLL.latitude, longitude: originLL.longitude, latitudeDelta: 0.04, longitudeDelta: 0.04 };
+      const destLL = latLngFromDbColumns(activeTrip.destination_lat, activeTrip.destination_lng);
+      if (destLL) return { latitude: destLL.latitude, longitude: destLL.longitude, latitudeDelta: 0.04, longitudeDelta: 0.04 };
+    }
+    return regionFromLatLngPoints([]);
+  }, [
+    mapUserLL,
+    activeTrip?.origin_lat,
+    activeTrip?.origin_lng,
+    activeTrip?.destination_lat,
+    activeTrip?.destination_lng,
+  ]);
+
+  /** Sem GPS e sem nenhuma coordenada válida da viagem → não montar MapView (evita 0,0 / oceano). */
+  const homeMapReady = useMemo(() => {
+    if (!activeTrip) return true;
+    if (mapUserLL && isValidGlobeCoordinate(mapUserLL.latitude, mapUserLL.longitude)) return true;
+    const oOk = latLngFromDbColumns(activeTrip.origin_lat, activeTrip.origin_lng) !== null;
+    const dOk = latLngFromDbColumns(activeTrip.destination_lat, activeTrip.destination_lng) !== null;
+    return oOk || dOk;
+  }, [activeTrip, mapUserLL]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -101,7 +176,9 @@ export function HomeScreen({ navigation }: Props) {
     // Active trip
     const { data: tripData } = await supabase
       .from('scheduled_trips')
-      .select('id, origin_address, destination_address, departure_at, trunk_occupancy_pct')
+      .select(
+        'id, origin_address, destination_address, departure_at, trunk_occupancy_pct, origin_lat, origin_lng, destination_lat, destination_lng',
+      )
       .eq('driver_id', user.id)
       .eq('status', 'active')
       .order('departure_at', { ascending: true })
@@ -109,7 +186,17 @@ export function HomeScreen({ navigation }: Props) {
       .maybeSingle();
 
     if (tripData) {
-      const t = tripData as { id: string; origin_address: string; destination_address: string; departure_at: string; trunk_occupancy_pct: number | null };
+      const t = tripData as {
+        id: string;
+        origin_address: string;
+        destination_address: string;
+        departure_at: string;
+        trunk_occupancy_pct: number | null;
+        origin_lat?: number | null;
+        origin_lng?: number | null;
+        destination_lat?: number | null;
+        destination_lng?: number | null;
+      };
       const { data: bkgs } = await supabase
         .from('bookings')
         .select('passenger_count, bags_count')
@@ -117,7 +204,19 @@ export function HomeScreen({ navigation }: Props) {
         .in('status', ['confirmed', 'paid']);
       const passengerCount = ((bkgs ?? []) as { passenger_count?: number }[]).reduce((s, b) => s + (b.passenger_count ?? 0), 0);
       const bagsCount = ((bkgs ?? []) as { bags_count?: number }[]).reduce((s, b) => s + (b.bags_count ?? 0), 0);
-      setActiveTrip({ ...t, passengerCount, bagsCount, trunkPct: t.trunk_occupancy_pct ?? 0 });
+      setActiveTrip({
+        id: t.id,
+        origin_address: t.origin_address,
+        destination_address: t.destination_address,
+        departure_at: t.departure_at,
+        passengerCount,
+        bagsCount,
+        trunkPct: t.trunk_occupancy_pct ?? 0,
+        origin_lat: t.origin_lat ?? null,
+        origin_lng: t.origin_lng ?? null,
+        destination_lat: t.destination_lat ?? null,
+        destination_lng: t.destination_lng ?? null,
+      });
     } else {
       setActiveTrip(null);
     }
@@ -287,28 +386,41 @@ export function HomeScreen({ navigation }: Props) {
             </View>
 
             {/* Mapa da viagem ativa */}
-            <View style={styles.mapPlaceholder}>
-              <MapboxMap
-                style={{ flex: 1, borderRadius: 12 }}
-                initialRegion={{
-                  latitude: -7.3289,
-                  longitude: -35.3328,
-                  latitudeDelta: 0.05,
-                  longitudeDelta: 0.05,
-                }}
-                scrollEnabled={false}
-              >
-                <MapboxMarker
-                  id="origin"
-                  coordinate={{ latitude: -7.3289, longitude: -35.3328 }}
-                  pinColor="#111827"
-                />
-                <MapboxMarker
-                  id="dest"
-                  coordinate={{ latitude: -7.29, longitude: -35.30 }}
-                  pinColor="#C9A227"
-                />
-              </MapboxMap>
+            <View style={styles.mapPlaceholder} collapsable={false}>
+              {!homeMapReady ? (
+                <View style={styles.mapPreviewLoading}>
+                  <ActivityIndicator size="large" color="#111827" />
+                  <Text style={styles.mapPreviewLoadingText}>Carregando mapa…</Text>
+                </View>
+              ) : (
+                <GoogleMapsMap
+                  style={styles.mapPreviewInner}
+                  initialRegion={homeTripMapRegion}
+                  scrollEnabled={false}
+                  showsUserLocation={Boolean(mapUserLL)}
+                >
+                  {(() => {
+                    const originLL = latLngFromDbColumns(activeTrip.origin_lat, activeTrip.origin_lng);
+                    return originLL ? (
+                      <MapMarker
+                        id="origin"
+                        coordinate={originLL}
+                        pinColor="#111827"
+                      />
+                    ) : null;
+                  })()}
+                  {(() => {
+                    const destLL = latLngFromDbColumns(activeTrip.destination_lat, activeTrip.destination_lng);
+                    return destLL ? (
+                      <MapMarker
+                        id="dest"
+                        coordinate={destLL}
+                        pinColor="#C9A227"
+                      />
+                    ) : null;
+                  })()}
+                </GoogleMapsMap>
+              )}
             </View>
 
             <TouchableOpacity style={styles.mapBtn} activeOpacity={0.85} onPress={() => activeTrip && navigation.navigate('ActiveTrip', { tripId: activeTrip.id })}>
@@ -436,10 +548,23 @@ const styles = StyleSheet.create({
   metaLabel: { fontSize: 12, color: '#9CA3AF' },
   metaValue: { fontSize: 16, fontWeight: '700', color: '#111827' },
   mapPlaceholder: {
-    height: 140, backgroundColor: '#E5E7EB', borderRadius: 12,
-    marginBottom: 14, alignItems: 'center', justifyContent: 'center',
-    overflow: 'hidden', position: 'relative',
+    height: 160,
+    width: '100%',
+    backgroundColor: '#E5E7EB',
+    borderRadius: 12,
+    marginBottom: 14,
+    overflow: 'hidden',
+    position: 'relative',
   },
+  mapPreviewInner: { width: '100%', height: '100%', borderRadius: 12 },
+  mapPreviewLoading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: '#E5E7EB',
+  },
+  mapPreviewLoadingText: { fontSize: 13, color: '#6B7280' },
   mapCarBubble: {
     width: 48, height: 48, borderRadius: 24, backgroundColor: '#111827',
     alignItems: 'center', justifyContent: 'center',

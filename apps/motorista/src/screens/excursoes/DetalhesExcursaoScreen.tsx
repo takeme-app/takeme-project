@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -15,17 +15,90 @@ import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ColetasExcursoesStackParamList } from '../../navigation/ColetasExcursoesStack';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
+import { googleForwardGeocode } from '@take-me/shared';
 import { supabase } from '../../lib/supabase';
+import { getGoogleMapsApiKey, getMapboxAccessToken } from '../../lib/googleMapsConfig';
+import {
+  GoogleMapsMap,
+  MapMarker,
+  MapPolyline,
+  latLngFromDbColumns,
+  mergeLngLatPointsForCamera,
+  toLngLatPair,
+  useMapCameraApply,
+} from '../../components/googleMaps';
+import type { LatLng, MapRegion, GoogleMapsMapRef } from '../../components/googleMaps';
+import { getRouteWithDuration, formatEta } from '../../lib/route';
 
-// Defensive Mapbox import
-let MapboxGL: any = null;
-try { MapboxGL = require('@rnmapbox/maps').default; } catch {}
+let Location: any = null;
+try {
+  Location = require('expo-location');
+} catch {
+  /* módulo nativo ausente até rebuild */
+}
 
 const { height: SCREEN_H } = Dimensions.get('window');
 const MAP_HEIGHT = SCREEN_H * 0.38;
 
-// Default coords (São Paulo, Brazil)
+// Fallback quando não há GPS nem coords no pedido (São Paulo — nunca use 0,0)
 const DEFAULT_COORD: [number, number] = [-46.6333, -23.5505];
+
+/** Mapa sem centro válido cai no Atlântico (~0,0). Garante sempre [lng,lat] finito. */
+function safeMapCenter(pair: [number, number] | null | undefined): [number, number] {
+  if (!pair || pair.length < 2) return DEFAULT_COORD;
+  const lng = pair[0];
+  const lat = pair[1];
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return DEFAULT_COORD;
+  if (Math.abs(lng) < 1e-6 && Math.abs(lat) < 1e-6) return DEFAULT_COORD;
+  if (lat < -85 || lat > 85 || lng < -180 || lng > 180) return DEFAULT_COORD;
+  return [lng, lat];
+}
+
+function toFiniteNumber(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const t = v.trim();
+    if (t === '') return null;
+    const n = Number(t.replace(',', '.'));
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/**
+ * [lng, lat] para câmera/marcadores. Rejeita null/NaN e (0,0) — emulador/GPS às vezes devolve 0,0 = Atlântico.
+ */
+function validCoordPair(lng: unknown, lat: unknown): [number, number] | null {
+  const ln = toFiniteNumber(lng);
+  const la = toFiniteNumber(lat);
+  if (ln == null || la == null) return null;
+  if (Math.abs(ln) < 1e-6 && Math.abs(la) < 1e-6) return null;
+  if (la < -85 || la > 85 || ln < -180 || ln > 180) return null;
+  return [ln, la];
+}
+
+/** Pontos [lng,lat] únicos: você, destino, origem — para enquadrar o mapa e ver a rota inteira. */
+function collectMapPoints(
+  user: [number, number] | null,
+  dest: [number, number] | null,
+  origin: [number, number] | null,
+): [number, number][] {
+  const out: [number, number][] = [];
+  const seen = new Set<string>();
+  for (const p of [user, dest, origin]) {
+    if (!p) continue;
+    const k = `${p[0].toFixed(5)}_${p[1].toFixed(5)}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(p);
+  }
+  return out;
+}
+
+function toLatLng(p: [number, number]): LatLng {
+  return { longitude: p[0], latitude: p[1] };
+}
 
 type Props = NativeStackScreenProps<ColetasExcursoesStackParamList, 'DetalhesExcursao'>;
 
@@ -98,14 +171,21 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(true);
   const [accepting, setAccepting] = useState(false);
   const [detail, setDetail] = useState<ExcursionDetail | null>(null);
-  const cameraRef = useRef<any>(null);
+  const [userLngLat, setUserLngLat] = useState<[number, number] | null>(null);
+  const [routeCoords, setRouteCoords] = useState<LatLng[]>([]);
+  const [routeEtaSec, setRouteEtaSec] = useState<number | null>(null);
+  /** Fallback quando o pedido só tem texto de destino (sem destination_lat no banco). */
+  const [geocodedDestCoord, setGeocodedDestCoord] = useState<[number, number] | null>(null);
+  /** Fallback para origem só em texto (sem origin_lat no banco). */
+  const [geocodedOriginCoord, setGeocodedOriginCoord] = useState<[number, number] | null>(null);
+  const excursionMapRef = useRef<GoogleMapsMapRef>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     const { data } = await supabase
       .from('excursion_requests')
       .select(
-        'id, origin, destination, excursion_date, departure_time, return_time, return_date, people_count, transport_type, responsible_name, direction, status, user_id, origin_lat, origin_lng, destination_lat, destination_lng',
+        'id, origin, destination, excursion_date, departure_time, return_time, return_date, people_count, fleet_type, responsible_name, direction, status, user_id, origin_lat, origin_lng, destination_lat, destination_lng',
       )
       .eq('id', excursionId)
       .maybeSingle();
@@ -123,6 +203,9 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     const depIso = r.departure_time ?? r.excursion_date ?? null;
     const retIso = r.return_time ?? r.return_date ?? null;
 
+    const originLL = latLngFromDbColumns(r.origin_lat, r.origin_lng);
+    const destLL = latLngFromDbColumns(r.destination_lat, r.destination_lng);
+
     setDetail({
       id: r.id,
       origin: r.origin ?? 'Origem',
@@ -130,19 +213,76 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
       departureTime: depIso,
       returnTime: retIso,
       passengerCount: r.people_count ?? 0,
-      transportType: r.transport_type ?? 'Van',
+      transportType: r.fleet_type ?? 'Van',
       responsible,
       direction: r.direction ?? 'Ida',
       status: r.status ?? 'pending',
-      originLat: r.origin_lat ?? null,
-      originLng: r.origin_lng ?? null,
-      destLat: r.destination_lat ?? null,
-      destLng: r.destination_lng ?? null,
+      originLat: originLL?.latitude ?? null,
+      originLng: originLL?.longitude ?? null,
+      destLat: destLL?.latitude ?? null,
+      destLng: destLL?.longitude ?? null,
     });
     setLoading(false);
   }, [excursionId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // GPS: última posição + fix atual + atualizações periódicas (mapa “começa em você”).
+  useEffect(() => {
+    if (!Location) return;
+    let cancelled = false;
+    let subscription: { remove: () => void } | null = null;
+
+    function applyPosition(longitude: number, latitude: number) {
+      const pair = validCoordPair(longitude, latitude);
+      if (pair && !cancelled) setUserLngLat(pair);
+    }
+
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted' || cancelled) return;
+
+        try {
+          const last = await Location.getLastKnownPositionAsync({});
+          if (last?.coords) {
+            applyPosition(last.coords.longitude, last.coords.latitude);
+          }
+        } catch {
+          /* sem cache */
+        }
+
+        const pos = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy?.Balanced ?? 3,
+        });
+        if (!cancelled && pos?.coords) {
+          applyPosition(pos.coords.longitude, pos.coords.latitude);
+        }
+
+        if (cancelled) return;
+        try {
+          subscription = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy?.Balanced ?? 3,
+              timeInterval: 6000,
+              distanceInterval: 30,
+            },
+            (loc: { coords: { longitude: number; latitude: number } }) => {
+              applyPosition(loc.coords.longitude, loc.coords.latitude);
+            },
+          );
+        } catch {
+          /* watch indisponível */
+        }
+      } catch {
+        /* GPS desligado / timeout */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      subscription?.remove();
+    };
+  }, []);
 
   const handleAccept = useCallback(async () => {
     if (!detail) return;
@@ -161,10 +301,183 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     await load();
   }, [detail, load]);
 
-  const mapCenter: [number, number] =
-    detail?.destLng != null && detail?.destLat != null
-      ? [detail.destLng, detail.destLat]
-      : DEFAULT_COORD;
+  const destCoord = useMemo(() => {
+    if (!detail || detail.destLat == null || detail.destLng == null) return null;
+    return toLngLatPair({ latitude: detail.destLat, longitude: detail.destLng });
+  }, [detail?.destLat, detail?.destLng, detail?.id]);
+
+  const originCoord = useMemo(() => {
+    if (!detail || detail.originLat == null || detail.originLng == null) return null;
+    return toLngLatPair({ latitude: detail.originLat, longitude: detail.originLng });
+  }, [detail?.originLat, detail?.originLng, detail?.id]);
+
+  useEffect(() => {
+    setGeocodedDestCoord(null);
+    if (!detail?.destination?.trim() || destCoord) return;
+    const apiKey = getGoogleMapsApiKey();
+    if (!apiKey) return;
+    let cancelled = false;
+    const q = `${detail.destination.trim()}, Brasil`;
+    (async () => {
+      const geo = await googleForwardGeocode(q, apiKey);
+      if (cancelled || !geo) return;
+      const pair = toLngLatPair({ latitude: geo.latitude, longitude: geo.longitude });
+      if (pair) setGeocodedDestCoord(pair);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [detail?.id, detail?.destination, destCoord]);
+
+  useEffect(() => {
+    setGeocodedOriginCoord(null);
+    const o = detail?.origin?.trim();
+    if (!o || o === 'Origem' || o.length < 2 || originCoord) return;
+    const apiKey = getGoogleMapsApiKey();
+    if (!apiKey) return;
+    let cancelled = false;
+    const q = `${o}, Brasil`;
+    (async () => {
+      const geo = await googleForwardGeocode(q, apiKey);
+      if (cancelled || !geo) return;
+      const pair = toLngLatPair({ latitude: geo.latitude, longitude: geo.longitude });
+      if (pair) setGeocodedOriginCoord(pair);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [detail?.id, detail?.origin, originCoord]);
+
+  const resolvedDestCoord = destCoord ?? geocodedDestCoord;
+  const resolvedOriginCoord = originCoord ?? geocodedOriginCoord;
+
+  const mapPoints = useMemo(
+    () => collectMapPoints(userLngLat, resolvedDestCoord, resolvedOriginCoord),
+    [userLngLat, resolvedDestCoord, resolvedOriginCoord],
+  );
+
+  /** Cantos da bbox da rota — enquadra a linha inteira (equivalente a fitBounds). */
+  const routeFitSamples = useMemo((): [number, number][] => {
+    if (routeCoords.length < 2) return [];
+    let minLng = Infinity;
+    let maxLng = -Infinity;
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    for (const c of routeCoords) {
+      const lng = parseFloat(String(c.longitude));
+      const lat = parseFloat(String(c.latitude));
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+      minLng = Math.min(minLng, lng);
+      maxLng = Math.max(maxLng, lng);
+      minLat = Math.min(minLat, lat);
+      maxLat = Math.max(maxLat, lat);
+    }
+    if (!Number.isFinite(minLng)) return [];
+    return [
+      [minLng, minLat],
+      [minLng, maxLat],
+      [maxLng, minLat],
+      [maxLng, maxLat],
+    ];
+  }, [routeCoords]);
+
+  const cameraFitPoints = useMemo(
+    () => mergeLngLatPointsForCamera(mapPoints, routeFitSamples),
+    [mapPoints, routeFitSamples],
+  );
+
+  const applyCameraRef = useMapCameraApply(excursionMapRef, {
+    fitPoints: cameraFitPoints,
+    hasRoutePolyline: routeCoords.length >= 2,
+    userLngLat,
+    safeCenter: safeMapCenter,
+    fallbackCenter: DEFAULT_COORD,
+  });
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      applyCameraRef.current();
+      requestAnimationFrame(() => applyCameraRef.current());
+    }, 80);
+    return () => clearTimeout(t);
+  }, [cameraFitPoints, routeCoords.length]);
+
+  // Rota no mapa: OSRM público (mesmo padrão do ActiveTrip). origem→destino do pedido, ou você→destino.
+  useEffect(() => {
+    if (!detail) {
+      setRouteCoords([]);
+      setRouteEtaSec(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const user = userLngLat ? toLatLng(userLngLat) : null;
+      const dest = resolvedDestCoord ? toLatLng(resolvedDestCoord) : null;
+      const origin = resolvedOriginCoord ? toLatLng(resolvedOriginCoord) : null;
+
+      const routeOpts = { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() };
+      let result = null;
+      if (origin && dest) {
+        result = await getRouteWithDuration(origin, dest, routeOpts);
+      } else if (user && dest) {
+        result = await getRouteWithDuration(user, dest, routeOpts);
+      } else if (user && origin) {
+        result = await getRouteWithDuration(user, origin, routeOpts);
+      }
+
+      if (cancelled) return;
+      if (result?.coordinates?.length) {
+        setRouteCoords(result.coordinates);
+        setRouteEtaSec(result.durationSeconds ?? null);
+      } else {
+        setRouteCoords([]);
+        setRouteEtaSec(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [detail?.id, userLngLat, resolvedDestCoord, resolvedOriginCoord]);
+
+  const cameraInitialCenter = useMemo(
+    () => safeMapCenter(userLngLat ?? resolvedDestCoord ?? resolvedOriginCoord ?? DEFAULT_COORD),
+    [userLngLat, resolvedDestCoord, resolvedOriginCoord],
+  );
+  const cameraInitialZoom = useMemo(() => {
+    if (userLngLat) return 14;
+    if (resolvedDestCoord || resolvedOriginCoord) return 11;
+    return 11;
+  }, [userLngLat, resolvedDestCoord, resolvedOriginCoord]);
+
+  /** Região inicial para o mapa (mesmo centro que a câmera usava; deltas coerentes com o zoom). */
+  const excursionMapRegion = useMemo((): MapRegion => {
+    const lat = cameraInitialCenter[1];
+    const lng = cameraInitialCenter[0];
+    const z = cameraInitialZoom;
+    const delta = Math.max(0.008 * 2 ** (14 - z), 0.02);
+    return {
+      latitude: lat,
+      longitude: lng,
+      latitudeDelta: delta,
+      longitudeDelta: delta,
+    };
+  }, [cameraInitialCenter, cameraInitialZoom]);
+
+  const mapIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onMapIdle = useCallback(() => {
+    if (mapIdleTimerRef.current) clearTimeout(mapIdleTimerRef.current);
+    mapIdleTimerRef.current = setTimeout(() => {
+      mapIdleTimerRef.current = null;
+      applyCameraRef.current();
+    }, 120);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (mapIdleTimerRef.current) clearTimeout(mapIdleTimerRef.current);
+    },
+    [],
+  );
 
   const cfg = detail ? statusCfg(detail.status) : DEFAULT_STATUS;
   const steps = detail ? timelineSteps(detail.status) : [true, false, false, false];
@@ -200,46 +513,76 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
         <>
           {/* Map */}
           <View style={[styles.mapWrap, { height: MAP_HEIGHT }]}>
-            {MapboxGL ? (
-              <MapboxGL.MapView
+            {getGoogleMapsApiKey() ? (
+              <>
+              <GoogleMapsMap
+                ref={excursionMapRef}
                 style={{ flex: 1 }}
-                styleURL="mapbox://styles/mapbox/light-v11"
-                logoEnabled={false}
-                attributionEnabled={false}
+                initialRegion={excursionMapRegion}
                 compassEnabled={false}
+                showsUserLocation
+                onDidFinishLoadingMap={() => applyCameraRef.current()}
+                onDidFinishLoadingStyle={() => applyCameraRef.current()}
+                onMapIdle={onMapIdle}
               >
-                <MapboxGL.Camera
-                  ref={cameraRef}
-                  centerCoordinate={mapCenter}
-                  zoomLevel={12}
-                  animationMode="none"
-                />
-
-                {/* Destination label pill */}
-                <MapboxGL.MarkerView coordinate={mapCenter} anchor={{ x: 0.5, y: 1 }}>
-                  <View style={styles.destPill}>
-                    <MaterialIcons name="place" size={14} color="#111827" />
-                    <Text style={styles.destPillText} numberOfLines={1}>{detail.destination}</Text>
-                  </View>
-                </MapboxGL.MarkerView>
-
-                {/* Origin marker (if coordinates available) */}
-                {detail.originLat != null && detail.originLng != null && (
-                  <MapboxGL.MarkerView
-                    coordinate={[detail.originLng, detail.originLat]}
-                    anchor={{ x: 0.5, y: 1 }}
-                  >
-                    <View style={styles.originPill}>
-                      <MaterialIcons name="trip-origin" size={14} color="#92400E" />
-                      <Text style={styles.originPillText} numberOfLines={1}>{detail.origin}</Text>
-                    </View>
-                  </MapboxGL.MarkerView>
-                )}
-              </MapboxGL.MapView>
+                {[
+                  ...(routeCoords.length >= 2
+                    ? [
+                        <MapPolyline
+                          key="exc-route"
+                          id="exc-route"
+                          coordinates={routeCoords}
+                          strokeColor="#C9A227"
+                          strokeWidth={4}
+                        />,
+                      ]
+                    : []),
+                  ...(resolvedDestCoord
+                    ? [
+                        <MapMarker
+                          key="exc-dest"
+                          id="exc-dest"
+                          coordinate={toLatLng(resolvedDestCoord)}
+                          anchor={{ x: 0.5, y: 1 }}
+                        >
+                          <View style={styles.destPill}>
+                            <MaterialIcons name="place" size={14} color="#111827" />
+                            <Text style={styles.destPillText} numberOfLines={1}>{detail.destination}</Text>
+                          </View>
+                        </MapMarker>,
+                      ]
+                    : []),
+                  ...(resolvedOriginCoord
+                    ? [
+                        <MapMarker
+                          key="exc-origin"
+                          id="exc-origin"
+                          coordinate={toLatLng(resolvedOriginCoord)}
+                          anchor={{ x: 0.5, y: 1 }}
+                        >
+                          <View style={styles.originPill}>
+                            <MaterialIcons name="trip-origin" size={14} color="#92400E" />
+                            <Text style={styles.originPillText} numberOfLines={1}>{detail.origin}</Text>
+                          </View>
+                        </MapMarker>,
+                      ]
+                    : []),
+                ]}
+              </GoogleMapsMap>
+              {routeEtaSec != null && routeCoords.length >= 2 ? (
+                <View style={styles.mapEtaPill} pointerEvents="none">
+                  <MaterialIcons name="schedule" size={14} color="#111827" />
+                  <Text style={styles.mapEtaText}>~{formatEta(routeEtaSec)} de percurso estimado</Text>
+                </View>
+              ) : null}
+              </>
             ) : (
               <View style={styles.mapFallback}>
                 <MaterialIcons name="map" size={40} color="#C9B87A" />
                 <Text style={styles.mapFallbackText}>{detail.destination}</Text>
+                <Text style={styles.mapFallbackHint}>
+                  Defina EXPO_PUBLIC_GOOGLE_MAPS_API_KEY no .env (raiz do repo), rode expo prebuild e reinicie o Metro.
+                </Text>
               </View>
             )}
           </View>
@@ -381,9 +724,24 @@ const styles = StyleSheet.create({
     backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
   },
 
-  mapWrap: { width: '100%', backgroundColor: '#F0EDE8' },
-  mapFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  mapWrap: { width: '100%', backgroundColor: '#F0EDE8', position: 'relative' },
+  mapEtaPill: {
+    position: 'absolute',
+    bottom: 10,
+    left: 10,
+    right: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.94)',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  mapEtaText: { fontSize: 12, color: '#374151', flex: 1 },
+  mapFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 20 },
   mapFallbackText: { fontSize: 14, color: '#9CA3AF', fontWeight: '500' },
+  mapFallbackHint: { fontSize: 12, color: '#9CA3AF', textAlign: 'center', lineHeight: 18 },
 
   destPill: {
     flexDirection: 'row', alignItems: 'center', gap: 4,

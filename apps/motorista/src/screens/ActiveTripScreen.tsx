@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -17,11 +17,23 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { CommonActions } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
-import { MapboxMap, MapboxMarker, MapboxPolyline } from '../components/mapbox';
-import type { LatLng } from '../components/mapbox';
+import {
+  GoogleMapsMap,
+  MapMarker,
+  MapPolyline,
+  type GoogleMapsMapRef,
+  type LatLng,
+  type MapRegion,
+  regionFromLatLngPoints,
+  isValidGlobeCoordinate,
+  latLngFromDbColumns,
+} from '../components/googleMaps';
 import { supabase } from '../lib/supabase';
+import { useTripStops, type TripStop, STOP_TYPE_COLORS } from '../hooks/useTripStops';
 import { Text } from '../components/Text';
+import { useAppAlert } from '../contexts/AppAlertContext';
 import { getRouteWithDuration, getMultiPointRoute, formatEta } from '../lib/route';
+import { getGoogleMapsApiKey, getMapboxAccessToken } from '../lib/googleMapsConfig';
 
 // expo-location — defensive import (needs native rebuild if just added)
 let Location: any = null;
@@ -31,27 +43,19 @@ type Props = NativeStackScreenProps<RootStackParamList, 'ActiveTrip'>;
 
 const GOLD = '#C9A227';
 const DARK = '#111827';
-const MAP_STYLE = 'mapbox://styles/mapbox/streets-v12';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type Stop = {
-  id: string;
-  type: 'pickup' | 'delivery';
-  name: string;
-  address: string;
-  notes?: string;
-  bagSize?: string;
-  rating?: number;
-  lat?: number;
-  lng?: number;
-  sourceType: 'booking' | 'shipment';
-  sourceId: string;
-  /** Código 4 dígitos que o cliente informará ao motorista (somente shipments) */
-  code: string | null;
-};
+type Stop = TripStop;
+
+/** Helper — stop é coleta (embarque / pick-up) */
+function isPickup(s: Stop) { return s.stopType === 'passenger_pickup' || s.stopType === 'package_pickup'; }
+/** Helper — stop é de passageiro */
+function isPassenger(s: Stop) { return s.stopType === 'passenger_pickup' || s.stopType === 'passenger_dropoff'; }
+/** Helper — stop é de encomenda */
+function isPackage(s: Stop) { return s.stopType === 'package_pickup' || s.stopType === 'package_dropoff'; }
 
 type TripRow = {
   id: string;
@@ -64,31 +68,6 @@ type TripRow = {
   destination_lng: number | null;
   amount_cents: number;
   status: string;
-};
-
-type BookingRow = {
-  id: string;
-  passenger_count: number;
-  bags_count: number;
-  amount_cents: number;
-  profiles: { full_name: string; avatar_url: string | null; rating: number | null } | null;
-};
-
-type ShipmentRow = {
-  id: string;
-  description: string;
-  size: string | null;
-  notes: string | null;
-  origin_address: string;
-  destination_address: string;
-  origin_lat: number | null;
-  origin_lng: number | null;
-  destination_lat: number | null;
-  destination_lng: number | null;
-  sender_name: string;
-  receiver_name: string;
-  pickup_code: string | null;
-  delivery_code: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -112,17 +91,39 @@ function formatDuration(startIso: string, endDate: Date): string {
   return `${m}min`;
 }
 
+/** Ignora null, NaN e (0,0) — evita rotas para o Atlântico vindas do banco. */
+function pickStopCoord(
+  lat: number | null | undefined,
+  lng: number | null | undefined,
+): LatLng | undefined {
+  const p = latLngFromDbColumns(lat, lng);
+  if (!p || !isValidGlobeCoordinate(p.latitude, p.longitude)) return undefined;
+  return { latitude: p.latitude, longitude: p.longitude };
+}
+
+function dedupeConsecutivePoints(pts: LatLng[]): LatLng[] {
+  const out: LatLng[] = [];
+  for (const p of pts) {
+    const last = out[out.length - 1];
+    if (last && last.latitude === p.latitude && last.longitude === p.longitude) continue;
+    out.push(p);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Main screen
 // ---------------------------------------------------------------------------
 
 export function ActiveTripScreen({ navigation, route }: Props) {
   const { tripId } = route.params;
+  const { showAlert } = useAppAlert();
 
   // Data
   const [trip, setTrip] = useState<TripRow | null>(null);
-  const [stops, setStops] = useState<Stop[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [tripLoading, setTripLoading] = useState(true);
+  const { stops, loading: stopsLoading } = useTripStops(tripId);
+  const loading = tripLoading || stopsLoading;
 
   // State machine
   const [currentStopIndex, setCurrentStopIndex] = useState(0);
@@ -135,6 +136,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // Driver position
   const [driverPosition, setDriverPosition] = useState<LatLng | null>(null);
   const locationSub = useRef<any>(null);
+  const mapRef = useRef<GoogleMapsMapRef>(null);
+  const hasFramedDriverOnMap = useRef(false);
+  const locationPermissionWarned = useRef(false);
+  const locationModuleWarned = useRef(false);
 
   // UI state
   const [detailVisible, setDetailVisible] = useState(false);
@@ -167,147 +172,84 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   useEffect(() => {
     let active = true;
     async function startLocation() {
-      if (!Location) return;
+      if (!Location) {
+        if (!locationModuleWarned.current) {
+          locationModuleWarned.current = true;
+          showAlert(
+            'Localização',
+            'O módulo de localização não está disponível. Faça um build nativo: expo run:android ou expo run:ios.',
+          );
+        }
+        return;
+      }
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') return;
-        const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (status !== 'granted') {
+          if (!locationPermissionWarned.current) {
+            locationPermissionWarned.current = true;
+            showAlert(
+              'Localização desativada',
+              'Sem permissão o mapa não mostra sua posição nem a rota até a próxima parada. Ative nas configurações do aparelho.',
+            );
+          }
+          return;
+        }
+        const current = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy?.High ?? Location.Accuracy.Balanced,
+        });
         if (active) {
           setDriverPosition({ latitude: current.coords.latitude, longitude: current.coords.longitude });
         }
         locationSub.current = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.Balanced, distanceInterval: 20, timeInterval: 10000 },
+          {
+            accuracy: Location.Accuracy.Balanced,
+            distanceInterval: 8,
+            timeInterval: 5000,
+          },
           (loc: any) => {
             if (active) {
               setDriverPosition({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
             }
           },
         );
-      } catch { /* location unavailable */ }
+      } catch {
+        if (!locationPermissionWarned.current) {
+          locationPermissionWarned.current = true;
+          showAlert(
+            'Localização',
+            'Não foi possível obter o GPS. Verifique se a localização está ligada e tente de novo.',
+          );
+        }
+      }
     }
     startLocation();
     return () => {
       active = false;
       locationSub.current?.remove?.();
     };
-  }, []);
+  }, [showAlert]);
 
   // ---------------------------------------------------------------------------
   // Load data
   // ---------------------------------------------------------------------------
 
   const load = useCallback(async () => {
-    setLoading(true);
+    setTripLoading(true);
     try {
-      const [{ data: tripData }, { data: bookingsData }, { data: shipmentsData }] =
-        await Promise.all([
-          supabase
-            .from('scheduled_trips')
-            .select('id, origin_address, destination_address, departure_at, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, status')
-            .eq('id', tripId)
-            .single(),
-          supabase
-            .from('bookings')
-            .select('id, passenger_count, bags_count, amount_cents, profiles(full_name, avatar_url, rating)')
-            .eq('scheduled_trip_id', tripId)
-            .in('status', ['confirmed', 'paid']),
-          supabase
-            .from('shipments')
-            .select('id, description, size, notes, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, sender_name, receiver_name, pickup_code, delivery_code')
-            .eq('scheduled_trip_id', tripId),
-        ]);
-
-      const t = tripData as TripRow | null;
-      if (t) setTrip(t);
-
-      const builtStops: Stop[] = [];
-
-      for (const b of (bookingsData ?? []) as BookingRow[]) {
-        builtStops.push({
-          id: `booking-${b.id}`,
-          type: 'pickup',
-          name: b.profiles?.full_name ?? 'Passageiro',
-          address: t?.origin_address ?? '',
-          rating: b.profiles?.rating ?? undefined,
-          bagSize: b.bags_count > 0 ? `${b.bags_count} bag(s)` : undefined,
-          lat: t?.origin_lat ?? undefined,
-          lng: t?.origin_lng ?? undefined,
-          sourceType: 'booking',
-          sourceId: b.id,
-          code: null,
-        });
-      }
-
-      for (const s of (shipmentsData ?? []) as ShipmentRow[]) {
-        builtStops.push({
-          id: `shipment-pickup-${s.id}`,
-          type: 'pickup',
-          name: s.sender_name,
-          address: s.origin_address,
-          notes: s.notes ?? undefined,
-          bagSize: s.size ?? undefined,
-          lat: s.origin_lat ?? t?.origin_lat ?? undefined,
-          lng: s.origin_lng ?? t?.origin_lng ?? undefined,
-          sourceType: 'shipment',
-          sourceId: s.id,
-          code: s.pickup_code,
-        });
-        builtStops.push({
-          id: `shipment-delivery-${s.id}`,
-          type: 'delivery',
-          name: s.receiver_name,
-          address: s.destination_address,
-          notes: s.notes ?? undefined,
-          bagSize: s.size ?? undefined,
-          lat: s.destination_lat ?? t?.destination_lat ?? undefined,
-          lng: s.destination_lng ?? t?.destination_lng ?? undefined,
-          sourceType: 'shipment',
-          sourceId: s.id,
-          code: s.delivery_code,
-        });
-      }
-
-      setStops(builtStops);
-
-      // Fetch stops route (full path through all stops)
-      if (t?.origin_lat && t?.origin_lng) {
-        const waypoints: Array<{ latitude: number; longitude: number }> = [];
-        if (t.origin_lat && t.origin_lng) waypoints.push({ latitude: t.origin_lat, longitude: t.origin_lng });
-        for (const s of (shipmentsData ?? []) as ShipmentRow[]) {
-          if (s.origin_lat && s.origin_lng) waypoints.push({ latitude: s.origin_lat, longitude: s.origin_lng });
-          if (s.destination_lat && s.destination_lng) waypoints.push({ latitude: s.destination_lat, longitude: s.destination_lng });
-        }
-        if (t.destination_lat && t.destination_lng) waypoints.push({ latitude: t.destination_lat, longitude: t.destination_lng });
-
-        if (waypoints.length >= 2) {
-          const result = await getMultiPointRoute(waypoints);
-          if (result) setStopsRouteCoords(result.coordinates);
-        }
-      }
+      const { data: tripData } = await supabase
+        .from('scheduled_trips')
+        .select('id, origin_address, destination_address, departure_at, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, status')
+        .eq('id', tripId)
+        .single();
+      if (tripData) setTrip(tripData as TripRow);
     } finally {
-      setLoading(false);
+      setTripLoading(false);
     }
   }, [tripId]);
 
   useEffect(() => {
     load();
   }, [load]);
-
-  // Fetch driver-to-current-stop route when driver position or current stop changes
-  useEffect(() => {
-    if (!driverPosition || stops.length === 0) return;
-    const stop = stops[currentStopIndex];
-    if (!stop?.lat || !stop?.lng) return;
-
-    getRouteWithDuration(driverPosition, { latitude: stop.lat, longitude: stop.lng })
-      .then((result) => {
-        if (result) {
-          setDriverRouteCoords(result.coordinates);
-          setEtaSeconds(result.durationSeconds);
-        }
-      })
-      .catch(() => {});
-  }, [driverPosition, currentStopIndex, stops]);
 
   // ---------------------------------------------------------------------------
   // Derived values
@@ -317,12 +259,217 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const totalStops = stops.length;
   const allDone = currentStopIndex >= totalStops && totalStops > 0;
 
-  const mapCenter = {
-    latitude: trip?.origin_lat ?? -23.5505,
-    longitude: trip?.origin_lng ?? -46.6333,
-    latitudeDelta: 0.06,
-    longitudeDelta: 0.06,
-  };
+  /**
+   * Dados do card inferior.
+   * Se há paradas, usa a parada atual.
+   * Se não há paradas (viagem direta sem passageiros/encomendas no roteiro),
+   * mostra o destino da viagem como destino único.
+   */
+  const cardInfo = useMemo((): Stop | null => {
+    if (currentStop) return currentStop;
+    if (!trip) return null;
+    return {
+      id: 'trip-dest',
+      scheduledTripId: trip.id,
+      stopType: 'passenger_dropoff',
+      entityId: trip.id,
+      label: trip.destination_address,
+      address: trip.destination_address,
+      lat: trip.destination_lat ?? null,
+      lng: trip.destination_lng ?? null,
+      sequenceOrder: 0,
+      status: 'pending',
+      notes: null,
+      code: null,
+    };
+  }, [currentStop, trip]);
+
+  /** Último ponto válido do roteiro (entrega final / última parada) ou destino da viagem. */
+  const finalDestination = useMemo((): LatLng | null => {
+    for (let i = stops.length - 1; i >= 0; i--) {
+      const s = stops[i];
+      if (
+        s.lat != null &&
+        s.lng != null &&
+        isValidGlobeCoordinate(s.lat, s.lng)
+      ) {
+        return { latitude: s.lat, longitude: s.lng };
+      }
+    }
+    if (!trip) return null;
+    return pickStopCoord(trip.destination_lat, trip.destination_lng) ?? null;
+  }, [stops, trip]);
+
+  /** ~100m de resolução: atualiza rota dourada “você → destino” sem spammar Directions a cada tick de GPS. */
+  const driverPositionKey = useMemo(() => {
+    if (
+      !driverPosition ||
+      !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
+    ) {
+      return '';
+    }
+    return `${driverPosition.latitude.toFixed(3)},${driverPosition.longitude.toFixed(3)}`;
+  }, [driverPosition]);
+
+  const tripOriginLL = useMemo(
+    () => (trip ? pickStopCoord(trip.origin_lat, trip.origin_lng) : undefined),
+    [trip?.origin_lat, trip?.origin_lng, trip?.id],
+  );
+  const tripDestLL = useMemo(
+    () => (trip ? pickStopCoord(trip.destination_lat, trip.destination_lng) : undefined),
+    [trip?.destination_lat, trip?.destination_lng, trip?.id],
+  );
+
+  /**
+   * Rota dourada (visão geral): paradas em ordem; se não der polyline multi,
+   * usa GPS → destino final (app de motorista: início = você).
+   */
+  useEffect(() => {
+    if (loading) return;
+    let cancelled = false;
+    const routeOpts = { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() };
+
+    const stopPts: LatLng[] = [];
+    for (const s of stops) {
+      if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
+        stopPts.push({ latitude: s.lat, longitude: s.lng });
+      }
+    }
+    const dedupStops = dedupeConsecutivePoints(stopPts);
+
+    (async () => {
+      if (dedupStops.length >= 2) {
+        const withDriver =
+          driverPosition &&
+          isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
+            ? dedupeConsecutivePoints([driverPosition, ...dedupStops])
+            : dedupStops;
+        const r = await getMultiPointRoute(withDriver, routeOpts);
+        if (!cancelled && r?.coordinates?.length) {
+          setStopsRouteCoords(r.coordinates);
+          return;
+        }
+      }
+      if (
+        driverPosition &&
+        isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) &&
+        dedupStops.length === 1
+      ) {
+        const r = await getRouteWithDuration(driverPosition, dedupStops[0]!, routeOpts);
+        if (!cancelled && r?.coordinates?.length) {
+          setStopsRouteCoords(r.coordinates);
+          return;
+        }
+      }
+      if (
+        driverPosition &&
+        isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) &&
+        finalDestination
+      ) {
+        const r = await getRouteWithDuration(driverPosition, finalDestination, routeOpts);
+        if (!cancelled && r?.coordinates?.length) {
+          setStopsRouteCoords(r.coordinates);
+          return;
+        }
+      }
+      if (!cancelled) setStopsRouteCoords([]);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, stops, finalDestination, driverPositionKey]);
+
+  // Trecho escuro: GPS → parada atual (ou → destino final se não houver paradas com coordenada).
+  useEffect(() => {
+    if (
+      !driverPosition ||
+      !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
+    ) {
+      return;
+    }
+
+    const dest: LatLng | null = (() => {
+      if (stops.length > 0) {
+        const stop = stops[currentStopIndex];
+        if (
+          stop?.lat != null &&
+          stop?.lng != null &&
+          isValidGlobeCoordinate(stop.lat, stop.lng)
+        ) {
+          return { latitude: stop.lat, longitude: stop.lng };
+        }
+        return null;
+      }
+      return finalDestination;
+    })();
+
+    if (!dest) return;
+
+    getRouteWithDuration(driverPosition, dest, {
+      mapboxToken: getMapboxAccessToken(),
+      googleMapsApiKey: getGoogleMapsApiKey(),
+    })
+      .then((result) => {
+        if (result) {
+          setDriverRouteCoords(result.coordinates);
+          setEtaSeconds(result.durationSeconds);
+        }
+      })
+      .catch(() => {});
+  }, [driverPosition, currentStopIndex, stops, finalDestination]);
+
+  // Região inicial estática — centrada na origem com zoom de rua.
+  // Não depende de driverPosition para evitar que updates de GPS resetem a câmera.
+  const mapInitialRegion = useMemo((): MapRegion => {
+    if (tripOriginLL) {
+      return {
+        latitude: tripOriginLL.latitude,
+        longitude: tripOriginLL.longitude,
+        latitudeDelta: 0.002,
+        longitudeDelta: 0.002,
+      };
+    }
+    const pts: LatLng[] = [];
+    for (const s of stops) {
+      if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
+        pts.push({ latitude: s.lat, longitude: s.lng });
+      }
+    }
+    if (tripDestLL) pts.push(tripDestLL);
+    return regionFromLatLngPoints(pts);
+  }, [trip?.id, tripOriginLL?.latitude, tripOriginLL?.longitude]);
+
+  /** Sem GPS e sem nenhuma coordenada de viagem/paradas → não confundir com mapa “real” centrado no BR. */
+  const activeTripMapReady = useMemo(() => {
+    if (loading) return true;
+    if (
+      driverPosition &&
+      isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
+    )
+      return true;
+    if (tripOriginLL || tripDestLL) return true;
+    return stops.some(
+      (s) =>
+        s.lat != null &&
+        s.lng != null &&
+        isValidGlobeCoordinate(s.lat, s.lng),
+    );
+  }, [loading, driverPosition, tripOriginLL, tripDestLL, stops]);
+
+  // Primeira posição GPS: centraliza no motorista com zoom 16.
+  useEffect(() => {
+    if (loading || !driverPosition || hasFramedDriverOnMap.current) return;
+    if (!isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) return;
+    const id = requestAnimationFrame(() => {
+      mapRef.current?.animateToRegion(
+        { latitude: driverPosition.latitude, longitude: driverPosition.longitude, latitudeDelta: 0.002, longitudeDelta: 0.002 },
+        500,
+      );
+    });
+    hasFramedDriverOnMap.current = true;
+    return () => cancelAnimationFrame(id);
+  }, [loading, driverPosition]);
 
   // ---------------------------------------------------------------------------
   // Detail sheet animation
@@ -359,7 +506,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const handleConfirmStop = async () => {
     if (!currentStop) return;
 
-    if (currentStop.sourceType === 'shipment') {
+    if (isPackage(currentStop)) {
       if (confirmCode.trim().length !== 4) {
         setConfirmError('O código deve ter 4 dígitos.');
         return;
@@ -369,11 +516,20 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         return;
       }
       const now = new Date().toISOString();
-      if (currentStop.type === 'pickup') {
-        await supabase.from('shipments').update({ picked_up_at: now } as never).eq('id', currentStop.sourceId);
+      if (isPickup(currentStop)) {
+        await supabase.from('shipments').update({ picked_up_at: now } as never).eq('id', currentStop.entityId);
       } else {
-        await supabase.from('shipments').update({ delivered_at: now } as never).eq('id', currentStop.sourceId);
+        await supabase.from('shipments').update({ delivered_at: now } as never).eq('id', currentStop.entityId);
       }
+    }
+
+    // Mark stop as completed in trip_stops (best-effort — table may not exist yet)
+    if (!currentStop.id.startsWith('booking-') && !currentStop.id.startsWith('shipment-')) {
+      await supabase
+        .from('trip_stops')
+        .update({ status: 'completed' } as never)
+        .eq('id', currentStop.id)
+        .catch(() => {});
     }
 
     setConfirmError('');
@@ -433,30 +589,27 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     <View style={styles.root}>
       <StatusBar style="dark" />
 
-      {/* ── Full-screen Mapbox map ───────────────────────────── */}
-      <MapboxMap
+      {/* ── Mapa (Google Maps) ───────────────────────────── */}
+      <GoogleMapsMap
+        ref={mapRef}
         style={StyleSheet.absoluteFillObject}
-        initialRegion={mapCenter}
-        styleURL={MAP_STYLE}
+        initialRegion={mapInitialRegion}
       >
         {/* Route from driver to current stop (dark) */}
         {driverRouteCoords.length >= 2 && (
-          <MapboxPolyline id="driver" coordinates={driverRouteCoords} strokeColor={DARK} strokeWidth={3} />
+          <MapPolyline id="driver" coordinates={driverRouteCoords} strokeColor={DARK} strokeWidth={3} />
         )}
 
         {/* Full route between stops (gold) */}
         {stopsRouteCoords.length >= 2 && (
-          <MapboxPolyline id="stops" coordinates={stopsRouteCoords} strokeColor={GOLD} strokeWidth={5} />
+          <MapPolyline id="stops" coordinates={stopsRouteCoords} strokeColor={GOLD} strokeWidth={5} />
         )}
 
-        {/* Fallback straight line if no OSRM route yet */}
-        {stopsRouteCoords.length < 2 && trip?.origin_lat && trip?.destination_lat && (
-          <MapboxPolyline
+        {/* Fallback: linha reta só entre pontos válidos (nunca 0,0) se Directions/OSRM falharem */}
+        {stopsRouteCoords.length < 2 && tripOriginLL && tripDestLL && (
+          <MapPolyline
             id="fallback"
-            coordinates={[
-              { latitude: trip.origin_lat, longitude: trip.origin_lng! },
-              { latitude: trip.destination_lat, longitude: trip.destination_lng! },
-            ]}
+            coordinates={[tripOriginLL, tripDestLL]}
             strokeColor={GOLD}
             strokeWidth={4}
           />
@@ -464,33 +617,39 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
         {/* Stop markers */}
         {stops.map((stop, idx) => {
-          const lat = stop.lat ?? mapCenter.latitude;
-          const lng = stop.lng ?? mapCenter.longitude;
+          const hasCoord =
+            stop.lat != null &&
+            stop.lng != null &&
+            isValidGlobeCoordinate(stop.lat, stop.lng);
+          const baseLat = mapInitialRegion.latitude;
+          const baseLng = mapInitialRegion.longitude;
+          const lat = hasCoord ? stop.lat! : baseLat + idx * 0.002;
+          const lng = hasCoord ? stop.lng! : baseLng + idx * 0.002;
           const isCompleted = idx < currentStopIndex;
-          const markerBg = isCompleted ? '#374151' : GOLD;
+          const markerBg = isCompleted ? '#374151' : STOP_TYPE_COLORS[stop.stopType];
           return (
-            <MapboxMarker
+            <MapMarker
               key={stop.id}
               id={stop.id}
-              coordinate={{ latitude: lat + idx * 0.0015, longitude: lng + idx * 0.0008 }}
+              coordinate={{ latitude: lat, longitude: lng }}
               anchor={{ x: 0.5, y: 0.5 }}
             >
               <View style={[styles.mapMarker, { backgroundColor: markerBg }]}>
                 {isCompleted ? (
                   <MaterialIcons name="check" size={18} color="#fff" />
-                ) : stop.sourceType === 'booking' ? (
+                ) : isPassenger(stop) ? (
                   <MaterialIcons name="person" size={18} color="#fff" />
                 ) : (
                   <MaterialIcons name="inventory-2" size={18} color="#fff" />
                 )}
               </View>
-            </MapboxMarker>
+            </MapMarker>
           );
         })}
 
         {/* Driver position marker */}
         {driverPosition && (
-          <MapboxMarker
+          <MapMarker
             id="driver"
             coordinate={driverPosition}
             anchor={{ x: 0.5, y: 0.5 }}
@@ -500,76 +659,123 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 <MaterialIcons name="play-arrow" size={18} color="#fff" />
               </View>
             </View>
-          </MapboxMarker>
+          </MapMarker>
         )}
-      </MapboxMap>
+      </GoogleMapsMap>
+
+      {!activeTripMapReady && (
+        <View style={styles.mapCoordsLoading} pointerEvents="none">
+          <ActivityIndicator size="large" color={DARK} />
+          <Text style={styles.mapCoordsLoadingText}>Carregando mapa…</Text>
+        </View>
+      )}
 
       {/* ── Overlay UI ──────────────────────────────────────── */}
       <SafeAreaView edges={['top', 'bottom']} style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
 
-        {/* Left sidebar */}
-        <View style={styles.sidebar}>
-          {stops.map((stop, idx) => {
-            const isCompleted = idx < currentStopIndex;
-            const isCurrent = idx === currentStopIndex;
-            const btnBg = isCompleted ? '#374151' : GOLD;
-            const opacity = !isCompleted && !isCurrent ? 0.5 : 1;
-            return (
-              <TouchableOpacity
-                key={stop.id}
-                style={[styles.sidebarBtn, { backgroundColor: btnBg, opacity }]}
-                onPress={() => { if (idx === currentStopIndex) openDetail(); }}
-                activeOpacity={0.8}
-              >
-                {isCompleted ? (
-                  <MaterialIcons name="check" size={20} color="#fff" />
-                ) : stop.sourceType === 'booking' ? (
-                  <MaterialIcons name="person" size={20} color="#fff" />
-                ) : (
-                  <MaterialIcons name="inventory-2" size={20} color="#fff" />
-                )}
-              </TouchableOpacity>
+        {/* Botão centralizar no motorista — lado esquerdo */}
+        <TouchableOpacity
+          style={styles.myLocationBtn}
+          activeOpacity={0.8}
+          onPress={() => {
+            if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) return;
+            mapRef.current?.animateToRegion(
+              { latitude: driverPosition.latitude, longitude: driverPosition.longitude, latitudeDelta: 0.002, longitudeDelta: 0.002 },
+              400,
             );
-          })}
-        </View>
+          }}
+        >
+          <MaterialIcons name="my-location" size={22} color={DARK} />
+        </TouchableOpacity>
 
-        {/* Mini bottom card */}
-        {currentStop && !detailVisible && (
-          <TouchableOpacity style={styles.miniSheet} onPress={openDetail} activeOpacity={0.95}>
-            <View style={styles.handle} />
+        {/* Right sidebar — paradas + destino */}
+        {(stops.length > 0 || tripDestLL) && (
+          <View style={styles.sidebar}>
+            {/* Linha conectora atrás dos botões */}
+            {(stops.length + (tripDestLL ? 1 : 0)) > 1 && (
+              <View style={styles.sidebarLine} pointerEvents="none" />
+            )}
 
+            {stops.map((stop, idx) => {
+              const isCompleted = idx < currentStopIndex;
+              const isCurrent = idx === currentStopIndex;
+              const btnBg = isCompleted ? '#9CA3AF' : isCurrent ? STOP_TYPE_COLORS[stop.stopType] : '#E5E7EB';
+              const iconColor = isCompleted || isCurrent ? '#fff' : '#6B7280';
+              return (
+                <TouchableOpacity
+                  key={stop.id}
+                  style={[styles.sidebarBtn, { backgroundColor: btnBg }]}
+                  onPress={() => { if (idx === currentStopIndex) openDetail(); }}
+                  activeOpacity={0.8}
+                >
+                  {isCompleted ? (
+                    <MaterialIcons name="check" size={18} color={iconColor} />
+                  ) : isPassenger(stop) ? (
+                    <MaterialIcons name="person" size={18} color={iconColor} />
+                  ) : (
+                    <MaterialIcons name="inventory-2" size={18} color={iconColor} />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+
+            {/* Ponto final: destino da viagem */}
+            {tripDestLL && (
+              <View style={[styles.sidebarBtn, styles.sidebarDestBtn]}>
+                <MaterialIcons name="flag" size={18} color={DARK} />
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* Mini bottom card — sempre visível quando há viagem ativa */}
+        {cardInfo && !detailVisible && !allDone && (
+          <TouchableOpacity
+            style={styles.miniSheet}
+            onPress={currentStop ? openDetail : undefined}
+            activeOpacity={currentStop ? 0.95 : 1}
+          >
             <View style={styles.miniSheetTopRow}>
-              <View style={styles.stopTypePill}>
+              <View style={[
+                styles.stopTypePill,
+                isPassenger(cardInfo) && styles.stopTypePillTrip,
+              ]}>
                 <View style={styles.stopTypeDot} />
                 <Text style={styles.stopTypePillText}>
-                  {currentStop.type === 'pickup' ? 'Coleta' : 'Entrega'}
+                  {isPassenger(cardInfo)
+                    ? 'Viagem'
+                    : isPickup(cardInfo) ? 'Coleta' : 'Entrega'}
                 </Text>
               </View>
               {etaSeconds !== null && (
                 <View style={styles.etaBadge}>
-                  <Text style={styles.etaBadgeText}>{formatEta(etaSeconds)}</Text>
+                  <Text style={styles.etaBadgeText}>{Math.max(1, Math.round(etaSeconds / 60))} min</Text>
                 </View>
               )}
             </View>
 
-            <Text style={styles.miniSheetName}>{currentStop.name}</Text>
+            <Text style={styles.miniSheetName} numberOfLines={1}>
+              {totalStops > 0 ? cardInfo.label : (trip?.origin_address ?? cardInfo.label)}
+            </Text>
 
             <View style={styles.addressRow}>
               <MaterialIcons name="location-on" size={14} color="#6B7280" />
-              <Text style={styles.addressText} numberOfLines={1}>{currentStop.address}</Text>
+              <Text style={styles.addressText} numberOfLines={1}>{cardInfo.address}</Text>
             </View>
 
-            <View style={styles.progressRow}>
-              <View style={styles.progressBarContainer}>
-                <View
-                  style={[
-                    styles.progressBarFill,
-                    { width: `${((currentStopIndex + 1) / Math.max(totalStops, 1)) * 100}%` as any },
-                  ]}
-                />
+            {totalStops > 0 && (
+              <View style={styles.miniSheetFooter}>
+                <View style={styles.progressBarContainer}>
+                  <View
+                    style={[
+                      styles.progressBarFill,
+                      { width: `${((currentStopIndex + 1) / Math.max(totalStops, 1)) * 100}%` as any },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.progressText}>{currentStopIndex + 1}/{totalStops}</Text>
               </View>
-              <Text style={styles.progressText}>{currentStopIndex + 1}/{totalStops}</Text>
-            </View>
+            )}
           </TouchableOpacity>
         )}
 
@@ -592,7 +798,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               <MaterialIcons name="close" size={20} color={DARK} />
             </TouchableOpacity>
             <Text style={styles.detailTitle}>
-              {currentStop?.type === 'pickup' ? 'Detalhes da coleta' : `Entrega para ${currentStop?.name ?? ''}`}
+              {currentStop && isPickup(currentStop) ? 'Detalhes da coleta' : `Entrega para ${currentStop?.label ?? ''}`}
             </Text>
             <TouchableOpacity style={styles.iconCircleBtn} activeOpacity={0.7}>
               <MaterialIcons name="phone" size={20} color={DARK} />
@@ -600,24 +806,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.detailScroll}>
-            {currentStop?.type === 'pickup' ? (
+            {currentStop && isPickup(currentStop) ? (
               <>
                 <View style={styles.avatarCenter}>
                   <View style={styles.avatarCircle}>
-                    <Text style={styles.avatarInitials}>{getInitials(currentStop?.name ?? '?')}</Text>
+                    <Text style={styles.avatarInitials}>{getInitials(currentStop?.label ?? '?')}</Text>
                   </View>
                 </View>
-                <Text style={styles.detailName}>{currentStop?.name}</Text>
+                <Text style={styles.detailName}>{currentStop?.label}</Text>
                 <View style={styles.detailMetaRow}>
-                  {currentStop?.rating !== undefined && (
-                    <>
-                      <MaterialIcons name="star" size={14} color={GOLD} />
-                      <Text style={styles.detailMetaText}>{currentStop.rating.toFixed(1)}</Text>
-                    </>
-                  )}
-                  {currentStop?.bagSize && (
-                    <Text style={styles.detailMetaText}> · {currentStop.bagSize}</Text>
-                  )}
                 </View>
                 <Text style={styles.detailLabel}>Endereço da coleta</Text>
                 <Text style={styles.detailValue}>{currentStop?.address}</Text>
@@ -648,7 +845,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 <View style={styles.deliveryArrowRow}>
                   <Text style={styles.deliveryNameText}>
                     {'Destinatário: '}
-                    <Text style={{ fontWeight: '700' }}>{currentStop?.name}</Text>
+                    <Text style={{ fontWeight: '700' }}>{currentStop?.label}</Text>
                   </Text>
                 </View>
                 <Text style={styles.detailLabel}>Local de entrega</Text>
@@ -683,11 +880,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           <View style={styles.centeredModal}>
             <Text style={styles.centeredModalTitle}>Confirmar coleta</Text>
             <Text style={styles.centeredModalSubtitle}>
-              {currentStop?.sourceType === 'shipment'
+              {currentStop && isPackage(currentStop)
                 ? 'Insira o código de 4 dígitos informado pelo remetente.'
                 : 'Confirme a coleta do passageiro.'}
             </Text>
-            {currentStop?.sourceType === 'shipment' && (
+            {currentStop && isPackage(currentStop) && (
               <>
                 <Text style={styles.fieldLabel}>Código de coleta</Text>
                 <TextInput
@@ -900,6 +1097,14 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' },
+  mapCoordsLoading: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(245,245,245,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  mapCoordsLoadingText: { fontSize: 14, color: '#6B7280' },
 
   // ── Map markers ──────────────────────────────────────────
   mapMarker: {
@@ -942,43 +1147,75 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
 
-  // ── Left sidebar ─────────────────────────────────────────
-  sidebar: {
+  // ── My location button — lado esquerdo ───────────────────
+  myLocationBtn: {
     position: 'absolute',
     left: 14,
     top: 100,
-    gap: 8,
-  },
-  sidebarBtn: {
     width: 46,
     height: 46,
-    borderRadius: 10,
+    borderRadius: 23,
+    backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 4,
-    elevation: 4,
+    elevation: 5,
   },
 
-  // ── Mini bottom sheet ─────────────────────────────────────
+  // ── Right sidebar ─────────────────────────────────────────
+  sidebar: {
+    position: 'absolute',
+    right: 14,
+    top: 100,
+    alignItems: 'center',
+    gap: 6,
+  },
+  sidebarLine: {
+    position: 'absolute',
+    top: 22,
+    bottom: 22,
+    width: 2,
+    backgroundColor: '#D1D5DB',
+    zIndex: -1,
+  },
+  sidebarBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: GOLD,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  sidebarDestBtn: {
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+  },
+
+  // ── Mini bottom sheet — card flutuante ────────────────────
   miniSheet: {
     position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
+    bottom: Platform.OS === 'ios' ? 28 : 20,
+    left: 14,
+    right: 14,
     backgroundColor: '#fff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 28,
+    borderRadius: 20,
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 16,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.14,
+    shadowRadius: 16,
+    elevation: 12,
   },
   handle: {
     width: 40,
@@ -1003,6 +1240,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#FEF9C3',
     borderRadius: 20,
   },
+  stopTypePillTrip: {
+    backgroundColor: '#FEF3C7',
+  },
   stopTypeDot: {
     width: 7,
     height: 7,
@@ -1010,23 +1250,24 @@ const styles = StyleSheet.create({
     backgroundColor: GOLD,
   },
   stopTypePillText: {
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 12,
+    fontWeight: '700',
     color: '#92400E',
+    letterSpacing: 0.2,
   },
   etaBadge: {
-    backgroundColor: DARK,
-    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 20,
     paddingHorizontal: 14,
-    paddingVertical: 6,
+    paddingVertical: 5,
   },
   etaBadgeText: {
-    color: '#fff',
+    color: DARK,
     fontSize: 14,
     fontWeight: '700',
   },
   miniSheetName: {
-    fontSize: 22,
+    fontSize: 21,
     fontWeight: '700',
     color: DARK,
     marginBottom: 6,
@@ -1042,30 +1283,28 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     flex: 1,
   },
-  progressRow: {
+  miniSheetFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    marginTop: 14,
+    marginTop: 12,
   },
   progressBarContainer: {
     flex: 1,
-    height: 6,
+    height: 4,
     backgroundColor: '#E5E7EB',
-    borderRadius: 3,
+    borderRadius: 2,
     overflow: 'hidden',
   },
   progressBarFill: {
-    height: 6,
-    borderRadius: 3,
+    height: 4,
+    borderRadius: 2,
     backgroundColor: GOLD,
   },
   progressText: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#374151',
-    minWidth: 28,
-    textAlign: 'right',
   },
 
   // ── Finalize float button ────────────────────────────────
