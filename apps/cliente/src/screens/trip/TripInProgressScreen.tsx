@@ -11,7 +11,7 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MapboxMap, MapboxMarker, MapboxPolyline } from '../../components/mapbox';
+import { MapboxMap, MapboxMarker, MapboxPolyline, sanitizeMapRegion } from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList } from '../../navigation/types';
 import { ConfirmModal } from '../../components/ConfirmModal';
@@ -146,7 +146,7 @@ export function TripInProgressScreen({ navigation }: Props) {
       <StatusBar style="dark" />
 
       <View style={styles.mapWrap}>
-        <MapboxMap style={styles.map} initialRegion={DEFAULT_REGION} scrollEnabled={true}>
+        <MapboxMap style={styles.map} initialRegion={sanitizeMapRegion(DEFAULT_REGION)} scrollEnabled={true}>
           <MapboxPolyline coordinates={ROUTE_COORDS} strokeColor={COLORS.black} strokeWidth={4} />
           {steps.map((step, i) => (
             <MapboxMarker

@@ -76,6 +76,8 @@ export function PlanTripScreen({ navigation }: Props) {
   const [destinationLat, setDestinationLat] = useState(DEFAULT_DESTINATION_COORDS.latitude);
   const [destinationLng, setDestinationLng] = useState(DEFAULT_DESTINATION_COORDS.longitude);
   const [destinationConfirmed, setDestinationConfirmed] = useState(false);
+  /** Texto do campo inline "Para onde?" (independe do modal) */
+  const [destinationText, setDestinationText] = useState('');
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editOrigin, setEditOrigin] = useState(originAddress);
   const [editDestination, setEditDestination] = useState('');
@@ -115,8 +117,11 @@ export function PlanTripScreen({ navigation }: Props) {
 
   useEffect(() => {
     setEditOrigin(originAddress);
-    setEditDestination(destinationAddress ?? '');
-  }, [originAddress, destinationAddress]);
+  }, [originAddress]);
+
+  useEffect(() => {
+    setDestinationText(destinationAddress ?? '');
+  }, [destinationAddress]);
 
   useEffect(() => {
     if (!editModalVisible) return;
@@ -130,14 +135,14 @@ export function PlanTripScreen({ navigation }: Props) {
 
   const openEditModal = useCallback(() => {
     setEditOrigin(originAddress);
-    setEditDestination(destinationAddress ?? '');
+    setEditDestination(destinationText);
     setDestinationConfirmed(!!destinationAddress);
     editOverlayOpacity.setValue(0);
     editSheetTranslateY.setValue(EDIT_SHEET_SLIDE);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => setEditModalVisible(true));
     });
-  }, [originAddress, destinationAddress]);
+  }, [originAddress, destinationAddress, destinationText]);
 
   const closeEditModal = useCallback(() => setEditModalVisible(false), []);
 
@@ -512,7 +517,7 @@ export function PlanTripScreen({ navigation }: Props) {
         </KeyboardAvoidingView>
       </Modal>
 
-      <TouchableOpacity style={styles.routeCard} onPress={openEditModal} activeOpacity={0.8}>
+      <View style={styles.routeCard}>
         <View style={styles.routeIconsColumn}>
           <View style={styles.routeIconOrigin}>
             <View style={styles.routeIconOriginDot} />
@@ -523,12 +528,28 @@ export function PlanTripScreen({ navigation }: Props) {
         <View style={styles.routeAddresses}>
           <Text style={styles.routeAddress} numberOfLines={1}>{originAddress}</Text>
           <View style={styles.routeAddressDivider} />
-          <Text style={[styles.routeAddress, !destinationAddress && styles.routeAddressPlaceholder]} numberOfLines={1}>
-            {destinationAddress ?? 'Para onde?'}
-          </Text>
+          <AddressAutocomplete
+            value={destinationText}
+            onChangeText={(text) => {
+              setDestinationText(text);
+              setDestinationConfirmed(false);
+            }}
+            onSelectPlace={(place) => {
+              setDestinationAddress(place.address);
+              setDestinationLat(place.latitude);
+              setDestinationLng(place.longitude);
+              setDestinationText(place.address);
+              setDestinationConfirmed(true);
+            }}
+            placeholder="Para onde?"
+            inputStyle={styles.routeAddressInput}
+            style={styles.routeAddressAutocomplete}
+          />
         </View>
-        <MaterialIcons name="edit" size={20} color={COLORS.neutral700} style={styles.editIcon} />
-      </TouchableOpacity>
+        <TouchableOpacity onPress={openEditModal} hitSlop={8} activeOpacity={0.7}>
+          <MaterialIcons name="edit" size={20} color={COLORS.neutral700} style={styles.editIcon} />
+        </TouchableOpacity>
+      </View>
 
       <ScrollView
         style={styles.planPageScroll}
@@ -866,7 +887,17 @@ const styles = StyleSheet.create({
   },
   routeAddresses: { flex: 1 },
   routeAddress: { fontSize: 14, fontWeight: '500', color: COLORS.black },
-  routeAddressPlaceholder: { color: COLORS.neutral700 },
+  routeAddressAutocomplete: {},
+  routeAddressInput: {
+    borderWidth: 0,
+    borderRadius: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    paddingRight: 0,
+    fontSize: 14,
+    fontWeight: '500',
+    color: COLORS.black,
+  },
   routeAddressDivider: {
     height: 1,
     backgroundColor: COLORS.neutral400,

@@ -10,7 +10,13 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MapboxMap, MapboxMarker, MapboxPolyline } from '../../components/mapbox';
+import {
+  MapboxMap,
+  MapboxMarker,
+  MapboxPolyline,
+  isValidTripCoordinate,
+  sanitizeMapRegion,
+} from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList, TripDriverParam, PaymentConfirmedBookingParam } from '../../navigation/types';
 import { getRoutePolyline, type RoutePoint } from '../../lib/route';
@@ -110,36 +116,42 @@ export function CheckoutScreen({ navigation, route }: Props) {
   }, [refreshCheckout]);
 
   const mapRegion = useMemo(() => {
-    if (origin && destination) {
-      const latMin = Math.min(origin.latitude, destination.latitude);
-      const latMax = Math.max(origin.latitude, destination.latitude);
-      const lngMin = Math.min(origin.longitude, destination.longitude);
-      const lngMax = Math.max(origin.longitude, destination.longitude);
+    const oOk = origin && isValidTripCoordinate(origin.latitude, origin.longitude);
+    const dOk = destination && isValidTripCoordinate(destination.latitude, destination.longitude);
+    if (oOk && dOk) {
+      const latMin = Math.min(origin!.latitude, destination!.latitude);
+      const latMax = Math.max(origin!.latitude, destination!.latitude);
+      const lngMin = Math.min(origin!.longitude, destination!.longitude);
+      const lngMax = Math.max(origin!.longitude, destination!.longitude);
       const padding = 0.004;
-      return {
+      return sanitizeMapRegion({
         latitude: (latMin + latMax) / 2,
         longitude: (lngMin + lngMax) / 2,
         latitudeDelta: Math.max(0.02, latMax - latMin + padding * 2),
         longitudeDelta: Math.max(0.02, lngMax - lngMin + padding * 2),
-      };
+      });
     }
-    if (origin) {
-      return {
-        latitude: origin.latitude,
-        longitude: origin.longitude,
+    if (oOk) {
+      return sanitizeMapRegion({
+        latitude: origin!.latitude,
+        longitude: origin!.longitude,
         latitudeDelta: 0.02,
         longitudeDelta: 0.02,
-      };
+      });
     }
-    if (currentPlace) {
-      return {
+    if (currentPlace && isValidTripCoordinate(currentPlace.latitude, currentPlace.longitude)) {
+      return sanitizeMapRegion({
         latitude: currentPlace.latitude,
         longitude: currentPlace.longitude,
         latitudeDelta: 0.02,
         longitudeDelta: 0.02,
-      };
+      });
     }
-    return DEFAULT_REGION;
+    return sanitizeMapRegion({
+      ...DEFAULT_REGION,
+      latitudeDelta: 0.02,
+      longitudeDelta: 0.02,
+    });
   }, [origin, destination, currentPlace]);
 
   return (
@@ -147,7 +159,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
       <StatusBar style="dark" />
       <View style={styles.mapWrap}>
         <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled={false}>
-          {origin && (
+          {origin && isValidTripCoordinate(origin.latitude, origin.longitude) && (
             <MapboxMarker
               id="origin"
               coordinate={{ latitude: origin.latitude, longitude: origin.longitude }}
@@ -157,7 +169,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
               pinColor="#0d0d0d"
             />
           )}
-          {destination && (
+          {destination && isValidTripCoordinate(destination.latitude, destination.longitude) && (
             <MapboxMarker
               id="destination"
               coordinate={{ latitude: destination.latitude, longitude: destination.longitude }}
@@ -167,7 +179,10 @@ export function CheckoutScreen({ navigation, route }: Props) {
               pinColor="#dc2626"
             />
           )}
-          {origin && destination && (
+          {origin &&
+            destination &&
+            isValidTripCoordinate(origin.latitude, origin.longitude) &&
+            isValidTripCoordinate(destination.latitude, destination.longitude) && (
             <MapboxPolyline
               coordinates={
                 routeCoords?.length

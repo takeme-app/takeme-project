@@ -7,6 +7,7 @@
  */
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { findAdb, resolveAdbSerial } = require('./adb-reverse');
 
 const appDir = path.resolve(__dirname, '..');
 
@@ -16,12 +17,20 @@ process.env.REACT_NATIVE_PACKAGER_PORT = process.env.REACT_NATIVE_PACKAGER_PORT 
 console.log('\n[android:run] Porta do Metro: 8081');
 console.log('[android:run] Em outro terminal rode: npm start\n');
 
+// Vários devices: Gradle/adb precisam de ANDROID_SERIAL (reverse também).
+const adbEarly = findAdb();
+if (adbEarly && !process.env.ANDROID_SERIAL) {
+  const serial = resolveAdbSerial(adbEarly);
+  if (serial) process.env.ANDROID_SERIAL = serial;
+}
+
 // Device físico: redireciona localhost:PORT no celular para o Metro no PC
+// shell:false — evita quebrar quando node.exe está em "C:\Program Files\..."
 spawnSync(process.execPath, [path.join(__dirname, 'adb-reverse.js')], {
   cwd: appDir,
   env: process.env,
   stdio: 'inherit',
-  shell: true,
+  shell: false,
 });
 
 // Gradle precisa do JAVA_HOME; uso o JBR do Android Studio se não estiver definido

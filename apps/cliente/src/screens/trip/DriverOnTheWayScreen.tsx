@@ -3,7 +3,7 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MapboxMap } from '../../components/mapbox';
+import { MapboxMap, sanitizeMapRegion } from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList } from '../../navigation/types';
 
@@ -18,12 +18,13 @@ const COLORS = {
   orange: '#EA580C',
 };
 
-const DEFAULT_REGION = {
+/** Placeholder até haver API com posição real; centro SP (válido, nunca 0,0). */
+const DEFAULT_REGION = sanitizeMapRegion({
   latitude: -23.5505,
   longitude: -46.6333,
   latitudeDelta: 0.02,
   longitudeDelta: 0.02,
-};
+});
 
 export function DriverOnTheWayScreen({ navigation }: Props) {
   return (

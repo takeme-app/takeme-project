@@ -2,6 +2,7 @@ import React from 'react';
 import { View, TouchableOpacity, Image, type ImageSourcePropType } from 'react-native';
 import { PointAnnotation, MarkerView } from '@rnmapbox/maps';
 import type { LatLng } from './mapboxUtils';
+import { isValidTripCoordinate } from './mapboxUtils';
 
 type Anchor = { x: number; y: number };
 
@@ -52,6 +53,10 @@ export function MapboxMarker({
   children,
   onPress,
 }: MapboxMarkerProps) {
+  if (!isValidTripCoordinate(coordinate.latitude, coordinate.longitude)) {
+    return null;
+  }
+
   const coord: [number, number] = [coordinate.longitude, coordinate.latitude];
 
   if (children || icon) {
