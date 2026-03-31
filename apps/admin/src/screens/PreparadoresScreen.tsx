@@ -125,12 +125,12 @@ export default function PreparadoresScreen() {
   // ── Filtro da página (Figma 898-22995) ──────────────────────────────
   const [filtroPaginaOpen, setFiltroPaginaOpen] = useState(false);
   const [appliedPeriodoPagina, setAppliedPeriodoPagina] = useState<FiltroPeriodo>('todos');
-  const [appliedDataInicialPagina, setAppliedDataInicialPagina] = useState('05 de setembro-2025');
-  const [appliedDataFinalPagina, setAppliedDataFinalPagina] = useState('31 de setembro');
+  const [appliedDataInicialPagina, setAppliedDataInicialPagina] = useState('');
+  const [appliedDataFinalPagina, setAppliedDataFinalPagina] = useState('');
   const [appliedStatusPagina, setAppliedStatusPagina] = useState<FiltroStatusChip>('todos');
   const [draftPeriodoPagina, setDraftPeriodoPagina] = useState<FiltroPeriodo>('todos');
-  const [draftDataInicialPagina, setDraftDataInicialPagina] = useState('05 de setembro-2025');
-  const [draftDataFinalPagina, setDraftDataFinalPagina] = useState('31 de setembro');
+  const [draftDataInicialPagina, setDraftDataInicialPagina] = useState('');
+  const [draftDataFinalPagina, setDraftDataFinalPagina] = useState('');
   const [draftStatusPagina, setDraftStatusPagina] = useState<FiltroStatusChip>('todos');
   // ── Filtro da tabela (Figma 1280-35489) ─────────────────────────────
   const [filtroTabelaOpen, setFiltroTabelaOpen] = useState(false);
