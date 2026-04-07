@@ -43,6 +43,7 @@ type ActiveTrip = {
   origin_lng: number | null;
   destination_lat: number | null;
   destination_lng: number | null;
+  bookingPickups: Array<{ lat: number; lng: number }>;
 };
 
 /** Região inicial do mapa a partir de origem/destino (fallback PB). */
@@ -177,12 +178,15 @@ export function HomeScreen({ navigation }: Props) {
       };
       const { data: bkgs } = await supabase
         .from('bookings')
-        .select('passenger_count')
+        .select('passenger_count, bags_count, origin_lat, origin_lng')
         .eq('scheduled_trip_id', t.id)
         .in('status', ['confirmed', 'paid']);
-      const passengerCount = ((bkgs ?? []) as { passenger_count?: number }[]).reduce((s, b) => s + (b.passenger_count ?? 0), 0);
-      // Nesta versão o Home não expõe encomendas — mantém campo para reativar depois
-      const bagsCount = 0;
+      const bkgRows = (bkgs ?? []) as { passenger_count?: number; bags_count?: number; origin_lat?: number | null; origin_lng?: number | null }[];
+      const passengerCount = bkgRows.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
+      const bagsCount = bkgRows.reduce((s, b) => s + (b.bags_count ?? 0), 0);
+      const bookingPickups = bkgRows
+        .filter((b) => b.origin_lat != null && b.origin_lng != null)
+        .map((b) => ({ lat: b.origin_lat!, lng: b.origin_lng! }));
       setActiveTrip({
         ...t,
         passengerCount,
@@ -192,6 +196,7 @@ export function HomeScreen({ navigation }: Props) {
         origin_lng: t.origin_lng ?? null,
         destination_lat: t.destination_lat ?? null,
         destination_lng: t.destination_lng ?? null,
+        bookingPickups,
       });
     } else {
       setActiveTrip(null);
@@ -401,6 +406,14 @@ export function HomeScreen({ navigation }: Props) {
                     pinColor="#C9A227"
                   />
                 )}
+                {activeTrip.bookingPickups.map((p, i) => (
+                  <MapboxMarker
+                    key={`pickup-${i}`}
+                    id={`pickup-${i}`}
+                    coordinate={{ latitude: p.lat, longitude: p.lng }}
+                    pinColor="#22C55E"
+                  />
+                ))}
               </MapboxMap>
               <MapZoomControls mapRef={homeMapRef} style={styles.homeMapZoom} />
             </View>
