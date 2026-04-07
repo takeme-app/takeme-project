@@ -30,6 +30,7 @@ config.resolver.blockList = Array.isArray(config.resolver.blockList)
     : extraBlock;
 
 config.projectRoot = projectRoot;
+config.server = { ...(config.server ?? {}), unstable_serverRoot: projectRoot };
 config.watchFolders = [monorepoRoot];
 config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),
