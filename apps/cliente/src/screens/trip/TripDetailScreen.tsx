@@ -204,8 +204,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
 
   const isInProgress = detail?.status && !['paid', 'cancelled'].includes(detail.status);
   const isCompleted = detail?.status === 'paid';
-  /** Só após o motorista aceitar (confirmed); pending = pago mas ainda sem aceite. */
-  const driverOnWay = detail?.status === 'confirmed';
+  const driverOnWay = detail?.status && ['confirmed', 'in_progress'].includes(detail.status);
 
   if (loading) {
     return (

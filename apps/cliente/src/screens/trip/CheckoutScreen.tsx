@@ -220,8 +220,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
             bags_count: bagsCount,
             passenger_data,
             amount_cents: finalAmountCents,
-            /** Pagamento registrado em paid_at; motorista ainda precisa aceitar → validação em PendingRequests. */
-            status: 'pending',
+            status: 'paid',
             paid_at: new Date().toISOString(),
           })
           .select('id')

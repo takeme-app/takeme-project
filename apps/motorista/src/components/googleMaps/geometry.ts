@@ -7,6 +7,12 @@ export type MapRegion = {
   longitudeDelta: number;
 };
 
+/**
+ * Zoom bem próximo para “minha localização” / acompanhar GPS (delta menor = mais zoom).
+ * Equivale a ~1 nível a mais que 0.002 em `regionToZoomLevel`.
+ */
+export const MY_LOCATION_NAV_DELTA = 0.00115;
+
 /** Centro aproximado do Brasil — evita (0,0) no Atlântico quando não há GPS/coords. */
 export const DEFAULT_MAP_REGION_BR: MapRegion = {
   latitude: -23.5505,

@@ -12,10 +12,6 @@ export function mapDriverTypeToSubtypeDb(driverType: RegistrationType): 'takeme'
 export type MotoristaRouteInput = {
   origin_address: string;
   destination_address: string;
-  origin_lat: number;
-  origin_lng: number;
-  destination_lat: number;
-  destination_lng: number;
   price_per_person_cents: number;
 };
 
@@ -210,10 +206,6 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
       worker_id: userId,
       origin_address: r.origin_address.trim(),
       destination_address: r.destination_address.trim(),
-      origin_lat: r.origin_lat,
-      origin_lng: r.origin_lng,
-      destination_lat: r.destination_lat,
-      destination_lng: r.destination_lng,
       price_per_person_cents: Math.round(r.price_per_person_cents),
       is_active: true,
     });

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { latLngFromDbColumns } from '../components/googleMaps';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -74,10 +75,14 @@ export function useTripStops(tripId: string | null) {
         return;
       }
 
-      // 2. No rows yet — try to generate via RPC
-      const { error: rpcErr } = await supabase.rpc('generate_trip_stops', {
-        trip_id: tripId,
-      });
+      // 2. No rows yet — try to generate via RPC (admin usa p_trip_id; alguns deploys usam trip_id)
+      let rpcErr =
+        (await supabase.rpc('generate_trip_stops' as never, { p_trip_id: tripId } as never)).error ??
+        null;
+      if (rpcErr) {
+        const second = await supabase.rpc('generate_trip_stops' as never, { trip_id: tripId } as never);
+        rpcErr = second.error ?? null;
+      }
 
       if (!rpcErr) {
         // Refetch after generation
@@ -115,11 +120,29 @@ export function useTripStops(tripId: string | null) {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/** Admin/PRD usam shipment_*; o app motorista usa package_* nos helpers de mapa. */
+function normalizeDbStopType(db: string): StopType {
+  switch (db) {
+    case 'shipment_pickup':
+      return 'package_pickup';
+    case 'shipment_dropoff':
+      return 'package_dropoff';
+    case 'passenger_pickup':
+    case 'passenger_dropoff':
+    case 'package_pickup':
+    case 'package_dropoff':
+    case 'excursion_stop':
+      return db;
+    default:
+      return 'excursion_stop';
+  }
+}
+
 function mapRows(rows: any[]): TripStop[] {
   return rows.map((r) => ({
     id: r.id,
     scheduledTripId: r.scheduled_trip_id,
-    stopType: r.stop_type as StopType,
+    stopType: normalizeDbStopType(String(r.stop_type ?? '')),
     entityId: r.entity_id,
     label: r.label ?? '',
     address: r.address ?? '',
@@ -136,9 +159,8 @@ async function buildStopsManually(tripId: string): Promise<TripStop[]> {
   const result: TripStop[] = [];
   let seq = 1;
 
-  const sb = supabase as { from: (table: string) => any };
-  // Bookings (passenger pickup + dropoff)
-  const { data: bookingsRaw } = await sb
+  // Bookings: origem/destino do passageiro vêm das colunas do booking (igual ao app cliente no checkout).
+  const { data: bookings } = await supabase
     .from('bookings')
     .select(`
       id,
@@ -153,47 +175,49 @@ async function buildStopsManually(tripId: string): Promise<TripStop[]> {
       profiles ( full_name )
     `)
     .eq('scheduled_trip_id', tripId)
-    .eq('status', 'confirmed');
+    .in('status', ['confirmed', 'in_progress']);
 
-  type BookingStopRow = {
+  type BookingRow = {
     id: string;
     notes?: string | null;
     origin_address?: string | null;
-    origin_lat?: number | null;
-    origin_lng?: number | null;
+    origin_lat?: unknown;
+    origin_lng?: unknown;
     destination_address?: string | null;
-    destination_lat?: number | null;
-    destination_lng?: number | null;
+    destination_lat?: unknown;
+    destination_lng?: unknown;
     profiles?: { full_name?: string | null } | null;
   };
 
-  for (const raw of (bookingsRaw ?? []) as BookingStopRow[]) {
-    const name = raw.profiles?.full_name?.trim() || 'Passageiro';
-    const oAddr = raw.origin_address?.trim() || 'Embarque do passageiro';
-    const dAddr = raw.destination_address?.trim() || 'Desembarque do passageiro';
+  for (const b of (bookings ?? []) as BookingRow[]) {
+    const name = b.profiles?.full_name?.trim() || 'Passageiro';
+    const oAddr = b.origin_address?.trim() || 'Ponto de embarque';
+    const dAddr = b.destination_address?.trim() || 'Ponto de desembarque';
+    const oLL = latLngFromDbColumns(b.origin_lat, b.origin_lng);
+    const dLL = latLngFromDbColumns(b.destination_lat, b.destination_lng);
     result.push({
-      id: `booking-pickup-${raw.id}`,
+      id: `booking-pickup-${b.id}`,
       scheduledTripId: tripId,
       stopType: 'passenger_pickup',
-      entityId: raw.id,
+      entityId: b.id,
       label: name,
       address: oAddr,
-      lat: raw.origin_lat ?? null,
-      lng: raw.origin_lng ?? null,
+      lat: oLL?.latitude ?? null,
+      lng: oLL?.longitude ?? null,
       sequenceOrder: seq++,
       status: 'pending',
-      notes: raw.notes ?? null,
+      notes: b.notes ?? null,
       code: null,
     });
     result.push({
-      id: `booking-dropoff-${raw.id}`,
+      id: `booking-dropoff-${b.id}`,
       scheduledTripId: tripId,
       stopType: 'passenger_dropoff',
-      entityId: raw.id,
+      entityId: b.id,
       label: name,
       address: dAddr,
-      lat: raw.destination_lat ?? null,
-      lng: raw.destination_lng ?? null,
+      lat: dLL?.latitude ?? null,
+      lng: dLL?.longitude ?? null,
       sequenceOrder: seq++,
       status: 'pending',
       notes: null,
@@ -202,7 +226,7 @@ async function buildStopsManually(tripId: string): Promise<TripStop[]> {
   }
 
   // Shipments (package pickup + dropoff)
-  const { data: shipments } = await sb
+  const { data: shipments } = await supabase
     .from('shipments')
     .select(`
       id,

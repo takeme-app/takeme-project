@@ -53,10 +53,9 @@ export function StatusBadge({ variant, label }: Props) {
 export function bookingStatusToBadge(status: string | undefined): TripStatusBadge {
   if (!status) return 'em_analise';
   const s = status.toLowerCase();
-  if (s === 'pending') return 'aguardando_motorista';
   if (s === 'paid' || s === 'completed' || s === 'concluido') return 'concluida';
   if (s === 'cancelled' || s === 'canceled' || s === 'cancelada') return 'cancelada';
-  if (s === 'in_progress' || s === 'em_andamento' || s === 'confirmed') return 'em_andamento';
+  if (s === 'in_progress' || s === 'em_andamento') return 'em_andamento';
   return 'em_analise';
 }
 

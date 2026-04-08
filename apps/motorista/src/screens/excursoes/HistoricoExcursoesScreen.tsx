@@ -106,7 +106,7 @@ export function HistoricoExcursoesScreen({ navigation }: Props) {
       .from('excursion_requests')
       .select('id, excursion_date, user_id, created_at')
       .eq('preparer_id', user.id)
-      .in('status', ['confirmed', 'cancelled'])
+      .in('status', ['confirmed', 'cancelled', 'completed'])
       .order('created_at', { ascending: false });
 
     const rows = (data ?? []) as { id: string; excursion_date: string; user_id: string; created_at: string }[];

@@ -23,8 +23,6 @@ import {
   GoogleMapsMap,
   MapMarker,
   MapPolyline,
-  MapZoomControls,
-  type GoogleMapsMapRef,
   regionFromLatLngPoints,
   isValidGlobeCoordinate,
   sanitizeMapRegion,
@@ -389,7 +387,6 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const [startLoading, setStartLoading] = useState(false);
 
   const [expenseDoc, setExpenseDoc] = useState<DocumentAsset | null>(null);
-  const tripDetailMapRef = useRef<GoogleMapsMapRef>(null);
 
   // ── Data loading ─────────────────────────────────────────────────────────────
 
@@ -411,7 +408,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
             'id, passenger_count, bags_count, status, amount_cents, profiles(full_name, avatar_url, rating)'
           )
           .eq('scheduled_trip_id', tripId)
-          .in('status', ['pending', 'confirmed', 'paid']),
+          .in('status', ['confirmed', 'paid']),
         supabase
           .from('shipments')
           .select(
@@ -498,17 +495,9 @@ export function TripDetailScreen({ route, navigation }: Props) {
 
   // ── Derived ───────────────────────────────────────────────────────────────────
 
-  const isTripCompleted = trip?.status === 'completed';
-  /** Passageiros “de bordo”: só após aceite; `paid` na viagem concluída = legado / encerramento. */
-  const confirmedBookings = bookings.filter((b) => {
-    if (b.status === 'confirmed') return true;
-    if (b.status === 'paid') return isTripCompleted === true;
-    return false;
-  });
+  const confirmedBookings = bookings.filter((b) => b.status === 'confirmed' || b.status === 'paid');
   const totalPax = confirmedBookings.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
-  const totalBags = bookings
-    .filter((b) => b.status === 'pending' || b.status === 'confirmed' || b.status === 'paid')
-    .reduce((s, b) => s + (b.bags_count ?? 0), 0);
+  const totalBags = bookings.reduce((s, b) => s + (b.bags_count ?? 0), 0);
   const totalRevenueCents = confirmedBookings.reduce((s, b) => s + (b.amount_cents ?? 0), 0);
 
   const bagsCapacity = trip?.bags_available ?? 0;
@@ -642,39 +631,31 @@ export function TripDetailScreen({ route, navigation }: Props) {
               <Text style={styles.mapLoadingText}>Carregando mapa…</Text>
             </View>
           ) : (
-            <>
-              <GoogleMapsMap
-                ref={tripDetailMapRef}
-                initialRegion={initialRegion}
-                style={styles.map}
-                scrollEnabled={false}
-              >
-                {routeCoords.length >= 2 && (
-                  <MapPolyline coordinates={routeCoords} strokeColor={GOLD} strokeWidth={4} />
-                )}
+            <GoogleMapsMap initialRegion={initialRegion} style={styles.map} scrollEnabled={false}>
+              {routeCoords.length >= 2 && (
+                <MapPolyline coordinates={routeCoords} strokeColor={GOLD} strokeWidth={4} />
+              )}
 
-                {tripOriginLL && (
-                  <MapMarker
-                    id="origin"
-                    coordinate={tripOriginLL}
-                    anchor={{ x: 0.5, y: 0.5 }}
-                  >
-                    <View style={styles.markerOrigin} />
-                  </MapMarker>
-                )}
+              {tripOriginLL && (
+                <MapMarker
+                  id="origin"
+                  coordinate={tripOriginLL}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                >
+                  <View style={styles.markerOrigin} />
+                </MapMarker>
+              )}
 
-                {tripDestLL && (
-                  <MapMarker
-                    id="destination"
-                    coordinate={tripDestLL}
-                    anchor={{ x: 0.5, y: 0.5 }}
-                  >
-                    <View style={styles.markerDest} />
-                  </MapMarker>
-                )}
-              </GoogleMapsMap>
-              <MapZoomControls mapRef={tripDetailMapRef} style={styles.tripDetailMapZoom} />
-            </>
+              {tripDestLL && (
+                <MapMarker
+                  id="destination"
+                  coordinate={tripDestLL}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                >
+                  <View style={styles.markerDest} />
+                </MapMarker>
+              )}
+            </GoogleMapsMap>
           )}
         </View>
 
@@ -986,12 +967,7 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 17, fontWeight: '700', color: '#111827' },
 
   // Map
-  mapContainer: { position: 'relative', height: 220, backgroundColor: '#E5E7EB' },
-  tripDetailMapZoom: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-  },
+  mapContainer: { height: 220, backgroundColor: '#E5E7EB' },
   mapLoading: {
     flex: 1,
     alignItems: 'center',

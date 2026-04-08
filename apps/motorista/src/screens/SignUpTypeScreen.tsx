@@ -74,12 +74,6 @@ export function SignUpTypeScreen({ navigation }: Props) {
           </TouchableOpacity>
         </View>
 
-        {/*
-         * ─── Cadastro como PREPARADOR (temporariamente oculto) ───
-         * Para voltar a exibir excursões/encomendas: descomente o bloco JSX abaixo
-         * (da <View style={styles.section}> até o </View> correspondente).
-         */}
-        {/*
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <View style={[styles.iconWrap, styles.iconWrapPreparador]}>
@@ -117,7 +111,6 @@ export function SignUpTypeScreen({ navigation }: Props) {
             </View>
           </TouchableOpacity>
         </View>
-        */}
 
         <TouchableOpacity
           style={[styles.nextButton, !selected && styles.nextButtonDisabled]}

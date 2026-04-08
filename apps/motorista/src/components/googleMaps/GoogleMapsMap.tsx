@@ -56,6 +56,8 @@ type GoogleMapsMapProps = {
   onDidFinishLoadingMap?: () => void;
   onDidFinishLoadingStyle?: () => void;
   onMapIdle?: () => void;
+  /** Pan/zoom manual no mapa (não inclui `setCamera` programático). Desliga “seguir GPS”, por exemplo. */
+  onUserAdjustedMap?: () => void;
   logoEnabled?: boolean;
   attributionEnabled?: boolean;
   compassEnabled?: boolean;
@@ -72,6 +74,7 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
     onDidFinishLoadingMap,
     onDidFinishLoadingStyle,
     onMapIdle,
+    onUserAdjustedMap,
     showsUserLocation = false,
   },
   ref,
@@ -162,6 +165,13 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
     onDidFinishLoadingStyle?.();
   }, [onDidFinishLoadingMap, onDidFinishLoadingStyle]);
 
+  const onRegionDidChange = useCallback(
+    (feature: { properties?: { isUserInteraction?: boolean } }) => {
+      if (feature?.properties?.isUserInteraction) onUserAdjustedMap?.();
+    },
+    [onUserAdjustedMap],
+  );
+
   if (!token) {
     return (
       <View style={[styles.fallback, style]}>
@@ -181,6 +191,7 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
         scaleBarEnabled={false}
         onDidFinishLoadingMap={onMapReady}
         onMapIdle={onMapIdle}
+        onRegionDidChange={onUserAdjustedMap ? onRegionDidChange : undefined}
       >
         <Camera
           ref={cameraRef}
