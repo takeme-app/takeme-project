@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "06aed207-23ff-415f-a672-7bedcc2cb46e"
+      }
+    },
+    "android": {
+      "package": "y.com.fraktal.takeme"
+    }
+  }
+}

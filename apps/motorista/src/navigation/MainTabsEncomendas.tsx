@@ -1,4 +1,5 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HomeEncomendasScreen } from '../screens/encomendas/HomeEncomendasScreen';
@@ -26,6 +27,15 @@ export function MainTabsEncomendas() {
   const insets = useSafeAreaInsets();
   const bottomPadding = Math.max(insets.bottom, MIN_BOTTOM_INSET);
 
+  const tabBarVisibleStyle = {
+    backgroundColor: '#FFFFFF' as const,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    height: TAB_BAR_CONTENT_HEIGHT + bottomPadding,
+    paddingBottom: bottomPadding,
+    paddingTop: 6,
+  };
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -34,14 +44,7 @@ export function MainTabsEncomendas() {
         tabBarActiveTintColor: TAB_ACTIVE,
         tabBarInactiveTintColor: TAB_INACTIVE,
         tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
-        tabBarStyle: {
-          backgroundColor: '#FFFFFF',
-          borderTopWidth: 1,
-          borderTopColor: '#E5E7EB',
-          height: TAB_BAR_CONTENT_HEIGHT + bottomPadding,
-          paddingBottom: bottomPadding,
-          paddingTop: 6,
-        },
+        tabBarStyle: tabBarVisibleStyle,
         tabBarItemStyle: { paddingVertical: 4 },
       }}
     >
@@ -58,9 +61,16 @@ export function MainTabsEncomendas() {
       <Tab.Screen
         name="ColetasEnc"
         component={ColetasEncomendasStack}
-        options={{
-          title: 'Coletas',
-          tabBarIcon: ({ color }) => <MaterialIcons name="inventory-2" size={24} color={color} />,
+        options={({ route }) => {
+          const focused = getFocusedRouteNameFromRoute(route) ?? 'ColetasMain';
+          const hideTabOnMap = focused === 'ActiveShipment' || focused === 'DetalhesEncomenda';
+          return {
+            title: 'Coletas',
+            tabBarIcon: ({ color }: { color: string }) => (
+              <MaterialIcons name="inventory-2" size={24} color={color} />
+            ),
+            tabBarStyle: hideTabOnMap ? { display: 'none' as const } : tabBarVisibleStyle,
+          };
         }}
       />
       <Tab.Screen

@@ -20,7 +20,14 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { MapboxMap, MapboxMarker, MapboxPolyline } from '../../components/mapbox';
+import {
+  MapboxMap,
+  MapboxMarker,
+  MapboxPolyline,
+  isValidTripCoordinate,
+  sanitizeMapRegion,
+  regionFromOriginDestination,
+} from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
@@ -163,11 +170,12 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
         setSenderName(p?.full_name ?? null);
         setSenderAvatarUrl(p?.avatar_url ?? null);
       }
-      if (!cancelled && (row as DetailRow).dependent_id) {
+      const depId = (row as DetailRow).dependent_id;
+      if (!cancelled && depId) {
         const { data: dep } = await supabase
           .from('dependents')
           .select('age')
-          .eq('id', (row as DetailRow).dependent_id)
+          .eq('id', depId)
           .single();
         if (!cancelled && dep && (dep as { age?: string | null }).age)
           setDependentAge((dep as { age: string }).age);
@@ -178,7 +186,12 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
   }, [dependentShipmentId]);
 
   useEffect(() => {
-    if (!detail?.origin_lat || !detail?.origin_lng || !detail?.destination_lat || !detail?.destination_lng) return;
+    if (
+      !detail ||
+      !isValidTripCoordinate(detail.origin_lat, detail.origin_lng) ||
+      !isValidTripCoordinate(detail.destination_lat, detail.destination_lng)
+    )
+      return;
     let cancelled = false;
     getRouteWithDuration(
       { latitude: detail.origin_lat, longitude: detail.origin_lng },
@@ -193,14 +206,22 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
   }, [detail?.origin_lat, detail?.origin_lng, detail?.destination_lat, detail?.destination_lng]);
 
   const mapRegion = useMemo(() => {
-    if (!detail?.origin_lat || !detail?.origin_lng || !detail?.destination_lat || !detail?.destination_lng) return null;
-    return {
-      latitude: detail.origin_lat,
-      longitude: detail.origin_lng,
-      latitudeDelta: 0.01,
-      longitudeDelta: 0.01,
-    };
+    if (!detail) return null;
+    if (
+      !isValidTripCoordinate(detail.origin_lat, detail.origin_lng) ||
+      !isValidTripCoordinate(detail.destination_lat, detail.destination_lng)
+    )
+      return null;
+    const r = regionFromOriginDestination(
+      detail.origin_lat,
+      detail.origin_lng,
+      detail.destination_lat,
+      detail.destination_lng,
+    );
+    return r ? sanitizeMapRegion(r) : null;
   }, [detail]);
+
+  const hasValidDependentShipmentMapCoords = mapRegion != null;
 
   const canCancel = detail?.status && ['pending_review', 'confirmed'].includes(detail.status);
   const driverOnWay = detail?.status && ['confirmed', 'in_progress'].includes(detail.status);
@@ -392,25 +413,30 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
         showsVerticalScrollIndicator={false}
       >
         {/* Mapa */}
-        {mapRegion && detail.origin_lat != null && detail.origin_lng != null && detail.destination_lat != null && detail.destination_lng != null && (
-          <View style={styles.mapSection}>
-            <View style={styles.mapContainer}>
-              <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled={false} showControls>
+        <View style={styles.mapSection}>
+          <View style={styles.mapContainer}>
+            {!hasValidDependentShipmentMapCoords ? (
+              <View style={styles.mapLoading}>
+                <ActivityIndicator size="large" color={COLORS.black} />
+                <Text style={styles.mapLoadingText}>Carregando mapa…</Text>
+              </View>
+            ) : (
+              <MapboxMap style={styles.map} initialRegion={mapRegion!} scrollEnabled={false} showControls>
                 {routeCoords && routeCoords.length > 0 && (
                   <MapboxPolyline coordinates={routeCoords} strokeColor={COLORS.black} strokeWidth={4} />
                 )}
                 {driverOnWay ? (
-                  <MapboxMarker id="origin" coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                  <MapboxMarker id="origin" coordinate={{ latitude: detail.origin_lat!, longitude: detail.origin_lng! }} anchor={{ x: 0.5, y: 0.5 }}>
                     <DriverEtaMarkerIcon eta={routeDuration ?? undefined} />
                   </MapboxMarker>
                 ) : (
-                  <MapboxMarker id="origin" coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }} anchor={{ x: 0.5, y: 0.5 }} icon={require('../../../assets/icons/icon-partida.png')} iconSize={17} />
+                  <MapboxMarker id="origin" coordinate={{ latitude: detail.origin_lat!, longitude: detail.origin_lng! }} anchor={{ x: 0.5, y: 0.5 }} icon={require('../../../assets/icons/icon-partida.png')} iconSize={17} />
                 )}
-                <MapboxMarker id="destination" coordinate={{ latitude: detail.destination_lat, longitude: detail.destination_lng }} anchor={{ x: 0.5, y: 0.5 }} icon={require('../../../assets/icons/icon-destino.png')} iconSize={14} />
+                <MapboxMarker id="destination" coordinate={{ latitude: detail.destination_lat!, longitude: detail.destination_lng! }} anchor={{ x: 0.5, y: 0.5 }} icon={require('../../../assets/icons/icon-destino.png')} iconSize={14} />
               </MapboxMap>
-            </View>
+            )}
           </View>
-        )}
+        </View>
 
         {/* Título + Avatar */}
         <View style={styles.infoHeader}>
@@ -736,6 +762,8 @@ const styles = StyleSheet.create({
 
   mapSection: { paddingHorizontal: 0 },
   mapContainer: { width: '100%', height: 200, backgroundColor: COLORS.neutral300 },
+  mapLoading: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
+  mapLoadingText: { fontSize: 13, color: COLORS.neutral700 },
   map: { width: '100%', height: '100%' },
 
   infoHeader: {

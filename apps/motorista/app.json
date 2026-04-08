@@ -38,7 +38,12 @@
       }
     },
     "plugins": [
-      "@rnmapbox/maps",
+      [
+        "@rnmapbox/maps",
+        {
+          "RNMapboxMapsImpl": "mapbox"
+        }
+      ],
       [
         "expo-splash-screen",
         {

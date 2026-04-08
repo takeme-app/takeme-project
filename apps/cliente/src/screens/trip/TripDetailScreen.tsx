@@ -16,7 +16,13 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SupportSheet } from '../../components/SupportSheet';
-import { MapboxMap, MapboxMarker, MapboxPolyline } from '../../components/mapbox';
+import {
+  MapboxMap,
+  MapboxMarker,
+  MapboxPolyline,
+  regionFromOriginDestination,
+  isValidTripCoordinate,
+} from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
@@ -69,6 +75,7 @@ type BookingDetail = {
   arrival_time: string;
   driver_name: string;
   driver_avatar_url: string | null;
+  driver_id: string | null;
 };
 
 export function TripDetailScreen({ navigation, route }: Props) {
@@ -153,6 +160,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
         arrival_time: arrTime,
         driver_name: driverName,
         driver_avatar_url: driverAvatarUrl,
+        driver_id: trip?.driver_id ?? null,
       });
       setLoading(false);
     })();
@@ -160,29 +168,39 @@ export function TripDetailScreen({ navigation, route }: Props) {
   }, [bookingId]);
 
   useEffect(() => {
-    if (!detail) return;
+    if (
+      !detail ||
+      !isValidTripCoordinate(detail.origin_lat, detail.origin_lng) ||
+      !isValidTripCoordinate(detail.destination_lat, detail.destination_lng)
+    ) {
+      return;
+    }
     let cancelled = false;
     getRouteWithDuration(
       { latitude: detail.origin_lat, longitude: detail.origin_lng },
-      { latitude: detail.destination_lat, longitude: detail.destination_lng }
+      { latitude: detail.destination_lat, longitude: detail.destination_lng },
     ).then((result) => {
       if (!cancelled && result) {
         setRouteCoords(result.coordinates);
         if (result.durationSeconds > 0) setRouteDuration(formatDuration(result.durationSeconds));
       }
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [detail?.origin_lat, detail?.origin_lng, detail?.destination_lat, detail?.destination_lng]);
 
   const mapRegion = useMemo(() => {
     if (!detail) return null;
-    return {
-      latitude: detail.origin_lat,
-      longitude: detail.origin_lng,
-      latitudeDelta: 0.01,
-      longitudeDelta: 0.01,
-    };
+    return regionFromOriginDestination(
+      detail.origin_lat,
+      detail.origin_lng,
+      detail.destination_lat,
+      detail.destination_lng,
+    );
   }, [detail]);
+
+  const hasValidMapCoords = mapRegion != null;
 
   const isInProgress = detail?.status && !['paid', 'cancelled'].includes(detail.status);
   const isCompleted = detail?.status === 'paid';
@@ -242,27 +260,50 @@ export function TripDetailScreen({ navigation, route }: Props) {
       </View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {mapRegion && (
-          <View style={styles.mapWrap}>
-            <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled={false} showControls>
-              {routeCoords && routeCoords.length > 0 && (
-                <MapboxPolyline coordinates={routeCoords} strokeColor={COLORS.black} strokeWidth={4} />
-              )}
-              {driverOnWay ? (
-                <MapboxMarker id="origin" coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                  <DriverEtaMarkerIcon eta={routeDuration ?? undefined} />
-                </MapboxMarker>
-              ) : (
-                <MapboxMarker id="origin" coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }} anchor={{ x: 0.5, y: 0.5 }} icon={require('../../../assets/icons/icon-partida.png')} iconSize={17} />
-              )}
-              <MapboxMarker id="destination" coordinate={{ latitude: detail.destination_lat, longitude: detail.destination_lng }} anchor={{ x: 0.5, y: 0.5 }} icon={require('../../../assets/icons/icon-destino.png')} iconSize={14} />
-            </MapboxMap>
-            <TouchableOpacity style={styles.trackButton} activeOpacity={0.8}>
-              <MaterialIcons name="explore" size={20} color={COLORS.neutral700} />
-              <Text style={styles.trackButtonText}>Acompanhar em tempo real</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        <View style={styles.mapWrap}>
+          {!hasValidMapCoords ? (
+            <View style={styles.mapLoading}>
+              <ActivityIndicator size="large" color={COLORS.black} />
+              <Text style={styles.mapLoadingText}>Carregando mapa…</Text>
+            </View>
+          ) : (
+            <>
+              <MapboxMap style={styles.map} initialRegion={mapRegion!} scrollEnabled={false} showControls>
+                {routeCoords && routeCoords.length > 0 && (
+                  <MapboxPolyline coordinates={routeCoords} strokeColor={COLORS.black} strokeWidth={4} />
+                )}
+                {driverOnWay ? (
+                  <MapboxMarker
+                    id="origin"
+                    coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                  >
+                    <DriverEtaMarkerIcon eta={routeDuration ?? undefined} />
+                  </MapboxMarker>
+                ) : (
+                  <MapboxMarker
+                    id="origin"
+                    coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                    icon={require('../../../assets/icons/icon-partida.png')}
+                    iconSize={17}
+                  />
+                )}
+                <MapboxMarker
+                  id="destination"
+                  coordinate={{ latitude: detail.destination_lat, longitude: detail.destination_lng }}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  icon={require('../../../assets/icons/icon-destino.png')}
+                  iconSize={14}
+                />
+              </MapboxMap>
+              <TouchableOpacity style={styles.trackButton} activeOpacity={0.8}>
+                <MaterialIcons name="explore" size={20} color={COLORS.neutral700} />
+                <Text style={styles.trackButtonText}>Acompanhar em tempo real</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
 
         <View style={styles.card}>
           <View style={styles.cardStatusRow}>
@@ -426,7 +467,18 @@ export function TripDetailScreen({ navigation, route }: Props) {
         visible={supportSheetVisible}
         onClose={() => setSupportSheetVisible(false)}
         showDriverChat={detail?.status != null && !['completed', 'cancelled'].includes(detail.status)}
-        onOpenDriverChat={() => navigation.navigate('Chat', { contactName: 'Motorista' })}
+        onOpenDriverChat={() => {
+          if (detail?.driver_id) {
+            navigation.navigate('Chat', {
+              contactName: detail.driver_name,
+              driverId: detail.driver_id,
+              bookingId: detail.id,
+              participantAvatarKey: detail.driver_avatar_url,
+            });
+            return;
+          }
+          navigation.navigate('Chat', { contactName: detail?.driver_name ?? 'Motorista' });
+        }}
         onOpenSupportChat={() => navigation.navigate('Chat', { contactName: 'Suporte Take Me' })}
       />
     </SafeAreaView>
@@ -468,6 +520,16 @@ const styles = StyleSheet.create({
   scrollContent: { paddingBottom: 40 },
   mapWrap: { height: 200, paddingHorizontal: 24, paddingTop: 16 },
   map: { width: '100%', height: '100%', borderRadius: 12 },
+  mapLoading: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 12,
+    backgroundColor: COLORS.neutral300,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  mapLoadingText: { fontSize: 13, color: COLORS.neutral700 },
   trackButton: {
     flexDirection: 'row',
     alignItems: 'center',

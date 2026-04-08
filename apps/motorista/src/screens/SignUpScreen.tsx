@@ -77,7 +77,13 @@ export function SignUpScreen({ navigation, route }: Props) {
     if (driverFirst) {
       if (!registrationType) return;
       setDeferred({ email: email.trim(), password, driverType: registrationType });
-      navigation.reset({ index: 0, routes: [{ name: 'CompleteDriverRegistration', params: { driverType: registrationType } }] });
+      if (registrationType === 'preparador_excursões') {
+        navigation.reset({ index: 0, routes: [{ name: 'CompletePreparadorExcursoes' }] });
+      } else if (registrationType === 'preparador_encomendas') {
+        navigation.reset({ index: 0, routes: [{ name: 'CompletePreparadorEncomendas' }] });
+      } else {
+        navigation.reset({ index: 0, routes: [{ name: 'CompleteDriverRegistration', params: { driverType: registrationType } }] });
+      }
       return;
     }
 

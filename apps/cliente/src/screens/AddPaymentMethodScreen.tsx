@@ -13,7 +13,7 @@ import { Text } from '../components/Text';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
-import { CardField, useStripe } from '@stripe/stripe-react-native';
+import { CardField, useStripe } from '../lib/stripeNativeBridge';
 import { supabase } from '../lib/supabase';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';

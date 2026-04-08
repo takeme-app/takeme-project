@@ -21,6 +21,7 @@ import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext
 import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
 import { formatPhoneBR } from '../utils/formatPhone';
 import { formatCurrencyBRLInput } from '../utils/formatCurrency';
+import { GooglePlacesAutocomplete } from '../components/GooglePlacesAutocomplete';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CompleteDriverRegistration'>;
 
@@ -564,24 +565,22 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
                 </TouchableOpacity>
               ) : null}
             </View>
-            <FieldBlock label="Origem">
-              <TextInput
-                style={styles.input}
-                placeholder="Ex: São Paulo"
-                placeholderTextColor="#9CA3AF"
-                value={r.origin}
-                onChangeText={(t) => updateRoute(r.id, { origin: t })}
-              />
-            </FieldBlock>
-            <FieldBlock label="Destino">
-              <TextInput
-                style={styles.input}
-                placeholder="Ex: Interior"
-                placeholderTextColor="#9CA3AF"
-                value={r.destination}
-                onChangeText={(t) => updateRoute(r.id, { destination: t })}
-              />
-            </FieldBlock>
+            <GooglePlacesAutocomplete
+              label="Origem"
+              placeholder="Ex: São Paulo"
+              value={r.origin}
+              onChangeText={(t) => updateRoute(r.id, { origin: t, originResolved: false })}
+              onSelectPlace={(place) => updateRoute(r.id, { origin: place.placeName, originResolved: true })}
+              hasResolvedCoords={r.originResolved ?? false}
+            />
+            <GooglePlacesAutocomplete
+              label="Destino"
+              placeholder="Ex: Interior"
+              value={r.destination}
+              onChangeText={(t) => updateRoute(r.id, { destination: t, destinationResolved: false })}
+              onSelectPlace={(place) => updateRoute(r.id, { destination: place.placeName, destinationResolved: true })}
+              hasResolvedCoords={r.destinationResolved ?? false}
+            />
             <FieldBlock label="Valor sugerido por passageiro">
               <TextInput
                 style={styles.input}

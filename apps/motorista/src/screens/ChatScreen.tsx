@@ -15,11 +15,15 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { ProfileStackParamList } from '../navigation/types';
+import type { ProfileStackParamList, ChatExcStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+
+const sb = supabase as { from: (table: string) => any };
 import { storageUrl } from '../utils/storageUrl';
 
-type Props = NativeStackScreenProps<ProfileStackParamList, 'Chat'>;
+type Props =
+  | NativeStackScreenProps<ProfileStackParamList, 'Chat'>
+  | NativeStackScreenProps<ChatExcStackParamList, 'ChatExcThread'>;
 
 const GOLD = '#C9A227';
 
@@ -82,7 +86,7 @@ export function ChatScreen({ navigation, route }: Props) {
   }, []);
 
   const loadMessages = useCallback(async () => {
-    const { data } = await supabase
+    const { data } = await sb
       .from('messages')
       .select('id, sender_id, content, created_at, read_at')
       .eq('conversation_id', conversationId)
@@ -92,7 +96,7 @@ export function ChatScreen({ navigation, route }: Props) {
   }, [conversationId]);
 
   const loadConversation = useCallback(async () => {
-    const { data } = await supabase
+    const { data } = await sb
       .from('conversations')
       .select('status')
       .eq('id', conversationId)
@@ -126,10 +130,10 @@ export function ChatScreen({ navigation, route }: Props) {
 
   const sendMessage = async () => {
     const text = inputText.trim();
-    if (!text || sending) return;
+    if (!text || sending || !myId) return;
     setSending(true);
     setInputText('');
-    await supabase.from('messages').insert({
+    await sb.from('messages').insert({
       conversation_id: conversationId,
       sender_id: myId,
       content: text,
@@ -236,9 +240,9 @@ export function ChatScreen({ navigation, route }: Props) {
               onSubmitEditing={sendMessage}
             />
             <TouchableOpacity
-              style={[styles.sendButton, (!inputText.trim() || sending) && styles.sendButtonDisabled]}
+              style={[styles.sendButton, (!inputText.trim() || sending || !myId) && styles.sendButtonDisabled]}
               onPress={sendMessage}
-              disabled={!inputText.trim() || sending}
+              disabled={!inputText.trim() || sending || !myId}
               activeOpacity={0.8}
             >
               {sending ? (

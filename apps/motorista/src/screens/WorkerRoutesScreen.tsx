@@ -25,6 +25,9 @@ import type { ProfileStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { useAppAlert } from '../contexts/AppAlertContext';
+import { GooglePlacesAutocomplete } from '../components/GooglePlacesAutocomplete';
+import { googleForwardGeocode, type GoogleGeocodeResult } from '@take-me/shared';
+import { getGoogleMapsApiKey } from '../lib/googleMapsConfig';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'WorkerRoutes'>;
 
@@ -53,6 +56,8 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
   const [saving, setSaving] = useState(false);
   const [origin, setOrigin] = useState('');
   const [destination, setDestination] = useState('');
+  const [originPlace, setOriginPlace] = useState<GoogleGeocodeResult | null>(null);
+  const [destinationPlace, setDestinationPlace] = useState<GoogleGeocodeResult | null>(null);
   const [price, setPrice] = useState('');
   const [useTakeMe, setUseTakeMe] = useState(false);
   const slideAnim = useRef(new Animated.Value(300)).current;
@@ -73,7 +78,12 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const openModal = () => {
-    setOrigin(''); setDestination(''); setPrice(''); setUseTakeMe(false);
+    setOrigin('');
+    setDestination('');
+    setOriginPlace(null);
+    setDestinationPlace(null);
+    setPrice('');
+    setUseTakeMe(false);
     resetDrag();
     slideAnim.setValue(300);
     setModalVisible(true);
@@ -138,14 +148,46 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
     if (!destination.trim()) { showAlert('Atenção', 'Informe o destino.'); return; }
     const priceCents = Math.round(parseFloat(price.replace(',', '.')) * 100);
     if (!priceCents || priceCents <= 0) { showAlert('Atenção', 'Informe um valor válido.'); return; }
+
+    const apiKey = getGoogleMapsApiKey();
     setSaving(true);
     try {
+      let oGeo = originPlace;
+      let dGeo = destinationPlace;
+      if (!oGeo || !dGeo) {
+        if (!apiKey) {
+          showAlert(
+            'Mapas',
+            'Escolha origem e destino na lista de sugestões ou configure EXPO_PUBLIC_GOOGLE_MAPS_API_KEY.',
+          );
+          return;
+        }
+        if (!oGeo) {
+          oGeo = await googleForwardGeocode(`${origin.trim()}, Brasil`, apiKey);
+          if (!oGeo) {
+            showAlert('Origem', 'Não encontramos esse local. Toque em uma sugestão da lista ou refine o texto.');
+            return;
+          }
+        }
+        if (!dGeo) {
+          dGeo = await googleForwardGeocode(`${destination.trim()}, Brasil`, apiKey);
+          if (!dGeo) {
+            showAlert('Destino', 'Não encontramos esse local. Toque em uma sugestão da lista ou refine o texto.');
+            return;
+          }
+        }
+      }
+
       const { data: { user } } = await supabase.auth.getUser();
       if (!user?.id) throw new Error('Não autenticado.');
       const { error } = await supabase.from('worker_routes').insert({
         worker_id: user.id,
-        origin_address: origin.trim(),
-        destination_address: destination.trim(),
+        origin_address: oGeo.placeName.trim() || origin.trim(),
+        destination_address: dGeo.placeName.trim() || destination.trim(),
+        origin_lat: oGeo.latitude,
+        origin_lng: oGeo.longitude,
+        destination_lat: dGeo.latitude,
+        destination_lng: dGeo.longitude,
         price_per_person_cents: priceCents,
         is_active: true,
       });
@@ -233,22 +275,28 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
             </View>
 
             <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-              <Text style={styles.fieldLabel}>Origem</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Ex: Rua Haddock Lobo, 1302"
-                placeholderTextColor="#9CA3AF"
+              <GooglePlacesAutocomplete
+                label="Origem"
+                placeholder="Digite cidade, bairro ou endereço"
                 value={origin}
-                onChangeText={setOrigin}
+                onChangeText={(t) => {
+                  setOrigin(t);
+                  setOriginPlace(null);
+                }}
+                onSelectPlace={setOriginPlace}
+                hasResolvedCoords={originPlace != null}
               />
 
-              <Text style={styles.fieldLabel}>Destino</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Av. Paulista, 500"
-                placeholderTextColor="#9CA3AF"
+              <GooglePlacesAutocomplete
+                label="Destino"
+                placeholder="Digite cidade, bairro ou endereço"
                 value={destination}
-                onChangeText={setDestination}
+                onChangeText={(t) => {
+                  setDestination(t);
+                  setDestinationPlace(null);
+                }}
+                onSelectPlace={setDestinationPlace}
+                hasResolvedCoords={destinationPlace != null}
               />
 
               <Text style={styles.fieldLabel}>Valor por pessoa</Text>

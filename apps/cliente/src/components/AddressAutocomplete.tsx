@@ -1,5 +1,15 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { View, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
+import {
+  View,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  ScrollView,
+  type StyleProp,
+  type TextStyle,
+  type ViewStyle,
+} from 'react-native';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { searchAddress, type AddressSuggestion } from '../lib/location';
@@ -19,7 +29,8 @@ type Props = {
   onSelectPlace: (place: AddressSuggestion) => void;
   placeholder?: string;
   editable?: boolean;
-  style?: object;
+  style?: StyleProp<ViewStyle>;
+  inputStyle?: StyleProp<TextStyle>;
 };
 
 export function AddressAutocomplete({
@@ -29,6 +40,7 @@ export function AddressAutocomplete({
   placeholder = 'Digite o endereço...',
   editable = true,
   style,
+  inputStyle,
 }: Props) {
   const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
   const [loading, setLoading] = useState(false);
@@ -86,7 +98,7 @@ export function AddressAutocomplete({
     <View style={[styles.wrap, style]}>
       <View style={styles.inputRow}>
         <TextInput
-          style={styles.input}
+          style={[styles.input, inputStyle]}
           value={value}
           onChangeText={handleChangeText}
           placeholder={placeholder}

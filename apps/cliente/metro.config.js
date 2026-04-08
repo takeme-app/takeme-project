@@ -2,6 +2,9 @@ const { getDefaultConfig } = require('expo/metro-config');
 const path = require('path');
 const fs = require('fs');
 
+const { loadEnv } = require('./scripts/load-env');
+loadEnv(__dirname);
+
 const projectRoot = __dirname;
 const monorepoRoot = path.resolve(projectRoot, '../..');
 

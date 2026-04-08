@@ -5,23 +5,47 @@ import {
   StyleSheet,
   ScrollView,
   Platform,
+  Image,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MapboxMap, MapboxMarker, MapboxPolyline } from '../../components/mapbox';
+import {
+  MapboxMap,
+  MapboxMarker,
+  MapboxPolyline,
+  isValidTripCoordinate,
+  sanitizeMapRegion,
+} from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { TripStackParamList, TripDriverParam, PaymentConfirmedBookingParam } from '../../navigation/types';
+import type {
+  TripStackParamList,
+  TripDriverParam,
+  PaymentConfirmedBookingParam,
+  TripLiveDriverDisplay,
+} from '../../navigation/types';
 import { getRoutePolyline, type RoutePoint } from '../../lib/route';
 import { supabase } from '../../lib/supabase';
 import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
+import { useAppAlert } from '../../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../../utils/errorMessage';
+import { formatVehicleDescription, formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
+import { fetchResolvedPriceCentsForScheduledTrip } from '../../lib/clientScheduledTrips';
 import { PaymentMethodSection, type PaymentMethodType } from '../../components/PaymentMethodSection';
+
+const supabasePublicUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+
+function resolveAvatarUri(avatarUrl: string | null | undefined): string | null {
+  if (!avatarUrl?.trim()) return null;
+  return avatarUrl.startsWith('http') ? avatarUrl : `${supabasePublicUrl}/storage/v1/object/public/avatars/${avatarUrl}`;
+}
 
 type Props = NativeStackScreenProps<TripStackParamList, 'Checkout'>;
 
 const DEFAULT_DRIVER: TripDriverParam = {
   id: '0',
+  driver_id: '',
   name: 'Carlos Silva',
   rating: 4.8,
   badge: 'Take Me',
@@ -29,6 +53,10 @@ const DEFAULT_DRIVER: TripDriverParam = {
   arrival: '16:30',
   seats: 3,
   bags: 3,
+  vehicle_model: null,
+  vehicle_year: null,
+  vehicle_plate: null,
+  avatar_url: null,
 };
 
 const COLORS = {
@@ -49,8 +77,15 @@ const DEFAULT_REGION = {
 
 export function CheckoutScreen({ navigation, route }: Props) {
   const { currentPlace } = useCurrentLocation();
+  const { showAlert } = useAppAlert();
   const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('credito');
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
+  /** Preço alinhado a `scheduled_trips` + `worker_routes` (evita fallback fictício 6400). */
+  const [resolvedFareCents, setResolvedFareCents] = useState<number | null>(() =>
+    route.params?.scheduled_trip_id ? null : route.params?.driver?.amount_cents ?? null
+  );
+  const [fareLoading, setFareLoading] = useState(() => Boolean(route.params?.scheduled_trip_id));
 
   const driver = route.params?.driver ?? DEFAULT_DRIVER;
   const origin = route.params?.origin;
@@ -59,9 +94,36 @@ export function CheckoutScreen({ navigation, route }: Props) {
   const bagsCount = route.params?.bags_count ?? driver.bags ?? 0;
   const scheduledTripId = route.params?.scheduled_trip_id;
   const immediateTrip = route.params?.immediateTrip === true;
-  const amountCents = driver.amount_cents ?? 6400;
-  const fareFormatted = `R$ ${(amountCents / 100).toFixed(2)}`;
+  const amountCents = resolvedFareCents ?? driver.amount_cents ?? null;
+  const fareFormatted =
+    amountCents != null
+      ? `R$ ${(amountCents / 100).toFixed(2)}`
+      : scheduledTripId
+        ? 'Carregando preço…'
+        : 'R$ —';
   const [tripDateLabel, setTripDateLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!scheduledTripId) {
+      setFareLoading(false);
+      setResolvedFareCents(driver.amount_cents ?? null);
+      return;
+    }
+    let cancelled = false;
+    setFareLoading(true);
+    fetchResolvedPriceCentsForScheduledTrip(scheduledTripId).then(({ cents, error }) => {
+      if (cancelled) return;
+      setFareLoading(false);
+      if (error) {
+        setResolvedFareCents(driver.amount_cents ?? null);
+        return;
+      }
+      setResolvedFareCents(cents ?? driver.amount_cents ?? null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [scheduledTripId, driver.amount_cents]);
 
   useEffect(() => {
     if (!scheduledTripId) {
@@ -74,16 +136,13 @@ export function CheckoutScreen({ navigation, route }: Props) {
       .select('departure_at')
       .eq('id', scheduledTripId)
       .single()
-      .then(({ data }) => {
-        if (cancelled || !data?.departure_at) {
+      .then(({ data, error }) => {
+        if (error || cancelled || !data?.departure_at) {
           if (!cancelled) setTripDateLabel(immediateTrip ? 'Hoje' : null);
           return;
         }
         const d = new Date(data.departure_at);
         setTripDateLabel(d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' }));
-      })
-      .catch(() => {
-        if (!cancelled) setTripDateLabel(immediateTrip ? 'Hoje' : null);
       });
     return () => { cancelled = true; };
   }, [scheduledTripId, immediateTrip]);
@@ -109,37 +168,153 @@ export function CheckoutScreen({ navigation, route }: Props) {
     return () => clearInterval(interval);
   }, [refreshCheckout]);
 
+  const handleConfirmPayment = useCallback(
+    async (_params: { method: PaymentMethodType; paymentMethodId?: string }) => {
+      if (!origin || !destination) return;
+      if (!scheduledTripId) {
+        showAlert(
+          'Não foi possível concluir',
+          'Identificação da viagem em falta. Volte e escolha novamente uma opção de motorista.'
+        );
+        return;
+      }
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        showAlert('Sessão', 'Faça login para concluir o pagamento.');
+        return;
+      }
+      setPaymentSubmitting(true);
+      try {
+        const { cents: dbCents, error: priceErr } =
+          await fetchResolvedPriceCentsForScheduledTrip(scheduledTripId);
+        if (priceErr) {
+          showAlert('Preço', priceErr);
+          return;
+        }
+        const finalAmountCents = dbCents ?? driver.amount_cents ?? null;
+        if (finalAmountCents == null || finalAmountCents < 0) {
+          showAlert(
+            'Preço',
+            'Não foi possível determinar o valor desta viagem. Verifique se a rota tem preço (worker_routes) ou se a viagem está cadastrada corretamente.'
+          );
+          return;
+        }
+        const passenger_data = passengersParam.map((p) => ({
+          name: p.name ?? '',
+          cpf: p.cpf ?? '',
+          bags: p.bags ?? '',
+        }));
+        const passenger_count = Math.max(1, passengersParam.length);
+        const { data: row, error } = await supabase
+          .from('bookings')
+          .insert({
+            user_id: user.id,
+            scheduled_trip_id: scheduledTripId,
+            origin_address: origin.address,
+            origin_lat: origin.latitude,
+            origin_lng: origin.longitude,
+            destination_address: destination.address,
+            destination_lat: destination.latitude,
+            destination_lng: destination.longitude,
+            passenger_count,
+            bags_count: bagsCount,
+            passenger_data,
+            amount_cents: finalAmountCents,
+            status: 'paid',
+            paid_at: new Date().toISOString(),
+          })
+          .select('id')
+          .single();
+        if (error) {
+          showAlert(
+            'Erro ao reservar',
+            getUserErrorMessage(error, 'Não foi possível registrar sua viagem. Tente novamente.')
+          );
+          return;
+        }
+        const bookingId = row && typeof row === 'object' && 'id' in row ? String((row as { id: string }).id) : '';
+        const summary: PaymentConfirmedBookingParam = {
+          booking_id: bookingId,
+          origin_address: origin.address,
+          destination_address: destination.address,
+          departure: driver.departure,
+          arrival: driver.arrival,
+          amount_cents: finalAmountCents,
+          driver_name: driver.name,
+        };
+        const tripLive: TripLiveDriverDisplay = {
+          driverName: driver.name,
+          rating: driver.rating,
+          vehicleLabel: formatVehicleDescription(driver.vehicle_model, driver.vehicle_year, driver.vehicle_plate),
+          amountCents: finalAmountCents,
+          bookingId: bookingId || undefined,
+        };
+        navigation.replace('PaymentConfirmed', {
+          booking: summary,
+          immediateTrip: route.params?.immediateTrip,
+          tripLive,
+        });
+      } finally {
+        setPaymentSubmitting(false);
+      }
+    },
+    [
+      bagsCount,
+      destination,
+      driver.amount_cents,
+      driver.arrival,
+      driver.departure,
+      driver.name,
+      driver.rating,
+      driver.vehicle_model,
+      driver.vehicle_year,
+      driver.vehicle_plate,
+      navigation,
+      origin,
+      passengersParam,
+      route.params?.immediateTrip,
+      scheduledTripId,
+      showAlert,
+    ]
+  );
+
   const mapRegion = useMemo(() => {
-    if (origin && destination) {
-      const latMin = Math.min(origin.latitude, destination.latitude);
-      const latMax = Math.max(origin.latitude, destination.latitude);
-      const lngMin = Math.min(origin.longitude, destination.longitude);
-      const lngMax = Math.max(origin.longitude, destination.longitude);
+    const oOk = origin && isValidTripCoordinate(origin.latitude, origin.longitude);
+    const dOk = destination && isValidTripCoordinate(destination.latitude, destination.longitude);
+    if (oOk && dOk) {
+      const latMin = Math.min(origin!.latitude, destination!.latitude);
+      const latMax = Math.max(origin!.latitude, destination!.latitude);
+      const lngMin = Math.min(origin!.longitude, destination!.longitude);
+      const lngMax = Math.max(origin!.longitude, destination!.longitude);
       const padding = 0.004;
-      return {
+      return sanitizeMapRegion({
         latitude: (latMin + latMax) / 2,
         longitude: (lngMin + lngMax) / 2,
         latitudeDelta: Math.max(0.02, latMax - latMin + padding * 2),
         longitudeDelta: Math.max(0.02, lngMax - lngMin + padding * 2),
-      };
+      });
     }
-    if (origin) {
-      return {
-        latitude: origin.latitude,
-        longitude: origin.longitude,
+    if (oOk) {
+      return sanitizeMapRegion({
+        latitude: origin!.latitude,
+        longitude: origin!.longitude,
         latitudeDelta: 0.02,
         longitudeDelta: 0.02,
-      };
+      });
     }
-    if (currentPlace) {
-      return {
+    if (currentPlace && isValidTripCoordinate(currentPlace.latitude, currentPlace.longitude)) {
+      return sanitizeMapRegion({
         latitude: currentPlace.latitude,
         longitude: currentPlace.longitude,
         latitudeDelta: 0.02,
         longitudeDelta: 0.02,
-      };
+      });
     }
-    return DEFAULT_REGION;
+    return sanitizeMapRegion({
+      ...DEFAULT_REGION,
+      latitudeDelta: 0.02,
+      longitudeDelta: 0.02,
+    });
   }, [origin, destination, currentPlace]);
 
   return (
@@ -147,7 +322,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
       <StatusBar style="dark" />
       <View style={styles.mapWrap}>
         <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled={false}>
-          {origin && (
+          {origin && isValidTripCoordinate(origin.latitude, origin.longitude) && (
             <MapboxMarker
               id="origin"
               coordinate={{ latitude: origin.latitude, longitude: origin.longitude }}
@@ -157,7 +332,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
               pinColor="#0d0d0d"
             />
           )}
-          {destination && (
+          {destination && isValidTripCoordinate(destination.latitude, destination.longitude) && (
             <MapboxMarker
               id="destination"
               coordinate={{ latitude: destination.latitude, longitude: destination.longitude }}
@@ -167,7 +342,10 @@ export function CheckoutScreen({ navigation, route }: Props) {
               pinColor="#dc2626"
             />
           )}
-          {origin && destination && (
+          {origin &&
+            destination &&
+            isValidTripCoordinate(origin.latitude, origin.longitude) &&
+            isValidTripCoordinate(destination.latitude, destination.longitude) && (
             <MapboxPolyline
               coordinates={
                 routeCoords?.length
@@ -197,10 +375,14 @@ export function CheckoutScreen({ navigation, route }: Props) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Motorista</Text>
           <View style={styles.driverRow}>
-            <View style={styles.driverAvatar} />
+            {resolveAvatarUri(driver.avatar_url) ? (
+              <Image source={{ uri: resolveAvatarUri(driver.avatar_url)! }} style={styles.driverAvatarImage} />
+            ) : (
+              <View style={styles.driverAvatar} />
+            )}
             <View style={styles.driverInfo}>
               <Text style={styles.driverName}>{driver.name}</Text>
-              <Text style={styles.driverRating}>★ {driver.rating}</Text>
+              <Text style={styles.driverRating}>★ {formatDriverRatingLabel(driver.rating)}</Text>
             </View>
             <Text style={styles.fare}>{fareFormatted}</Text>
           </View>
@@ -212,7 +394,9 @@ export function CheckoutScreen({ navigation, route }: Props) {
           </Text>
           <View style={styles.metaRow}>
             <MaterialIcons name="directions-car" size={18} color={COLORS.neutral700} />
-            <Text style={styles.metaText}>Argo Sedan • Placa RIO 2877</Text>
+            <Text style={styles.metaText}>
+              {formatVehicleDescription(driver.vehicle_model, driver.vehicle_year, driver.vehicle_plate)}
+            </Text>
           </View>
           <View style={styles.metaRow}>
             <MaterialIcons name="work-outline" size={18} color={COLORS.neutral700} />
@@ -247,24 +431,13 @@ export function CheckoutScreen({ navigation, route }: Props) {
 
         <View style={styles.card}>
           <PaymentMethodSection
-            amountCents={amountCents}
+            amountCents={amountCents ?? 0}
             selectedMethod={selectedPaymentMethod}
             onSelectMethod={setSelectedPaymentMethod}
             confirmLabel="Confirmar pagamento"
             cancellationPolicyVariant="trip"
-            onConfirmPayment={({ method }) => {
-              if (!origin || !destination) return;
-              const summary: PaymentConfirmedBookingParam = {
-                booking_id: 'pending',
-                origin_address: origin.address,
-                destination_address: destination.address,
-                departure: driver.departure,
-                arrival: driver.arrival,
-                amount_cents: amountCents,
-                driver_name: driver.name,
-              };
-              navigation.replace('PaymentConfirmed', { booking: summary, immediateTrip: route.params?.immediateTrip });
-            }}
+            loading={paymentSubmitting || fareLoading}
+            onConfirmPayment={handleConfirmPayment}
           />
         </View>
       </ScrollView>
@@ -307,6 +480,7 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 16, fontWeight: '700', color: COLORS.black, marginBottom: 12 },
   driverRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   driverAvatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: COLORS.neutral300, marginRight: 12 },
+  driverAvatarImage: { width: 48, height: 48, borderRadius: 24, marginRight: 12 },
   driverInfo: { flex: 1 },
   driverName: { fontSize: 16, fontWeight: '600', color: COLORS.black },
   driverRating: { fontSize: 14, color: COLORS.neutral700 },

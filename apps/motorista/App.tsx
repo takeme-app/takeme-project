@@ -8,10 +8,9 @@ import {
   LogBox,
 } from 'react-native';
 
-// @rnmapbox/maps v10 + React Native New Architecture (Fabric) produces a
-// non-fatal console.error about bare text nodes when the map is rendered.
-// The map renders correctly — this suppresses the LogBox red overlay.
+// @rnmapbox/maps v10 + Fabric: aviso não fatal sobre nós de texto — suprime overlay vermelho.
 LogBox.ignoreLogs(['Text strings must be rendered within a <Text> component.']);
+
 import * as SplashScreen from 'expo-splash-screen';
 import {
   useFonts,
@@ -20,6 +19,7 @@ import {
   Inter_700Bold,
 } from '@expo-google-fonts/inter';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import Mapbox from '@rnmapbox/maps';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { AppAlertProvider } from './src/contexts/AppAlertContext';
 import { RegistrationFormProvider } from './src/contexts/RegistrationFormContext';
@@ -27,10 +27,46 @@ import { DeferredDriverSignupProvider } from './src/contexts/DeferredDriverSignu
 import { supabase } from './src/lib/supabase';
 import { checkMotoristaCanAccessApp, subtypeToMainRoute } from './src/lib/motoristaAccess';
 
+/** Igual ao cliente: nomes literais em process.env para o Metro embutir o valor no bundle. */
+const mapboxToken =
+  (process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '').trim() ||
+  (process.env.EXPO_PUBLIC_MAPBOX_ACESS_TOKEN ?? '').trim();
+if (mapboxToken) {
+  Mapbox.setAccessToken(mapboxToken);
+}
+
+type InitialRouteName =
+  | 'Welcome'
+  | 'Main'
+  | 'MainExcursoes'
+  | 'MainEncomendas'
+  | 'MotoristaPendingApproval';
+
 const SPLASH_MIN_MS = 500;
-const SPLASH_MAX_MS = 10000;
+/** Se as fontes não carregarem (rede/emulador), segue com fonte do sistema. */
+const FONT_STALL_MS = 5000;
+/** Evita ficar preso em getSession / Supabase sem resposta. */
+const SESSION_INIT_MS = 8000;
+/** Último recurso: tela “Não foi possível conectar”. */
+const HARD_STALL_MS = 20000;
 
 SplashScreen.preventAutoHideAsync();
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(fallback), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      () => {
+        clearTimeout(t);
+        resolve(fallback);
+      },
+    );
+  });
+}
 
 export default function App() {
   const [fontsLoaded, fontError] = useFonts({
@@ -39,25 +75,31 @@ export default function App() {
     Inter_700Bold,
   });
 
+  const [fontBypass, setFontBypass] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setFontBypass(true), FONT_STALL_MS);
+    return () => clearTimeout(t);
+  }, []);
+
   const [ready, setReady] = useState(false);
-  const [initialRoute, setInitialRoute] = useState<'Welcome' | 'Main' | 'MainExcursoes' | 'MainEncomendas' | 'MotoristaPendingApproval'>('Welcome');
+  const [initialRoute, setInitialRoute] = useState<InitialRouteName>('Welcome');
   const [splashTimedOut, setSplashTimedOut] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const startTimeRef = useRef<number>(Date.now());
 
-  const runSessionInit = useCallback(async () => {
+  const runSessionInit = useCallback(async (): Promise<InitialRouteName> => {
     const {
       data: { session },
     } = await supabase.auth.getSession();
-    if (!session?.user) return 'Welcome' as const;
+    if (!session?.user) return 'Welcome';
 
     const gate = await checkMotoristaCanAccessApp(session.user.id);
     if (gate.kind === 'error' || gate.kind === 'missing_profile') {
       await supabase.auth.signOut();
-      return 'Welcome' as const;
+      return 'Welcome';
     }
-    if (gate.kind === 'pending') return 'MotoristaPendingApproval' as const;
-    return subtypeToMainRoute(gate.subtype) as typeof initialRoute;
+    if (gate.kind === 'pending') return 'MotoristaPendingApproval';
+    return subtypeToMainRoute(gate.subtype);
   }, []);
 
   useEffect(() => {
@@ -67,12 +109,12 @@ export default function App() {
         setSplashTimedOut(true);
         setReady(true);
       }
-    }, 12000);
+    }, HARD_STALL_MS);
     return () => clearTimeout(t);
   }, [ready]);
 
   useEffect(() => {
-    if (!fontsLoaded && !fontError) return;
+    if (!fontsLoaded && !fontError && !fontBypass) return;
 
     let mounted = true;
     const timeoutId = setTimeout(() => {
@@ -82,11 +124,11 @@ export default function App() {
       setSplashTimedOut(true);
       setInitialRoute('Welcome');
       setReady(true);
-    }, SPLASH_MAX_MS);
+    }, SESSION_INIT_MS);
 
     (async () => {
       try {
-        const route = await runSessionInit();
+        const route = await withTimeout(runSessionInit(), SESSION_INIT_MS, 'Welcome' as InitialRouteName);
         const elapsed = Date.now() - startTimeRef.current;
         const wait = Math.max(0, SPLASH_MIN_MS - elapsed);
         await new Promise((r) => setTimeout(r, wait));
@@ -110,7 +152,7 @@ export default function App() {
       mounted = false;
       clearTimeout(timeoutId);
     };
-  }, [fontsLoaded, fontError, runSessionInit]);
+  }, [fontsLoaded, fontError, fontBypass, runSessionInit]);
 
   const handleRetry = useCallback(async () => {
     setRetrying(true);

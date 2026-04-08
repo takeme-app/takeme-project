@@ -420,7 +420,23 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
         visible={supportSheetVisible}
         onClose={() => setSupportSheetVisible(false)}
         showDriverChat={detail?.status != null && !['completed', 'cancelled'].includes(detail.status)}
-        onOpenDriverChat={() => navigation.navigate('Chat', { contactName: 'Motorista' })}
+        onOpenDriverChat={async () => {
+          if (!detail?.driver_id) {
+            navigation.navigate('Chat', { contactName: 'Motorista' });
+            return;
+          }
+          const { data: p } = await supabase
+            .from('profiles')
+            .select('full_name, avatar_url')
+            .eq('id', detail.driver_id)
+            .single();
+          navigation.navigate('Chat', {
+            contactName: p?.full_name ?? 'Motorista',
+            driverId: detail.driver_id,
+            bookingId: null,
+            participantAvatarKey: p?.avatar_url ?? null,
+          });
+        }}
         onOpenSupportChat={() => navigation.navigate('Chat', { contactName: 'Suporte Take Me' })}
       />
     </SafeAreaView>

@@ -7,6 +7,8 @@ export type RouteFormEntry = {
   destination: string;
   /** Valor mascarado pt-BR (ex.: "50,00") sem prefixo R$. */
   suggestedPrice: string;
+  originResolved?: boolean;
+  destinationResolved?: boolean;
 };
 
 export type RegistrationFormData = {

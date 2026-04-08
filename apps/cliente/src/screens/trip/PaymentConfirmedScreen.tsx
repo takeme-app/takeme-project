@@ -47,7 +47,7 @@ export function PaymentConfirmedScreen({ navigation, route }: Props) {
         </Text>
         <TouchableOpacity
           style={styles.primaryButton}
-          onPress={() => navigation.navigate('DriverOnTheWay')}
+          onPress={() => navigation.navigate('DriverOnTheWay', route.params?.tripLive)}
           activeOpacity={0.8}
         >
           <Text style={styles.primaryButtonText}>Acompanhar viagem</Text>
@@ -90,7 +90,7 @@ export function PaymentConfirmedScreen({ navigation, route }: Props) {
       <TouchableOpacity style={styles.primaryButton} onPress={goToActivities} activeOpacity={0.8}>
         <Text style={styles.primaryButtonText}>Ver em Atividades</Text>
       </TouchableOpacity>
-      <TouchableOpacity style={styles.linkButton} onPress={() => navigation.navigate('DriverOnTheWay')}>
+      <TouchableOpacity style={styles.linkButton} onPress={() => navigation.navigate('DriverOnTheWay', route.params?.tripLive)}>
         <Text style={styles.linkButtonText}>Acompanhar viagem</Text>
       </TouchableOpacity>
       <TouchableOpacity style={styles.secondaryButton} onPress={goToMain}>

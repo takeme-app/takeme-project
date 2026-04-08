@@ -10,6 +10,8 @@ import { SignUpTypeScreen } from '../screens/SignUpTypeScreen';
 import { SignUpScreen } from '../screens/SignUpScreen';
 import { VerifyEmailScreen } from '../screens/VerifyEmailScreen';
 import { CompleteDriverRegistrationScreen } from '../screens/CompleteDriverRegistrationScreen';
+import { CompletePreparadorExcursoesScreen } from '../screens/CompletePreparadorExcursoesScreen';
+import { CompletePreparadorEncomendasScreen } from '../screens/CompletePreparadorEncomendasScreen';
 import { FinalizeRegistrationScreen } from '../screens/FinalizeRegistrationScreen';
 import { RegistrationSuccessScreen } from '../screens/RegistrationSuccessScreen';
 import { MotoristaPendingApprovalScreen } from '../screens/MotoristaPendingApprovalScreen';
@@ -20,7 +22,7 @@ import { ResetPasswordSuccessScreen } from '../screens/ResetPasswordSuccessScree
 import { TermsOfUseScreen } from '../screens/TermsOfUseScreen';
 import { PrivacyPolicyScreen } from '../screens/PrivacyPolicyScreen';
 import { MainTabs } from './MainTabs';
-import { MainTabsExcursoes } from './MainTabsExcursoes';
+import { MainExcursoesEntry } from '../screens/excursoes/MainExcursoesEntry';
 import { MainTabsEncomendas } from './MainTabsEncomendas';
 import { PendingRequestsScreen } from '../screens/PendingRequestsScreen';
 import { TripHistoryScreen } from '../screens/TripHistoryScreen';
@@ -56,6 +58,8 @@ export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
           <Stack.Screen name="SignUp" component={SignUpScreen} />
           <Stack.Screen name="VerifyEmail" component={VerifyEmailScreen} />
           <Stack.Screen name="CompleteDriverRegistration" component={CompleteDriverRegistrationScreen} />
+          <Stack.Screen name="CompletePreparadorExcursoes" component={CompletePreparadorExcursoesScreen} />
+          <Stack.Screen name="CompletePreparadorEncomendas" component={CompletePreparadorEncomendasScreen} />
           <Stack.Screen name="FinalizeRegistration" component={FinalizeRegistrationScreen} />
           <Stack.Screen name="RegistrationSuccess" component={RegistrationSuccessScreen} />
           <Stack.Screen
@@ -64,7 +68,7 @@ export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
             options={{ animation: 'fade' }}
           />
           <Stack.Screen name="Main" component={MainTabs} options={{ animation: 'fade' }} />
-          <Stack.Screen name="MainExcursoes" component={MainTabsExcursoes} options={{ animation: 'fade' }} />
+          <Stack.Screen name="MainExcursoes" component={MainExcursoesEntry} options={{ animation: 'fade' }} />
           <Stack.Screen name="MainEncomendas" component={MainTabsEncomendas} options={{ animation: 'fade' }} />
           <Stack.Screen name="PendingRequests" component={PendingRequestsScreen} options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="TripHistory" component={TripHistoryScreen} options={{ animation: 'slide_from_right' }} />

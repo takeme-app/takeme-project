@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
-import { CardField, useStripe } from '@stripe/stripe-react-native';
+import { CardField, useStripe } from '../lib/stripeNativeBridge';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
 import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';

@@ -45,6 +45,9 @@ pnpm-debug.log*
 # EAS
 .easignore
 
+# Expo export output
+_motorista_export_root_explicit/
+
 # Playwright (admin E2E)
 **/test-results/
 **/playwright-report/

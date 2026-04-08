@@ -1,6 +1,6 @@
 # Estratégia de branches — Take Me
 
-Este documento descreve como usar branches no monorepo para trabalhar em paralelo: **admin (web)**, **cliente**, **motorista**, **preparador-encomendas** e **preparador-excursoes**, com vários devs.
+Este documento descreve como usar branches no monorepo para trabalhar em paralelo: **admin (web)**, **cliente** e **motorista**, com vários devs.
 
 **Separação dos apps:** Cada app pode ser rodado de forma independente. O **admin** tem seu próprio `metro.config.js` em `apps/admin/` — rode sempre a partir de `apps/admin` (`npm run start`) para não abrir outro app. O motorista/cliente usam o Metro da raiz (ou o config do próprio app, se existir). Veja `apps/admin/README.md` para fluxo só do admin.
 
@@ -26,8 +26,6 @@ Use prefixos por **app** ou **escopo** para evitar conflito entre times:
 | `admin/` | Dev(s) do painel web | `admin/login`, `admin/dashboard-viagens`, `admin/fix-sessao` |
 | `cliente/` | Dev(s) do app cliente (mobile) | `cliente/pagamentos`, `cliente/recuperar-senha` |
 | `motorista/` | Dev(s) do app motorista | `motorista/rotas`, `motorista/aceitar-corrida` |
-| `preparador-encomendas/` | Dev(s) do app preparador encomendas | `preparador-encomendas/lista-pedidos` |
-| `preparador-excursoes/` | Dev(s) do app preparador excursões | `preparador-excursoes/budget` |
 | `shared/` ou `packages/` | Alterações em `packages/shared` (afeta todos) | `shared/tipos-booking`, `packages/supabase-client` |
 | `supabase/` | Migrations, Edge Functions, config | `supabase/fn-delete-account`, `supabase/migration-livros` |
 
