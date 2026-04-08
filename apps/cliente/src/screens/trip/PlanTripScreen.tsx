@@ -512,7 +512,7 @@ export function PlanTripScreen({ navigation }: Props) {
         </KeyboardAvoidingView>
       </Modal>
 
-      <TouchableOpacity style={styles.routeCard} onPress={openEditModal} activeOpacity={0.8}>
+      <View style={styles.routeCard}>
         <View style={styles.routeIconsColumn}>
           <View style={styles.routeIconOrigin}>
             <View style={styles.routeIconOriginDot} />
@@ -523,12 +523,34 @@ export function PlanTripScreen({ navigation }: Props) {
         <View style={styles.routeAddresses}>
           <Text style={styles.routeAddress} numberOfLines={1}>{originAddress}</Text>
           <View style={styles.routeAddressDivider} />
-          <Text style={[styles.routeAddress, !destinationAddress && styles.routeAddressPlaceholder]} numberOfLines={1}>
-            {destinationAddress ?? 'Para onde?'}
-          </Text>
+          <AddressAutocomplete
+            value={editDestination}
+            onChangeText={(text) => {
+              setEditDestination(text);
+              setDestinationConfirmed(false);
+            }}
+            onSelectPlace={(place) => {
+              setDestinationAddress(place.address);
+              setDestinationLat(place.latitude);
+              setDestinationLng(place.longitude);
+              setEditDestination(place.address);
+              setDestinationConfirmed(true);
+            }}
+            placeholder="Para onde?"
+            style={styles.routeDestinationAutocomplete}
+            inputStyle={styles.routeDestinationInput}
+          />
         </View>
-        <MaterialIcons name="edit" size={20} color={COLORS.neutral700} style={styles.editIcon} />
-      </TouchableOpacity>
+        <TouchableOpacity
+          onPress={openEditModal}
+          style={styles.editIconButton}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          accessibilityLabel="Editar origem e destino"
+          activeOpacity={0.7}
+        >
+          <MaterialIcons name="edit" size={20} color={COLORS.neutral700} />
+        </TouchableOpacity>
+      </View>
 
       <ScrollView
         style={styles.planPageScroll}
@@ -836,6 +858,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     marginBottom: 16,
+    zIndex: 2,
+    overflow: 'visible',
+    elevation: 3,
   },
   routeIconsColumn: { alignItems: 'center', marginRight: 12 },
   routeIconOrigin: {
@@ -864,15 +889,25 @@ const styles = StyleSheet.create({
     height: 10,
     backgroundColor: COLORS.neutral700,
   },
-  routeAddresses: { flex: 1 },
+  routeAddresses: { flex: 1, minWidth: 0 },
   routeAddress: { fontSize: 14, fontWeight: '500', color: COLORS.black },
-  routeAddressPlaceholder: { color: COLORS.neutral700 },
   routeAddressDivider: {
     height: 1,
     backgroundColor: COLORS.neutral400,
     marginVertical: 10,
   },
-  editIcon: { padding: 4, marginLeft: 4, marginTop: 2 },
+  routeDestinationAutocomplete: { zIndex: 3, marginTop: -2 },
+  routeDestinationInput: {
+    borderWidth: 0,
+    borderRadius: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    paddingRight: 32,
+    fontSize: 14,
+    fontWeight: '500',
+    minHeight: 22,
+  },
+  editIconButton: { padding: 4, marginLeft: 4, marginTop: 2 },
   editModalOverlayContainer: { flex: 1, justifyContent: 'flex-end' },
   editModalOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)' },
   modalContent: {
@@ -927,7 +962,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalButtonPrimaryText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
-  planPageScroll: { flex: 1 },
+  planPageScroll: { flex: 1, zIndex: 0 },
   planPageScrollContent: { paddingBottom: 24 },
   recentListPageRow: {
     flexDirection: 'row',

@@ -1,11 +1,15 @@
 {
   "name": "cliente",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "main": "index.ts",
   "scripts": {
     "prestart": "node -e \"const fs=require('fs'),path=require('path');const r=path.resolve(__dirname,'../../.env');const d=path.resolve(__dirname,'.env');if(fs.existsSync(r))fs.copyFileSync(r,d);\"",
+    "preios": "npm run prestart",
+    "preandroid": "npm run prestart",
     "start": "expo start --port 8081",
+    "start:lan": "node -e \"const fs=require('fs'),path=require('path');const r=path.resolve(__dirname,'../../.env');const d=path.resolve(__dirname,'.env');if(fs.existsSync(r))fs.copyFileSync(r,d);\" && expo start --port 8081 --host lan",
+    "start:8081": "expo start --port 8081",
     "start:8085": "expo start --port 8085",
     "android": "node scripts/run-android.js",
     "android:run": "node scripts/run-android-dev.js",

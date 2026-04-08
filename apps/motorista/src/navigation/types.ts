@@ -2,6 +2,12 @@ import type { NavigatorScreenParams } from '@react-navigation/native';
 
 export type DriverType = 'take_me' | 'parceiro';
 
+/** Chat na aba Excursões (preparador): mesmas telas do motorista, rotas próprias no stack. */
+export type ChatExcStackParamList = {
+  ChatExcList: { hideBack?: boolean; chatScreenName?: string } | undefined;
+  ChatExcThread: { conversationId: string; participantName?: string; participantAvatar?: string };
+};
+
 export type ProfileStackParamList = {
   /** Grid Configurações (aba Perfil). */
   Settings: undefined;
@@ -16,6 +22,8 @@ export type ProfileStackParamList = {
   Conversations: undefined;
   Chat: { conversationId: string; participantName?: string; participantAvatar?: string };
   TripSchedule: { fromHome?: boolean } | undefined;
+  /** Cronograma do preparador de excursões (aba Perfil). */
+  ExcursionSchedule: undefined;
   RouteSchedule: { routeId: string; routeName: string };
   /** Tela genérica de placeholder. */
   Placeholder: { title: string; subtitle?: string };
@@ -53,8 +61,12 @@ export type RootStackParamList = {
     phone?: string;
     registrationType?: RegistrationType;
   };
-  /** Cadastro completo — todos os tipos (motorista e preparador). */
+  /** Cadastro completo — motorista (take_me / parceiro). */
   CompleteDriverRegistration: { driverType: RegistrationType };
+  /** Cadastro completo — preparador de excursões. */
+  CompletePreparadorExcursoes: undefined;
+  /** Cadastro completo — preparador de encomendas. */
+  CompletePreparadorEncomendas: undefined;
   /** Cria auth + worker_profiles + vehicles + routes (último passo do cadastro). */
   FinalizeRegistration: { driverType: RegistrationType };
   RegistrationSuccess: undefined;

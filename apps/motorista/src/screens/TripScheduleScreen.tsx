@@ -35,8 +35,10 @@ type TripRow = {
   route_destination: string | null;
   departure_time: string | null;
   arrival_time: string | null;
-  day_of_week: number;
-  vehicle_type: string | null;
+  departure_at: string | null;
+  arrival_at: string | null;
+  /** 0=Dom … 6=Sáb (igual a `Date.getDay()` e ao `day_of_week` gravado na rota). */
+  effective_day_of_week: number;
   is_active: boolean;
   status: string | null;
 };
@@ -45,6 +47,31 @@ type DayState = {
   vehicleType: 'principal' | 'reserva';
   statusActive: boolean;
 };
+
+/** Índice do cartão (0=Seg … 6=Dom) → dia JS (1=Seg … 6=Sáb, 0=Dom). */
+function targetDowFromCardIndex(dayIdx: number): number {
+  return dayIdx === 6 ? 0 : dayIdx + 1;
+}
+
+function effectiveDayOfWeek(row: {
+  day_of_week: number | null;
+  departure_at: string | null;
+}): number | null {
+  if (row.day_of_week !== null && row.day_of_week !== undefined) return row.day_of_week;
+  if (row.departure_at) return new Date(row.departure_at).getDay();
+  return null;
+}
+
+function formatTripTime(time: string | null | undefined, at: string | null | undefined): string {
+  if (time?.trim()) return time.trim().slice(0, 5);
+  if (at) {
+    const d = new Date(at);
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+  }
+  return '—';
+}
 
 export function TripScheduleScreen({ navigation, route }: Props) {
   const [trips, setTrips] = useState<TripRow[]>([]);
@@ -57,48 +84,88 @@ export function TripScheduleScreen({ navigation, route }: Props) {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (user?.id) {
-      const { data } = await supabase
+      const baseSelect = `
+          id, day_of_week, departure_time, arrival_time, departure_at, arrival_at,
+          is_active, status,
+          origin_address, destination_address
+        `;
+      let res = await supabase
         .from('scheduled_trips')
-        .select(`
-          id, day_of_week, departure_time, arrival_time,
-          vehicle_type, is_active, status,
-          worker_routes ( origin_address, destination_address )
-        `)
+        .select(
+          `${baseSelect},
+          worker_routes ( origin_address, destination_address )`,
+        )
         .eq('driver_id', user.id)
-        .order('day_of_week', { ascending: true });
+        .neq('status', 'cancelled')
+        .order('departure_at', { ascending: true });
 
-      const rows = ((data ?? []) as unknown[]).map((r: unknown) => {
-        const row = r as {
-          id: string;
-          day_of_week: number;
-          departure_time: string | null;
-          arrival_time: string | null;
-          vehicle_type: string | null;
-          is_active: boolean;
-          status: string | null;
-          worker_routes: { origin_address: string; destination_address: string } | null;
-        };
-        return {
+      if (res.error) {
+        res = await supabase
+          .from('scheduled_trips')
+          .select(baseSelect)
+          .eq('driver_id', user.id)
+          .neq('status', 'cancelled')
+          .order('departure_at', { ascending: true });
+      }
+
+      const { data, error } = res;
+      if (error) {
+        setTrips([]);
+        setDayStates({});
+        setLoading(false);
+        return;
+      }
+
+      const raw = (data ?? []) as {
+        id: string;
+        day_of_week: number | null;
+        departure_time: string | null;
+        arrival_time: string | null;
+        departure_at: string | null;
+        arrival_at: string | null;
+        is_active: boolean;
+        status: string | null;
+        origin_address: string | null;
+        destination_address: string | null;
+        worker_routes: { origin_address: string; destination_address: string } | null;
+      }[];
+
+      const rows: TripRow[] = [];
+      for (const row of raw) {
+        const ed = effectiveDayOfWeek(row);
+        if (ed === null) continue;
+        rows.push({
           id: row.id,
-          day_of_week: row.day_of_week,
+          effective_day_of_week: ed,
           departure_time: row.departure_time,
           arrival_time: row.arrival_time,
-          vehicle_type: row.vehicle_type,
+          departure_at: row.departure_at,
+          arrival_at: row.arrival_at,
           is_active: row.is_active,
           status: row.status,
-          route_origin: row.worker_routes?.origin_address ?? null,
-          route_destination: row.worker_routes?.destination_address ?? null,
-        } as TripRow;
+          route_origin: row.origin_address?.trim()
+            ? row.origin_address
+            : row.worker_routes?.origin_address ?? null,
+          route_destination: row.destination_address?.trim()
+            ? row.destination_address
+            : row.worker_routes?.destination_address ?? null,
+        });
+      }
+
+      rows.sort((a, b) => {
+        const ta = a.departure_at ? new Date(a.departure_at).getTime() : 0;
+        const tb = b.departure_at ? new Date(b.departure_at).getTime() : 0;
+        if (ta !== tb) return ta - tb;
+        return (a.departure_time ?? '').localeCompare(b.departure_time ?? '');
       });
 
       setTrips(rows);
       const states: Record<number, DayState> = {};
-      for (const t of rows) {
-        if (!states[t.id as unknown as number]) {
-          states[t.day_of_week] = {
-            vehicleType: (t.vehicle_type ?? 'principal') as 'principal' | 'reserva',
-            statusActive: t.is_active,
-          };
+      for (let d = 0; d < 7; d++) {
+        const target = targetDowFromCardIndex(d);
+        const first = rows.find((t) => t.effective_day_of_week === target);
+        if (first) {
+          states[d] = { vehicleType: 'principal', statusActive: first.is_active };
         }
       }
       setDayStates(states);
@@ -113,21 +180,39 @@ export function TripScheduleScreen({ navigation, route }: Props) {
     setExpanded((prev) => (prev === dayIdx ? null : dayIdx));
   };
 
-  const updateTrip = async (tripId: string, dayIdx: number, update: Partial<{ vehicle_type: string; is_active: boolean }>) => {
-    setSaving(tripId);
+  const updateVehiclePrefOnly = (dayIdx: number, opt: 'principal' | 'reserva') => {
     setDayStates((prev) => ({
       ...prev,
       [dayIdx]: {
-        vehicleType: update.vehicle_type ? update.vehicle_type as 'principal' | 'reserva' : prev[dayIdx]?.vehicleType ?? 'principal',
-        statusActive: update.is_active !== undefined ? update.is_active : prev[dayIdx]?.statusActive ?? true,
+        vehicleType: opt,
+        statusActive: prev[dayIdx]?.statusActive ?? true,
       },
     }));
-    await supabase.from('scheduled_trips').update(update as never).eq('id', tripId);
+  };
+
+  const updateDayTripsActive = async (dayIdx: number, is_active: boolean) => {
+    const target = targetDowFromCardIndex(dayIdx);
+    const ids = trips.filter((t) => t.effective_day_of_week === target).map((t) => t.id);
+    if (ids.length === 0) return;
+    setSaving(ids[0]!);
+    setDayStates((prev) => ({
+      ...prev,
+      [dayIdx]: {
+        vehicleType: prev[dayIdx]?.vehicleType ?? 'principal',
+        statusActive: is_active,
+      },
+    }));
+    await Promise.all(
+      ids.map((id) => supabase.from('scheduled_trips').update({ is_active } as never).eq('id', id)),
+    );
+    setTrips((prev) => prev.map((t) => (ids.includes(t.id) ? { ...t, is_active } : t)));
     setSaving(null);
   };
 
-  const dayTrips = (dayIdx: number) =>
-    trips.filter((t) => t.day_of_week === dayIdx + 1 || (dayIdx === 6 && t.day_of_week === 0));
+  const dayTrips = (dayIdx: number) => {
+    const target = targetDowFromCardIndex(dayIdx);
+    return trips.filter((t) => t.effective_day_of_week === target);
+  };
 
   function shortAddr(s: string | null) {
     if (!s) return '—';
@@ -154,7 +239,6 @@ export function TripScheduleScreen({ navigation, route }: Props) {
             const dayT = dayTrips(idx);
             const isOpen = expanded === idx;
             const tripCount = dayT.length;
-            const firstTrip = dayT[0];
             const ds = dayStates[idx];
 
             return (
@@ -167,22 +251,26 @@ export function TripScheduleScreen({ navigation, route }: Props) {
                   <MaterialIcons name={isOpen ? 'keyboard-arrow-up' : 'keyboard-arrow-down'} size={22} color="#6B7280" />
                 </TouchableOpacity>
 
-                {isOpen && firstTrip && (
+                {isOpen && dayT.length > 0 && (
                   <View style={styles.cardBody}>
                     <View style={styles.divider} />
+                    {dayT.map((trip, tripIdx) => (
+                      <View key={trip.id}>
+                        {tripIdx > 0 ? <View style={[styles.divider, { marginTop: 6 }]} /> : null}
+                        <View style={styles.tripRoute}>
+                          <Text style={styles.tripOrigin}>{shortAddr(trip.route_origin)}</Text>
+                          <View style={styles.arrowWrap}>
+                            <MaterialIcons name="arrow-forward" size={18} color="#C9A227" />
+                          </View>
+                          <Text style={styles.tripDest}>{shortAddr(trip.route_destination)}</Text>
+                        </View>
 
-                    <View style={styles.tripRoute}>
-                      <Text style={styles.tripOrigin}>{shortAddr(firstTrip.route_origin)}</Text>
-                      <View style={styles.arrowWrap}>
-                        <MaterialIcons name="arrow-forward" size={18} color="#C9A227" />
+                        <View style={styles.timesRow}>
+                          <Text style={styles.timeText}>{formatTripTime(trip.departure_time, trip.departure_at)}</Text>
+                          <Text style={styles.timeText}>{formatTripTime(trip.arrival_time, trip.arrival_at)}</Text>
+                        </View>
                       </View>
-                      <Text style={styles.tripDest}>{shortAddr(firstTrip.route_destination)}</Text>
-                    </View>
-
-                    <View style={styles.timesRow}>
-                      <Text style={styles.timeText}>{firstTrip.departure_time?.slice(0, 5) ?? '—'}</Text>
-                      <Text style={styles.timeText}>{firstTrip.arrival_time?.slice(0, 5) ?? '—'}</Text>
-                    </View>
+                    ))}
 
                     <View style={styles.divider} />
 
@@ -192,7 +280,7 @@ export function TripScheduleScreen({ navigation, route }: Props) {
                       <TouchableOpacity
                         key={opt}
                         style={styles.radioRow}
-                        onPress={() => firstTrip && updateTrip(firstTrip.id, idx, { vehicle_type: opt })}
+                        onPress={() => updateVehiclePrefOnly(idx, opt)}
                         activeOpacity={0.7}
                       >
                         <View style={[styles.radioOuter, (ds?.vehicleType ?? 'principal') === opt && styles.radioActive]}>
@@ -213,16 +301,16 @@ export function TripScheduleScreen({ navigation, route }: Props) {
                       <Text style={styles.statusLabel}>Status da viagem</Text>
                       <Switch
                         value={ds?.statusActive ?? true}
-                        onValueChange={(v) => firstTrip && updateTrip(firstTrip.id, idx, { is_active: v })}
+                        onValueChange={(v) => updateDayTripsActive(idx, v)}
                         trackColor={{ false: '#E5E7EB', true: '#111827' }}
                         thumbColor="#FFFFFF"
-                        disabled={saving === firstTrip?.id}
+                        disabled={Boolean(saving && dayT.some((t) => t.id === saving))}
                       />
                     </View>
                   </View>
                 )}
 
-                {isOpen && !firstTrip && (
+                {isOpen && dayT.length === 0 && (
                   <View style={styles.cardBody}>
                     <View style={styles.divider} />
                     <Text style={styles.emptyDay}>Nenhuma viagem neste dia.</Text>

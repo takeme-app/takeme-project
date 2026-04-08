@@ -15,7 +15,7 @@ import {
   Inter_700Bold,
 } from '@expo-google-fonts/inter';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { StripeProvider } from '@stripe/stripe-react-native';
+import { StripeProvider } from './src/lib/stripeNativeBridge';
 import Mapbox from '@rnmapbox/maps';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { createSessionFromUrl } from './src/lib/oauth';

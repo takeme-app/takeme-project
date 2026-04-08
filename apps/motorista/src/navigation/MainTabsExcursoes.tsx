@@ -1,18 +1,21 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import type { NavigatorScreenParams } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { ProfileStackParamList, ChatExcStackParamList } from './types';
+import type { PagamentosExcStackParamList } from './PagamentosExcursoesStack';
 import { HomeExcursoesScreen } from '../screens/excursoes/HomeExcursoesScreen';
-import { ColetasExcursoesScreen } from '../screens/excursoes/ColetasExcursoesScreen';
-import { ChatExcursoesScreen } from '../screens/excursoes/ChatExcursoesScreen';
-import { PagamentosExcursoesScreen } from '../screens/excursoes/PagamentosExcursoesScreen';
-import { PerfilExcursoesScreen } from '../screens/excursoes/PerfilExcursoesScreen';
+import { ColetasExcursoesStack } from './ColetasExcursoesStack';
+import { ChatExcursoesStack } from './ChatExcursoesStack';
+import { PagamentosExcursoesStack } from './PagamentosExcursoesStack';
+import { PerfilExcursoesStack } from './PerfilExcursoesStack';
 
 type ExcursoesTabParamList = {
   HomeExc: undefined;
   ColetasExc: undefined;
-  ChatExc: undefined;
-  PagamentosExc: undefined;
-  PerfilExc: undefined;
+  ChatExc: NavigatorScreenParams<ChatExcStackParamList>;
+  PagamentosExc: NavigatorScreenParams<PagamentosExcStackParamList>;
+  PerfilExc: NavigatorScreenParams<ProfileStackParamList>;
 };
 
 const Tab = createBottomTabNavigator<ExcursoesTabParamList>();
@@ -57,7 +60,7 @@ export function MainTabsExcursoes() {
       />
       <Tab.Screen
         name="ColetasExc"
-        component={ColetasExcursoesScreen}
+        component={ColetasExcursoesStack}
         options={{
           title: 'Excursões',
           tabBarIcon: ({ color }) => <MaterialIcons name="directions-bus" size={24} color={color} />,
@@ -65,7 +68,7 @@ export function MainTabsExcursoes() {
       />
       <Tab.Screen
         name="ChatExc"
-        component={ChatExcursoesScreen}
+        component={ChatExcursoesStack}
         options={{
           title: 'Chat',
           tabBarIcon: ({ color }) => <MaterialIcons name="message" size={24} color={color} />,
@@ -73,7 +76,7 @@ export function MainTabsExcursoes() {
       />
       <Tab.Screen
         name="PagamentosExc"
-        component={PagamentosExcursoesScreen}
+        component={PagamentosExcursoesStack}
         options={{
           title: 'Pagamentos',
           tabBarIcon: ({ color }) => <MaterialIcons name="payments" size={24} color={color} />,
@@ -81,13 +84,19 @@ export function MainTabsExcursoes() {
       />
       <Tab.Screen
         name="PerfilExc"
-        component={PerfilExcursoesScreen}
+        component={PerfilExcursoesStack}
         options={{
           title: 'Perfil',
           tabBarIcon: ({ color, focused }) => (
             <MaterialIcons name={focused ? 'person' : 'person-outline'} size={24} color={color} />
           ),
         }}
+        listeners={({ navigation }) => ({
+          tabPress: (e) => {
+            e.preventDefault();
+            navigation.navigate('PerfilExc', { screen: 'Settings' });
+          },
+        })}
       />
     </Tab.Navigator>
   );

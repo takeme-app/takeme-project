@@ -6,7 +6,7 @@ Documento de situação atual para onboarding de novos desenvolvedores. Atualiza
 
 ## 1. Visão geral
 
-- **Projeto:** Take Me — monorepo com 5 ambientes (Cliente, Motorista, Preparador Encomendas, Preparador Excursões, Admin).
+- **Projeto:** Take Me — monorepo com 3 apps (Cliente, Motorista, Admin). Preparadores usam o app motorista no cadastro e fluxos dedicados.
 - **Repositório:** [github.com/FraktalSoftwares/take_me](https://github.com/FraktalSoftwares/take_me)
 - **Supabase:** projeto `xdxzxyzdgwpucwuaxvik` — [Dashboard](https://supabase.com/dashboard/project/xdxzxyzdgwpucwuaxvik)
 
@@ -29,9 +29,7 @@ Documento de situação atual para onboarding de novos desenvolvedores. Atualiza
 | Pasta | Descrição |
 |-------|-----------|
 | **apps/cliente** | App do passageiro (viagens, envios, excursões, perfil, notificações, LGPD) |
-| **apps/motorista** | App do motorista |
-| **apps/preparador-encomendas** | App do preparador de encomendas |
-| **apps/preparador-excursoes** | App do preparador de excursões |
+| **apps/motorista** | App do motorista (inclui fluxos de preparador de encomendas e excursões) |
 | **apps/admin** | Painel web (Expo Web) |
 | **packages/shared** | Cliente Supabase, tipos e utilitários compartilhados |
 | **supabase/** | Migrations, Edge Functions; ver [supabase/README.md](../supabase/README.md) e [supabase/EMAIL_SETUP.md](../supabase/EMAIL_SETUP.md) |

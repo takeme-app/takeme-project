@@ -12,13 +12,18 @@ import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useRoute } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { ProfileStackParamList } from '../navigation/types';
+import type { ProfileStackParamList, ChatExcStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+
+const sb = supabase as { from: (table: string) => any };
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { storageUrl } from '../utils/storageUrl';
 
-type Props = NativeStackScreenProps<ProfileStackParamList, 'Conversations'>;
+type Props =
+  | NativeStackScreenProps<ProfileStackParamList, 'Conversations'>
+  | NativeStackScreenProps<ChatExcStackParamList, 'ChatExcList'>;
 
 const GOLD = '#C9A227';
 const SUPPORT_COLOR = '#7C3D6E';
@@ -31,7 +36,7 @@ type ConversationRow = {
   participant_avatar: string | null;
   last_message: string | null;
   last_message_at: string | null;
-  unread_count: number;
+  unread_driver: number;
   status: string;
 };
 
@@ -61,6 +66,11 @@ function isSupport(name: string | null): boolean {
 }
 
 export function ConversationsScreen({ navigation }: Props) {
+  const route = useRoute();
+  const listParams = (route.params ?? {}) as { hideBack?: boolean; chatScreenName?: string };
+  const hideBack = listParams.hideBack === true;
+  const chatScreenName = listParams.chatScreenName ?? 'Chat';
+
   const [tab, setTab] = useState<Tab>('recentes');
   const [recentes, setRecentes] = useState<ConversationRow[]>([]);
   const [finalizadas, setFinalizadas] = useState<ConversationRow[]>([]);
@@ -70,15 +80,15 @@ export function ConversationsScreen({ navigation }: Props) {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (user?.id) {
-      const { data } = await supabase
+      const { data } = await sb
         .from('conversations')
-        .select('id, participant_name, participant_avatar, last_message, last_message_at, unread_count, status')
+        .select('id, participant_name, participant_avatar, last_message, last_message_at, unread_driver, status')
         .eq('driver_id', user.id)
         .order('last_message_at', { ascending: false });
 
       const all = (data ?? []) as ConversationRow[];
-      setRecentes(all.filter((c) => c.status !== 'finalized'));
-      setFinalizadas(all.filter((c) => c.status === 'finalized'));
+      setRecentes(all.filter((c) => c.status === 'active'));
+      setFinalizadas(all.filter((c) => c.status === 'closed'));
     }
     setLoading(false);
   }, []);
@@ -105,9 +115,13 @@ export function ConversationsScreen({ navigation }: Props) {
       <StatusBar style="dark" />
 
       <View style={styles.header}>
-        <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
-          <MaterialIcons name="arrow-back" size={22} color="#111827" />
-        </TouchableOpacity>
+        {hideBack ? (
+          <View style={styles.iconBtn} />
+        ) : (
+          <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+            <MaterialIcons name="arrow-back" size={22} color="#111827" />
+          </TouchableOpacity>
+        )}
         <Text style={styles.headerTitle}>Conversas</Text>
         <View style={{ width: 40 }} />
       </View>
@@ -136,25 +150,30 @@ export function ConversationsScreen({ navigation }: Props) {
               <TouchableOpacity
               style={styles.row}
               activeOpacity={0.75}
-              onPress={() => navigation.navigate('Chat', {
-                conversationId: item.id,
-                participantName: item.participant_name ?? undefined,
-                participantAvatar: item.participant_avatar ?? undefined,
-              })}
+              onPress={() => {
+                (navigation as { navigate: (n: string, p: Record<string, unknown>) => void }).navigate(
+                  chatScreenName,
+                  {
+                    conversationId: item.id,
+                    participantName: item.participant_name ?? undefined,
+                    participantAvatar: item.participant_avatar ?? undefined,
+                  },
+                );
+              }}
             >
                 {renderAvatar(item)}
                 <View style={styles.rowContent}>
                   <View style={styles.rowTop}>
                     <Text style={styles.name} numberOfLines={1}>{item.participant_name ?? 'Usuário'}</Text>
-                    <Text style={[styles.time, item.unread_count > 0 && styles.timeActive]}>
+                    <Text style={[styles.time, item.unread_driver > 0 && styles.timeActive]}>
                       {formatTime(item.last_message_at)}
                     </Text>
                   </View>
                   <View style={styles.rowBottom}>
                     <Text style={styles.preview} numberOfLines={2}>{item.last_message ?? ''}</Text>
-                    {item.unread_count > 0 && (
+                    {item.unread_driver > 0 && (
                       <View style={styles.badge}>
-                        <Text style={styles.badgeText}>{item.unread_count}</Text>
+                        <Text style={styles.badgeText}>{item.unread_driver}</Text>
                       </View>
                     )}
                   </View>

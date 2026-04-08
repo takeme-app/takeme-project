@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Modal,
   Linking,
+  Dimensions,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -16,6 +17,31 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ColetasEncomendasStackParamList } from '../../navigation/ColetasEncomendasStack';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { supabase } from '../../lib/supabase';
+import {
+  GoogleMapsMap,
+  MapMarker,
+  MapPolyline,
+  MapZoomControls,
+  latLngFromDbColumns,
+  regionFromLatLngPoints,
+  isValidGlobeCoordinate,
+  MY_LOCATION_NAV_DELTA,
+  type GoogleMapsMapRef,
+} from '../../components/googleMaps';
+import type { LatLng, MapRegion } from '../../components/googleMaps';
+import { getGoogleMapsApiKey, getMapboxAccessToken } from '../../lib/googleMapsConfig';
+import { getRouteWithDuration } from '../../lib/route';
+
+let Location: any = null;
+try {
+  Location = require('expo-location');
+} catch {
+  /* native rebuild */
+}
+
+const { height: SCREEN_H } = Dimensions.get('window');
+const MAP_HEIGHT = Math.round(SCREEN_H * 0.36);
+const GOLD = '#C9A227';
 
 type Props = NativeStackScreenProps<ColetasEncomendasStackParamList, 'DetalhesEncomenda'>;
 
@@ -31,6 +57,8 @@ type ShipmentDetail = {
   scheduledAt: string | null;
   status: string;
   clientName: string;
+  originCoord: LatLng | null;
+  destCoord: LatLng | null;
 };
 
 function tripId(id: string): string {
@@ -56,6 +84,27 @@ function packageSizeLabel(size: string): string {
   return 'Médio';
 }
 
+/** Câmera priorizando o ponto de coleta (origem), com zoom de rua. */
+function regionFocusedOnPickup(origin: LatLng | null, dest: LatLng | null): MapRegion {
+  if (origin && isValidGlobeCoordinate(origin.latitude, origin.longitude)) {
+    return {
+      latitude: origin.latitude,
+      longitude: origin.longitude,
+      latitudeDelta: 0.048,
+      longitudeDelta: 0.048,
+    };
+  }
+  if (dest && isValidGlobeCoordinate(dest.latitude, dest.longitude)) {
+    return {
+      latitude: dest.latitude,
+      longitude: dest.longitude,
+      latitudeDelta: 0.06,
+      longitudeDelta: 0.06,
+    };
+  }
+  return regionFromLatLngPoints([]);
+}
+
 const SUPPORT_PHONE = '+5500000000000';
 const SUPPORT_WHATSAPP = '+5500000000000';
 
@@ -64,18 +113,29 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<ShipmentDetail | null>(null);
   const [supportVisible, setSupportVisible] = useState(false);
+  const [routeCoords, setRouteCoords] = useState<LatLng[]>([]);
+  const [preparerPos, setPreparerPos] = useState<LatLng | null>(null);
+  const [followMyLocation, setFollowMyLocation] = useState(false);
+  const followFirstAnimDoneRef = useRef(false);
+  const locationSubRef = useRef<{ remove: () => void } | null>(null);
+  const mapRef = useRef<GoogleMapsMapRef>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setRouteCoords([]);
     const { data } = await supabase
       .from('shipments')
-      .select('id, origin_address, destination_address, package_size, amount_cents, instructions, created_at, scheduled_at, status, user_id')
+      .select(
+        'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, package_size, amount_cents, instructions, created_at, scheduled_at, status, user_id',
+      )
       .eq('id', shipmentId)
       .maybeSingle();
 
     if (!data) { setLoading(false); return; }
     const row = data as {
       id: string; origin_address: string; destination_address: string;
+      origin_lat: number | null; origin_lng: number | null;
+      destination_lat: number | null; destination_lng: number | null;
       package_size: string; amount_cents: number; instructions: string | null;
       created_at: string; scheduled_at: string | null; status: string; user_id: string;
     };
@@ -83,6 +143,9 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
     const { data: prof } = await supabase
       .from('profiles').select('full_name').eq('id', row.user_id).maybeSingle();
     const p = prof as { full_name?: string | null } | null;
+
+    const originCoord = latLngFromDbColumns(row.origin_lat, row.origin_lng);
+    const destCoord = latLngFromDbColumns(row.destination_lat, row.destination_lng);
 
     setDetail({
       id: row.id,
@@ -96,11 +159,80 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
       scheduledAt: row.scheduled_at ? formatDateTime(row.scheduled_at) : null,
       status: row.status,
       clientName: p?.full_name ?? 'Cliente',
+      originCoord,
+      destCoord,
     });
     setLoading(false);
+
+    if (
+      originCoord &&
+      destCoord &&
+      isValidGlobeCoordinate(originCoord.latitude, originCoord.longitude) &&
+      isValidGlobeCoordinate(destCoord.latitude, destCoord.longitude)
+    ) {
+      const routeOpts = { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() };
+      const res = await getRouteWithDuration(originCoord, destCoord, routeOpts);
+      if (res?.coordinates?.length) setRouteCoords(res.coordinates);
+    }
   }, [shipmentId]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!Location) return;
+    let mounted = true;
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted' || !mounted) return;
+      const pos = await Location.getCurrentPositionAsync({});
+      if (mounted) {
+        setPreparerPos({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+      }
+      locationSubRef.current = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy?.High ?? 5, distanceInterval: 15 },
+        (p: { coords: { latitude: number; longitude: number } }) => {
+          if (mounted) setPreparerPos({ latitude: p.coords.latitude, longitude: p.coords.longitude });
+        },
+      );
+    })();
+    return () => {
+      mounted = false;
+      locationSubRef.current?.remove();
+    };
+  }, []);
+
+  /** Após “minha localização”, câmera segue o GPS até gesto ou zoom pelos botões. */
+  useEffect(() => {
+    if (!followMyLocation) {
+      followFirstAnimDoneRef.current = false;
+      return;
+    }
+    if (!preparerPos || !isValidGlobeCoordinate(preparerPos.latitude, preparerPos.longitude)) return;
+    const dur = followFirstAnimDoneRef.current ? 0 : 350;
+    followFirstAnimDoneRef.current = true;
+    mapRef.current?.animateToRegion(
+      {
+        latitude: preparerPos.latitude,
+        longitude: preparerPos.longitude,
+        latitudeDelta: MY_LOCATION_NAV_DELTA,
+        longitudeDelta: MY_LOCATION_NAV_DELTA,
+      },
+      dur,
+    );
+  }, [preparerPos, followMyLocation]);
+
+  const mapInitialRegion = useMemo(
+    () => (detail ? regionFocusedOnPickup(detail.originCoord, detail.destCoord) : regionFromLatLngPoints([])),
+    [detail?.originCoord?.latitude, detail?.originCoord?.longitude, detail?.destCoord?.latitude, detail?.destCoord?.longitude],
+  );
+
+  const mapReady = Boolean(
+    detail?.originCoord &&
+      isValidGlobeCoordinate(detail.originCoord.latitude, detail.originCoord.longitude),
+  ) || Boolean(
+    detail?.destCoord &&
+      isValidGlobeCoordinate(detail.destCoord.latitude, detail.destCoord.longitude),
+  );
 
   const handleCall = () => {
     Linking.openURL(`tel:${SUPPORT_PHONE}`);
@@ -118,7 +250,7 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
 
       <View style={styles.header}>
         <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
-          <MaterialIcons name="close" size={20} color="#111827" />
+          <MaterialIcons name="arrow-back" size={22} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Detalhes do pedido</Text>
         <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7}>
@@ -135,10 +267,88 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
       ) : (
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
 
-          {/* Map placeholder */}
-          <View style={styles.mapPlaceholder}>
-            <MaterialIcons name="map" size={40} color="#C9B87A" />
-            <Text style={styles.mapPlaceholderText}>{detail.originAddress}</Text>
+          <View style={styles.mapOuter}>
+            {getMapboxAccessToken() && mapReady ? (
+              <>
+                <View style={styles.mapInnerWrap}>
+                <GoogleMapsMap
+                  ref={mapRef}
+                  style={StyleSheet.absoluteFillObject}
+                  initialRegion={mapInitialRegion}
+                  scrollEnabled
+                  showsUserLocation
+                  onDidFinishLoadingMap={() => mapRef.current?.resetCamera()}
+                  onDidFinishLoadingStyle={() => mapRef.current?.resetCamera()}
+                  onUserAdjustedMap={() => setFollowMyLocation(false)}
+                >
+                  {routeCoords.length >= 2 ? (
+                    <MapPolyline
+                      id="shipment-detail-route"
+                      coordinates={routeCoords}
+                      strokeColor={GOLD}
+                      strokeWidth={4}
+                    />
+                  ) : null}
+                  {detail.originCoord &&
+                    isValidGlobeCoordinate(detail.originCoord.latitude, detail.originCoord.longitude) && (
+                    <MapMarker
+                      id="pickup"
+                      coordinate={detail.originCoord}
+                      anchor={{ x: 0.5, y: 1 }}
+                    >
+                      <View style={styles.pickupPill}>
+                        <MaterialIcons name="inventory-2" size={14} color="#FFF" />
+                        <Text style={styles.pickupPillText} numberOfLines={1}>Coleta</Text>
+                      </View>
+                    </MapMarker>
+                  )}
+                  {detail.destCoord &&
+                    isValidGlobeCoordinate(detail.destCoord.latitude, detail.destCoord.longitude) && (
+                    <MapMarker
+                      id="delivery"
+                      coordinate={detail.destCoord}
+                      anchor={{ x: 0.5, y: 1 }}
+                    >
+                      <View style={styles.destPill}>
+                        <MaterialIcons name="place" size={12} color="#374151" />
+                        <Text style={styles.destPillText} numberOfLines={1}>Entrega</Text>
+                      </View>
+                    </MapMarker>
+                  )}
+                </GoogleMapsMap>
+                <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
+                  <TouchableOpacity
+                    style={[
+                      styles.mapMyLocationBtn,
+                      !preparerPos && styles.mapMyLocationBtnDisabled,
+                    ]}
+                    activeOpacity={0.85}
+                    disabled={!preparerPos}
+                    onPress={() => {
+                      if (!preparerPos || !isValidGlobeCoordinate(preparerPos.latitude, preparerPos.longitude)) return;
+                      setFollowMyLocation(true);
+                    }}
+                  >
+                    <MaterialIcons name="my-location" size={22} color="#111827" />
+                  </TouchableOpacity>
+                  <MapZoomControls
+                    mapRef={mapRef}
+                    onBeforeZoom={() => setFollowMyLocation(false)}
+                  />
+                </View>
+                </View>
+              </>
+            ) : (
+              <View style={[styles.mapPlaceholder, { height: MAP_HEIGHT }]}>
+                <MaterialIcons name="map" size={40} color="#C9B87A" />
+                <Text style={styles.mapPlaceholderText}>
+                  {getMapboxAccessToken()
+                    ? 'Coordenadas da coleta indisponíveis para o mapa.'
+                    : 'Configure EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN no .env (raiz), prebuild e reinicie o Metro.'}
+                </Text>
+                <Text style={styles.mapPlaceholderSub} numberOfLines={2}>{detail.originAddress}</Text>
+              </View>
+            )}
           </View>
 
           <View style={styles.card}>
@@ -295,11 +505,73 @@ const styles = StyleSheet.create({
     backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
   },
   scroll: { paddingBottom: 40 },
-  mapPlaceholder: {
-    height: 180, backgroundColor: '#F0EDE8',
-    alignItems: 'center', justifyContent: 'center', gap: 8,
+  mapOuter: {
+    marginHorizontal: 20,
+    marginTop: 16,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#F0EDE8',
+    position: 'relative',
   },
-  mapPlaceholderText: { fontSize: 13, color: '#9CA3AF', fontWeight: '500' },
+  mapInnerWrap: {
+    height: MAP_HEIGHT,
+    width: '100%',
+    position: 'relative',
+  },
+  mapMyLocationBtn: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  mapMyLocationBtnDisabled: { opacity: 0.45 },
+  pickupPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: GOLD,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+    maxWidth: 160,
+  },
+  pickupPillText: { fontSize: 12, fontWeight: '800', color: '#FFFFFF', flexShrink: 1 },
+  destPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    maxWidth: 140,
+  },
+  destPillText: { fontSize: 11, fontWeight: '700', color: '#374151', flexShrink: 1 },
+  mapPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 20,
+  },
+  mapPlaceholderText: { fontSize: 13, color: '#6B7280', fontWeight: '500', textAlign: 'center' },
+  mapPlaceholderSub: { fontSize: 12, color: '#9CA3AF', textAlign: 'center' },
   card: {
     marginHorizontal: 20, marginTop: 16,
     borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 20, overflow: 'hidden',

@@ -20,7 +20,17 @@ const projectRoot = path.resolve(monorepoRoot, appSubpath);
 
 const config = getDefaultConfig(projectRoot);
 
+// Gradle apaga/recria pastas em node_modules/.../android/build durante o native build;
+// o watcher do Metro quebra com ENOENT se incluir esses caminhos.
+const extraBlock = [/[/\\]android[/\\]build[/\\].*/, /[/\\]\.cxx[/\\].*/];
+config.resolver.blockList = Array.isArray(config.resolver.blockList)
+  ? [...config.resolver.blockList, ...extraBlock]
+  : config.resolver.blockList
+    ? [config.resolver.blockList, ...extraBlock]
+    : extraBlock;
+
 config.projectRoot = projectRoot;
+config.server = { ...(config.server ?? {}), unstable_serverRoot: monorepoRoot };
 config.watchFolders = [monorepoRoot];
 config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),

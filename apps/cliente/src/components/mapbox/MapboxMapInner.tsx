@@ -1,7 +1,14 @@
-import React, { useRef, useImperativeHandle, forwardRef, useCallback } from 'react';
+import React, {
+  useRef,
+  useImperativeHandle,
+  forwardRef,
+  useCallback,
+  useMemo,
+  useEffect,
+} from 'react';
 import { MapView, Camera } from '@rnmapbox/maps';
 import type { MapRegion } from './mapboxUtils';
-import { toMapboxCoord, regionToZoomLevel } from './mapboxUtils';
+import { toMapboxCoord, regionToZoomLevel, sanitizeMapRegion } from './mapboxUtils';
 
 export type MapboxMapRef = {
   animateToRegion: (region: MapRegion, duration?: number) => void;
@@ -19,19 +26,44 @@ type MapboxMapInnerProps = {
  */
 const MapboxMapInner = forwardRef<MapboxMapRef, MapboxMapInnerProps>(function MapboxMapInner(
   { style, initialRegion, scrollEnabled = true, children },
-  ref
+  ref,
 ) {
   const cameraRef = useRef<Camera>(null);
-  const center = toMapboxCoord({
-    latitude: initialRegion.latitude,
-    longitude: initialRegion.longitude,
-  });
-  const zoomLevel = regionToZoomLevel(initialRegion);
+
+  const safeRegion = useMemo(
+    () => sanitizeMapRegion(initialRegion),
+    [
+      initialRegion.latitude,
+      initialRegion.longitude,
+      initialRegion.latitudeDelta,
+      initialRegion.longitudeDelta,
+    ],
+  );
+
+  const center = useMemo(
+    () =>
+      toMapboxCoord({
+        latitude: safeRegion.latitude,
+        longitude: safeRegion.longitude,
+      }),
+    [safeRegion.latitude, safeRegion.longitude],
+  );
+
+  const zoomLevel = useMemo(() => regionToZoomLevel(safeRegion), [safeRegion]);
+
+  useEffect(() => {
+    cameraRef.current?.setCamera({
+      centerCoordinate: center,
+      zoomLevel,
+      animationDuration: 0,
+    });
+  }, [center, zoomLevel]);
 
   const animateToRegion = useCallback((region: MapRegion, duration = 400) => {
+    const r = sanitizeMapRegion(region);
     cameraRef.current?.setCamera({
-      centerCoordinate: [region.longitude, region.latitude],
-      zoomLevel: regionToZoomLevel(region),
+      centerCoordinate: [r.longitude, r.latitude],
+      zoomLevel: regionToZoomLevel(r),
       animationDuration: duration,
     });
   }, []);

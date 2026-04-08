@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -19,7 +19,16 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
-import { MapboxMap, MapboxMarker, MapboxPolyline } from '../components/mapbox';
+import {
+  GoogleMapsMap,
+  MapMarker,
+  MapPolyline,
+  regionFromLatLngPoints,
+  isValidGlobeCoordinate,
+  sanitizeMapRegion,
+  DEFAULT_MAP_REGION_BR,
+  latLngFromDbColumns,
+} from '../components/googleMaps';
 import { useBottomSheetDrag } from '../hooks/useBottomSheetDrag';
 import * as DocumentPicker from 'expo-document-picker';
 
@@ -495,21 +504,38 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const bagsOccupancyPct =
     bagsCapacity > 0 ? Math.round((totalBags / bagsCapacity) * 100) : 0;
 
-  const initialRegion = trip
-    ? {
-        latitude: (trip.origin_lat + trip.destination_lat) / 2,
-        longitude: (trip.origin_lng + trip.destination_lng) / 2,
-        latitudeDelta: Math.abs(trip.destination_lat - trip.origin_lat) * 2 + 0.02,
-        longitudeDelta: Math.abs(trip.destination_lng - trip.origin_lng) * 2 + 0.02,
-      }
-    : { latitude: -7.33, longitude: -35.33, latitudeDelta: 0.05, longitudeDelta: 0.05 };
+  const tripOriginLL = useMemo(
+    () => (trip ? latLngFromDbColumns(trip.origin_lat, trip.origin_lng) : null),
+    [trip?.origin_lat, trip?.origin_lng],
+  );
+  const tripDestLL = useMemo(
+    () => (trip ? latLngFromDbColumns(trip.destination_lat, trip.destination_lng) : null),
+    [trip?.destination_lat, trip?.destination_lng],
+  );
 
-  const routeCoords = trip
-    ? [
-        { latitude: trip.origin_lat, longitude: trip.origin_lng },
-        { latitude: trip.destination_lat, longitude: trip.destination_lng },
-      ]
-    : [];
+  const tripHasValidMapCoords = useMemo(() => {
+    return Boolean(tripOriginLL || tripDestLL);
+  }, [tripOriginLL, tripDestLL]);
+
+  const initialRegion = useMemo(() => {
+    if (!tripOriginLL && !tripDestLL) return { ...DEFAULT_MAP_REGION_BR };
+    if (tripOriginLL && tripDestLL) {
+      return sanitizeMapRegion({
+        latitude: (tripOriginLL.latitude + tripDestLL.latitude) / 2,
+        longitude: (tripOriginLL.longitude + tripDestLL.longitude) / 2,
+        latitudeDelta: Math.abs(tripDestLL.latitude - tripOriginLL.latitude) * 2 + 0.02,
+        longitudeDelta: Math.abs(tripDestLL.longitude - tripOriginLL.longitude) * 2 + 0.02,
+      });
+    }
+    return regionFromLatLngPoints([tripOriginLL ?? tripDestLL!]);
+  }, [tripOriginLL, tripDestLL]);
+
+  const routeCoords = useMemo(() => {
+    const out = [];
+    if (tripOriginLL) out.push(tripOriginLL);
+    if (tripDestLL) out.push(tripDestLL);
+    return out;
+  }, [tripOriginLL, tripDestLL]);
 
   // ── Status badge ──────────────────────────────────────────────────────────────
 
@@ -599,27 +625,38 @@ export function TripDetailScreen({ route, navigation }: Props) {
       >
         {/* Map */}
         <View style={styles.mapContainer}>
-          <MapboxMap initialRegion={initialRegion} style={styles.map} scrollEnabled={false}>
-            <MapboxPolyline coordinates={routeCoords} strokeColor={GOLD} strokeWidth={4} />
+          {!tripHasValidMapCoords ? (
+            <View style={styles.mapLoading}>
+              <ActivityIndicator size="large" color="#111827" />
+              <Text style={styles.mapLoadingText}>Carregando mapa…</Text>
+            </View>
+          ) : (
+            <GoogleMapsMap initialRegion={initialRegion} style={styles.map} scrollEnabled={false}>
+              {routeCoords.length >= 2 && (
+                <MapPolyline coordinates={routeCoords} strokeColor={GOLD} strokeWidth={4} />
+              )}
 
-            {/* Origin marker – filled circle */}
-            <MapboxMarker
-              id="origin"
-              coordinate={{ latitude: trip.origin_lat, longitude: trip.origin_lng }}
-              anchor={{ x: 0.5, y: 0.5 }}
-            >
-              <View style={styles.markerOrigin} />
-            </MapboxMarker>
+              {tripOriginLL && (
+                <MapMarker
+                  id="origin"
+                  coordinate={tripOriginLL}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                >
+                  <View style={styles.markerOrigin} />
+                </MapMarker>
+              )}
 
-            {/* Destination marker – square/diamond */}
-            <MapboxMarker
-              id="destination"
-              coordinate={{ latitude: trip.destination_lat, longitude: trip.destination_lng }}
-              anchor={{ x: 0.5, y: 0.5 }}
-            >
-              <View style={styles.markerDest} />
-            </MapboxMarker>
-          </MapboxMap>
+              {tripDestLL && (
+                <MapMarker
+                  id="destination"
+                  coordinate={tripDestLL}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                >
+                  <View style={styles.markerDest} />
+                </MapMarker>
+              )}
+            </GoogleMapsMap>
+          )}
         </View>
 
         {/* ── Details body ──────────────────────────────────────────────────── */}
@@ -931,6 +968,14 @@ const styles = StyleSheet.create({
 
   // Map
   mapContainer: { height: 220, backgroundColor: '#E5E7EB' },
+  mapLoading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    minHeight: 200,
+  },
+  mapLoadingText: { fontSize: 13, color: '#6B7280' },
   map: { height: 220 },
 
   // Body

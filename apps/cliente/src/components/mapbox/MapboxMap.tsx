@@ -1,10 +1,17 @@
-import React, { useRef, useImperativeHandle, forwardRef, useCallback } from 'react';
+import React, {
+  useRef,
+  useImperativeHandle,
+  forwardRef,
+  useCallback,
+  useMemo,
+  useEffect,
+} from 'react';
 import { View, StyleSheet, TouchableOpacity } from 'react-native';
 import { Text } from '../Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { MapView, Camera } from '@rnmapbox/maps';
 import type { MapRegion } from './mapboxUtils';
-import { toMapboxCoord, regionToZoomLevel } from './mapboxUtils';
+import { toMapboxCoord, regionToZoomLevel, sanitizeMapRegion } from './mapboxUtils';
 
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
 
@@ -26,11 +33,11 @@ type MapboxMapProps = {
 /**
  * Mapa Mapbox com API compatível com initialRegion/animateToRegion (react-native-maps).
  * Ref expõe animateToRegion(region, duration?), zoomIn(), zoomOut(), resetCamera().
- * Se EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN não estiver definido (ex.: no EAS), mostra fallback em vez de crashar.
+ * Região inválida ou (0,0) → centro do Brasil; câmera re-sincroniza quando initialRegion muda.
  */
 export const MapboxMap = forwardRef<MapboxMapRef, MapboxMapProps>(function MapboxMap(
   { style, initialRegion, scrollEnabled = true, showControls = false, children },
-  ref
+  ref,
 ) {
   if (!MAPBOX_TOKEN.trim()) {
     return (
@@ -44,18 +51,44 @@ export const MapboxMap = forwardRef<MapboxMapRef, MapboxMapProps>(function Mapbo
   }
 
   const cameraRef = useRef<Camera>(null);
-  const currentZoom = useRef(regionToZoomLevel(initialRegion));
-  const center = toMapboxCoord({
-    latitude: initialRegion.latitude,
-    longitude: initialRegion.longitude,
-  });
-  const defaultZoom = regionToZoomLevel(initialRegion);
+  const currentZoom = useRef(10);
+
+  const safeRegion = useMemo(
+    () => sanitizeMapRegion(initialRegion),
+    [
+      initialRegion.latitude,
+      initialRegion.longitude,
+      initialRegion.latitudeDelta,
+      initialRegion.longitudeDelta,
+    ],
+  );
+
+  const center = useMemo(
+    () =>
+      toMapboxCoord({
+        latitude: safeRegion.latitude,
+        longitude: safeRegion.longitude,
+      }),
+    [safeRegion.latitude, safeRegion.longitude],
+  );
+
+  const defaultZoom = useMemo(() => regionToZoomLevel(safeRegion), [safeRegion]);
+
+  useEffect(() => {
+    currentZoom.current = defaultZoom;
+    cameraRef.current?.setCamera({
+      centerCoordinate: center,
+      zoomLevel: defaultZoom,
+      animationDuration: 0,
+    });
+  }, [center, defaultZoom]);
 
   const animateToRegion = useCallback((region: MapRegion, duration = 400) => {
-    const z = regionToZoomLevel(region);
+    const r = sanitizeMapRegion(region);
+    const z = regionToZoomLevel(r);
     currentZoom.current = z;
     cameraRef.current?.setCamera({
-      centerCoordinate: [region.longitude, region.latitude],
+      centerCoordinate: [r.longitude, r.latitude],
       zoomLevel: z,
       animationDuration: duration,
     });
@@ -82,7 +115,11 @@ export const MapboxMap = forwardRef<MapboxMapRef, MapboxMapProps>(function Mapbo
     });
   }, [center, defaultZoom]);
 
-  useImperativeHandle(ref, () => ({ animateToRegion, zoomIn, zoomOut, resetCamera }), [animateToRegion, zoomIn, zoomOut, resetCamera]);
+  useImperativeHandle(
+    ref,
+    () => ({ animateToRegion, zoomIn, zoomOut, resetCamera }),
+    [animateToRegion, zoomIn, zoomOut, resetCamera],
+  );
 
   return (
     <View style={[{ flex: 1 }, style]}>
