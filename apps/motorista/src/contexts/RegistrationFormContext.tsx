@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
-import type { GoogleGeocodeResult } from '@take-me/shared';
 import type { DriverType } from '../navigation/types';
 
 export type RouteFormEntry = {
@@ -8,9 +7,8 @@ export type RouteFormEntry = {
   destination: string;
   /** Valor mascarado pt-BR (ex.: "50,00") sem prefixo R$. */
   suggestedPrice: string;
-  /** Preenchido via Google (autocomplete ou geocode) — usado ao salvar worker_routes com lat/lng. */
-  originPlace: GoogleGeocodeResult | null;
-  destinationPlace: GoogleGeocodeResult | null;
+  originResolved?: boolean;
+  destinationResolved?: boolean;
 };
 
 export type RegistrationFormData = {
@@ -48,8 +46,6 @@ function newRoute(): RouteFormEntry {
     origin: '',
     destination: '',
     suggestedPrice: '',
-    originPlace: null,
-    destinationPlace: null,
   };
 }
 

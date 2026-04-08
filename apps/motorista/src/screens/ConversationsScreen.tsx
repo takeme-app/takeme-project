@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, type Dispatch, type SetStateAction } from 'react';
+import { useState, useCallback } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -12,15 +12,18 @@ import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useRoute } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { ProfileStackParamList } from '../navigation/types';
+import type { ProfileStackParamList, ChatExcStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 
 const sb = supabase as { from: (table: string) => any };
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { storageUrl } from '../utils/storageUrl';
 
-type Props = NativeStackScreenProps<ProfileStackParamList, 'Conversations'>;
+type Props =
+  | NativeStackScreenProps<ProfileStackParamList, 'Conversations'>
+  | NativeStackScreenProps<ChatExcStackParamList, 'ChatExcList'>;
 
 const GOLD = '#C9A227';
 const SUPPORT_COLOR = '#7C3D6E';
@@ -62,42 +65,12 @@ function isSupport(name: string | null): boolean {
   return (name ?? '').toLowerCase().includes('suporte') || (name ?? '').toLowerCase().includes('take me');
 }
 
-function sortByLastMessage(a: ConversationRow, b: ConversationRow): number {
-  const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
-  const tb = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
-  return tb - ta;
-}
-
-/** Atualiza listas Recentes / Finalizadas a partir de um evento Realtime (INSERT/UPDATE/DELETE). */
-function mergeConversationRealtime(
-  payload: { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> },
-  setRecentes: Dispatch<SetStateAction<ConversationRow[]>>,
-  setFinalizadas: Dispatch<SetStateAction<ConversationRow[]>>,
-) {
-  if (payload.eventType === 'DELETE') {
-    const id = payload.old?.id as string | undefined;
-    if (!id) return;
-    setRecentes((p) => p.filter((c) => c.id !== id));
-    setFinalizadas((p) => p.filter((c) => c.id !== id));
-    return;
-  }
-
-  const raw = payload.new as ConversationRow;
-  if (!raw?.id) return;
-
-  setRecentes((prev) => {
-    const rest = prev.filter((c) => c.id !== raw.id);
-    if (raw.status !== 'active') return rest;
-    return [...rest, raw].sort(sortByLastMessage);
-  });
-  setFinalizadas((prev) => {
-    const rest = prev.filter((c) => c.id !== raw.id);
-    if (raw.status !== 'closed') return rest;
-    return [...rest, raw].sort(sortByLastMessage);
-  });
-}
-
 export function ConversationsScreen({ navigation }: Props) {
+  const route = useRoute();
+  const listParams = (route.params ?? {}) as { hideBack?: boolean; chatScreenName?: string };
+  const hideBack = listParams.hideBack === true;
+  const chatScreenName = listParams.chatScreenName ?? 'Chat';
+
   const [tab, setTab] = useState<Tab>('recentes');
   const [recentes, setRecentes] = useState<ConversationRow[]>([]);
   const [finalizadas, setFinalizadas] = useState<ConversationRow[]>([]);
@@ -122,47 +95,6 @@ export function ConversationsScreen({ navigation }: Props) {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  useEffect(() => {
-    let channel: ReturnType<typeof supabase.channel> | null = null;
-    let cancelled = false;
-
-    (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user?.id || cancelled) return;
-
-      channel = supabase
-        .channel(`driver-conversations:${user.id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'conversations',
-            filter: `driver_id=eq.${user.id}`,
-          },
-          (payload) => {
-            mergeConversationRealtime(
-              payload as { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> },
-              setRecentes,
-              setFinalizadas,
-            );
-          },
-        )
-        .subscribe((status, err) => {
-          if (!__DEV__) return;
-          if (status === 'SUBSCRIBED') console.log('[Conversations] Realtime: ligado');
-          if (status === 'CHANNEL_ERROR' || err) {
-            console.warn('[Conversations] Realtime:', status, err?.message ?? err);
-          }
-        });
-    })();
-
-    return () => {
-      cancelled = true;
-      if (channel) supabase.removeChannel(channel);
-    };
-  }, []);
-
   const active = tab === 'recentes' ? recentes : finalizadas;
 
   function renderAvatar(item: ConversationRow) {
@@ -183,9 +115,13 @@ export function ConversationsScreen({ navigation }: Props) {
       <StatusBar style="dark" />
 
       <View style={styles.header}>
-        <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
-          <MaterialIcons name="arrow-back" size={22} color="#111827" />
-        </TouchableOpacity>
+        {hideBack ? (
+          <View style={styles.iconBtn} />
+        ) : (
+          <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+            <MaterialIcons name="arrow-back" size={22} color="#111827" />
+          </TouchableOpacity>
+        )}
         <Text style={styles.headerTitle}>Conversas</Text>
         <View style={{ width: 40 }} />
       </View>
@@ -214,11 +150,16 @@ export function ConversationsScreen({ navigation }: Props) {
               <TouchableOpacity
               style={styles.row}
               activeOpacity={0.75}
-              onPress={() => navigation.navigate('Chat', {
-                conversationId: item.id,
-                participantName: item.participant_name ?? undefined,
-                participantAvatar: item.participant_avatar ?? undefined,
-              })}
+              onPress={() => {
+                (navigation as { navigate: (n: string, p: Record<string, unknown>) => void }).navigate(
+                  chatScreenName,
+                  {
+                    conversationId: item.id,
+                    participantName: item.participant_name ?? undefined,
+                    participantAvatar: item.participant_avatar ?? undefined,
+                  },
+                );
+              }}
             >
                 {renderAvatar(item)}
                 <View style={styles.rowContent}>

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Switch,
   Modal,
+  Platform,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -19,12 +20,24 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
-import { GoogleMapsMap as MapboxMap } from '../components/googleMaps/GoogleMapsMap';
-import { MapMarker as MapboxMarker } from '../components/googleMaps/MapMarker';
-import { MapPolyline as MapboxPolyline } from '../components/googleMaps/MapPolyline';
-import { MapZoomControls } from '../components/googleMaps/MapZoomControls';
-import type { GoogleMapsMapRef } from '../components/googleMaps/GoogleMapsMap';
-import type { MapRegion } from '../components/googleMaps/geometry';
+import {
+  GoogleMapsMap,
+  MapMarker,
+  MapPolyline,
+  MapZoomControls,
+  regionFromLatLngPoints,
+  isValidGlobeCoordinate,
+  latLngFromDbColumns,
+  MY_LOCATION_NAV_DELTA,
+} from '../components/googleMaps';
+import type { LatLng, GoogleMapsMapRef } from '../components/googleMaps';
+
+let LocationMod: typeof import('expo-location') | null = null;
+try {
+  LocationMod = require('expo-location');
+} catch {
+  /* native rebuild */
+}
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Home'>,
@@ -91,7 +104,6 @@ function shortAddr(addr: string): string {
 }
 
 export function HomeScreen({ navigation }: Props) {
-  const homeMapRef = useRef<GoogleMapsMapRef>(null);
   const [loading, setLoading] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
   const [cnhOk, setCnhOk] = useState(false);
@@ -103,6 +115,68 @@ export function HomeScreen({ navigation }: Props) {
   const [userId, setUserId] = useState<string | null>(null);
   const [activeTrip, setActiveTrip] = useState<ActiveTrip | null>(null);
   const [showEndTripModal, setShowEndTripModal] = useState(false);
+  const [mapUserLL, setMapUserLL] = useState<LatLng | null>(null);
+  const homeMapRef = useRef<GoogleMapsMapRef>(null);
+
+  useEffect(() => {
+    if (!LocationMod) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { status } = await LocationMod.requestForegroundPermissionsAsync();
+        if (status !== 'granted' || cancelled) return;
+        const pos = await LocationMod.getCurrentPositionAsync({
+          accuracy: LocationMod.Accuracy?.Balanced ?? LocationMod.Accuracy.Balanced,
+        });
+        if (!cancelled && pos?.coords) {
+          setMapUserLL({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          });
+        }
+      } catch {
+        /* GPS off / timeout */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const homeTripMapRegion = useMemo(() => {
+    // Prioridade: GPS do motorista → origem da viagem → destino.
+    // Usa zoom de rua (0.04°) para não ficar parecendo oceano em cidades costeiras.
+    if (mapUserLL && isValidGlobeCoordinate(mapUserLL.latitude, mapUserLL.longitude)) {
+      return {
+        latitude: mapUserLL.latitude,
+        longitude: mapUserLL.longitude,
+        latitudeDelta: MY_LOCATION_NAV_DELTA,
+        longitudeDelta: MY_LOCATION_NAV_DELTA,
+      };
+    }
+    if (activeTrip) {
+      const originLL = latLngFromDbColumns(activeTrip.origin_lat, activeTrip.origin_lng);
+      if (originLL) return { latitude: originLL.latitude, longitude: originLL.longitude, latitudeDelta: 0.04, longitudeDelta: 0.04 };
+      const destLL = latLngFromDbColumns(activeTrip.destination_lat, activeTrip.destination_lng);
+      if (destLL) return { latitude: destLL.latitude, longitude: destLL.longitude, latitudeDelta: 0.04, longitudeDelta: 0.04 };
+    }
+    return regionFromLatLngPoints([]);
+  }, [
+    mapUserLL,
+    activeTrip?.origin_lat,
+    activeTrip?.origin_lng,
+    activeTrip?.destination_lat,
+    activeTrip?.destination_lng,
+  ]);
+
+  /** Sem GPS e sem nenhuma coordenada válida da viagem → não montar MapView (evita 0,0 / oceano). */
+  const homeMapReady = useMemo(() => {
+    if (!activeTrip) return true;
+    if (mapUserLL && isValidGlobeCoordinate(mapUserLL.latitude, mapUserLL.longitude)) return true;
+    const oOk = latLngFromDbColumns(activeTrip.origin_lat, activeTrip.origin_lng) !== null;
+    const dOk = latLngFromDbColumns(activeTrip.destination_lat, activeTrip.destination_lng) !== null;
+    return oOk || dOk;
+  }, [activeTrip, mapUserLL]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -171,10 +245,10 @@ export function HomeScreen({ navigation }: Props) {
         destination_address: string;
         departure_at: string;
         trunk_occupancy_pct: number | null;
-        origin_lat: number | null;
-        origin_lng: number | null;
-        destination_lat: number | null;
-        destination_lng: number | null;
+        origin_lat?: number | null;
+        origin_lng?: number | null;
+        destination_lat?: number | null;
+        destination_lng?: number | null;
       };
       const { data: bkgs } = await supabase
         .from('bookings')
@@ -188,7 +262,10 @@ export function HomeScreen({ navigation }: Props) {
         .filter((b) => b.origin_lat != null && b.origin_lng != null)
         .map((b) => ({ lat: b.origin_lat!, lng: b.origin_lng! }));
       setActiveTrip({
-        ...t,
+        id: t.id,
+        origin_address: t.origin_address,
+        destination_address: t.destination_address,
+        departure_at: t.departure_at,
         passengerCount,
         bagsCount,
         trunkPct: t.trunk_occupancy_pct ?? 0,
@@ -329,7 +406,6 @@ export function HomeScreen({ navigation }: Props) {
                   <Text style={styles.metaValue}>{activeTrip.passengerCount}</Text>
                 </View>
               </View>
-              {/* Encomendas — desativado nesta versão (reativar metaItem + bags_count na query)
               <View style={styles.metaItem}>
                 <MaterialIcons name="inventory-2" size={18} color="#6B7280" />
                 <View>
@@ -337,7 +413,6 @@ export function HomeScreen({ navigation }: Props) {
                   <Text style={styles.metaValue}>{activeTrip.bagsCount}</Text>
                 </View>
               </View>
-              */}
             </View>
 
             {/* Bagageiro */}
@@ -371,7 +446,7 @@ export function HomeScreen({ navigation }: Props) {
 
             {/* Mapa da viagem ativa — largura total (evita w=0 com alignItems:center no ScrollView) */}
             <View style={styles.mapWrap}>
-              <MapboxMap
+              <GoogleMapsMap
                 ref={homeMapRef}
                 key={`home-map-${activeTrip.id}`}
                 style={styles.mapInner}
@@ -382,7 +457,7 @@ export function HomeScreen({ navigation }: Props) {
                   activeTrip.origin_lng != null &&
                   activeTrip.destination_lat != null &&
                   activeTrip.destination_lng != null && (
-                    <MapboxPolyline
+                    <MapPolyline
                       id="home-preview"
                       coordinates={[
                         { latitude: activeTrip.origin_lat, longitude: activeTrip.origin_lng },
@@ -393,28 +468,28 @@ export function HomeScreen({ navigation }: Props) {
                     />
                   )}
                 {activeTrip.origin_lat != null && activeTrip.origin_lng != null && (
-                  <MapboxMarker
+                  <MapMarker
                     id="origin"
                     coordinate={{ latitude: activeTrip.origin_lat, longitude: activeTrip.origin_lng }}
                     pinColor="#111827"
                   />
                 )}
                 {activeTrip.destination_lat != null && activeTrip.destination_lng != null && (
-                  <MapboxMarker
+                  <MapMarker
                     id="dest"
                     coordinate={{ latitude: activeTrip.destination_lat, longitude: activeTrip.destination_lng }}
                     pinColor="#C9A227"
                   />
                 )}
                 {activeTrip.bookingPickups.map((p, i) => (
-                  <MapboxMarker
+                  <MapMarker
                     key={`pickup-${i}`}
                     id={`pickup-${i}`}
                     coordinate={{ latitude: p.lat, longitude: p.lng }}
                     pinColor="#22C55E"
                   />
                 ))}
-              </MapboxMap>
+              </GoogleMapsMap>
               <MapZoomControls mapRef={homeMapRef} style={styles.homeMapZoom} />
             </View>
 
@@ -553,25 +628,34 @@ const styles = StyleSheet.create({
   metaLabel: { fontSize: 12, color: '#9CA3AF' },
   metaValue: { fontSize: 16, fontWeight: '700', color: '#111827' },
   mapWrap: {
-    position: 'relative',
-    height: 200,
+    height: 180,
     width: '100%',
-    alignSelf: 'stretch',
     borderRadius: 12,
     marginBottom: 14,
     overflow: 'hidden',
+    position: 'relative',
     backgroundColor: '#E5E7EB',
   },
-  homeMapZoom: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-  },
-  mapInner: {
+  mapInner: { width: '100%', height: '100%' },
+  homeMapZoom: { right: 8, bottom: 8 },
+  mapPlaceholder: {
+    height: 160,
     width: '100%',
-    height: '100%',
+    backgroundColor: '#E5E7EB',
     borderRadius: 12,
+    marginBottom: 14,
+    overflow: 'hidden',
+    position: 'relative',
   },
+  mapPreviewInner: { width: '100%', height: '100%', borderRadius: 12 },
+  mapPreviewLoading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: '#E5E7EB',
+  },
+  mapPreviewLoadingText: { fontSize: 13, color: '#6B7280' },
   mapBtn: {
     borderWidth: 1.5, borderColor: '#D1D5DB', borderRadius: 12,
     paddingVertical: 14, alignItems: 'center', marginBottom: 10,

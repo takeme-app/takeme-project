@@ -70,20 +70,9 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
 
         const routes = formData.routes.map((r) => {
           const reais = parseCurrencyBRLToNumber(r.suggestedPrice) ?? 0;
-          const o = r.originPlace;
-          const d = r.destinationPlace;
-          if (!o || !d) {
-            throw new Error(
-              'Rotas sem coordenadas Google. Volte ao formulário, escolha origem e destino nas sugestões e envie de novo.',
-            );
-          }
           return {
-            origin_address: (o.placeName || r.origin).trim(),
-            destination_address: (d.placeName || r.destination).trim(),
-            origin_lat: o.latitude,
-            origin_lng: o.longitude,
-            destination_lat: d.latitude,
-            destination_lng: d.longitude,
+            origin_address: r.origin.trim(),
+            destination_address: r.destination.trim(),
             price_per_person_cents: Math.max(0, Math.round(reais * 100)),
           };
         });

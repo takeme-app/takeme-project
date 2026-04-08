@@ -15,13 +15,15 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { ProfileStackParamList } from '../navigation/types';
+import type { ProfileStackParamList, ChatExcStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 
 const sb = supabase as { from: (table: string) => any };
 import { storageUrl } from '../utils/storageUrl';
 
-type Props = NativeStackScreenProps<ProfileStackParamList, 'Chat'>;
+type Props =
+  | NativeStackScreenProps<ProfileStackParamList, 'Chat'>
+  | NativeStackScreenProps<ChatExcStackParamList, 'ChatExcThread'>;
 
 const GOLD = '#C9A227';
 
@@ -106,6 +108,7 @@ export function ChatScreen({ navigation, route }: Props) {
     loadMessages();
     loadConversation();
 
+    // Realtime subscription
     const channel = supabase
       .channel(`chat:${conversationId}`)
       .on(
@@ -118,25 +121,7 @@ export function ChatScreen({ navigation, route }: Props) {
             return [...prev, newMsg];
           });
           setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-        },
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversationId}` },
-        (payload) => {
-          const updated = payload.new as Message;
-          setMessages((prev) => prev.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)));
-        },
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'conversations', filter: `id=eq.${conversationId}` },
-        (payload) => {
-          const c = payload.new as { status?: string };
-          if (c.status === 'closed' || c.status === 'active') {
-            setConversationStatus(c.status as 'active' | 'closed');
-          }
-        },
+        }
       )
       .subscribe();
 

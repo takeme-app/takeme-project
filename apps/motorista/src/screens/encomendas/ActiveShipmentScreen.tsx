@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -11,7 +11,7 @@ import {
   Platform,
 } from 'react-native';
 import { Text } from '../../components/Text';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -21,8 +21,11 @@ import {
   GoogleMapsMap,
   MapMarker,
   MapPolyline,
+  MapZoomControls,
   latLngFromDbColumns,
   regionFromLatLngPoints,
+  isValidGlobeCoordinate,
+  MY_LOCATION_NAV_DELTA,
   type GoogleMapsMapRef,
 } from '../../components/googleMaps';
 import { getGoogleMapsApiKey, getMapboxAccessToken } from '../../lib/googleMapsConfig';
@@ -70,6 +73,7 @@ function routeDistanceKm(coords: Coord[]): number {
 }
 
 export function ActiveShipmentScreen({ navigation, route }: Props) {
+  const insets = useSafeAreaInsets();
   const { shipmentId } = route.params;
   const [shipment, setShipment] = useState<Shipment | null>(null);
   const [loading, setLoading] = useState(true);
@@ -100,14 +104,38 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
   const mapRef = useRef<GoogleMapsMapRef>(null);
   const locationSubRef = useRef<any>(null);
   const startTimeRef = useRef(Date.now());
+  const [followMyLocation, setFollowMyLocation] = useState(false);
+  const followFirstAnimDoneRef = useRef(false);
 
   const mapInitialRegion = useMemo(() => {
     if (!shipment) return regionFromLatLngPoints([]);
+    if (step === 'to_pickup') {
+      const pts: Coord[] = [shipment.originCoord];
+      if (driverPos) pts.push(driverPos);
+      return regionFromLatLngPoints(pts);
+    }
     const pts: Coord[] = [];
     if (driverPos) pts.push(driverPos);
     pts.push(shipment.originCoord, shipment.destCoord);
     return regionFromLatLngPoints(pts);
-  }, [shipment, driverPos]);
+  }, [shipment, driverPos, step]);
+
+  /** Ao mudar etapa: coleta → zoom na origem; entrega → rota completa. */
+  useEffect(() => {
+    if (!shipment || loading) return;
+    setFollowMyLocation(false);
+    const region =
+      step === 'to_pickup'
+        ? {
+            latitude: shipment.originCoord.latitude,
+            longitude: shipment.originCoord.longitude,
+            latitudeDelta: 0.052,
+            longitudeDelta: 0.052,
+          }
+        : regionFromLatLngPoints([shipment.originCoord, shipment.destCoord]);
+    const t = setTimeout(() => mapRef.current?.animateToRegion(region, 450), 100);
+    return () => clearTimeout(t);
+  }, [step, shipment, loading]);
 
   // Load shipment
   useEffect(() => {
@@ -176,6 +204,26 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     };
   }, []);
 
+  /** Depois de tocar em “minha localização”, a câmera acompanha o GPS até você mover o mapa. */
+  useEffect(() => {
+    if (!followMyLocation) {
+      followFirstAnimDoneRef.current = false;
+      return;
+    }
+    if (!driverPos || !isValidGlobeCoordinate(driverPos.latitude, driverPos.longitude)) return;
+    const dur = followFirstAnimDoneRef.current ? 0 : 350;
+    followFirstAnimDoneRef.current = true;
+    mapRef.current?.animateToRegion(
+      {
+        latitude: driverPos.latitude,
+        longitude: driverPos.longitude,
+        latitudeDelta: MY_LOCATION_NAV_DELTA,
+        longitudeDelta: MY_LOCATION_NAV_DELTA,
+      },
+      dur,
+    );
+  }, [driverPos, followMyLocation]);
+
   // Driver → current stop route
   useEffect(() => {
     if (!driverPos || !shipment) return;
@@ -191,6 +239,34 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       }
     });
   }, [driverPos, step, shipment]);
+
+  const focusColeta = useCallback(() => {
+    if (!shipment) return;
+    setFollowMyLocation(false);
+    mapRef.current?.animateToRegion(
+      {
+        latitude: shipment.originCoord.latitude,
+        longitude: shipment.originCoord.longitude,
+        latitudeDelta: 0.045,
+        longitudeDelta: 0.045,
+      },
+      400,
+    );
+  }, [shipment]);
+
+  const focusEntrega = useCallback(() => {
+    if (!shipment) return;
+    setFollowMyLocation(false);
+    mapRef.current?.animateToRegion(
+      {
+        latitude: shipment.destCoord.latitude,
+        longitude: shipment.destCoord.longitude,
+        latitudeDelta: 0.045,
+        longitudeDelta: 0.045,
+      },
+      400,
+    );
+  }, [shipment]);
 
   const confirmPickup = async () => {
     if (!pickupCode.trim() || !shipment) return;
@@ -267,104 +343,172 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
   }
 
   const currentAddress = step === 'to_pickup' ? shipment.originAddress : shipment.destinationAddress;
-  const currentLabel = step === 'to_pickup' ? `Coleta — ${shipment.clientName}` : 'Entrega na base';
   const elapsedSec = Math.round((Date.now() - startTimeRef.current) / 1000);
   const totalKm = routeDistanceKm(
     fullRouteCoords.length > 1 ? fullRouteCoords : [shipment.originCoord, shipment.destCoord],
   );
 
-  const stops = [
-    { key: 'pickup', coord: shipment.originCoord, done: step === 'to_delivery' },
-    { key: 'delivery', coord: shipment.destCoord, done: false },
-  ];
+  const pickupDone = step === 'to_delivery';
+  const overlayTop = insets.top + 56;
 
   return (
     <View style={styles.root}>
       <StatusBar style="dark" />
 
-      {/* Full-screen map */}
-      <GoogleMapsMap ref={mapRef} style={styles.map} initialRegion={mapInitialRegion}>
-        {/* Full route — gold */}
-        {fullRouteCoords.length > 1 && (
-          <MapPolyline id="full" coordinates={fullRouteCoords} strokeColor={GOLD} strokeWidth={4} />
-        )}
-        {/* Driver → current stop — dark */}
-        {driverRouteCoords.length > 1 && (
+      {/* Mapa em tela cheia — mesmo padrão do ActiveTrip (motorista) */}
+      <GoogleMapsMap
+        ref={mapRef}
+        style={StyleSheet.absoluteFillObject}
+        initialRegion={mapInitialRegion}
+        onUserAdjustedMap={() => setFollowMyLocation(false)}
+      >
+        {driverRouteCoords.length >= 2 && (
           <MapPolyline id="driver" coordinates={driverRouteCoords} strokeColor={DARK} strokeWidth={3} />
         )}
-        {/* Stop markers */}
-        {stops.map((s) => (
-          <MapMarker key={s.key} id={`stop-${s.key}`} coordinate={s.coord} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={[styles.stopMarker, s.done && styles.stopMarkerDone]}>
-              <MaterialIcons name={s.done ? 'check' : 'inventory-2'} size={18} color="#FFF" />
-            </View>
-          </MapMarker>
-        ))}
-        {/* Driver marker */}
+        {fullRouteCoords.length >= 2 ? (
+          <MapPolyline id="full" coordinates={fullRouteCoords} strokeColor={GOLD} strokeWidth={5} />
+        ) : isValidGlobeCoordinate(shipment.originCoord.latitude, shipment.originCoord.longitude) &&
+          isValidGlobeCoordinate(shipment.destCoord.latitude, shipment.destCoord.longitude) ? (
+          <MapPolyline
+            id="fallback"
+            coordinates={[shipment.originCoord, shipment.destCoord]}
+            strokeColor={GOLD}
+            strokeWidth={4}
+          />
+        ) : null}
+
+        <MapMarker id="stop-pickup" coordinate={shipment.originCoord} anchor={{ x: 0.5, y: 0.5 }}>
+          <View style={[styles.mapStopMarker, pickupDone ? styles.mapStopMarkerDone : { backgroundColor: GOLD }]}>
+            <MaterialIcons name={pickupDone ? 'check' : 'inventory-2'} size={18} color="#fff" />
+          </View>
+        </MapMarker>
+        <MapMarker id="stop-delivery" coordinate={shipment.destCoord} anchor={{ x: 0.5, y: 0.5 }}>
+          <View
+            style={[
+              styles.mapStopMarker,
+              pickupDone ? { backgroundColor: GOLD } : styles.mapStopMarkerPending,
+            ]}
+          >
+            <MaterialIcons name="flag" size={18} color={pickupDone ? '#fff' : '#6B7280'} />
+          </View>
+        </MapMarker>
+
         {driverPos && (
           <MapMarker id="driver-pos" coordinate={driverPos} anchor={{ x: 0.5, y: 0.5 }}>
             <View style={styles.driverPulse}>
-              <View style={styles.driverDot}>
-                <MaterialIcons name="play-arrow" size={18} color="#FFF" />
+              <View style={styles.driverMarker}>
+                <MaterialIcons name="play-arrow" size={18} color="#fff" />
               </View>
             </View>
           </MapMarker>
         )}
       </GoogleMapsMap>
 
-      {/* Back button */}
-      <SafeAreaView style={styles.backSafe} edges={['top']} pointerEvents="box-none">
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.8}>
+      {/* Overlay alinhado ao ActiveTrip: safe area + controles */}
+      <SafeAreaView edges={['top', 'bottom']} style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
+        <TouchableOpacity
+          style={[styles.backBtn, { top: insets.top + 8, left: 14 }]}
+          onPress={() => navigation.goBack()}
+          activeOpacity={0.8}
+        >
           <MaterialIcons name="arrow-back" size={20} color={DARK} />
         </TouchableOpacity>
-      </SafeAreaView>
 
-      {/* Sidebar — stops */}
-      <View style={styles.sidebar} pointerEvents="box-none">
-        {stops.map((s, i) => (
-          <View key={s.key} style={styles.sidebarItem}>
-            <View style={[styles.sidebarBtn, s.done && styles.sidebarBtnDone]}>
-              <MaterialIcons name={s.done ? 'check' : 'inventory-2'} size={20} color="#FFF" />
-            </View>
-            {i < stops.length - 1 && <View style={styles.sidebarLine} />}
-          </View>
-        ))}
-      </View>
-
-      {/* Bottom card */}
-      <View style={styles.bottomCard}>
-        <View style={styles.bottomTopRow}>
-          <View style={styles.stepPill}>
-            <View style={[styles.pillDot, { backgroundColor: step === 'to_pickup' ? GOLD : '#34D399' }]} />
-            <Text style={styles.pillText}>{step === 'to_pickup' ? 'Coleta' : 'Entrega'}</Text>
-          </View>
-          {etaSeconds > 0 && (
-            <View style={styles.etaBadge}>
-              <Text style={styles.etaText}>{formatEta(etaSeconds)}</Text>
-            </View>
-          )}
-        </View>
-        <Text style={styles.stopLabel} numberOfLines={1}>{currentLabel}</Text>
-        <View style={styles.addressRow}>
-          <MaterialIcons name="place" size={14} color="#9CA3AF" />
-          <Text style={styles.addressText} numberOfLines={1}>{currentAddress}</Text>
-        </View>
-        <View style={styles.progressRow}>
-          <View style={styles.progressBar}>
-            <View style={[styles.progressFill, { width: step === 'to_pickup' ? '30%' : '70%' }]} />
-          </View>
-          <Text style={styles.progressCount}>{step === 'to_pickup' ? '1' : '2'}/2</Text>
-        </View>
         <TouchableOpacity
-          style={styles.confirmBtn}
-          activeOpacity={0.85}
-          onPress={() => step === 'to_pickup' ? setPickupVisible(true) : setDeliveryVisible(true)}
+          style={[styles.myLocationBtn, { top: overlayTop, left: 14 }]}
+          activeOpacity={0.8}
+          onPress={() => {
+            if (!driverPos || !isValidGlobeCoordinate(driverPos.latitude, driverPos.longitude)) return;
+            setFollowMyLocation(true);
+          }}
         >
-          <Text style={styles.confirmBtnText}>
-            {step === 'to_pickup' ? 'Confirmar coleta' : 'Confirmar entrega'}
-          </Text>
+          <MaterialIcons name="my-location" size={22} color={DARK} />
         </TouchableOpacity>
-      </View>
+
+        <View style={[styles.zoomWrap, { top: overlayTop + 46 + 10, left: 14 }]} pointerEvents="box-none">
+          <MapZoomControls
+            mapRef={mapRef}
+            floating={false}
+            onBeforeZoom={() => setFollowMyLocation(false)}
+          />
+        </View>
+
+        {/* Barra direita: encomenda — coleta → entrega (tocar centraliza no ponto) */}
+        <View style={[styles.sidebar, { top: overlayTop, right: 14 }]} pointerEvents="box-none">
+          <View style={styles.sidebarLine} pointerEvents="none" />
+          <TouchableOpacity
+            style={[
+              styles.sidebarBtn,
+              pickupDone ? { backgroundColor: '#9CA3AF' } : { backgroundColor: GOLD },
+            ]}
+            onPress={focusColeta}
+            activeOpacity={0.85}
+          >
+            <MaterialIcons name={pickupDone ? 'check' : 'inventory-2'} size={18} color="#fff" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.sidebarBtn,
+              pickupDone ? styles.sidebarDestBtn : { backgroundColor: '#E5E7EB' },
+            ]}
+            onPress={focusEntrega}
+            activeOpacity={0.85}
+          >
+            <MaterialIcons name="flag" size={18} color={pickupDone ? DARK : '#6B7280'} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Cartão flutuante — mesmo estilo do miniSheet da viagem ativa */}
+        <View
+          style={[
+            styles.miniSheet,
+            { bottom: Platform.OS === 'ios' ? Math.max(insets.bottom, 12) + 16 : 20 },
+          ]}
+          pointerEvents="box-none"
+        >
+          <View style={styles.miniSheetTopRow}>
+            <View style={styles.stopTypePill}>
+              <View style={styles.stopTypeDot} />
+              <Text style={styles.stopTypePillText}>Encomenda</Text>
+            </View>
+            {etaSeconds > 0 && (
+              <View style={styles.etaBadge}>
+                <Text style={styles.etaBadgeText}>{Math.max(1, Math.round(etaSeconds / 60))} min</Text>
+              </View>
+            )}
+          </View>
+
+          <Text style={styles.miniSheetName} numberOfLines={1}>
+            {step === 'to_pickup' ? `Coleta — ${shipment.clientName}` : 'Entrega na base'}
+          </Text>
+          <View style={styles.miniAddressRow}>
+            <MaterialIcons name="location-on" size={14} color="#6B7280" />
+            <Text style={styles.miniAddressText} numberOfLines={2}>
+              {currentAddress}
+            </Text>
+          </View>
+          <View style={styles.miniSheetFooter}>
+            <View style={styles.progressBarContainer}>
+              <View
+                style={[
+                  styles.progressBarFill,
+                  { width: `${step === 'to_pickup' ? 50 : 100}%` as any },
+                ]}
+              />
+            </View>
+            <Text style={styles.progressText}>{step === 'to_pickup' ? '1' : '2'}/2</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.miniConfirmBtn}
+            activeOpacity={0.85}
+            onPress={() => (step === 'to_pickup' ? setPickupVisible(true) : setDeliveryVisible(true))}
+          >
+            <Text style={styles.miniConfirmBtnText}>
+              {step === 'to_pickup' ? 'Confirmar coleta' : 'Confirmar entrega'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
 
       {/* ── Pickup modal ── */}
       <Modal visible={pickupVisible} transparent animationType="slide">
@@ -575,65 +719,219 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1 },
+  root: { flex: 1, backgroundColor: '#000' },
   loadingCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFF' },
-  map: { flex: 1 },
 
-  backSafe: { position: 'absolute', top: 0, left: 0, right: 0 },
+  zoomWrap: { position: 'absolute' },
+
   backBtn: {
-    margin: 16, width: 40, height: 40, borderRadius: 20,
-    backgroundColor: '#FFF', alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 4,
+    position: 'absolute',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 5,
+    elevation: 4,
   },
 
-  sidebar: { position: 'absolute', left: 16, top: '28%', alignItems: 'center' },
-  sidebarItem: { alignItems: 'center' },
+  myLocationBtn: {
+    position: 'absolute',
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+
+  sidebar: {
+    position: 'absolute',
+    alignItems: 'center',
+    gap: 6,
+  },
+  sidebarLine: {
+    position: 'absolute',
+    top: 22,
+    bottom: 22,
+    width: 2,
+    backgroundColor: '#D1D5DB',
+    zIndex: -1,
+  },
   sidebarBtn: {
-    width: 46, height: 46, borderRadius: 10, backgroundColor: GOLD,
-    alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 4,
   },
-  sidebarBtnDone: { backgroundColor: DARK },
-  sidebarLine: { width: 2, height: 20, backgroundColor: DARK },
+  sidebarDestBtn: {
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+  },
 
-  stopMarker: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: GOLD, alignItems: 'center', justifyContent: 'center',
+  mapStopMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 4,
   },
-  stopMarkerDone: { backgroundColor: DARK },
+  mapStopMarkerDone: { backgroundColor: '#374151' },
+  mapStopMarkerPending: { backgroundColor: '#E5E7EB', borderColor: '#E5E7EB' },
 
   driverPulse: {
-    width: 60, height: 60, borderRadius: 30,
-    backgroundColor: 'rgba(156,163,175,0.35)', alignItems: 'center', justifyContent: 'center',
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(17,24,39,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  driverDot: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: DARK, alignItems: 'center', justifyContent: 'center',
+  driverMarker: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: DARK,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2.5,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 6,
   },
 
-  bottomCard: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingHorizontal: 20, paddingTop: 16, paddingBottom: 36,
-    shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 20, elevation: 10,
+  miniSheet: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.14,
+    shadowRadius: 16,
+    elevation: 12,
   },
-  bottomTopRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10,
+  miniSheetTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
   },
-  stepPill: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  pillDot: { width: 8, height: 8, borderRadius: 4 },
-  pillText: { fontSize: 13, fontWeight: '600', color: '#374151' },
-  etaBadge: { backgroundColor: DARK, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 },
-  etaText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
-  stopLabel: { fontSize: 22, fontWeight: '700', color: DARK, marginBottom: 6 },
-  addressRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 14 },
-  addressText: { fontSize: 14, color: '#6B7280', flex: 1 },
-  progressRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
-  progressBar: { flex: 1, height: 6, backgroundColor: '#E5E7EB', borderRadius: 3, overflow: 'hidden' },
-  progressFill: { height: '100%', backgroundColor: GOLD, borderRadius: 3 },
-  progressCount: { fontSize: 13, fontWeight: '600', color: DARK },
-  confirmBtn: { backgroundColor: DARK, borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
-  confirmBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+  stopTypePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: '#FEF9C3',
+    borderRadius: 20,
+  },
+  stopTypeDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: GOLD,
+  },
+  stopTypePillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#92400E',
+    letterSpacing: 0.2,
+  },
+  etaBadge: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 5,
+  },
+  etaBadgeText: {
+    color: DARK,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  miniSheetName: {
+    fontSize: 21,
+    fontWeight: '700',
+    color: DARK,
+    marginBottom: 6,
+  },
+  miniAddressRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 4,
+    marginBottom: 0,
+  },
+  miniAddressText: {
+    fontSize: 13,
+    color: '#6B7280',
+    flex: 1,
+    lineHeight: 18,
+  },
+  miniSheetFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 12,
+  },
+  progressBarContainer: {
+    flex: 1,
+    height: 4,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: GOLD,
+  },
+  progressText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#374151',
+  },
+  miniConfirmBtn: {
+    backgroundColor: DARK,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 14,
+  },
+  miniConfirmBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
 
   // Modals
   kbav: { flex: 1 },

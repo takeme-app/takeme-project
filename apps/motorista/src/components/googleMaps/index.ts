@@ -15,6 +15,7 @@ export {
   hasValidTripCoordinatePair,
   sanitizeMapRegion,
   regionFromLatLngPoints,
+  MY_LOCATION_NAV_DELTA,
 } from './geometry';
 export type { LatLng, MapRegion } from './geometry';
 export {

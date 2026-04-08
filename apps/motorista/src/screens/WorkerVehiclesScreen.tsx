@@ -6,7 +6,6 @@ import {
   ScrollView,
   ActivityIndicator,
   Animated,
-  Image,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -17,7 +16,6 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
-import { storageUrl } from '../utils/storageUrl';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'WorkerVehicles'>;
 
@@ -28,26 +26,9 @@ type VehicleRow = {
   year: number;
   passenger_capacity: number;
   use_type: string | null;
-  vehicle_photos_urls: string[] | null;
-  vehicle_document_url: string | null;
 };
 
 const GOLD = '#C9A227';
-
-/** Primeira foto do veículo; se não houver, tenta imagem do CRLV (mesmo bucket). */
-function coverStoragePath(v: VehicleRow): string | null {
-  const photos = v.vehicle_photos_urls;
-  if (Array.isArray(photos)) {
-    const first = photos.find((p) => typeof p === 'string' && p.trim() !== '');
-    if (first) return first.trim();
-  }
-  const doc = v.vehicle_document_url?.trim();
-  if (doc) {
-    const lower = doc.split('?')[0]?.toLowerCase() ?? '';
-    if (/\.(jpe?g|png|webp|gif|heic)(\b|$)/i.test(lower)) return doc;
-  }
-  return null;
-}
 
 export function WorkerVehiclesScreen({ navigation, route }: Props) {
   const [rows, setRows] = useState<VehicleRow[]>([]);
@@ -88,7 +69,7 @@ export function WorkerVehiclesScreen({ navigation, route }: Props) {
     }
     const { data } = await supabase
       .from('vehicles')
-      .select('id, model, plate, year, passenger_capacity, use_type, vehicle_photos_urls, vehicle_document_url')
+      .select('id, model, plate, year, passenger_capacity, use_type')
       .eq('worker_id', user.id)
       .order('created_at', { ascending: true });
     setRows((data ?? []) as VehicleRow[]);
@@ -139,8 +120,6 @@ export function WorkerVehiclesScreen({ navigation, route }: Props) {
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           {rows.map((v) => {
             const isPrincipal = (v.use_type ?? 'principal') === 'principal';
-            const coverPath = coverStoragePath(v);
-            const coverUri = coverPath ? storageUrl('vehicles', coverPath) : null;
             return (
               <TouchableOpacity
                 key={v.id}
@@ -148,11 +127,7 @@ export function WorkerVehiclesScreen({ navigation, route }: Props) {
                 onPress={() => navigation.navigate('VehicleDetail', { vehicleId: v.id })}
                 activeOpacity={0.85}
               >
-                <View style={styles.cardPhotoArea}>
-                  {coverUri ? (
-                    <Image source={{ uri: coverUri }} style={styles.cardPhoto} resizeMode="cover" />
-                  ) : null}
-                </View>
+                <View style={styles.cardPhotoArea} />
                 <View style={styles.cardBadgeRow}>
                   <View style={[styles.badge, isPrincipal ? styles.badgePrincipal : styles.badgeReserva]}>
                     <Text style={[styles.badgeText, isPrincipal ? styles.badgeTextPrincipal : styles.badgeTextReserva]}>
@@ -223,12 +198,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginBottom: 16,
   },
-  cardPhotoArea: {
-    height: 140,
-    backgroundColor: '#E5E7EB',
-    overflow: 'hidden',
-  },
-  cardPhoto: { width: '100%', height: '100%' },
+  cardPhotoArea: { height: 100, backgroundColor: '#E5E7EB' },
   cardBadgeRow: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
