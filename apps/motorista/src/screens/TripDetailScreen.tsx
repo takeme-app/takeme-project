@@ -76,13 +76,11 @@ type Booking = {
 
 type Shipment = {
   id: string;
-  description: string | null;
-  size: string | null;
-  notes: string | null;
+  instructions: string | null;
+  package_size: string | null;
   origin_address: string | null;
   destination_address: string | null;
-  sender_name: string | null;
-  receiver_name: string | null;
+  recipient_name: string | null;
 };
 
 type DocumentAsset = {
@@ -414,7 +412,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
         supabase
           .from('shipments')
           .select(
-            'id, description, size, notes, origin_address, destination_address, sender_name, receiver_name'
+            'id, instructions, package_size, origin_address, destination_address, recipient_name'
           )
           .eq('scheduled_trip_id', tripId),
       ]);
@@ -827,7 +825,8 @@ export function TripDetailScreen({ route, navigation }: Props) {
                   <View style={styles.shipmentTitleRow}>
                     <MaterialIcons name="inventory-2" size={20} color="#6B7280" />
                     <Text style={styles.shipmentTitle} numberOfLines={1}>
-                      {s.sender_name ?? 'Remetente'} → {s.receiver_name ?? 'Destinatário'}
+                      {(s.origin_address ?? '').split(',')[0]?.trim() || 'Coleta'} →{' '}
+                      {s.recipient_name ?? 'Destinatário'}
                     </Text>
                   </View>
 
@@ -845,9 +844,9 @@ export function TripDetailScreen({ route, navigation }: Props) {
                     </Text>
                   </View>
 
-                  <Text style={styles.shipmentMeta}>Tamanho: {sizeLabel(s.size)}</Text>
-                  {s.notes ? (
-                    <Text style={styles.shipmentNotes}>Observações: {s.notes}</Text>
+                  <Text style={styles.shipmentMeta}>Tamanho: {sizeLabel(s.package_size)}</Text>
+                  {s.instructions ? (
+                    <Text style={styles.shipmentNotes}>Observações: {s.instructions}</Text>
                   ) : null}
                 </View>
               ))}
@@ -892,7 +891,9 @@ export function TripDetailScreen({ route, navigation }: Props) {
                     <MaterialIcons name="person" size={18} color="#6B7280" />
                     <View style={styles.contactInfo}>
                       <Text style={styles.contactRole}>Remetente</Text>
-                      <Text style={styles.contactName}>{s.sender_name ?? '—'}</Text>
+                      <Text style={styles.contactName}>
+                        {(s.origin_address ?? '').split(',')[0]?.trim() || 'Coleta'}
+                      </Text>
                     </View>
                   </View>
                   <View style={styles.contactDivider} />
@@ -900,7 +901,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
                     <MaterialIcons name="person-outline" size={18} color="#6B7280" />
                     <View style={styles.contactInfo}>
                       <Text style={styles.contactRole}>Destinatário</Text>
-                      <Text style={styles.contactName}>{s.receiver_name ?? '—'}</Text>
+                      <Text style={styles.contactName}>{s.recipient_name ?? '—'}</Text>
                     </View>
                   </View>
                 </View>
