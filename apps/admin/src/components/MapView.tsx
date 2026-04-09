@@ -26,6 +26,15 @@ export interface MapWaypoint extends MapCoord {
   color?: string;
   /** Tipo da parada (para icone customizado) */
   type?: 'driver_origin' | 'passenger_pickup' | 'shipment_pickup' | 'base_dropoff' | 'trip_destination' | string;
+  /** Ordem no roteiro (`trip_stops.sequence_order`) — rota Directions respeita esta ordem. */
+  sortOrder?: number;
+  /** Parada já concluída pelo motorista (`trip_stops.status`). */
+  completed?: boolean;
+  /** Próxima parada pendente no roteiro (destaque no mapa). */
+  isNext?: boolean;
+  /** Metadados opcionais para waypoints sintéticos de encomenda. */
+  entityId?: string;
+  shipmentLeg?: 'pickup' | 'dropoff';
 }
 
 export interface MapViewProps {
@@ -66,6 +75,11 @@ export interface MapViewProps {
   followTarget?: MapCoord;
   /** Chamado quando o utilizador arrasta ou roda o mapa — para desligar o modo acompanhar. */
   onFollowVehicleInterrupted?: () => void;
+  /**
+   * Viagem encerrada no painel (`concluído`): todos os pins mostram check cinza, como no motorista
+   * quando o roteiro terminou (mesmo se algum `trip_stops.status` não estiver sincronizado).
+   */
+  tripCompleted?: boolean;
   style?: React.CSSProperties;
 }
 
@@ -74,10 +88,14 @@ const FOLLOW_VEHICLE_ZOOM_MAX = 17;
 
 const LINE_SOURCE_ID = 'takeme-trip-line';
 const LINE_LAYER_ID = 'takeme-trip-line-layer';
+const LINE_NAV_SOURCE_ID = 'takeme-trip-nav-line';
+const LINE_NAV_LAYER_ID = 'takeme-trip-nav-line-layer';
 
 /** Mesma paleta do app motorista (TripDetail / Home / viagem ativa). */
 const MOTORISTA_GOLD = '#C9A227';
 const MOTORISTA_DARK = '#111827';
+/** Parada concluída no mapa (ActiveTrip — marker cinza). */
+const MOTORISTA_COMPLETED_BG = '#4B5563';
 
 /**
  * Cores por `stop_type` — espelha `STOP_TYPE_COLORS` em `apps/motorista/src/hooks/useTripStops.ts`
@@ -113,7 +131,7 @@ function normalizeStopTypeForIcon(raw: string | undefined): string {
   return t;
 }
 
-type StopIconKind = 'person' | 'package' | 'car' | 'flag' | 'business' | 'place';
+type StopIconKind = 'person' | 'package' | 'car' | 'flag' | 'business' | 'place' | 'check';
 
 function iconKindForStopType(type: string | undefined): StopIconKind {
   const t = normalizeStopTypeForIcon(type);
@@ -139,6 +157,7 @@ const STOP_ICON_PATH: Record<StopIconKind, string> = {
     'M12 7V3H2v18h20V7H12zM8 19H6v-2h2v2zm0-4H6v-2h2v2zm0-4H6V9h2v2zm0-4H6V5h2v2zm4 12h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V9h2v2zm0-4h-2V5h2v2zm8 12h-6v-2h2v-2h-2v-2h2v-2h-2V9h6v10zm-4-8h-2v2h2v-2zm0 4h-2v2h2v-2z',
   place:
     'M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z',
+  check: 'M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z',
 };
 
 const VIAGEM_ATIVA_MARKER_PX = 40;
@@ -153,6 +172,7 @@ function createViagemAtivaStyleMarkerElement(
   backgroundColor: string,
   iconKind: StopIconKind,
   title?: string,
+  ringHighlight?: boolean,
 ): HTMLDivElement {
   const el = document.createElement('div');
   const size = VIAGEM_ATIVA_MARKER_PX;
@@ -161,7 +181,9 @@ function createViagemAtivaStyleMarkerElement(
   el.style.borderRadius = '50%';
   el.style.background = backgroundColor;
   el.style.border = '2px solid #ffffff';
-  el.style.boxShadow = '0 2px 10px rgba(0,0,0,0.25)';
+  el.style.boxShadow = ringHighlight
+    ? '0 0 0 3px rgba(59,130,246,0.95), 0 2px 10px rgba(0,0,0,0.25)'
+    : '0 2px 10px rgba(0,0,0,0.25)';
   el.style.boxSizing = 'border-box';
   el.style.flexShrink = '0';
   el.style.pointerEvents = 'none';
@@ -179,18 +201,43 @@ function createViagemAtivaStyleMarkerElement(
   return el;
 }
 
-function createTripOriginMarkerElement(): HTMLDivElement {
-  return createViagemAtivaStyleMarkerElement(MOTORISTA_DARK, 'car', 'Partida');
+function createDriverStartMarkerElement(completed: boolean): HTMLDivElement {
+  if (completed) {
+    return createViagemAtivaStyleMarkerElement(MOTORISTA_COMPLETED_BG, 'check', 'Partida concluída', false);
+  }
+  return createViagemAtivaStyleMarkerElement(MOTORISTA_DARK, 'car', 'Partida', false);
 }
 
-function createTripDestinationMarkerElement(): HTMLDivElement {
-  return createViagemAtivaStyleMarkerElement(MOTORISTA_GOLD, 'flag', 'Destino');
+function createTripDestinationMarkerElement(completed: boolean): HTMLDivElement {
+  if (completed) {
+    return createViagemAtivaStyleMarkerElement(MOTORISTA_COMPLETED_BG, 'check', 'Destino final concluído', false);
+  }
+  return createViagemAtivaStyleMarkerElement(MOTORISTA_GOLD, 'flag', 'Destino final', false);
+}
+
+function createPassengerEmbarkMarkerElement(
+  title?: string,
+  ringHighlight?: boolean,
+  completed?: boolean,
+): HTMLDivElement {
+  if (completed) {
+    return createViagemAtivaStyleMarkerElement(MOTORISTA_COMPLETED_BG, 'check', title ?? 'Embarque concluído', false);
+  }
+  return createViagemAtivaStyleMarkerElement(
+    MOTORISTA_STOP_TYPE_COLORS.passenger_pickup,
+    'person',
+    title ?? 'Embarque passageiro',
+    Boolean(ringHighlight),
+  );
 }
 
 function createRoteiroWaypointMarkerElement(wp: MapWaypoint): HTMLDivElement {
+  if (wp.completed) {
+    return createViagemAtivaStyleMarkerElement(MOTORISTA_COMPLETED_BG, 'check', wp.label, false);
+  }
   const bg = waypointMarkerBackground(wp);
   const kind = iconKindForStopType(wp.type);
-  return createViagemAtivaStyleMarkerElement(bg, kind, wp.label);
+  return createViagemAtivaStyleMarkerElement(bg, kind, wp.label, Boolean(wp.isNext));
 }
 
 /** Estilo claro minimal (referência de produto). */
@@ -275,6 +322,53 @@ function fitMapToCoordinates(map: any, mapboxgl: any, coordinates: number[][]) {
 
 function coordsNearlyEqual(a: MapCoord, b: MapCoord, eps = 1e-5): boolean {
   return Math.abs(a.lat - b.lat) < eps && Math.abs(a.lng - b.lng) < eps;
+}
+
+/** ~55 m em graus (evita ocultar entrega de encomenda que coincide com destino da viagem). */
+const COORDS_DEDupe_DEST_EPS = 0.0005;
+
+/**
+ * Ordem do roteiro para Directions (`sortOrder` / `sequence_order`).
+ * Não remove `package_dropoff` por proximidade ao destino final da viagem: no motorista são paradas distintas
+ * (entrega da encomenda vs `trip_destination` / fim do trajeto passageiro).
+ */
+function orderedRouteWaypoints(waypoints: MapWaypoint[] | undefined, _destination?: MapCoord): MapWaypoint[] {
+  return [...(waypoints || [])].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+}
+
+/** Pin explícito de embarque quando o MapView não o recebe como waypoint (ex.: trip_stops sem lat/lng). */
+function needsExplicitPassengerEmbarkMarker(
+  origin: MapCoord | undefined,
+  waypoints: MapWaypoint[] | undefined,
+): boolean {
+  if (!origin || !Number.isFinite(origin.lat) || !Number.isFinite(origin.lng)) return false;
+  const hasPassengerWp = (waypoints || []).some((wp) => {
+    const t = normalizeStopTypeForIcon(wp.type);
+    if (t !== 'passenger_pickup' && t !== 'passenger_dropoff') return false;
+    return coordsNearlyEqual(wp, origin, COORDS_DEDupe_DEST_EPS);
+  });
+  return !hasPassengerWp;
+}
+
+function embarkMarkerOffsetPx(
+  origin: MapCoord,
+  driverStart: MapCoord | undefined,
+  waypoints: MapWaypoint[] | undefined,
+): [number, number] {
+  if (!driverStart || !coordsNearlyEqual(origin, driverStart, COORDS_DEDupe_DEST_EPS)) return [0, 0];
+  const dupWp = (waypoints || []).some((wp) => coordsNearlyEqual(wp, origin, COORDS_DEDupe_DEST_EPS));
+  if (dupWp) return [0, 0];
+  return [26, 0];
+}
+
+function resolveNextNavTarget(
+  destination: MapCoord | undefined,
+  waypoints: MapWaypoint[] | undefined,
+): MapCoord | undefined {
+  const ordered = orderedRouteWaypoints(waypoints, destination);
+  const next = ordered.find((w) => !w.completed);
+  if (next) return next;
+  return destination;
 }
 
 /** Desloca o pin do carro em px quando partilha coordenadas com um waypoint (ex.: mesmo edifício). */
@@ -430,6 +524,42 @@ function removeTripLineLayer(map: any) {
   } catch { /* ignore */ }
 }
 
+function removeTripNavLineLayer(map: any) {
+  try {
+    if (map.getLayer(LINE_NAV_LAYER_ID)) map.removeLayer(LINE_NAV_LAYER_ID);
+    if (map.getSource(LINE_NAV_SOURCE_ID)) map.removeSource(LINE_NAV_SOURCE_ID);
+  } catch { /* ignore */ }
+}
+
+/** Trecho escuro motorista → próxima parada pendente (espelha polyline “driver” no ActiveTrip). */
+function setTripNavSegmentLayer(map: any, from: MapCoord, to: MapCoord) {
+  const geojson = {
+    type: 'Feature' as const,
+    properties: {},
+    geometry: {
+      type: 'LineString' as const,
+      coordinates: [[from.lng, from.lat], [to.lng, to.lat]],
+    },
+  };
+  if (map.getSource(LINE_NAV_SOURCE_ID)) {
+    (map.getSource(LINE_NAV_SOURCE_ID) as any).setData(geojson);
+    return;
+  }
+  map.addSource(LINE_NAV_SOURCE_ID, { type: 'geojson', data: geojson });
+  map.addLayer({
+    id: LINE_NAV_LAYER_ID,
+    type: 'line',
+    source: LINE_NAV_SOURCE_ID,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': MOTORISTA_DARK,
+      'line-width': 3,
+      'line-opacity': 0.88,
+      'line-dasharray': [1.8, 2.4],
+    },
+  });
+}
+
 function setTripRouteLayer(map: any, geometry: { type: 'LineString'; coordinates: number[][] }) {
   const geojson = {
     type: 'Feature' as const,
@@ -563,6 +693,7 @@ export default function MapView(props: MapViewProps) {
     followVehicle = false,
     followTarget,
     onFollowVehicleInterrupted,
+    tripCompleted = false,
     style,
   } = props;
   const followVehicleRef = useRef(followVehicle);
@@ -699,6 +830,12 @@ export default function MapView(props: MapViewProps) {
           markersRef.current.forEach((mk) => mk.remove());
           markersRef.current = [];
 
+          const routeWaypointsOrdered = orderedRouteWaypoints(waypoints, destination);
+          const routeWaypoints = routeWaypointsOrdered.map((wp) => ({
+            ...wp,
+            completed: !!(wp.completed || tripCompleted),
+            isNext: tripCompleted ? false : wp.isNext,
+          }));
           const routeOrigin =
             driverStart && Number.isFinite(driverStart.lat) && Number.isFinite(driverStart.lng)
               ? driverStart
@@ -706,19 +843,33 @@ export default function MapView(props: MapViewProps) {
           const carOffset = carMarkerOffsetPx(
             driverStart && Number.isFinite(driverStart.lat) && Number.isFinite(driverStart.lng) ? driverStart : undefined,
             origin,
-            waypoints,
+            routeWaypointsOrdered,
           );
+          const showPassengerPin = needsExplicitPassengerEmbarkMarker(origin, routeWaypointsOrdered);
+          const passengerOffset = origin
+            ? embarkMarkerOffsetPx(
+                origin,
+                driverStart && Number.isFinite(driverStart.lat) && Number.isFinite(driverStart.lng)
+                  ? driverStart
+                  : undefined,
+                routeWaypointsOrdered,
+              )
+            : ([0, 0] as [number, number]);
+          const nextStop = resolveNextNavTarget(destination, waypoints);
+          const nextIsEmbark =
+            Boolean(origin && nextStop && coordsNearlyEqual(nextStop, origin, COORDS_DEDupe_DEST_EPS));
+
           const fitMarkerPoints: Array<MapCoord | undefined> = [
             routeOrigin,
             origin,
             destination,
-            ...(waypoints || []),
+            ...routeWaypoints,
           ];
 
           if (routeOrigin) {
             markersRef.current.push(
               new (mapboxgl as any).Marker({
-                element: createTripOriginMarkerElement(),
+                element: createDriverStartMarkerElement(tripCompleted),
                 anchor: MAP_MARKER_ANCHOR,
                 offset: carOffset,
               })
@@ -726,17 +877,30 @@ export default function MapView(props: MapViewProps) {
                 .addTo(m),
             );
           }
+          if (showPassengerPin && origin) {
+            markersRef.current.push(
+              new (mapboxgl as any).Marker({
+                element: createPassengerEmbarkMarkerElement(undefined, nextIsEmbark && !tripCompleted, tripCompleted),
+                anchor: MAP_MARKER_ANCHOR,
+                offset: passengerOffset,
+              })
+                .setLngLat([origin.lng, origin.lat])
+                .addTo(m),
+            );
+          }
           if (destination) {
             markersRef.current.push(
-              new (mapboxgl as any).Marker({ element: createTripDestinationMarkerElement(), anchor: MAP_MARKER_ANCHOR })
+              new (mapboxgl as any).Marker({
+                element: createTripDestinationMarkerElement(tripCompleted),
+                anchor: MAP_MARKER_ANCHOR,
+              })
                 .setLngLat([destination.lng, destination.lat])
                 .addTo(m),
             );
           }
 
-          // Waypoint markers — só ícone por tipo (igual viagem ativa no motorista; sem letras no pin)
-          if (waypoints && waypoints.length > 0) {
-            waypoints.forEach((wp) => {
+          if (routeWaypoints.length > 0) {
+            routeWaypoints.forEach((wp) => {
               const el = createRoteiroWaypointMarkerElement(wp);
               markersRef.current.push(
                 new (mapboxgl as any).Marker({ element: el, anchor: MAP_MARKER_ANCHOR })
@@ -749,7 +913,8 @@ export default function MapView(props: MapViewProps) {
           if (connectPoints && routeOrigin && destination) {
             try {
               removeTripLineLayer(m);
-              const intermediateCoords = (waypoints || []).filter(
+              removeTripNavLineLayer(m);
+              const intermediateCoords = routeWaypoints.filter(
                 (wp) => wp.lat != null && wp.lng != null && Number.isFinite(wp.lat) && Number.isFinite(wp.lng),
               );
               let line = await fetchDirectionsLineString(routeOrigin, destination, token, directionsProfile, ac.signal, intermediateCoords);
@@ -774,10 +939,18 @@ export default function MapView(props: MapViewProps) {
                   );
                 }
               }
+              const navTo = !tripCompleted ? resolveNextNavTarget(destination, waypoints) : undefined;
+              if (
+                navTo &&
+                !coordsNearlyEqual(routeOrigin, navTo, COORDS_DEDupe_DEST_EPS)
+              ) {
+                setTripNavSegmentLayer(m, routeOrigin, navTo);
+              }
             } catch {
               if (cancelled || ac.signal.aborted || !mapRef.current) return;
               try {
                 removeTripLineLayer(m);
+                removeTripNavLineLayer(m);
                 addStraightFallbackLine(m, routeOrigin, destination);
                 if (!followVehicleRef.current) {
                   fitMapToRouteAndMarkers(
@@ -787,10 +960,15 @@ export default function MapView(props: MapViewProps) {
                     fitMarkerPoints,
                   );
                 }
+                const navTo = !tripCompleted ? resolveNextNavTarget(destination, waypoints) : undefined;
+                if (navTo && !coordsNearlyEqual(routeOrigin, navTo, COORDS_DEDupe_DEST_EPS)) {
+                  setTripNavSegmentLayer(m, routeOrigin, navTo);
+                }
               } catch { /* ignore */ }
             }
           } else {
             removeTripLineLayer(m);
+            removeTripNavLineLayer(m);
             if (routeOrigin && destination) {
               if (!followVehicleRef.current) {
                 fitMapToRouteAndMarkers(m, mapboxgl, null, fitMarkerPoints);
@@ -883,6 +1061,12 @@ export default function MapView(props: MapViewProps) {
     markersRef.current.forEach((mk) => mk.remove());
     markersRef.current = [];
 
+    const routeWaypointsOrdered = orderedRouteWaypoints(waypoints, destination);
+    const routeWaypoints = routeWaypointsOrdered.map((wp) => ({
+      ...wp,
+      completed: !!(wp.completed || tripCompleted),
+      isNext: tripCompleted ? false : wp.isNext,
+    }));
     const routeOrigin =
       driverStart && Number.isFinite(driverStart.lat) && Number.isFinite(driverStart.lng)
         ? driverStart
@@ -890,19 +1074,31 @@ export default function MapView(props: MapViewProps) {
     const carOffset = carMarkerOffsetPx(
       driverStart && Number.isFinite(driverStart.lat) && Number.isFinite(driverStart.lng) ? driverStart : undefined,
       origin,
-      waypoints,
+      routeWaypointsOrdered,
     );
+    const showPassengerPin = needsExplicitPassengerEmbarkMarker(origin, routeWaypointsOrdered);
+    const passengerOffset = origin
+      ? embarkMarkerOffsetPx(
+          origin,
+          driverStart && Number.isFinite(driverStart.lat) && Number.isFinite(driverStart.lng) ? driverStart : undefined,
+          routeWaypointsOrdered,
+        )
+      : ([0, 0] as [number, number]);
+    const nextStop = resolveNextNavTarget(destination, waypoints);
+    const nextIsEmbark =
+      Boolean(origin && nextStop && coordsNearlyEqual(nextStop, origin, COORDS_DEDupe_DEST_EPS));
+
     const fitMarkerPoints: Array<MapCoord | undefined> = [
       routeOrigin,
       origin,
       destination,
-      ...(waypoints || []),
+      ...routeWaypoints,
     ];
 
     if (routeOrigin) {
       markersRef.current.push(
         new mapboxgl.Marker({
-          element: createTripOriginMarkerElement(),
+          element: createDriverStartMarkerElement(tripCompleted),
           anchor: MAP_MARKER_ANCHOR,
           offset: carOffset,
         })
@@ -910,16 +1106,30 @@ export default function MapView(props: MapViewProps) {
           .addTo(m),
       );
     }
+    if (showPassengerPin && origin) {
+      markersRef.current.push(
+        new mapboxgl.Marker({
+          element: createPassengerEmbarkMarkerElement(undefined, nextIsEmbark && !tripCompleted, tripCompleted),
+          anchor: MAP_MARKER_ANCHOR,
+          offset: passengerOffset,
+        })
+          .setLngLat([origin.lng, origin.lat])
+          .addTo(m),
+      );
+    }
     if (destination) {
       markersRef.current.push(
-        new mapboxgl.Marker({ element: createTripDestinationMarkerElement(), anchor: MAP_MARKER_ANCHOR })
+        new mapboxgl.Marker({
+          element: createTripDestinationMarkerElement(tripCompleted),
+          anchor: MAP_MARKER_ANCHOR,
+        })
           .setLngLat([destination.lng, destination.lat])
           .addTo(m),
       );
     }
 
-    if (waypoints && waypoints.length > 0) {
-      waypoints.forEach((wp) => {
+    if (routeWaypoints.length > 0) {
+      routeWaypoints.forEach((wp) => {
         const el = createRoteiroWaypointMarkerElement(wp);
         markersRef.current.push(
           new mapboxgl.Marker({ element: el, anchor: MAP_MARKER_ANCHOR })
@@ -929,13 +1139,13 @@ export default function MapView(props: MapViewProps) {
       });
     }
 
-    // Atualizar rota com novos waypoints / partida do motorista
     if (connectPoints && routeOrigin && destination && token) {
-      const intermediateCoords = (waypoints || []).filter((wp) => wp.lat != null && wp.lng != null);
+      const intermediateCoords = routeWaypoints.filter((wp) => wp.lat != null && wp.lng != null);
       let cancelled = false;
       (async () => {
         try {
           removeTripLineLayer(m);
+          removeTripNavLineLayer(m);
           let line = await fetchDirectionsLineString(routeOrigin, destination, token, directionsProfile, undefined, intermediateCoords);
           if (cancelled || !mapRef.current) return;
           if (!line && directionsProfile === 'driving-traffic') {
@@ -958,13 +1168,21 @@ export default function MapView(props: MapViewProps) {
               );
             }
           }
+          const navTo = !tripCompleted ? resolveNextNavTarget(destination, waypoints) : undefined;
+          if (navTo && !coordsNearlyEqual(routeOrigin, navTo, COORDS_DEDupe_DEST_EPS)) {
+            setTripNavSegmentLayer(m, routeOrigin, navTo);
+          }
         } catch { /* ignore */ }
       })();
       return () => { cancelled = true; };
+    } else {
+      removeTripLineLayer(m);
+      removeTripNavLineLayer(m);
     }
   }, [
     mapStyleReady,
     waypoints,
+    tripCompleted,
     origin?.lat,
     origin?.lng,
     destination?.lat,

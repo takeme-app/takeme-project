@@ -1,7 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { getGoogleMapsApiKey } from '../lib/expoExtra';
 
-export type PlaceResolved = { formattedAddress: string; lat: number; lng: number };
+export type PlaceAddressComponent = { longName: string; shortName: string; types: string[] };
+
+export type PlaceResolved = {
+  formattedAddress: string;
+  lat: number;
+  lng: number;
+  placeId: string;
+  addressComponents?: PlaceAddressComponent[];
+};
 
 export interface PlacesAddressInputProps {
   value: string;
@@ -10,6 +18,14 @@ export interface PlacesAddressInputProps {
   onPlaceResolved: (p: PlaceResolved) => void;
   inputStyle: React.CSSProperties;
   placeholder?: string;
+  /** Quando true, exibe o endereço sem busca nem edição (viagem encerrada no painel). */
+  readOnly?: boolean;
+  /**
+   * Só aceita endereço escolhido na lista do Places (não mantém texto livre ao sair do campo).
+   * `committedFormattedAddress` deve refletir o último endereço confirmado pelo Places (ou vazio).
+   */
+  requireSelectionFromPlaces?: boolean;
+  committedFormattedAddress?: string;
 }
 
 let scriptPromise: Promise<void> | null = null;
@@ -64,8 +80,26 @@ function loadGooglePlacesScript(): Promise<void> {
 /**
  * Campo de endereço com sugestões Google Places (ou input simples se não houver chave).
  */
+function mapAddressComponents(raw: Array<{ long_name?: string; short_name?: string; types?: string[] }> | undefined): PlaceAddressComponent[] | undefined {
+  if (!raw?.length) return undefined;
+  return raw.map((c) => ({
+    longName: c.long_name ?? '',
+    shortName: c.short_name ?? '',
+    types: Array.isArray(c.types) ? c.types : [],
+  }));
+}
+
 export default function PlacesAddressInput(props: PlacesAddressInputProps) {
-  const { value, onChange, onPlaceResolved, inputStyle, placeholder } = props;
+  const {
+    value,
+    onChange,
+    onPlaceResolved,
+    inputStyle,
+    placeholder,
+    readOnly,
+    requireSelectionFromPlaces,
+    committedFormattedAddress = '',
+  } = props;
   const [open, setOpen] = useState(false);
   const [preds, setPreds] = useState<Array<{ description: string; place_id: string }>>([]);
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -130,24 +164,74 @@ export default function PlacesAddressInput(props: PlacesAddressInputProps) {
     svc.getDetails(
       {
         placeId,
-        fields: ['geometry', 'formatted_address'],
+        fields: ['geometry', 'formatted_address', 'place_id', 'address_components'],
         sessionToken: sessionTokenRef.current,
       },
-      (place: { geometry?: { location?: { lat(): number; lng(): number } }; formatted_address?: string } | null, status: string) => {
+      (
+        place: {
+          place_id?: string;
+          geometry?: { location?: { lat(): number; lng(): number } };
+          formatted_address?: string;
+          address_components?: Array<{ long_name?: string; short_name?: string; types?: string[] }>;
+        } | null,
+        status: string,
+      ) => {
         sessionTokenRef.current = new g.maps.places.AutocompleteSessionToken();
         if (status !== g.maps.places.PlacesServiceStatus.OK || !place?.geometry?.location) return;
         const lat = place.geometry.location.lat();
         const lng = place.geometry.location.lng();
         const addr = place.formatted_address || description;
+        const pid = place.place_id || placeId;
         onChange(addr);
-        onPlaceResolved({ formattedAddress: addr, lat, lng });
+        onPlaceResolved({
+          formattedAddress: addr,
+          lat,
+          lng,
+          placeId: pid,
+          addressComponents: mapAddressComponents(place.address_components),
+        });
         setOpen(false);
         setPreds([]);
       },
     );
   }, [onChange, onPlaceResolved]);
 
+  const enforceCommittedOnBlur = useCallback(() => {
+    if (!requireSelectionFromPlaces) return;
+    const committed = committedFormattedAddress ?? '';
+    if (value !== committed) onChange(committed);
+  }, [requireSelectionFromPlaces, committedFormattedAddress, value, onChange]);
+
+  const readOnlyStyle: React.CSSProperties = readOnly
+    ? { ...inputStyle, opacity: 0.92, cursor: 'default' }
+    : inputStyle;
+
+  if (readOnly) {
+    return React.createElement('input', {
+      type: 'text',
+      value,
+      readOnly: true,
+      title: 'Esta viagem não pode ser editada',
+      placeholder: placeholder || '',
+      style: readOnlyStyle,
+    });
+  }
+
   if (!hasKey) {
+    if (requireSelectionFromPlaces) {
+      return React.createElement('div', { style: { width: '100%' } },
+        React.createElement('input', {
+          type: 'text',
+          value: '',
+          readOnly: true,
+          disabled: true,
+          placeholder: placeholder || 'Buscar endereço…',
+          style: { ...inputStyle, opacity: 0.75, cursor: 'not-allowed' },
+        }),
+        React.createElement('div', {
+          style: { fontSize: 12, color: '#b53838', marginTop: 4, fontFamily: 'Inter, sans-serif' },
+        }, 'Configure EXPO_PUBLIC_GOOGLE_MAPS_API_KEY (Places) para selecionar endereços.'));
+    }
     return React.createElement('input', {
       type: 'text',
       value,
@@ -164,6 +248,7 @@ export default function PlacesAddressInput(props: PlacesAddressInputProps) {
       placeholder: placeholder || 'Buscar endereço…',
       onChange: (e: React.ChangeEvent<HTMLInputElement>) => onInputChange(e.target.value),
       onFocus: () => { if (preds.length) setOpen(true); },
+      onBlur: () => { enforceCommittedOnBlur(); },
       style: inputStyle,
       autoComplete: 'off',
     }),

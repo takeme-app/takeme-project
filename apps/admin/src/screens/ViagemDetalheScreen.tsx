@@ -97,6 +97,11 @@ export default function ViagemDetalheScreen() {
     return undefined;
   }, [tripStops, tripCoords.vehicleOrigin]);
 
+  /**
+   * “Acompanhar em tempo real”: o GPS do motorista existe só no dispositivo (expo-location no app).
+   * Não há coluna/tabela de posição persistida no Supabase neste projeto — o mapa centra na partida
+   * cadastrada (`driver_origin` / origem da viagem), não no movimento em tempo real do veículo.
+   */
   const followTargetCoord = useMemo(
     () => driverStartCoord ?? tripCoords.origin,
     [driverStartCoord, tripCoords.origin],
@@ -173,6 +178,8 @@ export default function ViagemDetalheScreen() {
     return stateObj?.trip ?? null;
   }, [detail, stateObj]);
 
+  const tripPainelConcluido = t?.status === 'concluído';
+
   /** Alinhado a `bookings.passenger_count`: titular + extras em `passenger_data`, sem duplicar nome do titular. */
   const passengerDisplayRows = useMemo(() => {
     type Row = { name: string; pData?: { name?: string; cpf?: string; bags?: number } };
@@ -238,9 +245,6 @@ export default function ViagemDetalheScreen() {
   const motoristaTripsLabel = `(${motoristaTrips} viagens)`;
   const motoristaRating = driverStats.rating != null ? String(driverStats.rating) : '—';
 
-  const headsetIconSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-    React.createElement('path', { d: 'M3 18v-6a9 9 0 0118 0v6', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-    React.createElement('path', { d: 'M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3v5zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3v5z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
   const starFilledSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
     React.createElement('path', { d: 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z', fill: '#F59E0B', stroke: '#F59E0B', strokeWidth: 1 }));
 
@@ -295,7 +299,7 @@ export default function ViagemDetalheScreen() {
     const cpfLabel = pData?.cpf ? `CPF: ${pData.cpf}` : '';
 
     return React.createElement('div', { key: `pax-${idx}-${name}`, style: { background: '#f6f6f6', borderRadius: 12, padding: 16, minWidth: 280, maxWidth: 330, flex: '1 1 280px', display: 'flex', flexDirection: 'column' as const, gap: 0 } },
-      React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, paddingBottom: 12, borderBottom: '1px solid #e2e2e2', justifyContent: 'space-between' } },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, paddingBottom: 12, borderBottom: '1px solid #e2e2e2' } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, flex: 1, minWidth: 0 } },
           React.createElement('div', { style: { width: 48, height: 48, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 600, color: '#767676', fontFamily: 'Inter, sans-serif' } },
             name.charAt(0).toUpperCase()),
@@ -304,13 +308,7 @@ export default function ViagemDetalheScreen() {
             cpfLabel ? React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif', marginTop: 2 } }, cpfLabel) : null,
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 } },
               starFilledSvg,
-              React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#545454', fontFamily: 'Inter, sans-serif' } }, '—')))),
-        // Chat button
-        React.createElement('button', {
-          type: 'button',
-          title: 'Chat com passageiro',
-          style: { width: 40, height: 40, borderRadius: '50%', background: '#ffefc2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: 'none', cursor: 'pointer' },
-        }, headsetIconSvg)),
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#545454', fontFamily: 'Inter, sans-serif' } }, '—'))))),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, paddingTop: 12 } },
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
           React.createElement('span', { style: { fontSize: 14, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Mala'),
@@ -393,6 +391,7 @@ export default function ViagemDetalheScreen() {
           followVehicle: acompanharTempoReal,
           followTarget: acompanharTempoReal && followTargetCoord ? followTargetCoord : undefined,
           onFollowVehicleInterrupted: onFollowVehicleInterrupted,
+          tripCompleted: tripPainelConcluido,
           style: { borderRadius: 0 },
         }),
         React.createElement('button', {
@@ -548,11 +547,7 @@ export default function ViagemDetalheScreen() {
         encField('Valor:', fmtBRL(s.amountCents)),
         encField('Remetente:', s.senderName),
         encField('Destinatário:', s.recipientName),
-        encField('Status:', shipmentStatusLabel(s.status)),
-        React.createElement('button', {
-          type: 'button', title: 'Chat',
-          style: { width: 40, height: 40, borderRadius: '50%', background: '#ffefc2', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-        }, headsetIconSvg)),
+        encField('Status:', shipmentStatusLabel(s.status))),
       React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
         encField('Recolha:', s.originAddress || '—', true),
         encField('Entrega:', s.destinationAddress || '—', true),
@@ -598,6 +593,7 @@ export default function ViagemDetalheScreen() {
             followVehicle: acompanharTempoReal,
             followTarget: acompanharTempoReal && followTargetCoord ? followTargetCoord : undefined,
             onFollowVehicleInterrupted: onFollowVehicleInterrupted,
+            tripCompleted: tripPainelConcluido,
             style: { borderRadius: 0, width: '100%', height: '100%' },
           })),
         React.createElement('button', {

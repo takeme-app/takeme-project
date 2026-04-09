@@ -32,7 +32,6 @@ import AtendimentoDetalheScreen from './screens/AtendimentoDetalheScreen';
 import ElaborarOrcamentoScreen from './screens/ElaborarOrcamentoScreen';
 import HistoricoViagensScreen from './screens/HistoricoViagensScreen';
 import ConfiguracoesScreen from './screens/ConfiguracoesScreen';
-import DependentesScreen from './screens/DependentesScreen';
 import NotificacoesScreen from './screens/NotificacoesScreen';
 import AvaliacoesScreen from './screens/AvaliacoesScreen';
 import AnalyticsScreen from './screens/AnalyticsScreen';
@@ -59,7 +58,6 @@ export const router = createBrowserRouter([
           { path: '/viagens/:id/editar', element: React.createElement(ViagemEditScreen) },
           { path: '/passageiros', element: React.createElement(PassageirosScreen) },
           { path: '/passageiros/:id', element: React.createElement(PassageiroDetalheScreen) },
-          { path: '/dependentes', element: React.createElement(DependentesScreen) },
           { path: '/motoristas', element: React.createElement(MotoristasScreen) },
           { path: '/motoristas/:id', element: React.createElement(MotoristaEditScreen) },
           { path: '/motoristas/:mid/viagem/:id', element: React.createElement(ViagemDetalheScreen) },
@@ -74,6 +72,7 @@ export const router = createBrowserRouter([
           { path: '/preparadores/:pid/viagem/:id', element: React.createElement(ViagemDetalheScreen) },
           { path: '/passageiros/:pid/viagem/:id', element: React.createElement(ViagemDetalheScreen) },
           { path: '/passageiros/:pid/viagem/:id/editar', element: React.createElement(ViagemEditScreen) },
+          { path: '/passageiros/:pid/viagem/:id/historico', element: React.createElement(HistoricoViagensScreen) },
           { path: '/promocoes', element: React.createElement(PromocoesScreen) },
           { path: '/promocoes/nova', element: React.createElement(PromocaoCreateScreen) },
           { path: '/pagamentos', element: React.createElement(PagamentosScreen) },

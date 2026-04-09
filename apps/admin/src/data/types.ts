@@ -122,6 +122,10 @@ export interface BookingDetailForAdmin {
   bagsCount: number;
   passengerData: Array<{ name?: string; cpf?: string; bags?: number }>;
   userId: string;
+  /** `profiles.avatar_url` do cliente da reserva (`user_id`). */
+  clientAvatarUrl: string | null;
+  /** `avatar_url` por CPF só dígitos — passageiros extras em `passenger_data` com CPF cadastrado. */
+  avatarUrlByPassengerCpfDigits: Record<string, string | null>;
   clientPhone: string | null;
   trunkOccupancyPct: number;
   /** `scheduled_trips.departure_at` em ISO (duração no resumo). */
@@ -148,6 +152,10 @@ export interface TripShipmentListItem {
   senderName: string;
   originAddress: string;
   destinationAddress: string;
+  originLat: number | null;
+  originLng: number | null;
+  destinationLat: number | null;
+  destinationLng: number | null;
   instructions: string | null;
   photoUrl: string | null;
   status: string;
@@ -455,7 +463,7 @@ export interface SurchargeCatalogRow {
   is_active: boolean;
 }
 
-// ── Payment Methods (read-only for admin) ───────────────────────────
+// ── Payment Methods (admin pode inserir via insertPassengerPaymentMethodAdmin + RLS) ──
 export interface PaymentMethodRow {
   id: string;
   user_id: string;

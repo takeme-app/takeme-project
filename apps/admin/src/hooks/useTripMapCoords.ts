@@ -42,6 +42,29 @@ export function useTripMapCoords(detail: BookingDetailForAdmin | null): [TripMap
           if (!origin) origin = vehicleOrigin;
           if (!destination) destination = parseCoordPair(data.destination_lat, data.destination_lng);
         }
+
+        // Fallback a paradas persistidas (booking por vezes sem lat/lng; destino final na linha trip_destination).
+        if (!cancelled && (!origin || !destination)) {
+          const { data: stopRows } = await (supabase as any)
+            .from('trip_stops')
+            .select('stop_type, lat, lng')
+            .eq('scheduled_trip_id', tripId);
+          const rows = (stopRows || []) as Array<{ stop_type?: string; lat?: unknown; lng?: unknown }>;
+          if (!origin) {
+            const pu = rows.find(
+              (r) =>
+                String(r.stop_type ?? '') === 'passenger_pickup' ||
+                String(r.stop_type ?? '') === 'passenger_dropoff',
+            );
+            const ll = pu ? parseCoordPair(pu.lat, pu.lng) : undefined;
+            if (ll) origin = ll;
+          }
+          if (!destination) {
+            const td = rows.find((r) => String(r.stop_type ?? '') === 'trip_destination');
+            const ll = td ? parseCoordPair(td.lat, td.lng) : undefined;
+            if (ll) destination = ll;
+          }
+        }
       }
 
       let next: TripMapCoords = { origin, destination, vehicleOrigin };
