@@ -1,5 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Platform } from 'react-native';
 import { getMapboxAccessToken } from '../lib/expoExtra';
+
+// CSS síncrono no web: `await import('.css')` no efeito pode aplicar depois dos markers,
+// o que deixa pins invisíveis ou fora do lugar até o próximo resize.
+if (Platform.OS === 'web') {
+  try {
+    require('mapbox-gl/dist/mapbox-gl.css');
+  } catch {
+    /* ignore */
+  }
+}
 
 // ── Types ────────────────────────────────────────────────────────────
 export interface MapCoord {
@@ -50,54 +61,143 @@ export interface MapViewProps {
 const LINE_SOURCE_ID = 'takeme-trip-line';
 const LINE_LAYER_ID = 'takeme-trip-line-layer';
 
+/** Mesma paleta do app motorista (TripDetail / Home / viagem ativa). */
+const MOTORISTA_GOLD = '#C9A227';
+const MOTORISTA_DARK = '#111827';
+
+/**
+ * Cores por `stop_type` — espelha `STOP_TYPE_COLORS` em `apps/motorista/src/hooks/useTripStops.ts`
+ * (inclui aliases `shipment_*` vindos do Postgres).
+ */
+const MOTORISTA_STOP_TYPE_COLORS: Record<string, string> = {
+  passenger_pickup: '#10B981',
+  passenger_dropoff: '#3B82F6',
+  package_pickup: '#F59E0B',
+  package_dropoff: '#6366F1',
+  shipment_pickup: '#F59E0B',
+  shipment_dropoff: '#6366F1',
+  excursion_stop: '#EC4899',
+  driver_origin: '#64748B',
+  trip_destination: '#1D4ED8',
+  base_dropoff: '#EA580C',
+};
+
+function waypointMarkerBackground(wp: MapWaypoint): string {
+  if (wp.color) return wp.color;
+  const t = wp.type || '';
+  return MOTORISTA_STOP_TYPE_COLORS[t] || '#64748B';
+}
+
+/**
+ * Mesma lógica de `StopKindMarkerIcon` em `ActiveTripScreen` (motorista): ícone por tipo de parada.
+ * Aliases `shipment_*` vêm do Postgres como no hook do motorista.
+ */
+function normalizeStopTypeForIcon(raw: string | undefined): string {
+  const t = String(raw ?? '').trim();
+  if (t === 'shipment_pickup') return 'package_pickup';
+  if (t === 'shipment_dropoff') return 'package_dropoff';
+  return t;
+}
+
+type StopIconKind = 'person' | 'package' | 'car' | 'flag' | 'business' | 'place';
+
+function iconKindForStopType(type: string | undefined): StopIconKind {
+  const t = normalizeStopTypeForIcon(type);
+  if (t === 'passenger_pickup' || t === 'passenger_dropoff') return 'person';
+  if (t === 'package_pickup' || t === 'package_dropoff') return 'package';
+  if (t === 'driver_origin') return 'car';
+  if (t === 'trip_destination') return 'flag';
+  if (t === 'base_dropoff') return 'business';
+  if (t === 'excursion_stop') return 'place';
+  return 'place';
+}
+
+/** Paths 24×24 (Material Icons) — equivalente aos `MaterialIcons` da viagem ativa. */
+const STOP_ICON_PATH: Record<StopIconKind, string> = {
+  person:
+    'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
+  package:
+    'M20 2H4c-1 0-2 .9-2 2v3.01c0 .72.43 1.34 1 1.69V20c0 1.1 1.1 2 2 2h14c.9 0 2-.9 2-2V8.7c.57-.35 1-.97 1-1.69V4c0-1.1-.9-2-2-2zm-5 12H9v-2h6v2zm5-7H4V4h16v3z',
+  car:
+    'M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16C5.67 16 5 15.33 5 14.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z',
+  flag: 'M14.4 6L14 4H5v17h2v-7h5.6l.4 2h7V6h-5.6z',
+  business:
+    'M12 7V3H2v18h20V7H12zM8 19H6v-2h2v2zm0-4H6v-2h2v2zm0-4H6V9h2v2zm0-4H6V5h2v2zm4 12h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V9h2v2zm0-4h-2V5h2v2zm8 12h-6v-2h2v-2h-2v-2h2v-2h-2V9h6v10zm-4-8h-2v2h2v-2zm0 4h-2v2h2v-2z',
+  place:
+    'M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z',
+};
+
+const VIAGEM_ATIVA_MARKER_PX = 40;
+/** Igual `anchor={{ x: 0.5, y: 0.5 }}` nos markers da viagem ativa no motorista. */
+const MAP_MARKER_ANCHOR = 'center' as const;
+
+/**
+ * Marcador estilo viagem ativa (motorista): círculo 40px, borda branca, só o ícone — sem letras A/B/C.
+ * Âncora `center` — igual `MapMarker` + `anchor={{ x: 0.5, y: 0.5 }}` no ActiveTrip.
+ */
+function createViagemAtivaStyleMarkerElement(
+  backgroundColor: string,
+  iconKind: StopIconKind,
+  title?: string,
+): HTMLDivElement {
+  const el = document.createElement('div');
+  const size = VIAGEM_ATIVA_MARKER_PX;
+  el.style.width = `${size}px`;
+  el.style.height = `${size}px`;
+  el.style.borderRadius = '50%';
+  el.style.background = backgroundColor;
+  el.style.border = '2px solid #ffffff';
+  el.style.boxShadow = '0 2px 10px rgba(0,0,0,0.25)';
+  el.style.boxSizing = 'border-box';
+  el.style.flexShrink = '0';
+  el.style.pointerEvents = 'none';
+  el.style.display = 'flex';
+  el.style.alignItems = 'center';
+  el.style.justifyContent = 'center';
+  el.style.overflow = 'hidden';
+  if (title) el.title = title;
+
+  const path = STOP_ICON_PATH[iconKind];
+  const iconPx = 20;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="${iconPx}" height="${iconPx}" fill="#ffffff" aria-hidden="true"><path d="${path}"/></svg>`;
+
+  el.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;">${svg}</div>`;
+  return el;
+}
+
+function createTripOriginMarkerElement(): HTMLDivElement {
+  return createViagemAtivaStyleMarkerElement(MOTORISTA_DARK, 'car', 'Partida');
+}
+
+function createTripDestinationMarkerElement(): HTMLDivElement {
+  return createViagemAtivaStyleMarkerElement(MOTORISTA_GOLD, 'flag', 'Destino');
+}
+
+function createRoteiroWaypointMarkerElement(wp: MapWaypoint): HTMLDivElement {
+  const bg = waypointMarkerBackground(wp);
+  const kind = iconKindForStopType(wp.type);
+  return createViagemAtivaStyleMarkerElement(bg, kind, wp.label);
+}
+
 /** Estilo claro minimal (referência de produto). */
 const MAPBOX_STYLE_LIGHT = 'mapbox://styles/mapbox/light-v11';
 const MAPBOX_STATIC_STYLE_LIGHT = 'mapbox/light-v11';
 
+/**
+ * No web, `mapbox://...` + token só em `mapboxgl.accessToken` por vezes resulta em mapa cinza
+ * (worker não propaga o token ao carregar o JSON do estilo). URL HTTPS com `access_token` corrige.
+ */
+function mapboxGlStyleUrl(token: string): string {
+  const t = token.trim();
+  if (!t) return MAPBOX_STYLE_LIGHT;
+  return `https://api.mapbox.com/styles/v1/${MAPBOX_STATIC_STYLE_LIGHT}?access_token=${encodeURIComponent(t)}`;
+}
+
 /** Padding na Static API: mais margem interna ajuda a não colar atribuição Mapbox na borda do PNG. */
 const STATIC_MAP_API_PADDING = 96;
 
-/** Fundo do container estático (próximo ao light-v11) para barras do `object-fit: contain` discretas. */
-const STATIC_MAP_LETTERBOX_BG = '#f4f3ef';
-
-/** SVG do carro (branco) para marcador de origem no GL. */
-const TRIP_ORIGIN_CAR_SVG =
-  '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-  '<path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z" fill="#ffffff"/>' +
-  '</svg>';
-
-function createTripOriginMarkerElement(): HTMLDivElement {
-  const el = document.createElement('div');
-  el.style.width = '40px';
-  el.style.height = '40px';
-  el.style.borderRadius = '50%';
-  el.style.background = '#0d0d0d';
-  el.style.display = 'flex';
-  el.style.alignItems = 'center';
-  el.style.justifyContent = 'center';
-  el.style.boxShadow = '0 2px 10px rgba(0,0,0,0.22)';
-  el.innerHTML = TRIP_ORIGIN_CAR_SVG;
-  return el;
-}
-
-function createTripDestinationMarkerElement(): HTMLDivElement {
-  const el = document.createElement('div');
-  el.style.width = '36px';
-  el.style.height = '36px';
-  el.style.borderRadius = '50%';
-  el.style.background = '#2563eb';
-  el.style.display = 'flex';
-  el.style.alignItems = 'center';
-  el.style.justifyContent = 'center';
-  el.style.boxShadow = '0 2px 10px rgba(37,99,235,0.35)';
-  const dot = document.createElement('div');
-  dot.style.width = '8px';
-  dot.style.height = '8px';
-  dot.style.borderRadius = '50%';
-  dot.style.background = '#ffffff';
-  el.appendChild(dot);
-  return el;
-}
+/** Fundo do container estático — próximo ao `mapContainer` do TripDetail no motorista. */
+const STATIC_MAP_LETTERBOX_BG = '#E5E7EB';
 
 // ── Directions API ─────────────────────────────────────────────────────
 async function fetchDirectionsPolyline(
@@ -179,8 +279,9 @@ function buildStaticUrl(origin?: MapCoord, destination?: MapCoord, width = 600, 
   const token = getMapboxAccessToken();
   if (!token) return '';
   const markers: string[] = [];
-  if (origin) markers.push(`pin-s-a+000000(${r6(origin.lng)},${r6(origin.lat)})`);
-  if (destination) markers.push(`pin-s-b+2563eb(${r6(destination.lng)},${r6(destination.lat)})`);
+  // Mesmas cores da Home do motorista: origem #111827, destino #C9A227.
+  if (origin) markers.push(`pin-s-a+111827(${r6(origin.lng)},${r6(origin.lat)})`);
+  if (destination) markers.push(`pin-s-b+c9a227(${r6(destination.lng)},${r6(destination.lat)})`);
 
   if (origin && destination) {
     // `auto` ajusta zoom/ângulo aos overlays (recomendado na doc). Bbox manual com
@@ -215,9 +316,9 @@ function buildStaticUrlWithRoutePolyline(
   if (!token) return '';
   const enc = encodeURIComponent(polyline);
   const pins =
-    `pin-s-a+000000(${r6(origin.lng)},${r6(origin.lat)}),` +
-    `pin-s-b+2563eb(${r6(destination.lng)},${r6(destination.lat)})`;
-  const pathOverlay = `path-3+000-1(${enc})`;
+    `pin-s-a+111827(${r6(origin.lng)},${r6(origin.lat)}),` +
+    `pin-s-b+c9a227(${r6(destination.lng)},${r6(destination.lat)})`;
+  const pathOverlay = `path-4+c9a227-1(${enc})`;
   const overlay = `${pathOverlay},${pins}`;
   const u =
     `https://api.mapbox.com/styles/v1/${MAPBOX_STATIC_STYLE_LIGHT}/static/${overlay}/auto/${width}x${height}@2x` +
@@ -290,8 +391,8 @@ function setTripRouteLayer(map: any, geometry: { type: 'LineString'; coordinates
     source: LINE_SOURCE_ID,
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
-      'line-color': '#0d0d0d',
-      'line-width': 3,
+      'line-color': MOTORISTA_GOLD,
+      'line-width': 4,
       'line-opacity': 1,
     },
   });
@@ -342,25 +443,15 @@ function mapFigmaChromeElements(): React.ReactNode[] {
   },
     React.createElement('div', {
       style: {
-        width: 27,
-        height: 27,
+        width: 22,
+        height: 22,
         borderRadius: '50%',
-        background: '#2563eb',
-        boxShadow: '0 2px 10px rgba(37, 99, 235, 0.45)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        background: MOTORISTA_GOLD,
+        border: '2px solid #ffffff',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
         flexShrink: 0,
       },
-    },
-      React.createElement('div', {
-        style: {
-          width: 7,
-          height: 7,
-          borderRadius: '50%',
-          background: '#ffffff',
-        },
-      })));
+    }));
 
   const actionBtn = React.createElement('button', {
     key: 'figma-drive',
@@ -375,7 +466,7 @@ function mapFigmaChromeElements(): React.ReactNode[] {
       height: 40,
       borderRadius: '50%',
       border: 'none',
-      background: '#0d0d0d',
+      background: MOTORISTA_DARK,
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -416,6 +507,7 @@ export default function MapView(props: MapViewProps) {
   const mapRef = useRef<any>(null);
   const mapboxglRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
+  const currentPositionMarkerRef = useRef<any>(null);
   const [mapboxLoaded, setMapboxLoaded] = useState(false);
   const [mapStyleReady, setMapStyleReady] = useState(false);
   const [glFailed, setGlFailed] = useState(false);
@@ -461,7 +553,9 @@ export default function MapView(props: MapViewProps) {
   ]);
 
   useEffect(() => {
-    if (staticMode || !token || glFailed) return;
+    // Não usar `glFailed` aqui: quando o GL falha, `glFailed` vira true, o efeito re-roda por estar
+    // nas deps, e o guard `|| glFailed` impedia qualquer nova tentativa. Só tentamos GL quando há token.
+    if (staticMode || !token) return;
 
     let cancelled = false;
     const ac = new AbortController();
@@ -469,21 +563,47 @@ export default function MapView(props: MapViewProps) {
 
     (async () => {
       try {
-        await import('mapbox-gl/dist/mapbox-gl.css');
-        const mapboxgl = await import('mapbox-gl');
+        const pack: any = await import('mapbox-gl');
         if (cancelled) return;
+        const mapboxgl = pack.default ?? pack;
+
+        // Sem container (ex.: ramo estático ainda montado) — não marcar GL como “carregado”.
+        if (!mapContainerRef.current) return;
+
+        /**
+         * Expo + Metro no web: o worker precisa de URL absoluta. Prioridade:
+         * 1) Mesma origem — ficheiro em `public/mapbox-gl-csp-worker.js` (script `postinstall` em apps/admin).
+         * 2) unpkg — pode falhar com CSP / rede corporativa.
+         * Sem worker válido o GL falha → `useStatic` → só `<img>` com pins A/B.
+         */
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          const origin = window.location.origin.replace(/\/$/, '');
+          (mapboxgl as unknown as { workerUrl?: string }).workerUrl =
+            `${origin}/mapbox-gl-csp-worker.js`;
+        }
+
         mapboxglRef.current = mapboxgl;
         setMapboxLoaded(true);
 
-        if (!mapContainerRef.current) return;
+        const accessToken = token.trim();
+        (mapboxgl as any).accessToken = accessToken;
+        const styleUrl =
+          Platform.OS === 'web' ? mapboxGlStyleUrl(accessToken) : MAPBOX_STYLE_LIGHT;
 
-        (mapboxgl as any).accessToken = token;
         const map = new (mapboxgl as any).Map({
           container: mapContainerRef.current,
-          style: MAPBOX_STYLE_LIGHT,
+          style: styleUrl,
           center: origin ? [origin.lng, origin.lat] : [-46.6333, -23.5505],
           zoom: 11,
           interactive: true,
+          failIfMajorPerformanceCaveat: false,
+        });
+
+        map.on('error', (e: { error?: Error }) => {
+          const err = e?.error;
+          if (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production' && err) {
+            console.warn('[MapView] Erro Mapbox GL:', err.message || err);
+          }
         });
 
         mapRef.current = map;
@@ -511,46 +631,25 @@ export default function MapView(props: MapViewProps) {
 
           if (origin) {
             markersRef.current.push(
-              new (mapboxgl as any).Marker({ element: createTripOriginMarkerElement(), anchor: 'center' })
+              new (mapboxgl as any).Marker({ element: createTripOriginMarkerElement(), anchor: MAP_MARKER_ANCHOR })
                 .setLngLat([origin.lng, origin.lat])
                 .addTo(m),
             );
           }
           if (destination) {
             markersRef.current.push(
-              new (mapboxgl as any).Marker({ element: createTripDestinationMarkerElement(), anchor: 'center' })
+              new (mapboxgl as any).Marker({ element: createTripDestinationMarkerElement(), anchor: MAP_MARKER_ANCHOR })
                 .setLngLat([destination.lng, destination.lat])
                 .addTo(m),
             );
           }
 
-          // Waypoint markers (passageiros, encomendas, bases)
+          // Waypoint markers — só ícone por tipo (igual viagem ativa no motorista; sem letras no pin)
           if (waypoints && waypoints.length > 0) {
-            waypoints.forEach((wp, idx) => {
-              const colors: Record<string, string> = {
-                passenger_pickup: '#3b82f6',
-                shipment_pickup: '#f59e0b',
-                base_dropoff: '#22c55e',
-              };
-              const bg = wp.color || colors[wp.type || ''] || '#767676';
-              const el = document.createElement('div');
-              el.style.width = '28px';
-              el.style.height = '28px';
-              el.style.borderRadius = '50%';
-              el.style.background = bg;
-              el.style.border = '3px solid #fff';
-              el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.2)';
-              el.style.display = 'flex';
-              el.style.alignItems = 'center';
-              el.style.justifyContent = 'center';
-              el.style.color = '#fff';
-              el.style.fontSize = '11px';
-              el.style.fontWeight = '700';
-              el.style.fontFamily = 'Inter, sans-serif';
-              el.textContent = String(idx + 1);
-              if (wp.label) el.title = wp.label;
+            waypoints.forEach((wp) => {
+              const el = createRoteiroWaypointMarkerElement(wp);
               markersRef.current.push(
-                new (mapboxgl as any).Marker({ element: el, anchor: 'center' })
+                new (mapboxgl as any).Marker({ element: el, anchor: MAP_MARKER_ANCHOR })
                   .setLngLat([wp.lng, wp.lat])
                   .addTo(m),
               );
@@ -560,7 +659,9 @@ export default function MapView(props: MapViewProps) {
           if (connectPoints && origin && destination) {
             try {
               removeTripLineLayer(m);
-              const intermediateCoords = (waypoints || []).filter(wp => wp.lat && wp.lng);
+              const intermediateCoords = (waypoints || []).filter(
+                (wp) => wp.lat != null && wp.lng != null && Number.isFinite(wp.lat) && Number.isFinite(wp.lng),
+              );
               let line = await fetchDirectionsLineString(origin, destination, token, directionsProfile, ac.signal, intermediateCoords);
               if (cancelled || !mapRef.current) return;
               if (!line && directionsProfile === 'driving-traffic') {
@@ -611,15 +712,31 @@ export default function MapView(props: MapViewProps) {
           void placeMarkersAndRoute();
         };
 
+        const afterIdleResize = () => {
+          map.once('idle', () => {
+            if (cancelled || !mapRef.current) return;
+            resizeMap();
+          });
+        };
+
         if (map.isStyleLoaded && map.isStyleLoaded()) {
           resizeMap();
           setMapStyleReady(true);
           void placeMarkersAndRoute();
+          afterIdleResize();
         } else {
-          map.once('load', onReady);
+          map.once('load', () => {
+            onReady();
+            afterIdleResize();
+          });
         }
-      } catch {
-        if (!cancelled) setGlFailed(true);
+      } catch (err) {
+        if (!cancelled) {
+          if (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') {
+            console.warn('[MapView] Mapbox GL indisponível — usando mapa estático (pins A/B).', err);
+          }
+          setGlFailed(true);
+        }
       }
     })();
 
@@ -631,6 +748,7 @@ export default function MapView(props: MapViewProps) {
       markersRef.current = [];
       setMapStyleReady(false);
       mapboxglRef.current = null;
+      setMapboxLoaded(false);
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -639,7 +757,6 @@ export default function MapView(props: MapViewProps) {
   }, [
     staticMode,
     token,
-    glFailed,
     connectPoints,
     directionsProfile,
     origin?.lat,
@@ -663,45 +780,24 @@ export default function MapView(props: MapViewProps) {
 
     if (origin) {
       markersRef.current.push(
-        new mapboxgl.Marker({ element: createTripOriginMarkerElement(), anchor: 'center' })
+        new mapboxgl.Marker({ element: createTripOriginMarkerElement(), anchor: MAP_MARKER_ANCHOR })
           .setLngLat([origin.lng, origin.lat])
           .addTo(m),
       );
     }
     if (destination) {
       markersRef.current.push(
-        new mapboxgl.Marker({ element: createTripDestinationMarkerElement(), anchor: 'center' })
+        new mapboxgl.Marker({ element: createTripDestinationMarkerElement(), anchor: MAP_MARKER_ANCHOR })
           .setLngLat([destination.lng, destination.lat])
           .addTo(m),
       );
     }
 
     if (waypoints && waypoints.length > 0) {
-      waypoints.forEach((wp, idx) => {
-        const colors: Record<string, string> = {
-          passenger_pickup: '#3b82f6',
-          shipment_pickup: '#f59e0b',
-          base_dropoff: '#22c55e',
-        };
-        const bg = wp.color || colors[wp.type || ''] || '#767676';
-        const el = document.createElement('div');
-        el.style.width = '28px';
-        el.style.height = '28px';
-        el.style.borderRadius = '50%';
-        el.style.background = bg;
-        el.style.border = '3px solid #fff';
-        el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.2)';
-        el.style.display = 'flex';
-        el.style.alignItems = 'center';
-        el.style.justifyContent = 'center';
-        el.style.color = '#fff';
-        el.style.fontSize = '11px';
-        el.style.fontWeight = '700';
-        el.style.fontFamily = 'Inter, sans-serif';
-        el.textContent = String(idx + 1);
-        if (wp.label) el.title = wp.label;
+      waypoints.forEach((wp) => {
+        const el = createRoteiroWaypointMarkerElement(wp);
         markersRef.current.push(
-          new mapboxgl.Marker({ element: el, anchor: 'center' })
+          new mapboxgl.Marker({ element: el, anchor: MAP_MARKER_ANCHOR })
             .setLngLat([wp.lng, wp.lat])
             .addTo(m),
         );
@@ -748,24 +844,57 @@ export default function MapView(props: MapViewProps) {
   ]);
 
   useEffect(() => {
+    try {
+      currentPositionMarkerRef.current?.remove();
+      currentPositionMarkerRef.current = null;
+    } catch { /* ignore */ }
+
     if (!mapRef.current || !currentPosition || !mapboxLoaded || !token) return;
 
-    const el = document.createElement('div');
-    el.style.width = '14px';
-    el.style.height = '14px';
-    el.style.borderRadius = '50%';
-    el.style.background = '#3b82f6';
-    el.style.border = '3px solid white';
-    el.style.boxShadow = '0 0 6px rgba(59,130,246,0.5)';
+    const wrap = document.createElement('div');
+    wrap.style.width = '48px';
+    wrap.style.height = '48px';
+    wrap.style.borderRadius = '50%';
+    wrap.style.background = 'rgba(17,24,39,0.15)';
+    wrap.style.display = 'flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.justifyContent = 'center';
+    wrap.style.pointerEvents = 'none';
+
+    const inner = document.createElement('div');
+    inner.style.width = '30px';
+    inner.style.height = '30px';
+    inner.style.borderRadius = '50%';
+    inner.style.background = MOTORISTA_DARK;
+    inner.style.border = '2.5px solid #ffffff';
+    inner.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+    inner.style.display = 'flex';
+    inner.style.alignItems = 'center';
+    inner.style.justifyContent = 'center';
+    inner.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+      '<path d="M8 5v14l11-7z" fill="#ffffff"/>' +
+      '</svg>';
+    wrap.appendChild(inner);
 
     (async () => {
       try {
-        const mapboxgl = await import('mapbox-gl');
-        new (mapboxgl as any).Marker({ element: el })
+        const pack: any = await import('mapbox-gl');
+        const mapboxgl = pack.default ?? pack;
+        if (!mapRef.current) return;
+        const mk = new (mapboxgl as any).Marker({ element: wrap, anchor: 'center' })
           .setLngLat([currentPosition.lng, currentPosition.lat])
           .addTo(mapRef.current);
+        currentPositionMarkerRef.current = mk;
       } catch { /* ignore */ }
     })();
+
+    return () => {
+      try {
+        currentPositionMarkerRef.current?.remove();
+        currentPositionMarkerRef.current = null;
+      } catch { /* ignore */ }
+    };
   }, [currentPosition?.lat, currentPosition?.lng, mapboxLoaded, token]);
 
   const noCoords = !origin && !destination;

@@ -240,6 +240,15 @@ export default function PassageiroDetalheScreen() {
     [filteredBookings],
   );
 
+  const recentPayments = useMemo(
+    () => bookings.filter((b) => b.amountCents && b.amountCents > 0).slice(0, 15),
+    [bookings],
+  );
+  const totalPago = useMemo(
+    () => recentPayments.reduce((sum, b) => sum + (b.amountCents || 0), 0),
+    [recentPayments],
+  );
+
   // ── Add payment method modal state ────────────────────────────────────
   const [payModalOpen, setPayModalOpen] = useState(false);
   const [payType, setPayType] = useState<'credito' | 'debito'>('credito');
@@ -367,9 +376,6 @@ export default function PassageiroDetalheScreen() {
           : React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', padding: '6px 12px', borderRadius: 999, background: '#e8f5e9', ...font } }, '✓ Validado'))));
 
   // ── Tab: Pagamentos ─────────────────────────────────────────────────
-  const recentPayments = useMemo(() => bookings.filter((b) => b.amountCents && b.amountCents > 0).slice(0, 15), [bookings]);
-  const totalPago = useMemo(() => recentPayments.reduce((sum, b) => sum + (b.amountCents || 0), 0), [recentPayments]);
-
   const pagamentosTab = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24 } },
     // Métodos de pagamento
     React.createElement('h2', { style: s.sectionTitle }, 'Métodos de pagamento'),

@@ -25,15 +25,18 @@ interface UseTripStopsReturn {
   regenerate: () => Promise<void>;
 }
 
-// ── Cores por tipo de parada ─────────────────────────────────────────
+// ── Cores por tipo de parada (igual `STOP_TYPE_COLORS` no app motorista) ──
 const STOP_COLORS: Record<string, string> = {
-  driver_origin: '#0d0d0d',
-  passenger_pickup: '#3b82f6',
-  passenger_dropoff: '#1d4ed8',
-  shipment_pickup: '#f59e0b',
-  shipment_dropoff: '#d97706',
-  base_dropoff: '#22c55e',
-  trip_destination: '#ef4444',
+  passenger_pickup: '#10B981',
+  passenger_dropoff: '#3B82F6',
+  package_pickup: '#F59E0B',
+  package_dropoff: '#6366F1',
+  shipment_pickup: '#F59E0B',
+  shipment_dropoff: '#6366F1',
+  excursion_stop: '#EC4899',
+  driver_origin: '#64748B',
+  trip_destination: '#1D4ED8',
+  base_dropoff: '#EA580C',
 };
 
 // ── Hook ─────────────────────────────────────────────────────────────
