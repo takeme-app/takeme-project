@@ -35,7 +35,7 @@ export default function HomeScreen() {
   const [pagCounts, setPagCounts] = useState<PagamentoCounts | null>(null);
   const [pagByCategory, setPagByCategory] = useState<PagamentoCountsByCategory | null>(null);
   const [approvedExpenseCents, setApprovedExpenseCents] = useState(0);
-  const [pending, setPending] = useState<PendingCounts>({ pendingWorkers: 0, pendingDependents: 0, pendingPayouts: 0 });
+  const [pending, setPending] = useState<PendingCounts>({ pendingWorkers: 0, pendingPayouts: 0 });
 
   // Dados carregados UMA vez — filtros aplicados localmente (instantâneo)
   const [allViagens, setAllViagens] = useState<import('../data/types').ViagemListItem[]>([]);
@@ -361,7 +361,7 @@ export default function HomeScreen() {
     ? React.createElement('div', { style: webStyles.modalOverlay, onClick: () => setFilterModalOpen(false), role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'home-filtro-modal-titulo' }, filterModalInicioContent)
     : null;
 
-  const hasPending = pending.pendingWorkers > 0 || pending.pendingDependents > 0 || pending.pendingPayouts > 0;
+  const hasPending = pending.pendingWorkers > 0 || pending.pendingPayouts > 0;
   const pendingSection = hasPending ? React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%', padding: '16px 20px', background: '#fffbeb', border: '1px solid #fbbf24', borderRadius: 16, boxSizing: 'border-box' as const },
   },
@@ -372,11 +372,6 @@ export default function HomeScreen() {
       },
         React.createElement('span', { style: { width: 28, height: 28, borderRadius: '50%', background: '#fee59a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: '#92400e', ...font } }, String(pending.pendingWorkers)),
         React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, 'Motoristas aguardando aprovação')) : null,
-      pending.pendingDependents > 0 ? React.createElement('div', {
-        style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', background: '#fff', borderRadius: 12, border: '1px solid #e2e2e2' },
-      },
-        React.createElement('span', { style: { width: 28, height: 28, borderRadius: '50%', background: '#fee59a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: '#92400e', ...font } }, String(pending.pendingDependents)),
-        React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, 'Dependentes para validar')) : null,
       pending.pendingPayouts > 0 ? React.createElement('div', {
         style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', background: '#fff', borderRadius: 12, border: '1px solid #e2e2e2' },
       },

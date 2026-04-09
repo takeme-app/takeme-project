@@ -2,7 +2,7 @@
  * MotoristaEditScreen — Editar motorista conforme Figma 830-10503.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { webStyles, arrowBackSvg } from '../styles/webStyles';
 import { supabase } from '../lib/supabase';
@@ -67,7 +67,15 @@ const rwField = (
       style: inputShell,
     }));
 
-const docRow = (name: string) =>
+function documentDownloadHref(raw: string | undefined | null, resolved: string | null): string | null {
+  const t = typeof raw === 'string' ? raw.trim() : '';
+  if (!t) return null;
+  if (resolved) return resolved;
+  if (/^https?:\/\//i.test(t)) return t;
+  return null;
+}
+
+const docRow = (name: string, showDownloadIcon = true) =>
   React.createElement('div', {
     style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #f1f1f1' },
   },
@@ -76,8 +84,14 @@ const docRow = (name: string) =>
         React.createElement('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z', stroke: '#767676', strokeWidth: 2 }),
         React.createElement('path', { d: 'M14 2v6h6', stroke: '#767676', strokeWidth: 2 })),
       React.createElement('span', { style: { fontSize: 13, color: '#0d0d0d', ...font } }, name)),
-    React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { cursor: 'pointer' } },
-      React.createElement('path', { d: 'M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })));
+    showDownloadIcon
+      ? React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { cursor: 'pointer' } },
+        React.createElement('path', { d: 'M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))
+      : React.createElement('span', { style: { width: 16, height: 16 } }));
+
+const MAX_NEW_VEHICLE_PHOTOS = 4;
+const NV_DOC_MAX_BYTES = 10 * 1024 * 1024;
+const NV_PHOTO_MAX_BYTES = 20 * 1024 * 1024;
 
 export default function MotoristaEditScreen() {
   const navigate = useNavigate();
@@ -101,6 +115,22 @@ export default function MotoristaEditScreen() {
   const [newRoutePreco, setNewRoutePreco] = useState('');
   const [routeActionLoading, setRouteActionLoading] = useState(false);
   const [newRouteGeoError, setNewRouteGeoError] = useState<string | null>(null);
+  const [deleteRouteDraft, setDeleteRouteDraft] = useState<{ id: string; origin: string; destination: string } | null>(null);
+  const [deleteRouteConsent, setDeleteRouteConsent] = useState(false);
+  const [deleteRouteLoading, setDeleteRouteLoading] = useState(false);
+  const [newVehicleOpen, setNewVehicleOpen] = useState(false);
+  const [nvModel, setNvModel] = useState('');
+  const [nvYear, setNvYear] = useState('');
+  const [nvRenavam, setNvRenavam] = useState('');
+  const [nvPlate, setNvPlate] = useState('');
+  const [nvPassengerCapacity, setNvPassengerCapacity] = useState('');
+  const [nvUseType, setNvUseType] = useState<'principal' | 'reserva'>('principal');
+  const [nvDocFile, setNvDocFile] = useState<File | null>(null);
+  const [nvPhotoFiles, setNvPhotoFiles] = useState<File[]>([]);
+  const [nvSaving, setNvSaving] = useState(false);
+  const [nvError, setNvError] = useState<string | null>(null);
+  const nvDocInputRef = useRef<HTMLInputElement>(null);
+  const nvPhotoInputRef = useRef<HTMLInputElement>(null);
   const [vehiclePhotoDisplayUrls, setVehiclePhotoDisplayUrls] = useState<string[]>([]);
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -115,6 +145,14 @@ export default function MotoristaEditScreen() {
   const [editPix, setEditPix] = useState('');
   const [editHasOwnVehicle, setEditHasOwnVehicle] = useState(false);
   const [reviewerName, setReviewerName] = useState<string | null>(null);
+  /** worker_profiles / vehicles podem guardar path do bucket ou URL pública; href cru quebra para paths. */
+  const [resolvedDocHrefs, setResolvedDocHrefs] = useState<{
+    cnhFront: string | null;
+    cnhBack: string | null;
+    background: string | null;
+    vehicle: string | null;
+  }>({ cnhFront: null, cnhBack: null, background: null, vehicle: null });
+  const [docLinksLoading, setDocLinksLoading] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -280,6 +318,44 @@ export default function MotoristaEditScreen() {
   }, [vehicles]);
 
   useEffect(() => {
+    let cancelled = false;
+    const cnhF = (worker?.cnh_document_url as string | undefined)?.trim();
+    const cnhB = (worker?.cnh_document_back_url as string | undefined)?.trim();
+    const bg = (worker?.background_check_url as string | undefined)?.trim();
+    const vehDoc = (vehicles[0]?.vehicle_document_url as string | undefined)?.trim();
+    if (!cnhF && !cnhB && !bg && !vehDoc) {
+      setResolvedDocHrefs({ cnhFront: null, cnhBack: null, background: null, vehicle: null });
+      setDocLinksLoading(false);
+      return;
+    }
+    setDocLinksLoading(true);
+    (async () => {
+      const [rF, rB, rBg, rV] = await Promise.all([
+        cnhF ? resolveStorageDisplayUrl(supabase, cnhF) : Promise.resolve(null),
+        cnhB ? resolveStorageDisplayUrl(supabase, cnhB) : Promise.resolve(null),
+        bg ? resolveStorageDisplayUrl(supabase, bg) : Promise.resolve(null),
+        vehDoc ? resolveStorageDisplayUrl(supabase, vehDoc) : Promise.resolve(null),
+      ]);
+      if (!cancelled) {
+        setResolvedDocHrefs({
+          cnhFront: rF,
+          cnhBack: rB,
+          background: rBg,
+          vehicle: rV,
+        });
+        setDocLinksLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [
+    id,
+    worker?.cnh_document_url,
+    worker?.cnh_document_back_url,
+    worker?.background_check_url,
+    vehicles[0]?.vehicle_document_url,
+  ]);
+
+  useEffect(() => {
     const rid = worker?.reviewed_by as string | undefined;
     if (!rid) {
       setReviewerName(null);
@@ -292,6 +368,153 @@ export default function MotoristaEditScreen() {
     })();
     return () => { cancelled = true; };
   }, [worker?.reviewed_by]);
+
+  const nvPhotoUrls = useMemo(
+    () => nvPhotoFiles.map((f) => URL.createObjectURL(f)),
+    [nvPhotoFiles],
+  );
+  useEffect(() => {
+    return () => {
+      nvPhotoUrls.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [nvPhotoUrls]);
+
+  const closeNewVehicleModal = useCallback(() => {
+    setNewVehicleOpen(false);
+    setNvModel('');
+    setNvYear('');
+    setNvRenavam('');
+    setNvPlate('');
+    setNvPassengerCapacity('');
+    setNvUseType('principal');
+    setNvDocFile(null);
+    setNvPhotoFiles([]);
+    setNvSaving(false);
+    setNvError(null);
+  }, []);
+
+  const saveNewVehicle = useCallback(async () => {
+    if (!id) return;
+    setNvError(null);
+    if (!nvModel.trim()) {
+      setNvError('Informe o modelo do veículo.');
+      return;
+    }
+    const yearNum = parseInt(nvYear, 10);
+    if (!yearNum || yearNum < 1950 || yearNum > new Date().getFullYear() + 1) {
+      setNvError('Informe um ano válido.');
+      return;
+    }
+    if (!nvPlate.trim()) {
+      setNvError('Informe a placa.');
+      return;
+    }
+    const capNum = parseInt(nvPassengerCapacity, 10);
+    if (!capNum || capNum < 1 || capNum > 5) {
+      setNvError('Capacidade deve ser entre 1 e 5.');
+      return;
+    }
+    setNvSaving(true);
+    let createdVehicleId: string | null = null;
+    try {
+      const db = supabase as any;
+      // Mesmo fluxo conceitual do VehicleFormScreen (motorista): grava o veículo, obtém id, sobe arquivos em
+      // `{worker_id}/{vehicle_id}/…` e atualiza URLs — evita pasta `admin-*` e coincide com paths que o app já usa.
+      const baseRow = {
+        worker_id: id,
+        model: nvModel.trim(),
+        year: yearNum,
+        renavam: nvRenavam.trim() || null,
+        plate: nvPlate.trim().toUpperCase(),
+        passenger_capacity: capNum,
+        use_type: nvUseType,
+        vehicle_document_url: null as string | null,
+        vehicle_photos_urls: null as string[] | null,
+        status: 'pending',
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data: inserted, error: insErr } = await db.from('vehicles').insert(baseRow).select('id').single();
+      if (insErr) throw insErr;
+      const vid = inserted?.id as string | undefined;
+      if (!vid) throw new Error('Veículo criado sem id.');
+      createdVehicleId = vid;
+
+      let docUrl: string | null = null;
+      if (nvDocFile) {
+        const ext = nvDocFile.name.split('.').pop() || 'pdf';
+        const path = `${id}/${vid}/document.${ext}`;
+        const { error: upErr } = await db.storage.from('vehicles').upload(path, nvDocFile, {
+          contentType: nvDocFile.type || 'application/octet-stream',
+          upsert: true,
+        });
+        if (upErr) throw upErr;
+        const { data: pub } = db.storage.from('vehicles').getPublicUrl(path);
+        docUrl = pub?.publicUrl ? `${pub.publicUrl}?t=${Date.now()}` : null;
+      }
+
+      const photoUrls: string[] = [];
+      for (let i = 0; i < nvPhotoFiles.length; i++) {
+        const f = nvPhotoFiles[i];
+        // VehicleFormScreen: `photo_${idx}.jpg` + JPEG (ImagePicker). No web aceitamos png/webp com extensão e MIME coerentes.
+        const ext =
+          f.type === 'image/png' ? 'png' : f.type === 'image/webp' ? 'webp' : 'jpg';
+        const path = `${id}/${vid}/photo_${i}.${ext}`;
+        const contentType = f.type.startsWith('image/') ? f.type : 'image/jpeg';
+        const { error: upErr } = await db.storage.from('vehicles').upload(path, f, {
+          contentType,
+          upsert: true,
+        });
+        if (upErr) throw upErr;
+        const { data: pub } = db.storage.from('vehicles').getPublicUrl(path);
+        if (pub?.publicUrl) photoUrls.push(`${pub.publicUrl}?t=${Date.now()}`);
+      }
+
+      if (docUrl != null || photoUrls.length > 0) {
+        const { error: updErr } = await db
+          .from('vehicles')
+          .update({
+            ...(docUrl != null ? { vehicle_document_url: docUrl } : {}),
+            ...(photoUrls.length > 0 ? { vehicle_photos_urls: photoUrls } : {}),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', vid);
+        if (updErr) throw updErr;
+      }
+
+      const { data: vData } = await db
+        .from('vehicles')
+        .select('*')
+        .eq('worker_id', id)
+        .order('is_active', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: true });
+      setVehicles(vData || []);
+      closeNewVehicleModal();
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'message' in e
+          ? String((e as { message?: string }).message)
+          : String(e);
+      setNvError(msg || 'Não foi possível salvar o veículo.');
+      if (createdVehicleId) {
+        await (supabase as any).from('vehicles').delete().eq('id', createdVehicleId);
+      }
+    } finally {
+      setNvSaving(false);
+    }
+  }, [
+    id,
+    nvModel,
+    nvYear,
+    nvRenavam,
+    nvPlate,
+    nvPassengerCapacity,
+    nvUseType,
+    nvDocFile,
+    nvPhotoFiles,
+    closeNewVehicleModal,
+  ]);
 
   const handleApprove = useCallback(async () => {
     if (!worker?.id) return;
@@ -392,8 +615,6 @@ export default function MotoristaEditScreen() {
   const pix = worker?.pix_key || '—';
   const possuiVeiculo = worker?.has_own_vehicle;
   const workerStatus = worker?.status || 'pending';
-  const primaryVehicleDocUrl = vehicles[0]?.vehicle_document_url as string | undefined;
-
   // ── Breadcrumb (Figma 830:10506 — 12px semibold) ───────────────────────
   const breadcrumbCurrent = isEditMode ? 'Editar dados' : 'Visualização';
   const breadcrumb = React.createElement('div', {
@@ -567,32 +788,41 @@ export default function MotoristaEditScreen() {
     // Documentos
     React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: '8px 0 0', ...font } }, 'Documentos'),
     React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, 'CNH (frente)'),
-    worker?.cnh_document_url
-      ? React.createElement('a', { href: worker.cnh_document_url, target: '_blank', rel: 'noopener noreferrer', style: { textDecoration: 'none', color: 'inherit' } }, docRow('documento_cnh_frente.pdf'))
-      : docRow('Nenhum documento'),
+    (() => {
+      const raw = worker?.cnh_document_url as string | undefined;
+      const href = documentDownloadHref(raw, resolvedDocHrefs.cnhFront);
+      if (!raw?.trim()) return docRow('Nenhum documento', false);
+      if (docLinksLoading && !href) return docRow('Gerando link para download…', false);
+      if (!href) return docRow('Arquivo indisponível (confira permissões de storage)', false);
+      return React.createElement('a', { href, target: '_blank', rel: 'noopener noreferrer', style: { textDecoration: 'none', color: 'inherit' } }, docRow('documento_cnh_frente.pdf'));
+    })(),
     React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font, marginTop: 8 } }, 'CNH (verso)'),
-    worker?.cnh_document_back_url
-      ? React.createElement('a', { href: worker.cnh_document_back_url, target: '_blank', rel: 'noopener noreferrer', style: { textDecoration: 'none', color: 'inherit' } }, docRow('documento_cnh_verso.pdf'))
-      : docRow('Nenhum documento'),
+    (() => {
+      const raw = worker?.cnh_document_back_url as string | undefined;
+      const href = documentDownloadHref(raw, resolvedDocHrefs.cnhBack);
+      if (!raw?.trim()) return docRow('Nenhum documento', false);
+      if (docLinksLoading && !href) return docRow('Gerando link para download…', false);
+      if (!href) return docRow('Arquivo indisponível (confira permissões de storage)', false);
+      return React.createElement('a', { href, target: '_blank', rel: 'noopener noreferrer', style: { textDecoration: 'none', color: 'inherit' } }, docRow('documento_cnh_verso.pdf'));
+    })(),
     React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font, marginTop: 8 } }, 'Antecedentes criminais'),
-    worker?.background_check_url
-      ? React.createElement('a', { href: worker.background_check_url, target: '_blank', rel: 'noopener noreferrer', style: { textDecoration: 'none', color: 'inherit' } }, docRow('antecedentes_criminais.pdf'))
-      : docRow('Nenhum documento'),
+    (() => {
+      const raw = worker?.background_check_url as string | undefined;
+      const href = documentDownloadHref(raw, resolvedDocHrefs.background);
+      if (!raw?.trim()) return docRow('Nenhum documento', false);
+      if (docLinksLoading && !href) return docRow('Gerando link para download…', false);
+      if (!href) return docRow('Arquivo indisponível (confira permissões de storage)', false);
+      return React.createElement('a', { href, target: '_blank', rel: 'noopener noreferrer', style: { textDecoration: 'none', color: 'inherit' } }, docRow('antecedentes_criminais.pdf'));
+    })(),
     React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font, marginTop: 8 } }, 'Documento do veículo'),
-    primaryVehicleDocUrl
-      ? React.createElement('a', { href: primaryVehicleDocUrl, target: '_blank', rel: 'noopener noreferrer', style: { textDecoration: 'none', color: 'inherit' } }, docRow('documento_de_veiculo.pdf'))
-      : docRow('Nenhum documento'),
-    isEditMode
-      ? React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: 8 } },
-          React.createElement('button', {
-            type: 'button',
-            onClick: () => { /* OCR/extração — placeholder alinhado ao Figma */ },
-            style: {
-              height: 44, padding: '0 24px', borderRadius: 999, border: '1px solid #e2e2e2',
-              background: '#fff', fontSize: 14, fontWeight: 600, color: '#0d0d0d', cursor: 'pointer', ...font,
-            },
-          }, 'Extrair dados'))
-      : null);
+    (() => {
+      const raw = vehicles[0]?.vehicle_document_url as string | undefined;
+      const href = documentDownloadHref(raw, resolvedDocHrefs.vehicle);
+      if (!raw?.trim()) return docRow('Nenhum documento', false);
+      if (docLinksLoading && !href) return docRow('Gerando link para download…', false);
+      if (!href) return docRow('Arquivo indisponível (confira permissões de storage)', false);
+      return React.createElement('a', { href, target: '_blank', rel: 'noopener noreferrer', style: { textDecoration: 'none', color: 'inherit' } }, docRow('documento_de_veiculo.pdf'));
+    })());
 
   const dadosSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 16, paddingBottom: 32, borderBottom: '1px solid #e2e2e2', width: '100%', boxSizing: 'border-box' as const },
@@ -688,10 +918,14 @@ export default function MotoristaEditScreen() {
         isEditMode
           ? React.createElement('button', {
               type: 'button',
-              onClick: async () => {
-                if (!confirm('Remover esta rota?')) return;
-                await deleteWorkerRoute(r.id);
-                setRoutes((prev: any[]) => prev.filter((rt: any) => rt.id !== r.id));
+              'aria-label': 'Remover rota',
+              onClick: () => {
+                setDeleteRouteConsent(false);
+                setDeleteRouteDraft({
+                  id: r.id,
+                  origin: r.origin_address || '?',
+                  destination: r.destination_address || '?',
+                });
               },
               style: {
                 width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: 'pointer',
@@ -843,6 +1077,427 @@ export default function MotoristaEditScreen() {
           }, routeActionLoading ? 'Salvando...' : 'Salvar'))))
     : null;
 
+  const closeDeleteRouteModal = () => {
+    setDeleteRouteDraft(null);
+    setDeleteRouteConsent(false);
+    setDeleteRouteLoading(false);
+  };
+
+  const deleteRouteModal = deleteRouteDraft
+    ? React.createElement('div', {
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-labelledby': 'delete-route-dialog-title',
+        style: {
+          position: 'fixed' as const,
+          inset: 0,
+          background: 'rgba(0,0,0,0.4)',
+          zIndex: 1001,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+          boxSizing: 'border-box' as const,
+        },
+        onClick: closeDeleteRouteModal,
+      },
+      React.createElement('div', {
+        style: {
+          background: '#fff',
+          borderRadius: 16,
+          padding: 24,
+          width: '100%',
+          maxWidth: 440,
+          display: 'flex',
+          flexDirection: 'column' as const,
+          gap: 16,
+          boxSizing: 'border-box' as const,
+        },
+        onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      },
+        React.createElement('h2', {
+          id: 'delete-route-dialog-title',
+          style: { fontSize: 18, fontWeight: 700, margin: 0, color: '#0d0d0d', ...font },
+        }, 'Remover rota'),
+        React.createElement('p', { style: { fontSize: 14, color: '#3a3a3a', margin: 0, lineHeight: 1.5, ...font } },
+          'Esta rota será excluída permanentemente do cadastro do motorista. Passageiros não poderão mais ver nem solicitar viagens com este trecho.'),
+        React.createElement('div', {
+          style: {
+            fontSize: 14,
+            fontWeight: 600,
+            color: '#0d0d0d',
+            lineHeight: 1.45,
+            padding: '12px 14px',
+            background: '#f6f6f6',
+            borderRadius: 8,
+            ...font,
+          },
+        },
+          React.createElement('span', { style: { color: '#767676', fontWeight: 500 } }, 'Trecho: '),
+          `${deleteRouteDraft.origin} → ${deleteRouteDraft.destination}`),
+        React.createElement('label', {
+          style: {
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            cursor: 'pointer',
+            fontSize: 14,
+            color: '#0d0d0d',
+            lineHeight: 1.45,
+            ...font,
+          },
+        },
+          React.createElement('input', {
+            type: 'checkbox',
+            checked: deleteRouteConsent,
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDeleteRouteConsent(e.target.checked),
+            style: { width: 18, height: 18, marginTop: 2, flexShrink: 0, cursor: 'pointer' },
+          }),
+          React.createElement('span', null, 'Li e entendo que esta ação não pode ser desfeita.')),
+        React.createElement('div', { style: { display: 'flex', gap: 8 } },
+          React.createElement('button', {
+            type: 'button',
+            onClick: closeDeleteRouteModal,
+            disabled: deleteRouteLoading,
+            style: {
+              flex: 1,
+              height: 44,
+              borderRadius: 8,
+              border: '1px solid #e2e2e2',
+              background: '#fff',
+              fontSize: 14,
+              fontWeight: 500,
+              cursor: deleteRouteLoading ? 'wait' : 'pointer',
+              opacity: deleteRouteLoading ? 0.7 : 1,
+              ...font,
+            },
+          }, 'Cancelar'),
+          React.createElement('button', {
+            type: 'button',
+            disabled: !deleteRouteConsent || deleteRouteLoading,
+            onClick: async () => {
+              if (!deleteRouteDraft || !deleteRouteConsent) return;
+              const rid = deleteRouteDraft.id;
+              setDeleteRouteLoading(true);
+              try {
+                await deleteWorkerRoute(rid);
+                setRoutes((prev: any[]) => prev.filter((rt: any) => rt.id !== rid));
+                closeDeleteRouteModal();
+              } catch {
+                setDeleteRouteLoading(false);
+              }
+            },
+            style: {
+              flex: 1,
+              height: 44,
+              borderRadius: 8,
+              border: 'none',
+              background: '#b53838',
+              color: '#fff',
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: !deleteRouteConsent || deleteRouteLoading ? 'not-allowed' : 'pointer',
+              opacity: !deleteRouteConsent || deleteRouteLoading ? 0.5 : 1,
+              ...font,
+            },
+          }, deleteRouteLoading ? 'Removendo…' : 'Remover rota'))))
+    : null;
+
+  const nvLbl: React.CSSProperties = { fontSize: 13, fontWeight: 500, color: '#767676', ...font };
+  const nvModalTextField = (
+    label: string,
+    value: string,
+    onChange: (v: string) => void,
+    opts?: { inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode']; maxLength?: number },
+  ) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+      React.createElement('label', { style: nvLbl }, label),
+      React.createElement('input', {
+        type: 'text',
+        inputMode: opts?.inputMode,
+        maxLength: opts?.maxLength,
+        value,
+        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+        style: newRoutePlaceInputStyle,
+      }));
+
+  const nvUploadOuter = (onActivate: () => void, caption = 'Clique para selecionar arquivo'): React.ReactNode =>
+    React.createElement('button', {
+      type: 'button',
+      onClick: onActivate,
+      style: {
+        width: '100%',
+        border: '2px dashed #e2e2e2',
+        borderRadius: 8,
+        background: '#fafafa',
+        padding: '14px 12px',
+        cursor: 'pointer',
+        textAlign: 'center' as const,
+        boxSizing: 'border-box' as const,
+      },
+    },
+      React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, caption));
+
+  const nvRadioRow = (
+    value: 'principal' | 'reserva',
+    title: string,
+    sub: string,
+  ) =>
+    React.createElement('button', {
+      type: 'button',
+      onClick: () => setNvUseType(value),
+      style: {
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 12,
+        background: 'none',
+        border: 'none',
+        cursor: 'pointer',
+        padding: 0,
+        marginBottom: 10,
+        width: '100%',
+        textAlign: 'left' as const,
+      },
+    },
+      React.createElement('div', {
+        style: {
+          width: 22,
+          height: 22,
+          borderRadius: 11,
+          border: `2px solid ${nvUseType === value ? '#0d0d0d' : '#d1d5db'}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          marginTop: 2,
+        },
+      },
+        nvUseType === value
+          ? React.createElement('div', { style: { width: 10, height: 10, borderRadius: 5, background: '#0d0d0d' } })
+          : null),
+      React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+        React.createElement('div', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, title),
+        React.createElement('div', { style: { fontSize: 12, color: '#767676', marginTop: 2, lineHeight: 1.45, ...font } }, sub)));
+
+  const newVehicleModal = newVehicleOpen
+    ? React.createElement('div', {
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-labelledby': 'new-vehicle-dialog-title',
+        style: {
+          position: 'fixed' as const,
+          inset: 0,
+          background: 'rgba(0,0,0,0.4)',
+          zIndex: 1002,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+          boxSizing: 'border-box' as const,
+        },
+        onClick: closeNewVehicleModal,
+      },
+      React.createElement('div', {
+        style: {
+          background: '#fff',
+          borderRadius: 16,
+          padding: 24,
+          width: '100%',
+          maxWidth: 440,
+          maxHeight: 'min(90vh, 720px)',
+          overflowY: 'auto' as const,
+          display: 'flex',
+          flexDirection: 'column' as const,
+          gap: 16,
+          boxSizing: 'border-box' as const,
+        },
+        onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      },
+        React.createElement('h2', {
+          id: 'new-vehicle-dialog-title',
+          style: { fontSize: 18, fontWeight: 700, margin: 0, color: '#0d0d0d', ...font },
+        }, 'Adicionar novo veículo'),
+
+          nvModalTextField('Modelo', nvModel, setNvModel),
+          nvModalTextField('Ano do veículo', nvYear, (v) => setNvYear(v.replace(/\D/g, '').slice(0, 4)), { inputMode: 'numeric' }),
+          nvModalTextField('Renavam', nvRenavam, setNvRenavam),
+          nvModalTextField('Placa', nvPlate, (v) => setNvPlate(v.toUpperCase())),
+          nvModalTextField(
+            'Capacidade de passageiros (máx. 5)',
+            nvPassengerCapacity,
+            (v) => setNvPassengerCapacity(v.replace(/\D/g, '').slice(0, 1)),
+            { inputMode: 'numeric' },
+          ),
+
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+            React.createElement('span', { style: nvLbl }, 'Definir tipo de uso do veículo'),
+            nvRadioRow('principal', 'Principal', 'Veículo principal utilizado nas corridas.'),
+            nvRadioRow('reserva', 'Reserva', 'Usado apenas quando o principal estiver indisponível.')),
+
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+            React.createElement('span', { style: nvLbl }, 'Documento do veículo'),
+            React.createElement('input', {
+              ref: nvDocInputRef,
+              type: 'file',
+              accept: '.pdf,application/pdf,image/*',
+              style: { display: 'none' },
+              onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+                const f = e.target.files?.[0];
+                e.target.value = '';
+                if (!f) return;
+                if (f.size > NV_DOC_MAX_BYTES) {
+                  setNvError('Documento muito grande (máx. 10 MB).');
+                  return;
+                }
+                const ok = f.type === 'application/pdf' || f.type.startsWith('image/');
+                if (!ok) {
+                  setNvError('Use PDF ou imagem para o documento do veículo.');
+                  return;
+                }
+                setNvError(null);
+                setNvDocFile(f);
+              },
+            }),
+            nvDocFile
+              ? React.createElement('div', {
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '10px 0',
+                    borderBottom: '1px solid #f1f1f1',
+                  },
+                },
+                  React.createElement('span', { style: { flex: 1, fontSize: 14, color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, ...font } }, nvDocFile.name),
+                  React.createElement('button', {
+                    type: 'button',
+                    onClick: () => setNvDocFile(null),
+                    style: { background: 'none', border: 'none', color: '#b53838', fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font },
+                  }, 'Remover'),
+                  React.createElement('button', {
+                    type: 'button',
+                    onClick: () => nvDocInputRef.current?.click(),
+                    style: { background: 'none', border: 'none', color: '#0d0d0d', fontSize: 13, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', ...font },
+                  }, 'Alterar'))
+              : nvUploadOuter(() => nvDocInputRef.current?.click())),
+
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+            React.createElement('span', { style: nvLbl }, 'Fotos do veículo'),
+            React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, `Máx. ${MAX_NEW_VEHICLE_PHOTOS} fotos, 20MB`),
+            React.createElement('input', {
+              ref: nvPhotoInputRef,
+              type: 'file',
+              accept: 'image/*',
+              multiple: true,
+              style: { display: 'none' },
+              onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+                const list = e.target.files;
+                e.target.value = '';
+                if (!list?.length) return;
+                const next = [...nvPhotoFiles];
+                for (let i = 0; i < list.length; i++) {
+                  if (next.length >= MAX_NEW_VEHICLE_PHOTOS) break;
+                  const f = list[i];
+                  if (!f.type.startsWith('image/')) {
+                    setNvError('Envie apenas imagens nas fotos do veículo.');
+                    return;
+                  }
+                  if (f.size > NV_PHOTO_MAX_BYTES) {
+                    setNvError('Cada foto pode ter no máximo 20 MB.');
+                    return;
+                  }
+                  next.push(f);
+                }
+                setNvError(null);
+                setNvPhotoFiles(next);
+              },
+            }),
+            nvPhotoFiles.length > 0
+              ? React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 12 } },
+                  ...nvPhotoFiles.map((f, i) =>
+                    React.createElement('div', { key: `${f.name}-${i}`, style: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 6 } },
+                      React.createElement('div', {
+                        style: {
+                          width: 140,
+                          height: 120,
+                          borderRadius: 8,
+                          background: '#f1f1f1',
+                          overflow: 'hidden',
+                        },
+                      }, React.createElement('img', {
+                        src: nvPhotoUrls[i],
+                        alt: '',
+                        style: { width: '100%', height: '100%', objectFit: 'cover' as const },
+                      })),
+                      React.createElement('button', {
+                        type: 'button',
+                        onClick: () => setNvPhotoFiles((prev) => prev.filter((_, j) => j !== i)),
+                        style: { background: 'none', border: 'none', fontSize: 13, color: '#374151', textDecoration: 'underline', cursor: 'pointer', ...font },
+                      }, 'Remover foto'))),
+                  nvPhotoFiles.length < MAX_NEW_VEHICLE_PHOTOS
+                    ? React.createElement('button', {
+                        type: 'button',
+                        onClick: () => nvPhotoInputRef.current?.click(),
+                        style: {
+                          width: 140,
+                          height: 120,
+                          borderRadius: 8,
+                          background: '#f1f1f1',
+                          border: '1px dashed #e2e2e2',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        },
+                      },
+                        React.createElement('svg', { width: 28, height: 28, viewBox: '0 0 24 24', fill: 'none' },
+                          React.createElement('path', { d: 'M12 5v14M5 12h14', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' })))
+                    : null)
+              : nvUploadOuter(() => nvPhotoInputRef.current?.click(), 'Clique para fazer upload (múltiplas fotos)')),
+
+          nvError
+            ? React.createElement('div', { role: 'alert', style: { fontSize: 13, color: '#b53838', ...font } }, nvError)
+            : null,
+
+          React.createElement('div', { style: { display: 'flex', gap: 8 } },
+            React.createElement('button', {
+              type: 'button',
+              onClick: closeNewVehicleModal,
+              disabled: nvSaving,
+              style: {
+                flex: 1,
+                height: 44,
+                borderRadius: 8,
+                border: '1px solid #e2e2e2',
+                background: '#fff',
+                fontSize: 14,
+                fontWeight: 500,
+                color: '#0d0d0d',
+                cursor: nvSaving ? 'wait' : 'pointer',
+                opacity: nvSaving ? 0.7 : 1,
+                ...font,
+              },
+            }, 'Cancelar'),
+            React.createElement('button', {
+              type: 'button',
+              onClick: () => void saveNewVehicle(),
+              disabled: nvSaving,
+              style: {
+                flex: 1,
+                height: 44,
+                borderRadius: 8,
+                border: 'none',
+                background: '#0d0d0d',
+                color: '#fff',
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: nvSaving ? 'wait' : 'pointer',
+                opacity: nvSaving ? 0.65 : 1,
+                ...font,
+              },
+            }, nvSaving ? 'Salvando…' : 'Salvar veículo'))))
+    : null;
+
   const routesAddButton = React.createElement('div', {
     style: { display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 48, width: '100%' },
   },
@@ -938,6 +1593,10 @@ export default function MotoristaEditScreen() {
     ? React.createElement('div', { style: { display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 48, width: '100%' } },
         React.createElement('button', {
           type: 'button',
+          onClick: () => {
+            setNvError(null);
+            setNewVehicleOpen(true);
+          },
           style: {
             background: 'none',
             border: 'none',
@@ -1010,19 +1669,6 @@ export default function MotoristaEditScreen() {
           React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, m.title),
           React.createElement('span', { style: { fontSize: 28, fontWeight: 700, color: '#0d0d0d', ...font } }, m.value)))));
 
-  const salvarBtn = isEditMode
-    ? React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end' } },
-        React.createElement('button', {
-          type: 'button',
-          onClick: () => void handleSaveEdits(),
-          disabled: saveLoading,
-          style: {
-            height: 44, padding: '0 28px', borderRadius: 999, border: '1px solid #e2e2e2',
-            background: '#fff', fontSize: 14, fontWeight: 600, color: '#0d0d0d', cursor: saveLoading ? 'wait' : 'pointer', opacity: saveLoading ? 0.65 : 1, ...font,
-          },
-        }, saveLoading ? 'Salvando…' : 'Salvar dados'))
-    : null;
-
   // ── Histórico de alterações (derivado de worker_profiles, worker_routes, vehicles;
   //     status_history no banco não inclui entidade «motorista».)
   const histIcon = (pathD: string) =>
@@ -1065,6 +1711,8 @@ export default function MotoristaEditScreen() {
       breadcrumb, header, toast, saveErrorBanner),
     statusActions,
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 32, width: '100%' } },
-      dadosSection, photosSection, salvarBtn, routesSection, vehiclesSection, metricsSection, historicoSection),
-    newRouteModal);
+      dadosSection, photosSection, routesSection, vehiclesSection, metricsSection, historicoSection),
+    newRouteModal,
+    deleteRouteModal,
+    newVehicleModal);
 }

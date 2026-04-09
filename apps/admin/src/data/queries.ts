@@ -376,11 +376,13 @@ export async function fetchBookingDetailForAdmin(bookingOrTripId: string): Promi
 
   const profileMap: Record<string, string> = {};
   let clientPhone: string | null = null;
+  let clientAvatarUrl: string | null = null;
   if (userIds.length) {
-    const { data: profiles } = await supabase.from('profiles').select('id, full_name, phone').in('id', userIds);
+    const { data: profiles } = await supabase.from('profiles').select('id, full_name, phone, avatar_url').in('id', userIds);
     (profiles || []).forEach((p: any) => {
       profileMap[p.id] = p.full_name ?? 'Sem nome';
       clientPhone = p.phone ?? null;
+      if (p.id === row.user_id) clientAvatarUrl = p.avatar_url ?? null;
     });
   }
 
@@ -395,6 +397,23 @@ export async function fetchBookingDetailForAdmin(bookingOrTripId: string): Promi
 
   const pd = row.passenger_data;
   const passengerData = Array.isArray(pd) ? pd as Array<{ name?: string; cpf?: string; bags?: number }> : [];
+
+  const cpfDigitsOnly = (cpf: string | undefined) => (cpf || '').replace(/\D/g, '');
+  const cpfVariantsForQuery = (digits: string): string[] => {
+    const d = cpfDigitsOnly(digits);
+    if (d.length !== 11) return d ? [d] : [];
+    return [d, `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`];
+  };
+  const cpfDigitKeys = [...new Set(passengerData.map((p) => cpfDigitsOnly(p.cpf)).filter((x) => x.length >= 11))];
+  const cpfVariants = [...new Set(cpfDigitKeys.flatMap(cpfVariantsForQuery))];
+  const avatarUrlByPassengerCpfDigits: Record<string, string | null> = {};
+  if (cpfVariants.length) {
+    const { data: cpfProfs } = await supabase.from('profiles').select('cpf, avatar_url').in('cpf', cpfVariants);
+    (cpfProfs || []).forEach((p: any) => {
+      const k = cpfDigitsOnly(p.cpf);
+      if (k) avatarUrlByPassengerCpfDigits[k] = p.avatar_url ?? null;
+    });
+  }
 
   const listItem = listItemFromBookingJoin(row, profileMap, driverNameMap, driverPartnerMap);
   const trunk = Number(trip?.trunk_occupancy_pct);
@@ -425,6 +444,8 @@ export async function fetchBookingDetailForAdmin(bookingOrTripId: string): Promi
     bagsCount: Number(row.bags_count ?? 0),
     passengerData,
     userId: row.user_id,
+    clientAvatarUrl,
+    avatarUrlByPassengerCpfDigits,
     clientPhone,
     trunkOccupancyPct: Number.isFinite(trunk) ? trunk : 0,
     tripDepartureAtIso: depAt ? new Date(depAt as string).toISOString() : null,
@@ -440,11 +461,29 @@ export async function fetchShipmentsForScheduledTrip(tripId: string): Promise<Tr
   if (!isSupabaseConfigured || !tripId) return [];
   const { data, error } = await supabase
     .from('shipments')
-    .select('id, user_id, package_size, amount_cents, recipient_name, recipient_phone, origin_address, destination_address, instructions, photo_url, status')
+    .select(
+      'id, user_id, package_size, amount_cents, recipient_name, recipient_phone, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, instructions, photo_url, status',
+    )
     .eq('scheduled_trip_id', tripId)
     .order('created_at', { ascending: true });
   if (error || !data?.length) return [];
-  type Row = { id: string; user_id: string; package_size?: string | null; amount_cents?: number | null; recipient_name?: string | null; recipient_phone?: string | null; origin_address?: string | null; destination_address?: string | null; instructions?: string | null; photo_url?: string | null; status?: string | null };
+  type Row = {
+    id: string;
+    user_id: string;
+    package_size?: string | null;
+    amount_cents?: number | null;
+    recipient_name?: string | null;
+    recipient_phone?: string | null;
+    origin_address?: string | null;
+    origin_lat?: number | null;
+    origin_lng?: number | null;
+    destination_address?: string | null;
+    destination_lat?: number | null;
+    destination_lng?: number | null;
+    instructions?: string | null;
+    photo_url?: string | null;
+    status?: string | null;
+  };
   const rows = data as Row[];
   const userIds = [...new Set(rows.map((s) => s.user_id).filter(Boolean))];
   const senderMap: Record<string, string> = {};
@@ -463,6 +502,10 @@ export async function fetchShipmentsForScheduledTrip(tripId: string): Promise<Tr
     senderName: senderMap[s.user_id] ?? '—',
     originAddress: s.origin_address ?? '',
     destinationAddress: s.destination_address ?? '',
+    originLat: s.origin_lat != null && Number.isFinite(Number(s.origin_lat)) ? Number(s.origin_lat) : null,
+    originLng: s.origin_lng != null && Number.isFinite(Number(s.origin_lng)) ? Number(s.origin_lng) : null,
+    destinationLat: s.destination_lat != null && Number.isFinite(Number(s.destination_lat)) ? Number(s.destination_lat) : null,
+    destinationLng: s.destination_lng != null && Number.isFinite(Number(s.destination_lng)) ? Number(s.destination_lng) : null,
     instructions: s.instructions ?? null,
     photoUrl: s.photo_url ?? null,
     status: String(s.status ?? ''),
@@ -655,7 +698,11 @@ export async function updateShipmentFields(
     instructions?: string | null;
     status?: string;
     origin_address?: string;
+    origin_lat?: number | null;
+    origin_lng?: number | null;
     destination_address?: string;
+    destination_lat?: number | null;
+    destination_lng?: number | null;
     recipient_name?: string;
     recipient_phone?: string;
     recipient_email?: string;
@@ -1731,7 +1778,13 @@ export async function savePreparadorExcursionFields(
 
 export async function saveProfileFields(
   profileId: string,
-  fields: { full_name?: string; cpf?: string | null; city?: string | null },
+  fields: {
+    full_name?: string;
+    cpf?: string | null;
+    city?: string | null;
+    state?: string | null;
+    phone?: string | null;
+  },
 ): Promise<{ error: string | null }> {
   const { error } = await (supabase.from('profiles') as any).update(fields).eq('id', profileId);
   return { error: error ? (error as Error).message : null };
@@ -1869,53 +1922,6 @@ export async function fetchDependentsByUser(userId: string): Promise<any[]> {
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
   return data || [];
-}
-
-export interface DependentAdminRow {
-  id: string;
-  userId: string;
-  responsavelNome: string;
-  responsavelAvatarUrl: string | null;
-  nome: string;
-  age: number | null;
-  gender: string | null;
-  status: 'pending' | 'validated';
-  documentUrl: string | null;
-  createdAt: string;
-}
-
-/** Fetches ALL dependents across all users for admin validation view. */
-export async function fetchAllDependents(): Promise<DependentAdminRow[]> {
-  if (!isSupabaseConfigured) return [];
-  const { data, error } = await (supabase as any)
-    .from('dependents')
-    .select('id, user_id, full_name, age, gender, status, document_url, created_at')
-    .order('created_at', { ascending: false })
-    .limit(500);
-  if (error || !data || data.length === 0) return [];
-
-  const userIds: string[] = [...new Set<string>(data.map((d: any) => d.user_id as string))];
-  const { data: profiles } = await supabase
-    .from('profiles')
-    .select('id, full_name, avatar_url')
-    .in('id', userIds);
-  const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p]));
-
-  return data.map((d: any) => {
-    const p = profileMap.get(d.user_id) as any;
-    return {
-      id: d.id as string,
-      userId: d.user_id as string,
-      responsavelNome: p?.full_name ?? 'Responsável',
-      responsavelAvatarUrl: p?.avatar_url ?? null,
-      nome: d.full_name ?? 'Sem nome',
-      age: typeof d.age === 'number' ? d.age : null,
-      gender: d.gender ?? null,
-      status: (d.status ?? 'pending') as 'pending' | 'validated',
-      documentUrl: d.document_url ?? null,
-      createdAt: d.created_at ?? '',
-    };
-  });
 }
 
 // ── Excursion status management ─────────────────────────────────────
@@ -2188,6 +2194,41 @@ export async function fetchPassageiroPaymentMethods(userId: string): Promise<Pay
 
   if (error || !data) return [];
   return data as PaymentMethodRow[];
+}
+
+/** Cadastro pelo admin: grava só last_four e metadados (sem número completo nem CVV). Requer RLS admin. */
+export async function insertPassengerPaymentMethodAdmin(params: {
+  userId: string;
+  type: 'credit' | 'debit';
+  holderName: string;
+  lastFour: string;
+  brand: string | null;
+  expiryMonth: number;
+  expiryYear: number;
+}): Promise<{ error: string | null }> {
+  const last = params.lastFour.replace(/\D/g, '').slice(-4);
+  if (last.length !== 4) return { error: 'Últimos 4 dígitos inválidos.' };
+
+  const { error } = await sb.from('payment_methods').insert({
+    user_id: params.userId,
+    type: params.type,
+    holder_name: params.holderName.trim() || null,
+    last_four: last,
+    brand: params.brand,
+    expiry_month: params.expiryMonth,
+    expiry_year: params.expiryYear,
+    provider: null,
+    provider_id: null,
+  });
+
+  if (error) {
+    const msg = error.message || 'Não foi possível salvar o cartão.';
+    if (/row-level security|rls|violates/i.test(msg)) {
+      return { error: 'Sem permissão para cadastrar cartão (confira se o usuário é admin no Supabase).' };
+    }
+    return { error: msg };
+  }
+  return { error: null };
 }
 
 // ── Passageiro Bookings (for detail screen) ─────────────────────────
@@ -2477,7 +2518,8 @@ export async function createShipmentTripDirect(
  * Recalcula stops de uma viagem (ex: após trocar motorista)
  */
 export async function recalculateTripStops(tripId: string): Promise<void> {
-  await sb.rpc('generate_trip_stops', { p_trip_id: tripId });
+  const { error } = await sb.rpc('generate_trip_stops', { p_trip_id: tripId });
+  if (error) throw new Error(error.message || 'generate_trip_stops falhou');
 }
 
 // ── Worker Routes (admin CRUD) ──────────────────────────────────────────
@@ -2507,7 +2549,12 @@ export async function createWorkerRoute(
       ? { destination_lat: data.destinationLat, destination_lng: data.destinationLng }
       : {}),
   });
-  return { error: error?.message ?? null };
+  let msg = error?.message ?? null;
+  if (msg && /row-level security|violates row-level security/i.test(msg)) {
+    msg =
+      'Sem permissão para criar rota (RLS). Aplique as migrations do repositório (políticas admin em worker_routes) e garanta que seu usuário é admin: JWT app_metadata.role=admin no Supabase Auth ou linha em worker_profiles com role=admin (status approved, pending, inactive ou under_review). Depois faça login de novo.';
+  }
+  return { error: msg };
 }
 
 export async function toggleWorkerRouteActive(routeId: string, isActive: boolean): Promise<void> {
@@ -2522,19 +2569,16 @@ export async function deleteWorkerRoute(routeId: string): Promise<void> {
 
 export interface PendingCounts {
   pendingWorkers: number;
-  pendingDependents: number;
   pendingPayouts: number;
 }
 
 export async function fetchPendingCounts(): Promise<PendingCounts> {
-  const [wRes, dRes, pRes] = await Promise.all([
+  const [wRes, pRes] = await Promise.all([
     sb.from('worker_profiles').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
-    (supabase as any).from('dependents').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
     sb.from('payouts').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
   ]);
   return {
     pendingWorkers: (wRes as any).count ?? 0,
-    pendingDependents: (dRes as any).count ?? 0,
     pendingPayouts: (pRes as any).count ?? 0,
   };
 }
