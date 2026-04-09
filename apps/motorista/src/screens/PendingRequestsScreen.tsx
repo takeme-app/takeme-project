@@ -15,6 +15,9 @@ import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+import { createOrGetBookingConversation } from '../lib/bookingConversation';
+import { createOrGetShipmentConversation } from '../lib/shipmentConversation';
+import { useAppAlert } from '../contexts/AppAlertContext';
 import { storageUrl } from '../utils/storageUrl';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PendingRequests'>;
@@ -23,6 +26,7 @@ const GOLD = '#C9A227';
 
 type RequestItem = {
   id: string;
+  kind: 'booking' | 'shipment';
   /** scheduledTripId — para navegar para TripDetail após aceitar */
   scheduledTripId: string;
   origin: string;
@@ -35,8 +39,10 @@ type RequestItem = {
   userAvatar: string | null;
   userRating: number | null;
   minutesAgo: number;
-  /** Número de passageiros */
+  /** passageiros (apenas kind booking) */
   passengerCount: number;
+  /** tamanho do pacote (apenas kind shipment) */
+  packageSizeLabel: string;
   /** 30min antes da partida */
   expiresAt: Date;
   rawId: string;
@@ -63,18 +69,29 @@ function shortAddr(addr: string): string {
   return addr.split(',')[0]?.trim() ?? addr;
 }
 
-/** Formata countdown em MM:SS. Retorna null se expirado. */
+function packageSizeLabelDb(size: string | null | undefined): string {
+  switch (size) {
+    case 'pequeno': return 'Pequeno';
+    case 'medio': return 'Médio';
+    case 'grande': return 'Grande';
+    default: return size?.trim() ? size : 'Pacote';
+  }
+}
+
+/** Countdown até o limite (ex.: 30 min antes da partida). HH:mm:ss; urgente nos últimos 5 min. */
 function formatCountdown(expiresAt: Date): { label: string; urgent: boolean } | null {
   const ms = expiresAt.getTime() - Date.now();
   if (ms <= 0) return null;
   const totalSecs = Math.floor(ms / 1000);
-  const mins = Math.floor(totalSecs / 60);
-  const secs = totalSecs % 60;
-  const label = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-  return { label, urgent: mins < 5 };
+  const h = Math.floor(totalSecs / 3600);
+  const m = Math.floor((totalSecs % 3600) / 60);
+  const s = totalSecs % 60;
+  const label = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return { label, urgent: totalSecs < 5 * 60 };
 }
 
 export function PendingRequestsScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [items, setItems] = useState<RequestItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [actioning, setActioning] = useState<string | null>(null);
@@ -100,18 +117,12 @@ export function PendingRequestsScreen({ navigation }: Props) {
       .select(
         'id, origin_address, destination_address, passenger_count, amount_cents, created_at, scheduled_trip_id, user_id, scheduled_trips!inner(departure_at, driver_id)'
       )
-      .eq('status', 'pending')
+      .in('status', ['pending', 'paid'])
       .limit(50);
 
-    const now = Date.now();
     const filtered = ((bookings ?? []) as unknown[]).filter((b: unknown) => {
-      const row = b as { scheduled_trips?: { driver_id?: string; departure_at?: string } };
-      if (row.scheduled_trips?.driver_id !== user.id) return false;
-      // Exclui viagens cuja janela de aceite já fechou (30min antes da partida)
-      const depAt = row.scheduled_trips?.departure_at;
-      if (!depAt) return true;
-      const expires = new Date(depAt).getTime() - 30 * 60 * 1000;
-      return expires > now;
+      const row = b as { scheduled_trips?: { driver_id?: string } };
+      return row.scheduled_trips?.driver_id === user.id;
     });
 
     const all: RequestItem[] = [];
@@ -131,6 +142,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
 
       all.push({
         id: `booking_${row.id}`,
+        kind: 'booking',
         rawId: row.id,
         scheduledTripId: row.scheduled_trip_id,
         origin: row.origin_address,
@@ -143,8 +155,70 @@ export function PendingRequestsScreen({ navigation }: Props) {
         userRating: p?.rating != null ? Number(p.rating) : null,
         minutesAgo: minutesAgoFn(row.created_at),
         passengerCount: row.passenger_count,
+        packageSizeLabel: '',
         expiresAt,
       });
+    }
+
+    // Encomendas sem base na rota deste motorista: aguardam aceite (como passageiros pendentes)
+    const { data: myTrips } = await supabase
+      .from('scheduled_trips')
+      .select('id, departure_at')
+      .eq('driver_id', user.id);
+    const tripRows = (myTrips ?? []) as { id: string; departure_at: string }[];
+    const tripDeparture = new Map(tripRows.map((t) => [t.id, t.departure_at]));
+    const tripIds = tripRows.map((t) => t.id);
+
+    if (tripIds.length > 0) {
+      const { data: shipRows } = await supabase
+        .from('shipments')
+        .select(
+          'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, scheduled_trip_id',
+        )
+        .in('scheduled_trip_id', tripIds)
+        .is('base_id', null)
+        .is('driver_id', null)
+        .in('status', ['pending_review', 'confirmed'])
+        .limit(50);
+
+      for (const s of (shipRows ?? []) as {
+        id: string;
+        origin_address: string;
+        destination_address: string;
+        amount_cents: number;
+        created_at: string;
+        user_id: string;
+        package_size: string;
+        scheduled_trip_id: string;
+      }[]) {
+        const depAt = tripDeparture.get(s.scheduled_trip_id);
+        if (!depAt) continue;
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('full_name, avatar_url, rating')
+          .eq('id', s.user_id)
+          .maybeSingle();
+        const p = prof as { full_name?: string; avatar_url?: string; rating?: number } | null;
+        const expiresAt = new Date(new Date(depAt).getTime() - 30 * 60 * 1000);
+        all.push({
+          id: `shipment_${s.id}`,
+          kind: 'shipment',
+          rawId: s.id,
+          scheduledTripId: s.scheduled_trip_id,
+          origin: s.origin_address,
+          destination: s.destination_address,
+          departureAt: depAt,
+          timeLabel: formatTime(depAt),
+          priceCents: s.amount_cents,
+          userName: p?.full_name ?? 'Cliente',
+          userAvatar: p?.avatar_url ?? null,
+          userRating: p?.rating != null ? Number(p.rating) : null,
+          minutesAgo: minutesAgoFn(s.created_at),
+          passengerCount: 0,
+          packageSizeLabel: packageSizeLabelDb(s.package_size),
+          expiresAt,
+        });
+      }
     }
 
     all.sort((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime());
@@ -159,33 +233,70 @@ export function PendingRequestsScreen({ navigation }: Props) {
     setActioning(item.id);
     const now = new Date().toISOString();
     try {
-      await supabase
-        .from('bookings')
-        .update({ status: accept ? 'confirmed' : 'cancelled', updated_at: now } as never)
-        .eq('id', item.rawId);
-
-      // Atualiza worker_assignment se existir
-      const { data: wa } = await supabase
-        .from('worker_assignments')
-        .select('id')
-        .eq('worker_id', userId)
-        .eq('entity_type', 'booking')
-        .eq('entity_id', item.rawId)
-        .maybeSingle();
-      if (wa) {
+      if (item.kind === 'shipment') {
         await supabase
-          .from('worker_assignments')
-          .update(accept
-            ? { status: 'accepted' } as never
-            : { status: 'rejected', rejected_at: now, rejection_reason: 'Recusado pelo motorista' } as never
+          .from('shipments')
+          .update(
+            accept
+              ? ({
+                  driver_id: userId,
+                  driver_accepted_at: now,
+                  status: 'confirmed',
+                } as never)
+              : ({ status: 'cancelled' } as never),
           )
-          .eq('id', (wa as { id: string }).id);
+          .eq('id', item.rawId);
+      } else {
+        await supabase
+          .from('bookings')
+          .update(
+            accept
+              ? ({
+                  status: 'confirmed',
+                  paid_at: now,
+                  updated_at: now,
+                } as never)
+              : ({ status: 'cancelled', updated_at: now } as never),
+          )
+          .eq('id', item.rawId);
+
+        const { data: wa } = await supabase
+          .from('worker_assignments')
+          .select('id')
+          .eq('worker_id', userId)
+          .eq('entity_type', 'booking')
+          .eq('entity_id', item.rawId)
+          .maybeSingle();
+        if (wa) {
+          await supabase
+            .from('worker_assignments')
+            .update(accept
+              ? { status: 'accepted' } as never
+              : { status: 'rejected', rejected_at: now, rejection_reason: 'Recusado pelo motorista' } as never
+            )
+            .eq('id', (wa as { id: string }).id);
+        }
       }
 
       setItems((prev) => prev.filter((i) => i.id !== item.id));
 
       if (accept) {
-        navigation.navigate('TripDetail', { tripId: item.scheduledTripId });
+        const conv =
+          item.kind === 'booking'
+            ? await createOrGetBookingConversation(item.rawId, userId)
+            : await createOrGetShipmentConversation(item.rawId, userId);
+        if (conv.error) {
+          showAlert('Chat', conv.error);
+        }
+        if (conv.conversationId) {
+          navigation.navigate('DriverClientChat', {
+            conversationId: conv.conversationId,
+            participantName: item.userName,
+            participantAvatar: item.userAvatar ?? undefined,
+          });
+        } else {
+          navigation.navigate('TripDetail', { tripId: item.scheduledTripId });
+        }
       }
     } finally {
       setActioning(null);
@@ -200,7 +311,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
         <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
           <MaterialIcons name="close" size={22} color="#111827" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Viagens pendentes</Text>
+        <Text style={styles.headerTitle}>Solicitações pendentes</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -209,7 +320,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
       ) : items.length === 0 ? (
         <View style={styles.center}>
           <MaterialIcons name="check-circle-outline" size={48} color="#D1D5DB" />
-          <Text style={styles.emptyText}>Nenhuma solicitação de viagem pendente.</Text>
+          <Text style={styles.emptyText}>Nenhuma solicitação pendente.</Text>
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
@@ -221,9 +332,15 @@ export function PendingRequestsScreen({ navigation }: Props) {
               <View key={item.id} style={styles.card}>
                 {/* Header: badge Viagem + countdown */}
                 <View style={styles.badgeRow}>
-                  <View style={styles.badge}>
-                    <MaterialIcons name="directions-car" size={13} color="#1D4ED8" />
-                    <Text style={styles.badgeText}>Viagem</Text>
+                  <View style={item.kind === 'shipment' ? styles.badgeShipment : styles.badge}>
+                    <MaterialIcons
+                      name={item.kind === 'shipment' ? 'inventory-2' : 'directions-car'}
+                      size={13}
+                      color={item.kind === 'shipment' ? '#B45309' : '#1D4ED8'}
+                    />
+                    <Text style={item.kind === 'shipment' ? styles.badgeShipmentText : styles.badgeText}>
+                      {item.kind === 'shipment' ? 'Encomenda' : 'Viagem'}
+                    </Text>
                   </View>
                   {countdown ? (
                     <View style={[styles.countdownBadge, countdown.urgent && styles.countdownBadgeUrgent]}>
@@ -259,9 +376,15 @@ export function PendingRequestsScreen({ navigation }: Props) {
                     <Text style={styles.metaText}>{item.timeLabel}</Text>
                   </View>
                   <View style={styles.metaItem}>
-                    <MaterialIcons name="people" size={14} color="#6B7280" />
+                    <MaterialIcons
+                      name={item.kind === 'shipment' ? 'local-shipping' : 'people'}
+                      size={14}
+                      color="#6B7280"
+                    />
                     <Text style={styles.metaText}>
-                      {item.passengerCount} {item.passengerCount === 1 ? 'passageiro' : 'passageiros'}
+                      {item.kind === 'shipment'
+                        ? `Pacote ${item.packageSizeLabel}`
+                        : `${item.passengerCount} ${item.passengerCount === 1 ? 'passageiro' : 'passageiros'}`}
                     </Text>
                   </View>
                   <Text style={styles.price}>{formatCents(item.priceCents)}</Text>
@@ -350,6 +473,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 5,
   },
   badgeText: { fontSize: 13, fontWeight: '600', color: '#1D4ED8' },
+  badgeShipment: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: '#FEF3C7', borderRadius: 20,
+    paddingHorizontal: 10, paddingVertical: 5,
+  },
+  badgeShipmentText: { fontSize: 13, fontWeight: '600', color: '#B45309' },
   countdownBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     backgroundColor: '#FEF3C7', borderRadius: 20,

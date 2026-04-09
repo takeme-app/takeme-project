@@ -8,6 +8,18 @@ export type ChatExcStackParamList = {
   ChatExcThread: { conversationId: string; participantName?: string; participantAvatar?: string };
 };
 
+/** Chat na aba Encomendas (preparador): lista + thread (conversations/messages). */
+export type ChatEncomendasStackParamList = {
+  ChatEncList: { hideBack?: boolean; chatScreenName?: string } | undefined;
+  ChatEncThread: { conversationId: string; participantName?: string; participantAvatar?: string };
+};
+
+/** Aba Pagamentos — preparador de encomendas (resumo + histórico mensal). */
+export type PagamentosEncStackParamList = {
+  PagamentosMain: undefined;
+  PagamentosHistorico: undefined;
+};
+
 export type ProfileStackParamList = {
   /** Grid Configurações (aba Perfil). */
   Settings: undefined;
@@ -77,6 +89,12 @@ export type RootStackParamList = {
   TripHistory: undefined;
   TripDetail: { tripId: string };
   ActiveTrip: { tripId: string };
+  /** Chat com cliente após aceitar solicitação (pilha raiz: volta para a tela anterior). */
+  DriverClientChat: {
+    conversationId: string;
+    participantName?: string;
+    participantAvatar?: string;
+  };
   PaymentHistory: undefined;
   ForgotPassword: undefined;
   ForgotPasswordEmailSent: { email: string };

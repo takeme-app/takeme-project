@@ -28,6 +28,7 @@ import { PendingRequestsScreen } from '../screens/PendingRequestsScreen';
 import { TripHistoryScreen } from '../screens/TripHistoryScreen';
 import { TripDetailScreen } from '../screens/TripDetailScreen';
 import { ActiveTripScreen } from '../screens/ActiveTripScreen';
+import { ChatScreen } from '../screens/ChatScreen';
 import { PaymentHistoryScreen } from '../screens/PaymentHistoryScreen';
 import type { RootStackParamList } from './types';
 
@@ -74,6 +75,7 @@ export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
           <Stack.Screen name="TripHistory" component={TripHistoryScreen} options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="TripDetail" component={TripDetailScreen} options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="ActiveTrip" component={ActiveTripScreen} options={{ animation: 'fade', gestureEnabled: false }} />
+          <Stack.Screen name="DriverClientChat" component={ChatScreen} options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="PaymentHistory" component={PaymentHistoryScreen} options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
           <Stack.Screen name="ForgotPasswordEmailSent" component={ForgotPasswordEmailSentScreen} />

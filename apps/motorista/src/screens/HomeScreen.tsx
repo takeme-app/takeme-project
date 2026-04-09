@@ -50,7 +50,10 @@ type ActiveTrip = {
   destination_address: string;
   departure_at: string;
   passengerCount: number;
+  /** Malas informadas na reserva (`bookings.bags_count`), não é envio de encomenda. */
   bagsCount: number;
+  /** Envios (`shipments`) vinculados a esta viagem agendada. */
+  shipmentCount: number;
   trunkPct: number;
   origin_lat: number | null;
   origin_lng: number | null;
@@ -230,10 +233,11 @@ export function HomeScreen({ navigation }: Props) {
     const { data: tripData } = await supabase
       .from('scheduled_trips')
       .select(
-        'id, origin_address, destination_address, departure_at, trunk_occupancy_pct, origin_lat, origin_lng, destination_lat, destination_lng',
+        'id, origin_address, destination_address, departure_at, trunk_occupancy_pct, origin_lat, origin_lng, destination_lat, destination_lng, route_id, is_active, driver_journey_started_at',
       )
       .eq('driver_id', user.id)
       .eq('status', 'active')
+      .not('driver_journey_started_at', 'is', null)
       .order('departure_at', { ascending: true })
       .limit(1)
       .maybeSingle();
@@ -249,43 +253,76 @@ export function HomeScreen({ navigation }: Props) {
         origin_lng?: number | null;
         destination_lat?: number | null;
         destination_lng?: number | null;
+        route_id?: string | null;
+        is_active?: boolean | null;
       };
+      if (t.route_id != null && t.is_active === false) {
+        setActiveTrip(null);
+      } else {
       const { data: bkgs } = await supabase
         .from('bookings')
         .select('passenger_count, bags_count, origin_lat, origin_lng')
         .eq('scheduled_trip_id', t.id)
-        .in('status', ['confirmed', 'paid']);
+        .eq('status', 'confirmed');
       const bkgRows = (bkgs ?? []) as { passenger_count?: number; bags_count?: number; origin_lat?: number | null; origin_lng?: number | null }[];
       const passengerCount = bkgRows.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
       const bagsCount = bkgRows.reduce((s, b) => s + (b.bags_count ?? 0), 0);
+
+      const { count: shipCount } = await supabase
+        .from('shipments')
+        .select('id', { count: 'exact', head: true })
+        .eq('scheduled_trip_id' as never, t.id as never)
+        .eq('driver_id', user.id)
+        .in('status', ['confirmed', 'in_progress'] as never);
+
       const bookingPickups = bkgRows
         .filter((b) => b.origin_lat != null && b.origin_lng != null)
         .map((b) => ({ lat: b.origin_lat!, lng: b.origin_lng! }));
-      setActiveTrip({
-        id: t.id,
-        origin_address: t.origin_address,
-        destination_address: t.destination_address,
-        departure_at: t.departure_at,
-        passengerCount,
-        bagsCount,
-        trunkPct: t.trunk_occupancy_pct ?? 0,
-        origin_lat: t.origin_lat ?? null,
-        origin_lng: t.origin_lng ?? null,
-        destination_lat: t.destination_lat ?? null,
-        destination_lng: t.destination_lng ?? null,
-        bookingPickups,
-      });
+        setActiveTrip({
+          id: t.id,
+          origin_address: t.origin_address,
+          destination_address: t.destination_address,
+          departure_at: t.departure_at,
+          passengerCount,
+          bagsCount,
+          shipmentCount: shipCount ?? 0,
+          trunkPct: t.trunk_occupancy_pct ?? 0,
+          origin_lat: t.origin_lat ?? null,
+          origin_lng: t.origin_lng ?? null,
+          destination_lat: t.destination_lat ?? null,
+          destination_lng: t.destination_lng ?? null,
+          bookingPickups,
+        });
+      }
     } else {
       setActiveTrip(null);
     }
 
-    // Pendentes só de viagem: bookings `pending` nas viagens deste motorista
+    // Solicitações aguardando aceite: reservas (pending/paid) + encomendas sem base na rota (sem driver_id)
     const { count: bCount } = await supabase
       .from('bookings')
       .select('id, scheduled_trips!inner(driver_id)', { count: 'exact', head: true })
-      .eq('status', 'pending')
+      .in('status', ['pending', 'paid'])
       .eq('scheduled_trips.driver_id', user.id);
-    setPendingCount(bCount ?? 0);
+
+    const { data: tripIdsRows } = await supabase
+      .from('scheduled_trips')
+      .select('id')
+      .eq('driver_id', user.id);
+    const myTripIds = (tripIdsRows ?? []).map((r) => (r as { id: string }).id);
+    let sPending = 0;
+    if (myTripIds.length > 0) {
+      const { count: sCount } = await supabase
+        .from('shipments')
+        .select('id', { count: 'exact', head: true })
+        .in('scheduled_trip_id', myTripIds)
+        .is('base_id', null)
+        .is('driver_id', null)
+        .in('status', ['pending_review', 'confirmed']);
+      sPending = sCount ?? 0;
+    }
+
+    setPendingCount((bCount ?? 0) + sPending);
 
     setLoading(false);
   }, []);
@@ -406,13 +443,24 @@ export function HomeScreen({ navigation }: Props) {
                   <Text style={styles.metaValue}>{activeTrip.passengerCount}</Text>
                 </View>
               </View>
-              <View style={styles.metaItem}>
-                <MaterialIcons name="inventory-2" size={18} color="#6B7280" />
-                <View>
-                  <Text style={styles.metaLabel}>Encomendas</Text>
-                  <Text style={styles.metaValue}>{activeTrip.bagsCount}</Text>
+              {activeTrip.bagsCount > 0 ? (
+                <View style={styles.metaItem}>
+                  <MaterialIcons name="card-travel" size={18} color="#6B7280" />
+                  <View>
+                    <Text style={styles.metaLabel}>Malas</Text>
+                    <Text style={styles.metaValue}>{activeTrip.bagsCount}</Text>
+                  </View>
                 </View>
-              </View>
+              ) : null}
+              {activeTrip.shipmentCount > 0 ? (
+                <View style={styles.metaItem}>
+                  <MaterialIcons name="inventory-2" size={18} color="#6B7280" />
+                  <View>
+                    <Text style={styles.metaLabel}>Encomendas</Text>
+                    <Text style={styles.metaValue}>{activeTrip.shipmentCount}</Text>
+                  </View>
+                </View>
+              ) : null}
             </View>
 
             {/* Bagageiro */}

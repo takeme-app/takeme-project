@@ -28,6 +28,7 @@ import { useAppAlert } from '../contexts/AppAlertContext';
 import { GooglePlacesAutocomplete } from '../components/GooglePlacesAutocomplete';
 import { googleForwardGeocode, type GoogleGeocodeResult } from '@take-me/shared';
 import { getGoogleMapsApiKey } from '../lib/googleMapsConfig';
+import { formatCurrencyBRLInput, parseCurrencyBRLToNumber } from '../utils/formatCurrency';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'WorkerRoutes'>;
 
@@ -146,7 +147,8 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
     }
     if (!origin.trim()) { showAlert('Atenção', 'Informe a origem.'); return; }
     if (!destination.trim()) { showAlert('Atenção', 'Informe o destino.'); return; }
-    const priceCents = Math.round(parseFloat(price.replace(',', '.')) * 100);
+    const reais = parseCurrencyBRLToNumber(price);
+    const priceCents = reais != null ? Math.round(reais * 100) : 0;
     if (!priceCents || priceCents <= 0) { showAlert('Atenção', 'Informe um valor válido.'); return; }
 
     const apiKey = getGoogleMapsApiKey();
@@ -304,11 +306,16 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
                 style={styles.input}
                 placeholder="Ex: R$ 25,00"
                 placeholderTextColor="#9CA3AF"
-                keyboardType="numeric"
-                value={price}
-                onChangeText={setPrice}
+                keyboardType="number-pad"
+                value={price ? `R$ ${price}` : ''}
+                onChangeText={(t) => {
+                  const cleaned = t.replace(/R\$\s?/i, '');
+                  setPrice(formatCurrencyBRLInput(cleaned));
+                }}
               />
-              <Text style={styles.fieldHint}>Valor cobrado por pessoa</Text>
+              <Text style={styles.fieldHint}>
+                Igual ao cadastro: só números, da direita para a esquerda em centavos (ex.: 6000 = R$ 60,00).
+              </Text>
 
               <View style={styles.toggleRow}>
                 <View style={styles.toggleText}>

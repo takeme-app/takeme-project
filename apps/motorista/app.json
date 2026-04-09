@@ -38,6 +38,7 @@
       }
     },
     "plugins": [
+      "@react-native-community/datetimepicker",
       [
         "@rnmapbox/maps",
         {

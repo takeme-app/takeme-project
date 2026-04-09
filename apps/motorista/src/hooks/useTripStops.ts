@@ -11,7 +11,10 @@ export type StopType =
   | 'passenger_dropoff'
   | 'package_pickup'
   | 'package_dropoff'
-  | 'excursion_stop';
+  | 'excursion_stop'
+  | 'driver_origin'
+  | 'trip_destination'
+  | 'base_dropoff';
 
 export type StopStatus = 'pending' | 'completed' | 'skipped';
 
@@ -37,6 +40,9 @@ export const STOP_TYPE_COLORS: Record<StopType, string> = {
   package_pickup: '#F59E0B',     // amber  — coleta encomenda
   package_dropoff: '#6366F1',    // indigo — entrega encomenda
   excursion_stop: '#EC4899',     // pink   — parada excursão
+  driver_origin: '#64748B',      // slate  — partida / ponto do motorista
+  trip_destination: '#1D4ED8',   // blue   — destino final da viagem
+  base_dropoff: '#EA580C',       // orange — entrega em base
 };
 
 // ---------------------------------------------------------------------------
@@ -120,9 +126,24 @@ export function useTripStops(tripId: string | null) {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+type StopRowMeta = { label?: string | null; sequence_order?: number | null };
+
 /** Admin/PRD usam shipment_*; o app motorista usa package_* nos helpers de mapa. */
-function normalizeDbStopType(db: string): StopType {
-  switch (db) {
+function normalizeDbStopType(db: string, row?: StopRowMeta): StopType {
+  const raw = String(db ?? '').trim();
+  const labelNorm = String(row?.label ?? '').trim().toLowerCase();
+  const seq = row?.sequence_order;
+
+  // Alguns deploys marcam o 1º ponto (partida do motorista) como shipment/package_pickup.
+  if (
+    (raw === 'shipment_pickup' || raw === 'package_pickup') &&
+    (seq === 1 || seq === 0) &&
+    (labelNorm === 'motorista' || labelNorm.includes('motorista'))
+  ) {
+    return 'driver_origin';
+  }
+
+  switch (raw) {
     case 'shipment_pickup':
       return 'package_pickup';
     case 'shipment_dropoff':
@@ -132,7 +153,10 @@ function normalizeDbStopType(db: string): StopType {
     case 'package_pickup':
     case 'package_dropoff':
     case 'excursion_stop':
-      return db;
+    case 'driver_origin':
+    case 'trip_destination':
+    case 'base_dropoff':
+      return raw;
     default:
       return 'excursion_stop';
   }
@@ -142,7 +166,10 @@ function mapRows(rows: any[]): TripStop[] {
   return rows.map((r) => ({
     id: r.id,
     scheduledTripId: r.scheduled_trip_id,
-    stopType: normalizeDbStopType(String(r.stop_type ?? '')),
+    stopType: normalizeDbStopType(String(r.stop_type ?? ''), {
+      label: r.label,
+      sequence_order: r.sequence_order,
+    }),
     entityId: r.entity_id,
     label: r.label ?? '',
     address: r.address ?? '',
@@ -225,26 +252,36 @@ async function buildStopsManually(tripId: string): Promise<TripStop[]> {
     });
   }
 
-  // Shipments (package pickup + dropoff)
-  const { data: shipments } = await supabase
-    .from('shipments')
-    .select(`
-      id,
-      description,
-      notes,
-      origin_address,
-      destination_address,
-      origin_lat,
-      origin_lng,
-      destination_lat,
-      destination_lng,
-      sender_name,
-      receiver_name,
-      pickup_code,
-      delivery_code
-    `)
-    .eq('scheduled_trip_id', tripId)
-    .in('status', ['confirmed', 'in_transit']);
+  const { data: tripDriverRow } = await supabase
+    .from('scheduled_trips')
+    .select('driver_id')
+    .eq('id', tripId)
+    .maybeSingle();
+  const tripDriverId = (tripDriverRow as { driver_id?: string | null } | null)?.driver_id ?? null;
+
+  // Shipments na viagem: só após o motorista aceitar (driver_id = motorista da viagem)
+  const { data: shipments } = tripDriverId
+    ? await supabase
+        .from('shipments')
+        .select(`
+          id,
+          description,
+          notes,
+          origin_address,
+          destination_address,
+          origin_lat,
+          origin_lng,
+          destination_lat,
+          destination_lng,
+          sender_name,
+          receiver_name,
+          pickup_code,
+          delivery_code
+        `)
+        .eq('scheduled_trip_id', tripId)
+        .eq('driver_id', tripDriverId)
+        .in('status', ['confirmed', 'in_progress'])
+    : { data: [] as Record<string, unknown>[] };
 
   for (const s of shipments ?? []) {
     result.push({

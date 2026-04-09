@@ -15,6 +15,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+import { tripDisplayEarningsCents } from '../lib/driverTripEarnings';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TripHistory'>;
@@ -28,6 +29,7 @@ type Booking = {
   passenger_count: number | null;
   bags_count: number | null;
   status: string;
+  amount_cents?: number | null;
 };
 
 type Trip = {
@@ -36,6 +38,7 @@ type Trip = {
   destination_address: string;
   departure_at: string;
   status: 'completed' | 'cancelled';
+  amount_cents?: number | null;
   bookings: Booking[];
 };
 
@@ -75,11 +78,18 @@ function subtitleForTrip(bookings: Booking[]): string {
   return parts.length > 0 ? parts.join(' • ') : '—';
 }
 
+function formatEarnings(trip: Trip): string {
+  const cents = tripDisplayEarningsCents(trip.bookings, trip.amount_cents ?? null);
+  if (cents <= 0) return '';
+  return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
 // ─── Trip Row ──────────────────────────────────────────────────────────────────
 
 function TripRow({ trip, onPress }: { trip: Trip; onPress: () => void }) {
   const isPackage = isPackageTrip(trip.bookings);
   const isCompleted = trip.status === 'completed';
+  const earningsLabel = formatEarnings(trip);
 
   return (
     <TouchableOpacity style={styles.tripRow} onPress={onPress} activeOpacity={0.75}>
@@ -107,6 +117,11 @@ function TripRow({ trip, onPress }: { trip: Trip; onPress: () => void }) {
           {'  '}
           <Text style={styles.tripMetaSub}>{subtitleForTrip(trip.bookings)}</Text>
         </Text>
+        {earningsLabel ? (
+          <Text style={styles.tripEarnings} numberOfLines={1}>
+            {earningsLabel}
+          </Text>
+        ) : null}
       </View>
 
       {/* Badge */}
@@ -171,7 +186,7 @@ export function TripHistoryScreen({ navigation }: Props) {
     const { data, error } = await supabase
       .from('scheduled_trips')
       .select(
-        'id, origin_address, destination_address, departure_at, status, bookings(id, passenger_count, bags_count, status)'
+        'id, origin_address, destination_address, departure_at, status, amount_cents, bookings(id, passenger_count, bags_count, status, amount_cents)'
       )
       .eq('driver_id', user.id)
       .in('status', ['completed', 'cancelled'])
@@ -336,6 +351,12 @@ const styles = StyleSheet.create({
   tripMetaSub: {
     fontSize: 13,
     color: '#9CA3AF',
+  },
+  tripEarnings: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: GOLD,
+    marginTop: 4,
   },
 
   // Badges

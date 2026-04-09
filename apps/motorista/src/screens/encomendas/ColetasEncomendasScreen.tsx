@@ -17,6 +17,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ColetasEncomendasStackParamList } from '../../navigation/ColetasEncomendasStack';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { supabase } from '../../lib/supabase';
+import { fetchWorkerShipmentBaseId } from '../../lib/preparerEncomendasBase';
 
 type Props = NativeStackScreenProps<ColetasEncomendasStackParamList, 'ColetasMain'>;
 
@@ -25,7 +26,8 @@ type ActiveShipment = {
   shortId: string;
   clientName: string;
   originAddress: string;
-  destinationAddress: string;
+  /** Endereço da base (devolução da encomenda). */
+  baseAddress: string;
   scheduledAt: string;
 };
 
@@ -68,30 +70,46 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user?.id) { setLoading(false); return; }
 
-    // Encomenda ativa (mais recente confirmada)
+    const myBaseId = await fetchWorkerShipmentBaseId(user.id);
+    if (!myBaseId) {
+      setActive(null);
+      setHistory([]);
+      setLoading(false);
+      return;
+    }
+
+    // Encomenda ativa (confirmada, mesma base do preparador)
     const { data: activeData } = await supabase
       .from('shipments')
-      .select('id, origin_address, destination_address, scheduled_at, created_at, user_id')
-      .eq('status', 'confirmed')
+      .select('id, origin_address, scheduled_at, created_at, user_id, base_id, bases(name, address)')
+      .in('status', ['confirmed', 'in_progress'])
       .eq('driver_id' as never, user.id)
+      .eq('base_id' as never, myBaseId as never)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
 
     if (activeData) {
       const row = activeData as {
-        id: string; origin_address: string; destination_address: string;
-        scheduled_at: string | null; created_at: string; user_id: string;
+        id: string;
+        origin_address: string;
+        scheduled_at: string | null;
+        created_at: string;
+        user_id: string;
+        bases?: { name?: string | null; address?: string | null } | null;
       };
       const { data: prof } = await supabase
         .from('profiles').select('full_name').eq('id', row.user_id).maybeSingle();
       const p = prof as { full_name?: string | null } | null;
+      const baseAddr = row.bases?.address?.trim()
+        ? `${row.bases?.name ? `${row.bases.name} — ` : ''}${row.bases.address}`.trim()
+        : 'Base (endereço indisponível)';
       setActive({
         id: row.id,
         shortId: shortId(row.id),
         clientName: p?.full_name ?? 'Cliente',
         originAddress: row.origin_address,
-        destinationAddress: row.destination_address,
+        baseAddress: baseAddr,
         scheduledAt: formatScheduledAt(row.scheduled_at, row.created_at),
       });
     } else {
@@ -103,6 +121,7 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
       .from('shipments')
       .select('id, created_at, user_id')
       .eq('driver_id' as never, user.id)
+      .eq('base_id' as never, myBaseId as never)
       .order('created_at', { ascending: false })
       .limit(5);
 
@@ -169,7 +188,7 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
               <View style={styles.activeRouteRow}>
                 <Text style={styles.activeRouteFrom} numberOfLines={1}>{active.originAddress}</Text>
                 <MaterialIcons name="arrow-forward" size={14} color="#6B7280" style={{ marginHorizontal: 6 }} />
-                <Text style={styles.activeRouteTo} numberOfLines={1}>{active.destinationAddress}</Text>
+                <Text style={styles.activeRouteTo} numberOfLines={1}>{active.baseAddress}</Text>
               </View>
               <View style={styles.activeTimeRow}>
                 <MaterialIcons name="access-time" size={14} color="#6B7280" />

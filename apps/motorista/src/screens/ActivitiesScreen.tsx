@@ -21,6 +21,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
+import { useAppAlert } from '../contexts/AppAlertContext';
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Activities'>,
@@ -42,6 +43,9 @@ type RawTrip = {
   bags_available: number | null;
   trunk_occupancy_pct: number | null;
   status: string;
+  route_id?: string | null;
+  is_active?: boolean | null;
+  driver_journey_started_at?: string | null;
   bookings: Booking[];
 };
 
@@ -54,9 +58,13 @@ type TripRow = {
   status: string;
   confirmedBookings: Booking[];
   passengerCount: number;
+  /** Malas declaradas nas reservas (`bookings.bags_count`), não é envio de encomenda. */
   bagsUsed: number;
+  /** Linhas em `shipments` vinculadas à viagem (frete). */
+  shipmentCount: number;
   trunkPct: number;
   isConfirmed: boolean;
+  driverJourneyStartedAt: string | null;
 };
 
 type FilterCategory = 'Todas' | 'Viagens' | 'Envios' | 'Dependentes';
@@ -108,20 +116,15 @@ function formatDateDisplay(dateStr: string): string {
 }
 
 function buildTripRow(raw: RawTrip): TripRow {
-  const confirmedBookings = (raw.bookings ?? []).filter(
-    (b) => b.status === 'confirmed' || b.status === 'paid',
-  );
-  const passengerCount = confirmedBookings.reduce(
-    (s, b) => s + (b.passenger_count ?? 0),
-    0,
-  );
-  const bagsUsed = confirmedBookings.reduce(
-    (s, b) => s + (b.bags_count ?? 0),
-    0,
-  );
+  const rows = raw.bookings ?? [];
+  const confirmedBookings = rows.filter((b) => b.status === 'confirmed');
   const bagsAvailable = raw.bags_available ?? 0;
   const trunkPct = raw.trunk_occupancy_pct ?? 0;
-  const isConfirmed = raw.status === 'active' || confirmedBookings.length > 0;
+  // Passageiros e malas só contam após o motorista aceitar (confirmed).
+  // pending/paid ficam só em Solicitações pendentes até lá.
+  const passengerCount = confirmedBookings.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
+  const bagsUsed = confirmedBookings.reduce((s, b) => s + (b.bags_count ?? 0), 0);
+  const isConfirmed = confirmedBookings.length > 0;
 
   return {
     id: raw.id,
@@ -133,8 +136,10 @@ function buildTripRow(raw: RawTrip): TripRow {
     confirmedBookings,
     passengerCount,
     bagsUsed,
+    shipmentCount: 0,
     trunkPct,
     isConfirmed,
+    driverJourneyStartedAt: raw.driver_journey_started_at ?? null,
   };
 }
 
@@ -142,16 +147,21 @@ function TripCard({
   trip,
   onPress,
   onTrunkChange,
+  onStartTrip,
+  startTripLoading,
 }: {
   trip: TripRow;
   onPress: () => void;
   onTrunkChange?: (newPct: number) => void;
+  onStartTrip?: () => void;
+  startTripLoading?: boolean;
 }) {
   const isConfirmed = trip.isConfirmed;
-  const isPlannedNoPassengers =
-    !isConfirmed && trip.confirmedBookings.length === 0;
+  const isPlannedNoPassengers = !isConfirmed;
+  const journeyStarted = Boolean(trip.driverJourneyStartedAt);
   const hasPassengers = trip.passengerCount > 0;
-  const hasPackages = trip.bagsUsed > 0;
+  const hasLuggage = trip.bagsUsed > 0;
+  const hasShipments = trip.shipmentCount > 0;
 
   const trunkColor =
     trip.trunkPct >= 80 ? '#EF4444' : trip.trunkPct >= 50 ? GOLD : '#22C55E';
@@ -197,23 +207,40 @@ function TripCard({
       {/* Row 3: date */}
       <Text style={styles.dateText}>{formatDeparture(trip.departure_at)}</Text>
 
-      {/* Row 4: content type */}
-      {(hasPassengers || hasPackages) && (
-        <View style={styles.contentRow}>
-          {hasPassengers && (
-            <View style={styles.contentItem}>
-              <Text style={styles.contentLabel}>Passageiros</Text>
-              <Text style={styles.contentValue}>
-                {trip.passengerCount} passageiros
+      {/* Row 4: passageiros + malas na mesma linha; encomendas abaixo (largura total) */}
+      {(hasPassengers || hasLuggage || hasShipments) && (
+        <View style={styles.contentBlock}>
+          {(hasPassengers || hasLuggage) ? (
+            <View style={styles.contentRowTop}>
+              {hasPassengers ? (
+                <View style={[styles.contentItem, styles.contentItemTop]}>
+                  <Text style={styles.contentLabel}>Passageiros</Text>
+                  <Text style={styles.contentValue} numberOfLines={1}>
+                    {trip.passengerCount}{' '}
+                    {trip.passengerCount === 1 ? 'passageiro' : 'passageiros'}
+                  </Text>
+                </View>
+              ) : null}
+              {hasLuggage ? (
+                <View style={[styles.contentItem, styles.contentItemTop]}>
+                  <Text style={styles.contentLabel}>Malas</Text>
+                  <Text style={styles.contentValue} numberOfLines={1}>
+                    {trip.bagsUsed === 1 ? '1 mala' : `${trip.bagsUsed} malas`}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+          {hasShipments ? (
+            <View style={styles.contentShipmentRow}>
+              <Text style={styles.contentLabel}>Encomendas</Text>
+              <Text style={styles.contentValueShipment}>
+                {trip.shipmentCount === 1
+                  ? '1 encomenda'
+                  : `${trip.shipmentCount} encomendas`}
               </Text>
             </View>
-          )}
-          {hasPackages && (
-            <View style={styles.contentItem}>
-              <Text style={styles.contentLabel}>Encomendas</Text>
-              <Text style={styles.contentValue}>{trip.bagsUsed} pacotes</Text>
-            </View>
-          )}
+          ) : null}
         </View>
       )}
 
@@ -247,6 +274,21 @@ function TripCard({
         )}
       </View>
 
+      {!journeyStarted && onStartTrip && trip.status !== 'cancelled' && trip.status !== 'completed' ? (
+        <TouchableOpacity
+          onPress={onStartTrip}
+          activeOpacity={0.85}
+          style={styles.btnStartTrip}
+          disabled={startTripLoading}
+        >
+          {startTripLoading ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <Text style={styles.btnStartTripText}>Iniciar viagem</Text>
+          )}
+        </TouchableOpacity>
+      ) : null}
+
       {/* Bottom link */}
       <TouchableOpacity onPress={onPress} activeOpacity={0.7} style={styles.linkBtn}>
         <Text style={styles.linkText}>
@@ -258,7 +300,9 @@ function TripCard({
 }
 
 export function ActivitiesScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [loading, setLoading] = useState(true);
+  const [startingTripId, setStartingTripId] = useState<string | null>(null);
   const [confirmedTrips, setConfirmedTrips] = useState<TripRow[]>([]);
   const [plannedTrips, setPlannedTrips] = useState<TripRow[]>([]);
   const [filterVisible, setFilterVisible] = useState(false);
@@ -287,14 +331,38 @@ export function ActivitiesScreen({ navigation }: Props) {
     const { data } = await supabase
       .from('scheduled_trips')
       .select(
-        'id, origin_address, destination_address, departure_at, bags_available, trunk_occupancy_pct, status, bookings(id, passenger_count, bags_count, status)',
+        'id, origin_address, destination_address, departure_at, bags_available, trunk_occupancy_pct, status, route_id, is_active, driver_journey_started_at, bookings(id, passenger_count, bags_count, status)',
       )
       .eq('driver_id', user.id)
       .in('status', ['active', 'scheduled'])
       .order('departure_at', { ascending: true });
 
     const rawTrips = (data ?? []) as RawTrip[];
-    const rows = rawTrips.map(buildTripRow);
+    const visibleRaw = rawTrips.filter((t) => {
+      if (t.route_id != null && t.is_active === false) return false;
+      return true;
+    });
+    let rows = visibleRaw.map(buildTripRow);
+
+    if (rows.length > 0) {
+      const tripIds = rows.map((r) => r.id);
+      const { data: shipRows } = await supabase
+        .from('shipments')
+        .select('scheduled_trip_id')
+        .in('scheduled_trip_id', tripIds)
+        .eq('driver_id', user.id)
+        .in('status', ['confirmed', 'in_progress'] as never);
+      const countByTrip = new Map<string, number>();
+      for (const s of shipRows ?? []) {
+        const tid = (s as { scheduled_trip_id?: string }).scheduled_trip_id;
+        if (!tid) continue;
+        countByTrip.set(tid, (countByTrip.get(tid) ?? 0) + 1);
+      }
+      rows = rows.map((r) => ({
+        ...r,
+        shipmentCount: countByTrip.get(r.id) ?? 0,
+      }));
+    }
 
     let filtered = rows;
 
@@ -346,6 +414,31 @@ export function ActivitiesScreen({ navigation }: Props) {
   const goTripHistory = () => {
     navigation.navigate('TripHistory');
   };
+
+  const startTripJourney = useCallback(
+    async (tripId: string) => {
+      setStartingTripId(tripId);
+      const now = new Date().toISOString();
+      const { error } = await supabase
+        .from('scheduled_trips')
+        .update(
+          {
+            status: 'active',
+            driver_journey_started_at: now,
+            updated_at: now,
+          } as never,
+        )
+        .eq('id', tripId);
+      setStartingTripId(null);
+      if (error) {
+        showAlert('Erro', 'Não foi possível iniciar a viagem. Tente novamente.');
+        return;
+      }
+      await load();
+      navigation.navigate('ActiveTrip', { tripId });
+    },
+    [load, navigation, showAlert],
+  );
 
   const updateTrunk = useCallback(async (tripId: string, pct: number) => {
     const update = (prev: TripRow[]) =>
@@ -412,6 +505,10 @@ export function ActivitiesScreen({ navigation }: Props) {
                     trip={trip}
                     onPress={() => goTripDetail(trip.id)}
                     onTrunkChange={(pct) => updateTrunk(trip.id, pct)}
+                    onStartTrip={() => {
+                      void startTripJourney(trip.id);
+                    }}
+                    startTripLoading={startingTripId === trip.id}
                   />
                 ))}
               </>
@@ -426,6 +523,10 @@ export function ActivitiesScreen({ navigation }: Props) {
                     trip={trip}
                     onPress={() => goTripDetail(trip.id)}
                     onTrunkChange={(pct) => updateTrunk(trip.id, pct)}
+                    onStartTrip={() => {
+                      void startTripJourney(trip.id);
+                    }}
+                    startTripLoading={startingTripId === trip.id}
                   />
                 ))}
               </>
@@ -728,17 +829,39 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
 
-  contentRow: {
-    flexDirection: 'row',
-    gap: 20,
+  contentBlock: {
     marginBottom: 10,
+    gap: 8,
+  },
+  contentRowTop: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    rowGap: 6,
   },
   contentItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  contentItemTop: {
+    flexGrow: 1,
+    flexBasis: '45%',
+    minWidth: 0,
+  },
+  contentShipmentRow: {
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 2,
+    width: '100%',
+  },
   contentLabel: {
     fontSize: 13,
     color: '#6B7280',
   },
   contentValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#111827',
+    flexShrink: 1,
+  },
+  contentValueShipment: {
     fontSize: 13,
     fontWeight: '600',
     color: '#111827',
@@ -779,6 +902,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
+  btnStartTrip: {
+    backgroundColor: '#111827',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 14,
+  },
+  btnStartTripText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
   linkBtn: { alignItems: 'center', paddingTop: 4 },
   linkText: {
     fontSize: 14,
