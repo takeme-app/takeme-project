@@ -1,7 +1,7 @@
 /**
  * ViagemDetalheScreen — Detalhe da viagem (dados Supabase por :id ou state).
  */
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   webStyles,
@@ -22,6 +22,7 @@ import {
   statusStyles,
   statusLabels,
   statusPill,
+  liveFollowMyLocationSvg,
   type ViagemRow,
   type DetailTimelineItem,
 } from '../styles/webStyles';
@@ -80,13 +81,28 @@ export default function ViagemDetalheScreen() {
   const [availDrivers, setAvailDrivers] = useState<MotoristaListItem[]>([]);
   const [selectedDriver, setSelectedDriver] = useState(0);
   const [imageZoomOpen, setImageZoomOpen] = useState(false);
+  const [acompanharTempoReal, setAcompanharTempoReal] = useState(false);
   const [linkedShipments, setLinkedShipments] = useState<TripShipmentListItem[]>([]);
   const [tripCoords] = useTripMapCoords(detail);
   const [driverStats, setDriverStats] = useState<{ rating: number | null; totalTrips: number; avatarUrl: string | null }>({ rating: null, totalTrips: 0, avatarUrl: null });
 
   // Multi-ponto: buscar paradas da viagem
   const tripIdForStops = detail?.listItem?.tripId || null;
-  const { waypoints: tripWaypoints } = useTripStops(tripIdForStops);
+  const { waypoints: tripWaypoints, stops: tripStops } = useTripStops(tripIdForStops);
+
+  const driverStartCoord = useMemo(() => {
+    const d = tripStops.find((s) => s.stop_type === 'driver_origin' && s.lat != null && s.lng != null);
+    if (d) return { lat: d.lat!, lng: d.lng! };
+    if (tripCoords.vehicleOrigin) return tripCoords.vehicleOrigin;
+    return undefined;
+  }, [tripStops, tripCoords.vehicleOrigin]);
+
+  const followTargetCoord = useMemo(
+    () => driverStartCoord ?? tripCoords.origin,
+    [driverStartCoord, tripCoords.origin],
+  );
+
+  const onFollowVehicleInterrupted = useCallback(() => setAcompanharTempoReal(false), []);
 
   const isMotoristas = location.pathname.startsWith('/motoristas');
   const isPassageiros = location.pathname.startsWith('/passageiros');
@@ -157,15 +173,30 @@ export default function ViagemDetalheScreen() {
     return stateObj?.trip ?? null;
   }, [detail, stateObj]);
 
-  const passengerNames = useMemo(() => {
-    const names: string[] = [];
-    if (detail) {
-      names.push(detail.listItem.passageiro);
-      detail.passengerData.forEach((p: { name?: string | null }) => { if (p.name) names.push(p.name); });
-    } else if (t) {
-      names.push(t.passageiro);
+  /** Alinhado a `bookings.passenger_count`: titular + extras em `passenger_data`, sem duplicar nome do titular. */
+  const passengerDisplayRows = useMemo(() => {
+    type Row = { name: string; pData?: { name?: string; cpf?: string; bags?: number } };
+    if (!detail) {
+      return t ? [{ name: t.passageiro }] as Row[] : [];
     }
-    return [...new Set(names.filter(Boolean))];
+    const count = Math.max(1, Number(detail.passengerCount) || 1);
+    const primary = (detail.listItem.passageiro || 'Sem nome').trim();
+    const primaryKey = primary.toLowerCase();
+    const primaryPData = detail.passengerData.find(
+      (p) => (p.name || '').trim().toLowerCase() === primaryKey,
+    );
+    const rows: Row[] = [{ name: primary || 'Sem nome', pData: primaryPData }];
+    const seen = new Set<string>([primaryKey]);
+    for (const p of detail.passengerData) {
+      if (rows.length >= count) break;
+      const nm = (p.name || '').trim();
+      if (!nm) continue;
+      const k = nm.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      rows.push({ name: nm, pData: p });
+    }
+    return rows;
   }, [detail, t]);
 
   if (loading) {
@@ -248,16 +279,22 @@ export default function ViagemDetalheScreen() {
     React.createElement('h2', { style: webStyles.detailSectionTitle }, 'Motorista'),
     motoristaCard);
 
-  const passageiroCard = (name: string, idx: number) => {
-    const pData = detail?.passengerData?.[idx];
-    const bags = pData?.bags ?? 1;
+  const passageiroCard = (row: { name: string; pData?: { name?: string; cpf?: string; bags?: number } }, idx: number) => {
+    const name = row.name;
+    const pData = row.pData;
+    const bags =
+      pData?.bags != null && Number.isFinite(Number(pData.bags))
+        ? Number(pData.bags)
+        : detail && detail.passengerCount <= 1
+          ? Math.max(1, detail.bagsCount ?? 1)
+          : 1;
     const bagLabel = bags <= 1 ? 'Pequena' : bags <= 2 ? 'Média' : 'Grande';
     const unitPrice = detail && detail.passengerCount > 0
       ? fmtBRL(Math.round((detail.amountCents ?? 0) / detail.passengerCount))
       : 'R$ 150,00';
     const cpfLabel = pData?.cpf ? `CPF: ${pData.cpf}` : '';
 
-    return React.createElement('div', { style: { background: '#f6f6f6', borderRadius: 12, padding: 16, minWidth: 280, maxWidth: 330, flex: '1 1 280px', display: 'flex', flexDirection: 'column' as const, gap: 0 } },
+    return React.createElement('div', { key: `pax-${idx}-${name}`, style: { background: '#f6f6f6', borderRadius: 12, padding: 16, minWidth: 280, maxWidth: 330, flex: '1 1 280px', display: 'flex', flexDirection: 'column' as const, gap: 0 } },
       React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, paddingBottom: 12, borderBottom: '1px solid #e2e2e2', justifyContent: 'space-between' } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, flex: 1, minWidth: 0 } },
           React.createElement('div', { style: { width: 48, height: 48, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 600, color: '#767676', fontFamily: 'Inter, sans-serif' } },
@@ -298,7 +335,24 @@ export default function ViagemDetalheScreen() {
       React.createElement('h2', { style: { ...webStyles.detailSectionTitle, margin: 0 } }, 'Passageiros'),
       passageirosChevronBtn),
     React.createElement('div', { style: { display: 'flex', gap: 24, overflowX: 'auto' as const } },
-      ...passengerNames.map((n, i) => passageiroCard(n, i))));
+      ...passengerDisplayRows.map((row, i) => passageiroCard(row, i))));
+
+  const acompanharTempoRealBtn = followTargetCoord
+    ? React.createElement('button', {
+      type: 'button',
+      style: {
+        ...webStyles.detailLiveFollowBtn,
+        ...(acompanharTempoReal ? { boxShadow: 'inset 0 0 0 2px #C9A227' } : {}),
+      },
+      'aria-pressed': acompanharTempoReal,
+      title: acompanharTempoReal
+        ? 'Clique novamente ou arraste o mapa para sair do modo acompanhar'
+        : 'Aproximar o mapa e manter o veículo centrado; segue atualizações de posição quando disponíveis.',
+      onClick: () => setAcompanharTempoReal((v) => !v),
+    },
+      liveFollowMyLocationSvg,
+      'Acompanhar em tempo real')
+    : null;
 
   const firstSection = React.createElement('div', { style: { ...webStyles.detailSection, ...detailSectionBorder } },
     React.createElement('div', { style: webStyles.detailBreadcrumb },
@@ -308,11 +362,7 @@ export default function ViagemDetalheScreen() {
     React.createElement('div', { style: webStyles.detailToolbar },
       React.createElement('button', { type: 'button', style: webStyles.detailBackBtn, onClick: () => navigate(-1) }, arrowBackSvg, 'Voltar'),
       React.createElement('div', { style: { ...webStyles.detailDocBtns, gap: 16 } },
-        isMotoristas ? React.createElement('button', { type: 'button', style: { ...webStyles.detailDocBtn, background: '#0d0d0d', color: '#fff', border: '1px solid #0d0d0d' } },
-          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-            React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#fff', strokeWidth: 2 }),
-            React.createElement('circle', { cx: 12, cy: 12, r: 3, fill: '#fff' })),
-          'Acompanhar em tempo real') : null,
+        acompanharTempoRealBtn,
         React.createElement('button', { type: 'button', style: webStyles.detailDocBtn },
           React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
             React.createElement('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z', stroke: '#0d0d0d', strokeWidth: 2 }),
@@ -335,10 +385,14 @@ export default function ViagemDetalheScreen() {
         React.createElement(MapView, {
           origin: tripCoords.origin,
           destination: tripCoords.destination,
+          driverStart: driverStartCoord,
           waypoints: tripWaypoints.length > 0 ? tripWaypoints : undefined,
           height: DETAIL_TRIP_MAP_HEIGHT,
           staticMode: false,
           connectPoints: true,
+          followVehicle: acompanharTempoReal,
+          followTarget: acompanharTempoReal && followTargetCoord ? followTargetCoord : undefined,
+          onFollowVehicleInterrupted: onFollowVehicleInterrupted,
           style: { borderRadius: 0 },
         }),
         React.createElement('button', {
@@ -536,9 +590,14 @@ export default function ViagemDetalheScreen() {
           React.createElement(MapView, {
             origin: tripCoords.origin,
             destination: tripCoords.destination,
+            driverStart: driverStartCoord,
+            waypoints: tripWaypoints.length > 0 ? tripWaypoints : undefined,
             height: 675,
             staticMode: false,
             connectPoints: true,
+            followVehicle: acompanharTempoReal,
+            followTarget: acompanharTempoReal && followTargetCoord ? followTargetCoord : undefined,
+            onFollowVehicleInterrupted: onFollowVehicleInterrupted,
             style: { borderRadius: 0, width: '100%', height: '100%' },
           })),
         React.createElement('button', {
