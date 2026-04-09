@@ -25,9 +25,9 @@ import {
   type ViagemRow,
   type DetailTimelineItem,
 } from '../styles/webStyles';
-import { fetchBookingDetailForAdmin, fetchMotoristas } from '../data/queries';
+import { fetchBookingDetailForAdmin, fetchMotoristas, fetchShipmentsForScheduledTrip } from '../data/queries';
 import { supabase } from '../lib/supabase';
-import type { BookingDetailForAdmin } from '../data/types';
+import type { BookingDetailForAdmin, TripShipmentListItem } from '../data/types';
 import type { MotoristaListItem } from '../data/types';
 import MapView from '../components/MapView';
 import { useTripStops } from '../hooks/useTripStops';
@@ -50,6 +50,18 @@ function fmtBRL(cents: number): string {
   return `R$ ${(cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+const SHIPMENT_STATUS_LABEL: Record<string, string> = {
+  pending_review: 'Pendente de análise',
+  confirmed: 'Confirmada',
+  in_progress: 'Em andamento',
+  delivered: 'Entregue',
+  cancelled: 'Cancelada',
+};
+
+function shipmentStatusLabel(status: string): string {
+  return SHIPMENT_STATUS_LABEL[status] || status || '—';
+}
+
 function tripDurationMin(depIso: string, arrIso: string): string {
   const a = new Date(depIso).getTime();
   const b = new Date(arrIso).getTime();
@@ -68,7 +80,7 @@ export default function ViagemDetalheScreen() {
   const [availDrivers, setAvailDrivers] = useState<MotoristaListItem[]>([]);
   const [selectedDriver, setSelectedDriver] = useState(0);
   const [imageZoomOpen, setImageZoomOpen] = useState(false);
-  const [linkedShipments, setLinkedShipments] = useState<any[]>([]);
+  const [linkedShipments, setLinkedShipments] = useState<TripShipmentListItem[]>([]);
   const [tripCoords] = useTripMapCoords(detail);
   const [driverStats, setDriverStats] = useState<{ rating: number | null; totalTrips: number; avatarUrl: string | null }>({ rating: null, totalTrips: 0, avatarUrl: null });
 
@@ -134,14 +146,9 @@ export default function ViagemDetalheScreen() {
         });
       });
     }
-    // Linked shipments (shipments with same trip timeframe and route)
-    (supabase as any).from('shipments')
-      .select('id, origin_address, destination_address, package_size, recipient_name, recipient_phone, amount_cents, status, photo_url, instructions')
-      .order('created_at', { ascending: false })
-      .limit(20)
-      .then(({ data }: any) => {
-        if (!cancel && data) setLinkedShipments(data);
-      });
+    fetchShipmentsForScheduledTrip(tripId).then((rows) => {
+      if (!cancel) setLinkedShipments(rows);
+    });
     return () => { cancel = true; };
   }, [detail?.listItem?.tripId]);
 
@@ -192,7 +199,7 @@ export default function ViagemDetalheScreen() {
 
   const motoristaNome = detail
     ? (v?.motoristaNome ?? '—')
-    : (stateObj?.motoristaNome ?? 'Matheus Barros');
+    : (stateObj?.motoristaNome ?? '—');
   const motoristaBadge = !detail
     ? 'Motorista TakeMe'
     : (v?.motoristaCategoria === 'motorista' ? 'Motorista Parceiro' : 'Motorista TakeMe');
@@ -410,10 +417,14 @@ export default function ViagemDetalheScreen() {
   const bookingIdLabel = v?.bookingId ? `#${String(v.bookingId).slice(0, 8)}` : (isMockTrip ? '#123456' : (id ? `#${String(id).slice(0, 8)}` : '—'));
   const totalCents = detail?.amountCents ?? (isMockTrip ? 15430 : 0);
   const unitCents = detail && detail.passengerCount > 0 ? Math.round(totalCents / detail.passengerCount) : (isMockTrip ? 8000 : totalCents);
-  const dur = v ? tripDurationMin(
-    v.departureAtIso,
-    new Date(new Date(v.departureAtIso).getTime() + 3600000).toISOString(),
-  ) : (isMockTrip ? '50 minutos' : '—');
+  const dur = detail?.tripDepartureAtIso && detail?.tripArrivalAtIso
+    ? tripDurationMin(detail.tripDepartureAtIso, detail.tripArrivalAtIso)
+    : v
+      ? tripDurationMin(
+        v.departureAtIso,
+        new Date(new Date(v.departureAtIso).getTime() + 3600000).toISOString(),
+      )
+      : (isMockTrip ? '50 minutos' : '—');
   const distKmLabel = isMockTrip ? '18,4 km' : '—';
 
   const resumoSection = React.createElement('div', {
@@ -456,44 +467,51 @@ export default function ViagemDetalheScreen() {
         React.createElement('span', { style: webStyles.detailPerfCardValue }, distKmLabel))));
 
   // ── Encomendas conforme Figma: linhas horizontais ──────────────────
-  const encField = (label: string, value: string) =>
+  const encField = (label: string, value: string, multiline?: boolean) =>
     React.createElement('div', { style: { flex: '1 1 0', minWidth: 0 } },
       React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 } }, label),
-      React.createElement('div', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', lineHeight: 1.5, overflow: 'hidden', textOverflow: 'ellipsis' as const, whiteSpace: 'nowrap' as const } }, value));
+      React.createElement('div', {
+        style: {
+          fontSize: 14, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', lineHeight: 1.5,
+          ...(multiline
+            ? { whiteSpace: 'normal' as const, wordBreak: 'break-word' as const }
+            : { overflow: 'hidden', textOverflow: 'ellipsis' as const, whiteSpace: 'nowrap' as const }),
+        },
+      }, value));
 
-  const shipmentRow = (s: any) => {
-    const sizeLabel = s.package_size === 'pequeno' ? 'Pequeno' : s.package_size === 'medio' ? 'Médio' : s.package_size === 'grande' ? 'Grande' : s.package_size || '—';
+  const shipmentRow = (s: TripShipmentListItem) => {
+    const ps = s.packageSize;
+    const sizeLabel = ps === 'pequeno' ? 'Pequeno' : ps === 'medio' ? 'Médio' : ps === 'grande' ? 'Grande' : ps || '—';
     return React.createElement('div', {
       key: s.id,
       style: { background: '#f6f6f6', borderRadius: 16, padding: '20px 24px', display: 'flex', flexDirection: 'column' as const, gap: 16 },
     },
-      // Linha 1: Foto + Tamanho | Valor | Remetente | Destinatário | Chat
-      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 16 } },
-        s.photo_url
-          ? React.createElement('img', { src: s.photo_url, alt: '', style: { width: 44, height: 44, borderRadius: 8, objectFit: 'cover' as const, flexShrink: 0 } })
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' as const } },
+        s.photoUrl
+          ? React.createElement('img', { src: s.photoUrl, alt: '', style: { width: 44, height: 44, borderRadius: 8, objectFit: 'cover' as const, flexShrink: 0 } })
           : React.createElement('div', { style: { width: 44, height: 44, borderRadius: 8, background: '#e2e2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 } }, '\u{1F4E6}'),
         encField('Tamanho:', sizeLabel),
-        encField('Valor:', fmtBRL(s.amount_cents || 0)),
-        encField('Remetente:', s.recipient_name || '—'),
-        encField('Destinatário:', s.recipient_name || '—'),
+        encField('Valor:', fmtBRL(s.amountCents)),
+        encField('Remetente:', s.senderName),
+        encField('Destinatário:', s.recipientName),
+        encField('Status:', shipmentStatusLabel(s.status)),
         React.createElement('button', {
           type: 'button', title: 'Chat',
           style: { width: 40, height: 40, borderRadius: '50%', background: '#ffefc2', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
         }, headsetIconSvg)),
-      // Linha 2: Recolha | Entrega | Observações
-      React.createElement('div', { style: { display: 'flex', gap: 16 } },
-        encField('Recolha:', s.origin_address?.slice(0, 35) || '—'),
-        encField('Entrega:', s.destination_address?.slice(0, 35) || '—'),
+      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+        encField('Recolha:', s.originAddress || '—', true),
+        encField('Entrega:', s.destinationAddress || '—', true),
         s.instructions
-          ? encField('Observações:', s.instructions.slice(0, 40))
+          ? encField('Observações:', s.instructions, true)
           : React.createElement('div', { style: { flex: '1 1 0', minWidth: 0 } })));
   };
 
   const encomendasSection = React.createElement('div', { style: { ...webStyles.detailPassageirosSection, borderBottom: 'none' } },
     React.createElement('h2', { style: webStyles.detailSectionTitle }, 'Encomendas'),
     linkedShipments.length === 0
-      ? React.createElement('p', { style: { fontSize: 14, color: '#767676', fontFamily: 'Inter, sans-serif' } },
-          'Não há encomendas vinculadas a esta reserva no sistema.')
+      ? React.createElement('p', { style: { fontSize: 14, color: '#767676', fontFamily: 'Inter, sans-serif', maxWidth: 560, lineHeight: 1.5 } },
+          'Não há encomendas associadas a esta viagem agendada. Envios aparecem aqui quando estão atribuídos à mesma viagem do motorista.')
       : React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
           ...linkedShipments.map(shipmentRow)));
 

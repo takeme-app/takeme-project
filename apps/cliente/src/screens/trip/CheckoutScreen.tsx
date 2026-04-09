@@ -169,7 +169,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
   }, [refreshCheckout]);
 
   const handleConfirmPayment = useCallback(
-    async (_params: { method: PaymentMethodType; paymentMethodId?: string }) => {
+    async (params: { method: PaymentMethodType; paymentMethodId?: string }) => {
       if (!origin || !destination) return;
       if (!scheduledTripId) {
         showAlert(
@@ -233,6 +233,42 @@ export function CheckoutScreen({ navigation, route }: Props) {
           return;
         }
         const bookingId = row && typeof row === 'object' && 'id' in row ? String((row as { id: string }).id) : '';
+        if (!bookingId) {
+          showAlert('Erro', 'Não foi possível obter o identificador da reserva.');
+          return;
+        }
+
+        const cancelBookingHold = async () => {
+          await supabase
+            .from('bookings')
+            .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+            .eq('id', bookingId);
+        };
+
+        if (params.method === 'credito' || params.method === 'debito') {
+          if (params.paymentMethodId) {
+            const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke('charge-booking', {
+              body: {
+                booking_id: bookingId,
+                stripe_payment_method_id: params.paymentMethodId,
+              },
+            });
+            const chargeErrMsg =
+              chargeFnError?.message ??
+              (chargeData && typeof chargeData === 'object' && 'error' in chargeData
+                ? String((chargeData as { error?: string }).error ?? '')
+                : '');
+            if (chargeErrMsg) {
+              await cancelBookingHold();
+              showAlert(
+                'Pagamento',
+                chargeErrMsg || 'Não foi possível confirmar o pagamento. A reserva foi liberada.',
+              );
+              return;
+            }
+          }
+        }
+
         const summary: PaymentConfirmedBookingParam = {
           booking_id: bookingId,
           origin_address: origin.address,

@@ -85,24 +85,25 @@ test.describe('listas, dados da API e filtros', () => {
     await expect(d).toBeHidden();
   });
 
-  test('Motoristas — tabela e filtro (nome)', async ({ page }) => {
+  test('Motoristas — lista e filtro (nome/telefone)', async ({ page }) => {
     await page.goto('/motoristas');
     await expect(page.getByRole('heading', { name: 'Motoristas', exact: true })).toBeVisible({ timeout: 25_000 });
     await expect(page.getByText('Carregando motoristas...')).toBeHidden({ timeout: 60_000 });
-    const rows = page.getByTestId('motorista-table-row');
+    await expect(page.getByText('Carregando cadastros...')).toBeHidden({ timeout: 60_000 });
+    const rows = page.getByTestId('motorista-cadastro-row');
     const initial = await rows.count();
     assertHasRows(initial, 'motoristas');
-    await page.getByTestId('motoristas-open-table-filter').click();
-    const dialog = page.getByRole('dialog', { name: 'Filtro da tabela' });
+    await page.getByTestId('motoristas-open-cadastro-filter').click();
+    const dialog = page.getByRole('dialog', { name: 'Filtro da lista' });
     await expect(dialog).toBeVisible();
-    await dialog.getByPlaceholder('Ex: Carlos Silva').fill('__e2e_no_match__');
-    await dialog.getByRole('button', { name: 'Aplicar filtro' }).click();
+    await dialog.getByPlaceholder('Ex: João ou 11999...').fill('__e2e_no_match__');
+    await dialog.getByRole('button', { name: 'Aplicar' }).click();
     await expect(dialog).toBeHidden();
     await expect(rows).toHaveCount(0);
-    await page.getByTestId('motoristas-open-table-filter').click();
-    const d2 = page.getByRole('dialog', { name: 'Filtro da tabela' });
-    await d2.getByPlaceholder('Ex: Carlos Silva').fill('');
-    await d2.getByRole('button', { name: 'Aplicar filtro' }).click();
+    await page.getByTestId('motoristas-open-cadastro-filter').click();
+    const d2 = page.getByRole('dialog', { name: 'Filtro da lista' });
+    await d2.getByPlaceholder('Ex: João ou 11999...').fill('');
+    await d2.getByRole('button', { name: 'Aplicar' }).click();
     await expect(rows).toHaveCount(initial);
   });
 

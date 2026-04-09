@@ -124,6 +124,25 @@ export interface BookingDetailForAdmin {
   userId: string;
   clientPhone: string | null;
   trunkOccupancyPct: number;
+  /** `scheduled_trips.departure_at` em ISO (duração no resumo). */
+  tripDepartureAtIso: string | null;
+  /** `scheduled_trips.arrival_at` em ISO (duração no resumo). */
+  tripArrivalAtIso: string | null;
+}
+
+/** Shipment ligado à viagem (`scheduled_trip_id`) — lista no detalhe da viagem. */
+export interface TripShipmentListItem {
+  id: string;
+  packageSize: string | null;
+  amountCents: number;
+  recipientName: string;
+  /** Remetente: `profiles.full_name` do `shipments.user_id`. */
+  senderName: string;
+  originAddress: string;
+  destinationAddress: string;
+  instructions: string | null;
+  photoUrl: string | null;
+  status: string;
 }
 
 /** Encomenda para ecrã de edição admin (shipment ou envio de dependente). */
@@ -198,6 +217,22 @@ export interface MotoristaListItem {
   rating: number | null;
 }
 
+export type WorkerApprovalStatus = 'pending' | 'approved' | 'rejected' | 'suspended';
+
+/** Row for the motorista approval/registration management view. */
+export interface WorkerApprovalRow {
+  id: string;
+  nome: string;
+  phone: string | null;
+  avatarUrl: string | null;
+  rating: number | null;
+  subtype: 'take_me' | 'parceiro';
+  approvalStatus: WorkerApprovalStatus;
+  rejectionReason: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
+}
+
 /** Contagens por bucket de UI (derivadas de `scheduled_trips.status` por viagem da rota). */
 export type DestinoTripStatusCounts = {
   em_andamento: number;
@@ -240,6 +275,14 @@ export interface PreparadorEditPassenger {
   cpf: string | null;
   phone: string | null;
   observations: string | null;
+  /** Boarding/departure status from excursion_passengers.status_departure */
+  statusDeparture: 'not_started' | 'embarked' | 'absent' | null;
+  /** Return status from excursion_passengers.status_return */
+  statusReturn: string | null;
+  /** Whether absence was justified */
+  absenceJustified: boolean;
+  /** Age from excursion_passengers.age */
+  age: number | null;
 }
 
 export interface PreparadorEditDetail {

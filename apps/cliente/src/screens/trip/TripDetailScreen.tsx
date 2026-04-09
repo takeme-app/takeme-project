@@ -29,7 +29,7 @@ import { supabase } from '../../lib/supabase';
 import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib/route';
 import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
 import { getAvailableTimeSlots, ALL_TIME_SLOTS, toISODate } from '../../lib/dateTimeSlots';
-import { StatusBadge, bookingStatusToBadge } from '../../components/StatusBadge';
+import { StatusBadge, clientViagemStatusBadge } from '../../components/StatusBadge';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'TripDetail'>;
 
@@ -76,6 +76,8 @@ type BookingDetail = {
   driver_name: string;
   driver_avatar_url: string | null;
   driver_id: string | null;
+  /** `scheduled_trips.status` — active | completed | cancelled */
+  trip_status: string | null;
 };
 
 export function TripDetailScreen({ navigation, route }: Props) {
@@ -129,7 +131,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
       }
       const { data: trip } = await supabase
         .from('scheduled_trips')
-        .select('departure_at, arrival_at, driver_id')
+        .select('departure_at, arrival_at, driver_id, status')
         .eq('id', booking.scheduled_trip_id)
         .single();
       let driverName = 'Motorista';
@@ -161,6 +163,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
         driver_name: driverName,
         driver_avatar_url: driverAvatarUrl,
         driver_id: trip?.driver_id ?? null,
+        trip_status: (trip as { status?: string } | null)?.status ?? null,
       });
       setLoading(false);
     })();
@@ -202,9 +205,25 @@ export function TripDetailScreen({ navigation, route }: Props) {
 
   const hasValidMapCoords = mapRegion != null;
 
-  const isInProgress = detail?.status && !['paid', 'cancelled'].includes(detail.status);
-  const isCompleted = detail?.status === 'paid';
-  const driverOnWay = detail?.status && ['confirmed', 'in_progress'].includes(detail.status);
+  const b = (detail?.status ?? '').toLowerCase();
+  const t = (detail?.trip_status ?? '').toLowerCase();
+  const isBookingCancelled = b === 'cancelled' || b === 'canceled';
+  const isTripCancelled = t === 'cancelled' || t === 'canceled';
+  const isTripCompleted = t === 'completed';
+  const allowsClientTripActions =
+    !isBookingCancelled &&
+    !isTripCancelled &&
+    !isTripCompleted &&
+    ['pending', 'paid', 'confirmed'].includes(b);
+  const isInProgress = Boolean(detail && allowsClientTripActions);
+  const isCompleted = Boolean(detail && isTripCompleted && !isBookingCancelled);
+  const driverOnWay =
+    Boolean(detail) &&
+    !isBookingCancelled &&
+    !isTripCancelled &&
+    !isTripCompleted &&
+    t === 'active' &&
+    ['confirmed', 'in_progress'].includes(b);
 
   if (loading) {
     return (
@@ -307,7 +326,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
 
         <View style={styles.card}>
           <View style={styles.cardStatusRow}>
-            <StatusBadge variant={bookingStatusToBadge(detail.status)} />
+            <StatusBadge variant={clientViagemStatusBadge(detail.status, detail.trip_status)} />
           </View>
           <Text style={styles.tripId}>VG{detail.id.slice(-6).toUpperCase()}</Text>
           <Text style={styles.cardDate}>{formatDetailDate(detail.created_at)}</Text>

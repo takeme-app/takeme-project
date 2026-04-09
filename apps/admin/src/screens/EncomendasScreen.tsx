@@ -51,14 +51,15 @@ type EncomendaRow = {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const tableCols = [
-  { label: 'Destino', flex: '1 1 14%', minWidth: 120 },
-  { label: 'Origem', flex: '1 1 14%', minWidth: 120 },
-  { label: 'Remetente', flex: '1 1 12%', minWidth: 110 },
-  { label: 'Data', flex: '0 0 100px', minWidth: 100 },
-  { label: 'Tamanho', flex: '0 0 90px', minWidth: 90 },
-  { label: 'Valor', flex: '0 0 100px', minWidth: 100 },
-  { label: 'Status', flex: '0 0 130px', minWidth: 130 },
-  { label: 'Visualizar/Editar', flex: '0 0 96px', minWidth: 96 },
+  { label: 'Tipo', flex: '0 0 110px', minWidth: 110 },
+  { label: 'Destino', flex: '1 1 13%', minWidth: 120 },
+  { label: 'Origem', flex: '1 1 13%', minWidth: 120 },
+  { label: 'Remetente', flex: '1 1 11%', minWidth: 100 },
+  { label: 'Data', flex: '0 0 96px', minWidth: 96 },
+  { label: 'Tamanho', flex: '0 0 88px', minWidth: 88 },
+  { label: 'Valor', flex: '0 0 96px', minWidth: 96 },
+  { label: 'Status', flex: '0 0 120px', minWidth: 120 },
+  { label: 'Ações', flex: '0 0 96px', minWidth: 96 },
 ];
 
 const statusStyles: Record<string, { bg: string; color: string }> = {
@@ -298,11 +299,15 @@ export default function EncomendasScreen() {
   }
 
   // ── KPI cards ─────────────────────────────────────────────────────────────
+  const totalRegular = allEncomendasData.filter((e) => e.tipo === 'shipment').length;
+  const totalDependente = allEncomendasData.filter((e) => e.tipo === 'dependent_shipment').length;
+
   const kpiCards = [
     { title: 'Total de Entregas', value: counts.total },
-    { title: 'Entregas Concluídas', value: counts.concluidas },
+    { title: '📦 Envios Regulares', value: totalRegular },
+    { title: '👤 Envios de Dependentes', value: totalDependente },
     { title: 'Em Andamento', value: counts.emAndamento },
-    { title: 'Agendadas', value: counts.agendadas },
+    { title: 'Concluídas', value: counts.concluidas },
     { title: 'Canceladas', value: counts.canceladas },
   ].map(({ title, value }) =>
     React.createElement('div', { key: title, style: webStyles.statCard },
@@ -471,13 +476,20 @@ export default function EncomendasScreen() {
         borderBottom: '1px solid #d9d9d9', background: '#f6f6f6',
       },
     },
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth, fontWeight: 500 } }, row.destino),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500 } }, row.origem),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth, fontWeight: 500 } }, row.remetente),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth } }, row.data),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth } }, row.tamanho),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth } }, row.valor),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[6].flex, minWidth: tableCols[6].minWidth } },
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth } },
+        React.createElement('span', {
+          style: { fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 999, whiteSpace: 'nowrap' as const, ...font,
+            ...(item?.tipo === 'dependent_shipment'
+              ? { background: '#f3e8ff', color: '#6b21a8' }
+              : { background: '#dbeafe', color: '#1e40af' }) },
+        }, item?.tipo === 'dependent_shipment' ? '👤 Dependente' : '📦 Regular')),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500 } }, row.destino),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth, fontWeight: 500 } }, row.origem),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth, fontWeight: 500 } }, row.remetente),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth } }, row.data),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth } }, row.tamanho),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[6].flex, minWidth: tableCols[6].minWidth } }, row.valor),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[7].flex, minWidth: tableCols[7].minWidth } },
         React.createElement('span', {
           style: {
             display: 'inline-block', padding: '4px 12px', borderRadius: 999,
@@ -486,7 +498,7 @@ export default function EncomendasScreen() {
           },
         }, row.status)),
       React.createElement('div', {
-        style: { flex: tableCols[7].flex, minWidth: tableCols[7].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
+        style: { flex: tableCols[8].flex, minWidth: tableCols[8].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
       },
         React.createElement('button', {
           type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar',

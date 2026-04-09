@@ -171,10 +171,13 @@ export default function PagamentosScreen() {
     return () => window.removeEventListener('keydown', onKey);
   }, [filtroModalOpen, fecharFiltroModal]);
 
+  const pendingCount = useMemo(() => pagamentos.filter((p) => p.status === 'Agendado').length, [pagamentos]);
+
   const metrics = [
     { title: 'Pagamentos previstos', value: fmtBRL(counts.pagamentosPrevistos), pct: '+12.5%', desc: 'vs período anterior' },
     { title: 'Pagamentos feitos', value: fmtBRL(counts.pagamentosFeitos), pct: '+8.2%', desc: 'vs período anterior' },
     { title: 'Lucro', value: fmtBRL(counts.lucro), pct: counts.lucro > 0 ? '+' : '', desc: 'vs período anterior', negative: counts.lucro <= 0 },
+    { title: 'Aguardando liberação', value: String(pendingCount), pct: '', desc: 'pagamentos pendentes', negative: pendingCount > 0, isCount: true },
   ];
 
   const filteredRows = useMemo(() => {
@@ -355,13 +358,13 @@ export default function PagamentosScreen() {
   const metricCards = React.createElement('div', {
     style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
   },
-    ...metrics.map((m) =>
-      React.createElement('div', { key: m.title, style: s.metricCard },
+    ...metrics.map((m: any) =>
+      React.createElement('div', { key: m.title, style: { ...s.metricCard, ...(m.isCount && pendingCount > 0 ? { border: '1px solid #fbbf24', background: '#fffbeb' } : {}) } },
         React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, m.title),
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
-          React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: m.negative ? '#b53838' : '#22c55e', ...font } }, m.pct),
-          React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, m.desc)),
-        React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, m.value))));
+          m.pct ? React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: m.negative ? '#b53838' : '#22c55e', ...font } }, m.pct) : null,
+          React.createElement('span', { style: { fontSize: 12, color: m.negative ? '#b53838' : '#767676', ...font } }, m.desc)),
+        React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: m.isCount && pendingCount > 0 ? '#b53838' : '#0d0d0d', margin: 0, ...font } }, m.value))));
 
   // ── Table ─────────────────────────────────────────────────────────────
   const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 6px' };
@@ -407,13 +410,13 @@ export default function PagamentosScreen() {
             type: 'button',
             onClick: async () => {
               if (!isSupabaseConfigured || !row.id) return;
-              if (!confirm('Marcar este pagamento como pago?')) return;
+              if (!confirm('Liberar este pagamento ao profissional?')) return;
               await (supabase as any).from('payouts').update({ status: 'paid', paid_at: new Date().toISOString() }).eq('id', row.id);
               const [items, c] = await Promise.all([fetchPagamentos(), fetchPagamentoCounts()]);
               setPagamentos(items); setCounts(c);
             },
             style: { marginLeft: 8, height: 28, padding: '0 10px', borderRadius: 999, border: 'none', background: '#22c55e', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const },
-          }, 'Pagar')
+          }, '💸 Liberar')
         : null);
   });
 
