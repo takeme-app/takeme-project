@@ -242,6 +242,9 @@ export function TripScheduleScreen({ navigation, route }: Props) {
         <Text style={styles.headerTitle}>Cronograma de viagens</Text>
         <View style={{ width: 40 }} />
       </View>
+      <Text style={styles.headerHint}>
+        Cada linha é um trecho (origem → destino). Para oferecer volta, crie outra viagem com horário e sentido inversos.
+      </Text>
 
       {loading ? (
         <View style={styles.center}><ActivityIndicator size="large" color="#111827" /></View>
@@ -350,6 +353,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
   },
   headerTitle: { fontSize: 17, fontWeight: '700', color: '#111827' },
+  headerHint: {
+    fontSize: 12,
+    color: '#6B7280',
+    lineHeight: 17,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    backgroundColor: '#FFFFFF',
+  },
   scroll: { padding: 16, gap: 12, paddingBottom: 40 },
   card: {
     backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB',

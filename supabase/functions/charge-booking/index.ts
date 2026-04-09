@@ -72,12 +72,21 @@ Deno.serve(async (req) => {
       );
     }
 
-    const body = (await req.json().catch(() => ({}))) as { booking_id?: string; payment_method_id?: string };
+    const body = (await req.json().catch(() => ({}))) as {
+      booking_id?: string;
+      /** UUID em `payment_methods.id` (cartão salvo na carteira) */
+      payment_method_id?: string;
+      /** ID Stripe `pm_...` retornado pelo PaymentSheet / Stripe RN no checkout */
+      stripe_payment_method_id?: string;
+    };
     const bookingId = body.booking_id?.trim();
     const paymentMethodIdSupabase = body.payment_method_id?.trim();
-    if (!bookingId || !paymentMethodIdSupabase) {
+    const stripePaymentMethodIdFromClient = body.stripe_payment_method_id?.trim();
+    if (!bookingId || (!paymentMethodIdSupabase && !stripePaymentMethodIdFromClient)) {
       return new Response(
-        JSON.stringify({ error: "booking_id e payment_method_id são obrigatórios" }),
+        JSON.stringify({
+          error: "Envie booking_id e payment_method_id (cartão salvo) ou stripe_payment_method_id (pm_… do checkout).",
+        }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -103,19 +112,24 @@ Deno.serve(async (req) => {
       );
     }
 
-    const { data: pmRow, error: pmErr } = await admin
-      .from("payment_methods")
-      .select("id, user_id, provider_id")
-      .eq("id", paymentMethodIdSupabase)
-      .eq("user_id", userId)
-      .single();
-    if (pmErr || !pmRow?.provider_id) {
-      return new Response(
-        JSON.stringify({ error: "Método de pagamento não encontrado" }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    let stripePaymentMethodId: string;
+    if (stripePaymentMethodIdFromClient) {
+      stripePaymentMethodId = stripePaymentMethodIdFromClient;
+    } else {
+      const { data: pmRow, error: pmErr } = await admin
+        .from("payment_methods")
+        .select("id, user_id, provider_id")
+        .eq("id", paymentMethodIdSupabase!)
+        .eq("user_id", userId)
+        .single();
+      if (pmErr || !pmRow?.provider_id) {
+        return new Response(
+          JSON.stringify({ error: "Método de pagamento não encontrado" }),
+          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      stripePaymentMethodId = pmRow.provider_id as string;
     }
-    const stripePaymentMethodId = pmRow.provider_id as string;
 
     const { data: profile } = await admin.from("profiles").select("stripe_customer_id").eq("id", userId).single();
     const customerId = profile?.stripe_customer_id as string | null | undefined;

@@ -753,52 +753,77 @@ export default function PreparadorEditScreen() {
         secTitle('Passageiros da excursão'),
         React.createElement('button', {
           type: 'button',
-          onClick: () => {
-            setSortByAge((prev) => !prev);
-          },
+          onClick: () => { setSortByAge((prev) => !prev); },
           style: { height: 36, padding: '0 16px', borderRadius: 8, border: '1px solid #e2e2e2', background: sortByAge ? '#0d0d0d' : '#fff', color: sortByAge ? '#fff' : '#0d0d0d', fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font },
         }, sortByAge ? 'Ordenar por nome' : 'Ordenar por idade')),
+      // ── Boarding KPIs ─────────────────────────────────────────────────
+      detail.passengers.length > 0 ? React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap' as const } },
+        ...[
+          { label: 'Total', value: detail.passengers.length, bg: '#f6f6f6', color: '#0d0d0d' },
+          { label: '✅ Embarcados', value: detail.passengers.filter((p) => p.statusDeparture === 'embarked').length, bg: '#b0e8d1', color: '#174f38' },
+          { label: '⏳ Aguardando', value: detail.passengers.filter((p) => !p.statusDeparture || p.statusDeparture === 'not_started').length, bg: '#e5e7eb', color: '#374151' },
+          { label: '❌ Ausentes', value: detail.passengers.filter((p) => p.statusDeparture === 'absent').length, bg: '#eeafaa', color: '#551611' },
+          { label: '📋 Just. ausência', value: detail.passengers.filter((p) => p.absenceJustified).length, bg: '#fef3c7', color: '#92400e' },
+        ].map((k) => React.createElement('div', {
+          key: k.label,
+          style: { flex: '1 1 0', minWidth: 100, background: k.bg, borderRadius: 12, padding: '12px 16px', display: 'flex', flexDirection: 'column' as const, gap: 6, boxSizing: 'border-box' as const },
+        },
+          React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, k.label),
+          React.createElement('span', { style: { fontSize: 24, fontWeight: 700, color: k.color, ...font } }, String(k.value))))) : null,
       detail.passengers.length === 0
         ? React.createElement('p', { style: { fontSize: 14, color: '#767676', ...font } }, 'Sem passageiros registados nesta solicitação.')
         : React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16 } },
           ...[...detail.passengers].sort((a, b) => {
             if (!sortByAge) return 0;
-            const ageA = parseInt(String((a as any).age || '0'), 10) || 0;
-            const ageB = parseInt(String((b as any).age || '0'), 10) || 0;
+            const ageA = a.age ?? 0;
+            const ageB = b.age ?? 0;
             return ageA - ageB;
-          }).map((pass) =>
-            React.createElement('div', {
+          }).map((pass) => {
+            // Boarding status badge
+            const depStatus = pass.statusDeparture;
+            const depBadge = depStatus === 'embarked'
+              ? { label: 'Embarcado', bg: '#b0e8d1', color: '#174f38' }
+              : depStatus === 'absent'
+              ? { label: pass.absenceJustified ? 'Ausente (justif.)' : 'Ausente', bg: pass.absenceJustified ? '#fef3c7' : '#eeafaa', color: pass.absenceJustified ? '#92400e' : '#551611' }
+              : { label: 'Aguardando', bg: '#e5e7eb', color: '#374151' };
+
+            return React.createElement('div', {
               key: pass.id,
-              style: {
-                flex: '1 1 calc(50% - 8px)', minWidth: 280, border: '1px solid #e2e2e2', borderRadius: 16, background: '#fff', padding: 20, boxSizing: 'border-box' as const,
-              },
+              style: { flex: '1 1 calc(50% - 8px)', minWidth: 280, border: '1px solid #e2e2e2', borderRadius: 16, background: '#fff', padding: 20, boxSizing: 'border-box' as const },
             },
-              React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', display: 'block', marginBottom: 12, ...font } }, pass.fullName || 'Passageiro'),
+              // Header: name + status badge
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap' as const, gap: 8 } },
+                React.createElement('span', { style: { fontSize: 15, fontWeight: 600, color: '#0d0d0d', ...font } }, pass.fullName || 'Passageiro'),
+                React.createElement('span', { style: { fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 999, background: depBadge.bg, color: depBadge.color, ...font } }, depBadge.label)),
+              pass.age != null ? React.createElement('p', { style: { fontSize: 12, color: '#767676', margin: '0 0 10px', ...font } }, `${pass.age} anos`) : null,
               readOnlyBox('CPF', pass.cpf ?? '—'),
               React.createElement('div', { style: { height: 8 } }),
               readOnlyBox('Telefone', pass.phone ?? '—'),
               React.createElement('div', { style: { height: 8 } }),
               readOnlyBox('Observações', pass.observations ?? '—'),
-              // Check-in / Check-out buttons
-              React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 12 } },
+              // Check-in / Check-out / Marcar ausente buttons
+              React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' as const } },
                 React.createElement('button', {
                   type: 'button',
                   onClick: async () => {
                     await (await import('../lib/supabase')).supabase.from('excursion_passengers')
                       .update({ status_departure: 'embarked' }).eq('id', pass.id);
-                    setToast(`${pass.fullName} embarcado(a)`);
+                    setToast(`${pass.fullName} embarcado(a) ✅`);
+                    setDetail((prev) => prev ? { ...prev, passengers: prev.passengers.map((p) => p.id === pass.id ? { ...p, statusDeparture: 'embarked' } : p) } : prev);
                   },
-                  style: { flex: 1, height: 36, borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font },
-                }, 'Check-in'),
+                  style: { flex: 1, height: 36, borderRadius: 8, border: 'none', background: depStatus === 'embarked' ? '#0d8344' : '#22c55e', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font },
+                }, depStatus === 'embarked' ? '✅ Embarcado' : 'Check-in'),
                 React.createElement('button', {
                   type: 'button',
                   onClick: async () => {
                     await (await import('../lib/supabase')).supabase.from('excursion_passengers')
-                      .update({ status_return: 'disembarked' }).eq('id', pass.id);
-                    setToast(`${pass.fullName} desembarcado(a)`);
+                      .update({ status_departure: 'absent' }).eq('id', pass.id);
+                    setToast(`${pass.fullName} marcado(a) como ausente`);
+                    setDetail((prev) => prev ? { ...prev, passengers: prev.passengers.map((p) => p.id === pass.id ? { ...p, statusDeparture: 'absent' } : p) } : prev);
                   },
-                  style: { flex: 1, height: 36, borderRadius: 8, border: '1px solid #e2e2e2', background: '#fff', color: '#0d0d0d', fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font },
-                }, 'Check-out')))))),
+                  style: { flex: 1, height: 36, borderRadius: 8, border: '1px solid #e2e2e2', background: depStatus === 'absent' ? '#d64545' : '#fff', color: depStatus === 'absent' ? '#fff' : '#0d0d0d', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font },
+                }, depStatus === 'absent' ? '❌ Ausente' : 'Ausente')));
+          }))),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
       secTitle('Métricas e histórico'),
       React.createElement('div', { style: { border: '1px solid #e2e2e2', borderRadius: 16, padding: '24px 24px 32px', background: '#fff' } },

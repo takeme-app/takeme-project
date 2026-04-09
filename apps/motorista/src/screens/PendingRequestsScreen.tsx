@@ -247,18 +247,27 @@ export function PendingRequestsScreen({ navigation }: Props) {
           )
           .eq('id', item.rawId);
       } else {
-        await supabase
-          .from('bookings')
-          .update(
-            accept
-              ? ({
-                  status: 'confirmed',
-                  paid_at: now,
-                  updated_at: now,
-                } as never)
-              : ({ status: 'cancelled', updated_at: now } as never),
-          )
-          .eq('id', item.rawId);
+        if (accept) {
+          const { data: cur } = await supabase
+            .from('bookings')
+            .select('paid_at')
+            .eq('id', item.rawId)
+            .maybeSingle();
+          const paidAt = (cur as { paid_at?: string | null } | null)?.paid_at;
+          const upd: Record<string, string> = {
+            status: 'confirmed',
+            updated_at: now,
+          };
+          if (!paidAt) {
+            upd.paid_at = now;
+          }
+          await supabase.from('bookings').update(upd as never).eq('id', item.rawId);
+        } else {
+          await supabase
+            .from('bookings')
+            .update({ status: 'cancelled', updated_at: now } as never)
+            .eq('id', item.rawId);
+        }
 
         const { data: wa } = await supabase
           .from('worker_assignments')

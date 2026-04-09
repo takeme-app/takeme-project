@@ -414,8 +414,10 @@ export default function MapView(props: MapViewProps) {
   } = props;
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
+  const mapboxglRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
   const [mapboxLoaded, setMapboxLoaded] = useState(false);
+  const [mapStyleReady, setMapStyleReady] = useState(false);
   const [glFailed, setGlFailed] = useState(false);
   const token = getMapboxAccessToken();
   const useStatic = staticMode || !token || glFailed;
@@ -470,6 +472,7 @@ export default function MapView(props: MapViewProps) {
         await import('mapbox-gl/dist/mapbox-gl.css');
         const mapboxgl = await import('mapbox-gl');
         if (cancelled) return;
+        mapboxglRef.current = mapboxgl;
         setMapboxLoaded(true);
 
         if (!mapContainerRef.current) return;
@@ -604,11 +607,13 @@ export default function MapView(props: MapViewProps) {
 
         const onReady = () => {
           resizeMap();
+          setMapStyleReady(true);
           void placeMarkersAndRoute();
         };
 
         if (map.isStyleLoaded && map.isStyleLoaded()) {
           resizeMap();
+          setMapStyleReady(true);
           void placeMarkersAndRoute();
         } else {
           map.once('load', onReady);
@@ -624,6 +629,8 @@ export default function MapView(props: MapViewProps) {
       resizeObserver?.disconnect();
       resizeObserver = null;
       markersRef.current = [];
+      setMapStyleReady(false);
+      mapboxglRef.current = null;
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -639,6 +646,105 @@ export default function MapView(props: MapViewProps) {
     origin?.lng,
     destination?.lat,
     destination?.lng,
+  ]);
+
+  // ── Efeito separado: atualiza markers/rota quando waypoints mudam ──────────
+  // O efeito principal cria o mapa mas não inclui waypoints nas deps (para evitar
+  // recriar o mapa a cada fetch). Este efeito re-coloca os markers quando os stops
+  // chegam de forma assíncrona (ex.: useTripStops carrega após o mapa ser montado).
+  useEffect(() => {
+    const mapboxgl = mapboxglRef.current;
+    if (!mapRef.current || !mapboxgl || !mapStyleReady) return;
+    const m = mapRef.current;
+
+    // Re-colocar todos os markers (remove antigos primeiro)
+    markersRef.current.forEach((mk) => mk.remove());
+    markersRef.current = [];
+
+    if (origin) {
+      markersRef.current.push(
+        new mapboxgl.Marker({ element: createTripOriginMarkerElement(), anchor: 'center' })
+          .setLngLat([origin.lng, origin.lat])
+          .addTo(m),
+      );
+    }
+    if (destination) {
+      markersRef.current.push(
+        new mapboxgl.Marker({ element: createTripDestinationMarkerElement(), anchor: 'center' })
+          .setLngLat([destination.lng, destination.lat])
+          .addTo(m),
+      );
+    }
+
+    if (waypoints && waypoints.length > 0) {
+      waypoints.forEach((wp, idx) => {
+        const colors: Record<string, string> = {
+          passenger_pickup: '#3b82f6',
+          shipment_pickup: '#f59e0b',
+          base_dropoff: '#22c55e',
+        };
+        const bg = wp.color || colors[wp.type || ''] || '#767676';
+        const el = document.createElement('div');
+        el.style.width = '28px';
+        el.style.height = '28px';
+        el.style.borderRadius = '50%';
+        el.style.background = bg;
+        el.style.border = '3px solid #fff';
+        el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.2)';
+        el.style.display = 'flex';
+        el.style.alignItems = 'center';
+        el.style.justifyContent = 'center';
+        el.style.color = '#fff';
+        el.style.fontSize = '11px';
+        el.style.fontWeight = '700';
+        el.style.fontFamily = 'Inter, sans-serif';
+        el.textContent = String(idx + 1);
+        if (wp.label) el.title = wp.label;
+        markersRef.current.push(
+          new mapboxgl.Marker({ element: el, anchor: 'center' })
+            .setLngLat([wp.lng, wp.lat])
+            .addTo(m),
+        );
+      });
+    }
+
+    // Atualizar rota com novos waypoints
+    if (connectPoints && origin && destination && token) {
+      const intermediateCoords = (waypoints || []).filter((wp) => wp.lat != null && wp.lng != null);
+      let cancelled = false;
+      (async () => {
+        try {
+          removeTripLineLayer(m);
+          let line = await fetchDirectionsLineString(origin, destination, token, directionsProfile, undefined, intermediateCoords);
+          if (cancelled || !mapRef.current) return;
+          if (!line && directionsProfile === 'driving-traffic') {
+            line = await fetchDirectionsLineString(origin, destination, token, 'driving', undefined, intermediateCoords);
+          }
+          if (cancelled || !mapRef.current) return;
+          if (line) {
+            setTripRouteLayer(m, line);
+            fitMapToCoordinates(m, mapboxgl, line.coordinates);
+          } else {
+            addStraightFallbackLine(m, origin, destination);
+            const bounds = new mapboxgl.LngLatBounds();
+            bounds.extend([origin.lng, origin.lat]);
+            bounds.extend([destination.lng, destination.lat]);
+            m.fitBounds(bounds, { padding: 56, maxZoom: 14, duration: 0 });
+          }
+        } catch { /* ignore */ }
+      })();
+      return () => { cancelled = true; };
+    }
+  }, [
+    mapStyleReady,
+    waypoints,
+    origin?.lat,
+    origin?.lng,
+    destination?.lat,
+    destination?.lng,
+    connectPoints,
+    directionsProfile,
+    token,
   ]);
 
   useEffect(() => {

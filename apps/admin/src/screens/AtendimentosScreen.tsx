@@ -5,8 +5,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
-import { fetchViagemCounts, fetchEncomendaCounts, fetchMotoristas, fetchConversationCategoryCounts } from '../data/queries';
-import type { ConversationCategoryCount } from '../data/queries';
+import { fetchViagemCounts, fetchEncomendaCounts, fetchMotoristas } from '../data/queries';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -23,6 +22,7 @@ const statusMap: Record<string, { dot: string; bg: string; color: string; label:
 
 // ── Ticket data (first section — "Meu atendimento") ────────────────────
 type Ticket = {
+  id: string;
   nome: string;
   avatar: string;
   categoria: string;
@@ -50,6 +50,8 @@ const chevronDownSvg = React.createElement('svg', { width: 14, height: 14, viewB
 export default function AtendimentosScreen() {
   const navigate = useNavigate();
   const [meuCatActive, setMeuCatActive] = useState('Todos');
+  /** Filtro de status na visão "Meu atendimento" (modal Filtrar status) — não confundir com categoria. */
+  const [meuStatusFilter, setMeuStatusFilter] = useState('Todos');
   const [todosStatusActive, setTodosStatusActive] = useState('Todos');
   const [onlineStatus, setOnlineStatus] = useState<'Online' | 'Ausente' | 'Offline'>('Online');
   const [statusDropdownOpen, setStatusDropdownOpen] = useState(false);
@@ -85,8 +87,12 @@ export default function AtendimentosScreen() {
       .select('id, driver_id, client_id, status, participant_name, last_message, last_message_at, created_at, category, sla_deadline_at, admin_id')
       .order('last_message_at', { ascending: false })
       .limit(50)
-      .then(({ data }: { data: any[] | null }) => {
-        if (cancelled || !data) return;
+      .then(({ data, error }: { data: any[] | null; error: Error | null }) => {
+        if (cancelled) return;
+        if (error || !data) {
+          setRealTickets([]);
+          return;
+        }
         const now = Date.now();
         const categoryLabelMap: Record<string, string> = {
           excursao: 'Excursão',
@@ -100,17 +106,30 @@ export default function AtendimentosScreen() {
         };
         const tickets: Ticket[] = data.map((c: any) => {
           const name = c.participant_name || 'Usuário';
-          const diff = now - new Date(c.last_message_at || c.created_at).getTime();
-          const mins = Math.floor(diff / 60000);
-          const tempo = mins < 60 ? `há ${mins} min` : mins < 1440 ? `há ${Math.floor(mins / 60)}h` : `há ${Math.floor(mins / 1440)} dias`;
-          // SLA: atrasada se não finalizada e criada há mais de 24h
+          const lastAt = new Date(c.last_message_at || c.created_at).getTime();
+          const createdAt = new Date(c.created_at).getTime();
+          const diffLastMsgMin = Math.floor((now - lastAt) / 60000);
+          const tempo = diffLastMsgMin < 60
+            ? `há ${diffLastMsgMin} min`
+            : diffLastMsgMin < 1440
+              ? `há ${Math.floor(diffLastMsgMin / 60)}h`
+              : `há ${Math.floor(diffLastMsgMin / 1440)} dias`;
+          // SLA 24h: prazo explícito ou 24h desde a abertura (created_at), não desde a última mensagem
           const isOverSLA = c.sla_deadline_at
             ? now > new Date(c.sla_deadline_at).getTime()
-            : diff > 24 * 60 * 60000;
-          let ticketStatus = c.status === 'active' ? 'em_atendimento' : 'finalizada';
-          if (c.status === 'active' && isOverSLA) ticketStatus = 'atrasada';
-          if (c.status === 'active' && !c.admin_id) ticketStatus = 'nao_atendida';
+            : now - createdAt > 24 * 60 * 60000;
+          let ticketStatus: string;
+          if (c.status !== 'active') {
+            ticketStatus = 'finalizada';
+          } else if (!c.admin_id) {
+            ticketStatus = 'nao_atendida';
+          } else if (isOverSLA) {
+            ticketStatus = 'atrasada';
+          } else {
+            ticketStatus = 'em_atendimento';
+          }
           return {
+            id: String(c.id),
             nome: name,
             avatar: name.charAt(0).toUpperCase(),
             categoria: categoryLabelMap[c.category || ''] || c.category || 'Outros',
@@ -120,17 +139,13 @@ export default function AtendimentosScreen() {
           };
         });
         setRealTickets(tickets);
-      });
+      })
+      .catch(() => { if (!cancelled) setRealTickets([]); });
     return () => { cancelled = true; };
   }, []);
 
   const activeMeuTickets = realTickets.filter((t) => t.status !== 'finalizada');
   const activeTodosTickets = realTickets;
-
-  const [convCategoryCounts, setConvCategoryCounts] = useState<ConversationCategoryCount[]>([]);
-  useEffect(() => {
-    fetchConversationCategoryCounts().then(setConvCategoryCounts);
-  }, []);
 
   const meuCategorias = useMemo(() => {
     const counts = new Map<string, number>();
@@ -143,19 +158,39 @@ export default function AtendimentosScreen() {
     ];
   }, [activeMeuTickets]);
 
-  const meuTicketsFiltered = useMemo(() => {
-    if (meuCatActive === 'Todos') return activeMeuTickets;
-    return activeMeuTickets.filter((t) => t.categoria === meuCatActive);
-  }, [activeMeuTickets, meuCatActive]);
+  const statusLabelToKey: Record<string, string> = {
+    'Não atendida': 'nao_atendida',
+    'Em atendimento': 'em_atendimento',
+    Atrasada: 'atrasada',
+    Finalizadas: 'finalizada',
+  };
 
-  const todosStatusChips = convCategoryCounts.length > 0
-    ? convCategoryCounts
-    : [{ label: 'Todos', count: activeTodosTickets.length }];
+  const meuTicketsFiltered = useMemo(() => {
+    let list = activeMeuTickets;
+    if (meuCatActive !== 'Todos') list = list.filter((t) => t.categoria === meuCatActive);
+    if (meuStatusFilter !== 'Todos') {
+      const key = statusLabelToKey[meuStatusFilter];
+      if (key) list = list.filter((t) => t.status === key);
+    }
+    return list;
+  }, [activeMeuTickets, meuCatActive, meuStatusFilter]);
+
+  /** Contagens alinhadas ao mesmo mapeamento de status usado nos cards (não só active/closed do BD). */
+  const todosStatusChips = useMemo(() => {
+    const all = activeTodosTickets;
+    return [
+      { label: 'Todos', count: all.length },
+      { label: 'Não atendida', count: all.filter((t) => t.status === 'nao_atendida').length },
+      { label: 'Em atendimento', count: all.filter((t) => t.status === 'em_atendimento').length },
+      { label: 'Atrasada', count: all.filter((t) => t.status === 'atrasada').length },
+      { label: 'Finalizadas', count: all.filter((t) => t.status === 'finalizada').length },
+    ];
+  }, [activeTodosTickets]);
 
   const todosTicketsFiltered = useMemo(() => {
     if (todosStatusActive === 'Todos') return activeTodosTickets;
-    if (todosStatusActive === 'Em atendimento') return activeTodosTickets.filter((t) => t.status === 'em_atendimento');
-    if (todosStatusActive === 'Finalizadas') return activeTodosTickets.filter((t) => t.status === 'finalizada');
+    const key = statusLabelToKey[todosStatusActive];
+    if (key) return activeTodosTickets.filter((t) => t.status === key);
     return activeTodosTickets;
   }, [activeTodosTickets, todosStatusActive]);
 
@@ -192,7 +227,7 @@ export default function AtendimentosScreen() {
     const st = statusMap[t.status] || statusMap.nao_atendida;
     const avatarBg = avatarColors[t.avatar] || '#999';
     return React.createElement('div', {
-      key: `${t.nome}-${idx}`,
+      key: t.id || `${t.nome}-${idx}`,
       'data-testid': 'atendimento-ticket-row',
       style: {
         display: 'flex', flexDirection: 'column' as const, gap: 16, padding: '20px 0',
@@ -240,7 +275,7 @@ export default function AtendimentosScreen() {
         // Atender button
         React.createElement('button', {
           type: 'button',
-          onClick: () => navigate(`/atendimentos/${idx}`, { state: { ticket: t } }),
+          onClick: () => navigate(`/atendimentos/${t.id}`, { state: { ticket: t } }),
           style: {
             height: 44, padding: '0 24px', borderRadius: 999, border: '1px solid #0d0d0d',
             background: '#fff', fontSize: 14, fontWeight: 600, color: '#0d0d0d',
@@ -324,7 +359,7 @@ export default function AtendimentosScreen() {
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
       React.createElement('button', {
         type: 'button',
-        onClick: () => setFiltrarStatusOpen(true),
+        onClick: () => { setFiltrarStatusSelected(meuStatusFilter); setFiltrarStatusOpen(true); },
         style: {
           height: 40, padding: '0 20px', borderRadius: 999, border: '1px solid #e2e2e2',
           background: '#fff', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
@@ -443,7 +478,7 @@ export default function AtendimentosScreen() {
       // Buttons
       React.createElement('button', {
         type: 'button',
-        onClick: () => { setMeuCatActive(filtrarStatusSelected === 'Todos' ? 'Todos' : filtrarStatusSelected); setFiltrarStatusOpen(false); },
+        onClick: () => { setMeuStatusFilter(filtrarStatusSelected); setFiltrarStatusOpen(false); },
         style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
       }, 'Salvar alterações'),
       React.createElement('button', {
@@ -451,45 +486,9 @@ export default function AtendimentosScreen() {
         style: { height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
       }, 'Cancelar'))) : null;
 
-  // ── Pedidos por categoria ──────────────────────────────────────────────
-  const pedidoCategorias = ['Todos', 'Excursão', 'Encomendas', 'Reembolso', 'Cadastro de transporte', 'Autorizar menores', 'Denúncia', 'Ouvidoria', 'Outros'];
-  const [pedidoCatActive, setPedidoCatActive] = useState('Todos');
-  const pedidoCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const t of realTickets) {
-      counts[t.categoria] = (counts[t.categoria] || 0) + 1;
-    }
-    return pedidoCategorias.map((c) => ({ label: c, count: c === 'Todos' ? realTickets.length : (counts[c] || 0) }));
-  }, [realTickets]);
-
-  const pedidoChips = React.createElement('div', {
-    style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const },
-  }, ...pedidoCounts.map((c) => chip(c.label, c.count, pedidoCatActive === c.label, () => setPedidoCatActive(c.label))));
-
-  const pedidoFilteredTickets = useMemo(() => {
-    if (pedidoCatActive === 'Todos') return realTickets.filter((t) => t.status !== 'finalizada');
-    return realTickets.filter((t) => t.categoria === pedidoCatActive && t.status !== 'finalizada');
-  }, [realTickets, pedidoCatActive]);
-
-  const pedidoCards = React.createElement('div', {
-    style: { display: 'flex', flexDirection: 'column' as const, background: '#f6f6f6', borderRadius: 16, padding: '0 24px' },
-  },
-    pedidoFilteredTickets.length === 0
-      ? [React.createElement('p', { key: 'empty-pedido', style: { padding: '24px 0', fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhum pedido nesta categoria.')]
-      : pedidoFilteredTickets.map((t, i) => ticketCard(t, i)));
-
-  const pedidosSection = React.createElement('div', {
-    style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' },
-  },
-    React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Gestão de cadastros e pedidos'),
-    pedidoChips,
-    pedidoCards);
-
   return React.createElement(React.Fragment, null,
     headerRow,
     metricCards,
-    sep,
-    pedidosSection,
     sep,
     meuSection,
     sep,
