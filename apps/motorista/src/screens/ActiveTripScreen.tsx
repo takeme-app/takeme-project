@@ -61,14 +61,10 @@ function isPassenger(s: Stop) { return s.stopType === 'passenger_pickup' || s.st
 function isPackage(s: Stop) { return s.stopType === 'package_pickup' || s.stopType === 'package_dropoff'; }
 
 function isRouteWaypointStop(s: Stop) {
-  return (
-    s.stopType === 'excursion_stop' ||
-    s.stopType === 'driver_origin' ||
-    s.stopType === 'trip_destination'
-  );
+  return s.stopType === 'excursion_stop' || s.stopType === 'trip_destination';
 }
 
-/** Ícone no mapa / sidebar: passageiro, encomenda (caixa), partida (place), destino (bandeira), base, demais “place”. */
+/** Ícone no mapa / sidebar: passageiro, encomenda (caixa), destino (bandeira), base, demais “place”. */
 function StopKindMarkerIcon({
   stop,
   completed,
@@ -88,9 +84,6 @@ function StopKindMarkerIcon({
   }
   if (isPackage(stop)) {
     return <MaterialIcons name="inventory-2" size={size} color={color} />;
-  }
-  if (stop.stopType === 'driver_origin') {
-    return <MaterialIcons name="place" size={size} color={color} />;
   }
   if (stop.stopType === 'trip_destination') {
     return <MaterialIcons name="flag" size={size} color={color} />;
@@ -114,8 +107,6 @@ function stopPhaseShortLabel(s: Stop): string {
       return 'Entrega';
     case 'excursion_stop':
       return 'Parada';
-    case 'driver_origin':
-      return 'Partida';
     case 'trip_destination':
       return 'Destino';
     case 'base_dropoff':
@@ -138,8 +129,6 @@ function detailSheetTitle(stop: Stop | null): string {
       return `Entrega para ${stop.label}`;
     case 'excursion_stop':
       return 'Parada na rota';
-    case 'driver_origin':
-      return 'Ponto de partida';
     case 'trip_destination':
       return 'Destino da viagem';
     case 'base_dropoff':
@@ -152,7 +141,6 @@ function detailSheetTitle(stop: Stop | null): string {
 function confirmPickupTitle(stop: Stop | null | undefined): string {
   if (!stop) return 'Confirmar';
   if (stop.stopType === 'passenger_dropoff') return 'Confirmar desembarque';
-  if (stop.stopType === 'driver_origin') return 'Concluir partida';
   if (stop.stopType === 'trip_destination') return 'Concluir chegada';
   if (stop.stopType === 'excursion_stop') return 'Concluir parada';
   if (stop.stopType === 'package_pickup') return 'Confirmar coleta';
@@ -161,9 +149,12 @@ function confirmPickupTitle(stop: Stop | null | undefined): string {
 
 function confirmPickupSubtitle(stop: Stop | null | undefined): string {
   if (!stop) return '';
+  if (stop.stopType === 'package_pickup') {
+    return 'Insira o código informado pelo passageiro para confirmar a coleta.';
+  }
+  if (stop.stopType === 'package_dropoff') return '';
   if (isPackage(stop)) return 'Insira o código de 4 dígitos informado pelo remetente.';
   if (stop.stopType === 'passenger_dropoff') return 'Confirme que o passageiro desembarcou neste ponto.';
-  if (stop.stopType === 'driver_origin') return 'Confirme que você iniciou a viagem a partir deste ponto.';
   if (stop.stopType === 'trip_destination') return 'Confirme a chegada ao destino da viagem.';
   if (stop.stopType === 'excursion_stop') return 'Confirme que esta parada na rota foi concluída.';
   return 'Confirme o embarque do passageiro.';
@@ -233,8 +224,8 @@ function dedupeConsecutivePoints(pts: LatLng[]): LatLng[] {
 }
 
 /**
- * Navegação: não envia o motorista de volta à “origem” cadastrada (driver_origin).
- * Usa a primeira parada restante com coordenadas que seja cliente/encomenda/etc.
+ * Navegação: primeira parada restante com coordenadas válidas (cliente/encomenda/destino).
+ * Ignora driver_origin caso ainda apareça em algum fluxo legado.
  */
 function resolveNavigationDestination(
   stopsList: TripStop[],
@@ -251,7 +242,7 @@ function resolveNavigationDestination(
   return finalDest;
 }
 
-/** Pontos da viagem restante para polyline (sem origem operacional do motorista). */
+/** Pontos da viagem restante para polyline (GPS cobre o “início”; sem parada sintética de partida). */
 function collectRemainingStopPoints(stopsList: TripStop[], fromIndex: number): LatLng[] {
   const pts: LatLng[] = [];
   for (let i = fromIndex; i < stopsList.length; i++) {
@@ -502,8 +493,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   }, [stops, tripDestLL]);
 
   /**
-   * Rota dourada: a partir da posição atual → paradas restantes (sem driver_origin).
-   * Não obriga o trajeto a “passar” pela origem cadastrada da viagem.
+   * Rota dourada: posição atual (GPS) → paradas da rota (cliente/encomenda/destino).
+   * Paradas `driver_origin` não são carregadas no app.
    */
   useEffect(() => {
     if (loading) return;
@@ -556,7 +547,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     };
   }, [loading, stops, finalDestination, driverPositionKey, currentStopIndex]);
 
-  // Trecho escuro: GPS → próximo alvo útil (ignora driver_origin como destino de navegação).
+  // Trecho escuro: GPS → próximo alvo útil na lista de paradas.
   useEffect(() => {
     if (
       !driverPosition ||
@@ -1126,11 +1117,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   activeOpacity={0.85}
                 >
                   <Text style={styles.actionBtnText}>
-                    {currentStop.stopType === 'driver_origin'
-                      ? 'Concluir partida'
-                      : currentStop.stopType === 'trip_destination'
-                        ? 'Concluir chegada'
-                        : 'Concluir parada'}
+                    {currentStop.stopType === 'trip_destination' ? 'Concluir chegada' : 'Concluir parada'}
                   </Text>
                 </TouchableOpacity>
               </>
@@ -1188,7 +1175,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   onChangeText={(v) => { setConfirmCode(v.replace(/\D/g, '').slice(0, 4)); setConfirmError(''); }}
                   keyboardType="numeric"
                   maxLength={4}
-                  placeholder="0000"
+                  placeholder="Ex: 1234"
                   placeholderTextColor="#9CA3AF"
                   textAlign="center"
                 />
@@ -1229,7 +1216,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               onChangeText={(v) => { setConfirmCode(v.replace(/\D/g, '').slice(0, 4)); setConfirmError(''); }}
               keyboardType="numeric"
               maxLength={4}
-              placeholder="0000"
+              placeholder="Ex: 1234"
               placeholderTextColor="#9CA3AF"
               textAlign="center"
             />
