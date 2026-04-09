@@ -49,14 +49,41 @@ export function StatusBadge({ variant, label }: Props) {
   );
 }
 
-/** Mapeia status do backend para variante do badge (bookings.status) */
+/** Mapeia só `bookings.status` (sem `scheduled_trips`). Preferir `clientViagemStatusBadge` quando houver viagem. */
 export function bookingStatusToBadge(status: string | undefined): TripStatusBadge {
   if (!status) return 'em_analise';
   const s = status.toLowerCase();
-  if (s === 'paid' || s === 'completed' || s === 'concluido') return 'concluida';
   if (s === 'cancelled' || s === 'canceled' || s === 'cancelada') return 'cancelada';
+  if (s === 'completed' || s === 'concluido') return 'concluida';
   if (s === 'in_progress' || s === 'em_andamento') return 'em_andamento';
+  if (s === 'confirmed') return 'em_andamento';
+  if (s === 'paid' || s === 'pending') return 'aguardando_motorista';
   return 'em_analise';
+}
+
+/**
+ * Combina reserva + viagem agendada (`scheduled_trips.status`).
+ * Alinhado ao fluxo motorista: active → em andamento / aguardando; completed → concluída; cancelled em qualquer lado → cancelada.
+ */
+export function clientViagemStatusBadge(
+  bookingStatus: string | undefined,
+  tripStatus: string | undefined | null,
+): TripStatusBadge {
+  const b = String(bookingStatus ?? '').trim().toLowerCase();
+  const t = String(tripStatus ?? '').trim().toLowerCase();
+
+  if (b === 'cancelled' || b === 'canceled' || t === 'cancelled' || t === 'canceled') {
+    return 'cancelada';
+  }
+  if (t === 'completed') {
+    return 'concluida';
+  }
+  if (t === 'active') {
+    if (b === 'confirmed' || b === 'in_progress') return 'em_andamento';
+    if (b === 'paid' || b === 'pending') return 'aguardando_motorista';
+    return 'em_analise';
+  }
+  return bookingStatusToBadge(bookingStatus);
 }
 
 /** Mapeia status do backend para variante do badge (shipments.status). Inclui awaiting_driver para quando o app motorista existir. */

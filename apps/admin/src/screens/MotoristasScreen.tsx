@@ -6,11 +6,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
-  searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
-import { fetchMotoristas, fetchMotoristaTableRows } from '../data/queries';
-import type { MotoristaListItem } from '../data/types';
+import { fetchMotoristas, fetchMotoristaTableRows, fetchAllMotoristaProfiles, updateWorkerStatus } from '../data/queries';
+import type { MotoristaListItem, WorkerApprovalRow, WorkerApprovalStatus } from '../data/types';
 import type { MotoristaTableRow } from '../data/queries';
 
 const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } = require('recharts');
@@ -26,31 +25,12 @@ const pencilActionSvg = React.createElement('svg', { width: 20, height: 20, view
   React.createElement('path', { d: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
   React.createElement('path', { d: 'M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 
-const swapIconSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-  React.createElement('path', { d: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-  React.createElement('path', { d: 'M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
-
 const closeSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
   React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
 
-// ── Table columns ─────────────────────────────────────────────────────────
-const tableCols = [
-  { label: 'Motoristas', flex: '1 1 15%', minWidth: 140 },
-  { label: 'Origem', flex: '1 1 15%', minWidth: 120 },
-  { label: 'Destino', flex: '1 1 15%', minWidth: 120 },
-  { label: 'Data', flex: '0 0 96px', minWidth: 96 },
-  { label: 'Embarque', flex: '0 0 76px', minWidth: 76 },
-  { label: 'Chegada', flex: '0 0 72px', minWidth: 72 },
-  { label: 'Status', flex: '0 0 120px', minWidth: 120 },
-  { label: 'Visualizar/Editar', flex: '0 0 90px', minWidth: 90 },
-];
-
-const statusStyles: Record<string, { bg: string; color: string }> = {
-  'Concluído': { bg: '#b0e8d1', color: '#174f38' },
-  'Cancelado': { bg: '#eeafaa', color: '#551611' },
-  'Agendado': { bg: '#a8c6ef', color: '#102d57' },
-  'Em andamento': { bg: '#fee59a', color: '#654c01' },
-};
+/** Última coluna: min-width cobre 2×40px ícones + até 2 pills (pendente) sem wrap na linha de 64px. */
+const cadastrosGridTemplate =
+  'minmax(0, 1.55fr) minmax(0, 0.58fr) minmax(0, 0.68fr) minmax(0, 0.34fr) minmax(0, 0.44fr) minmax(0, 0.52fr) minmax(220px, 0.95fr)';
 
 // ── Avatar helper ─────────────────────────────────────────────────────────
 const renderAvatar = (nome: string, avatarUrl?: string | null) => {
@@ -68,28 +48,61 @@ export default function MotoristasScreen() {
   const [motoristasData, setMotoristasData] = useState<MotoristaListItem[]>([]);
   const [tableData, setTableData] = useState<MotoristaTableRow[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
+  const [allProfiles, setAllProfiles] = useState<WorkerApprovalRow[]>([]);
+  const [profilesLoading, setProfilesLoading] = useState(false);
+  const [approvalFilter, setApprovalFilter] = useState<WorkerApprovalStatus | 'todos'>('todos');
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [cadastrosSearch, setCadastrosSearch] = useState('');
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([fetchMotoristas(), fetchMotoristaTableRows()]).then(([stats, rows]) => {
-      if (!cancelled) { setMotoristasData(stats); setTableData(rows); setDataLoading(false); }
+    setProfilesLoading(true);
+    Promise.all([fetchMotoristas(), fetchMotoristaTableRows(), fetchAllMotoristaProfiles()]).then(([stats, rows, profiles]) => {
+      if (!cancelled) {
+        setMotoristasData(stats);
+        setTableData(rows);
+        setAllProfiles(profiles);
+        setDataLoading(false);
+        setProfilesLoading(false);
+      }
     });
     return () => { cancelled = true; };
   }, []);
 
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 3000);
+  };
+
+  const handleApprove = async (id: string) => {
+    setActionLoading(id);
+    const { error } = await updateWorkerStatus(id, 'approved');
+    setActionLoading(null);
+    if (error) { showToast('Erro ao aprovar motorista.'); return; }
+    setAllProfiles((prev) => prev.map((p) => p.id === id ? { ...p, approvalStatus: 'approved' } : p));
+    showToast('Motorista aprovado com sucesso!');
+  };
+
+  const handleReject = async (id: string) => {
+    setActionLoading(id);
+    const { error } = await updateWorkerStatus(id, 'rejected');
+    setActionLoading(null);
+    if (error) { showToast('Erro ao rejeitar motorista.'); return; }
+    setAllProfiles((prev) => prev.map((p) => p.id === id ? { ...p, approvalStatus: 'rejected' } : p));
+    showToast('Motorista rejeitado.');
+  };
+
+  const pendingCount = useMemo(() => allProfiles.filter((p) => p.approvalStatus === 'pending').length, [allProfiles]);
+
   // ── Search & filter state ─────────────────────────────────────────────
-  const [search, setSearch] = useState('');
   const [filtroOpen, setFiltroOpen] = useState(false);
   const [filtroStatus, setFiltroStatus] = useState<'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('todos');
   const [filtroCategoria, setFiltroCategoria] = useState<'todos' | 'take_me' | 'parceiro'>('todos');
   const [filtroDateInicio, setFiltroDateInicio] = useState('');
   const [filtroDateFim, setFiltroDateFim] = useState('');
 
-  // ── Table filter state ─────────────────────────────────────────────────
-  const [tblFilterOpen, setTblFilterOpen] = useState(false);
-  const [tblNomeMotorista, setTblNomeMotorista] = useState('');
-  const [tblOrigem, setTblOrigem] = useState('');
-  const [tblDestino, setTblDestino] = useState('');
+  const [cadastroFiltroOpen, setCadastroFiltroOpen] = useState(false);
 
   // ── Trocar motorista panel ─────────────────────────────────────────────
   const [trocarOpen, setTrocarOpen] = useState(false);
@@ -100,9 +113,6 @@ export default function MotoristasScreen() {
   // ── Filtered table data ────────────────────────────────────────────────
   const filteredTableData = useMemo(() => {
     return tableData.filter((t) => {
-      const q = search.toLowerCase();
-      if (q && !t.nome.toLowerCase().includes(q) && !t.origem.toLowerCase().includes(q) && !t.destino.toLowerCase().includes(q)) return false;
-
       if (filtroStatus !== 'todos') {
         const expected = filtroStatus === 'em_andamento' ? 'Em andamento'
           : filtroStatus === 'agendadas' ? 'Agendado'
@@ -112,14 +122,11 @@ export default function MotoristasScreen() {
       }
       if (filtroCategoria === 'take_me' && t.categoria !== 'take_me') return false;
       if (filtroCategoria === 'parceiro' && t.categoria !== 'parceiro') return false;
-
-      if (tblNomeMotorista && !t.nome.toLowerCase().includes(tblNomeMotorista.toLowerCase())) return false;
-      if (tblOrigem && !t.origem.toLowerCase().includes(tblOrigem.toLowerCase())) return false;
-      if (tblDestino && !t.destino.toLowerCase().includes(tblDestino.toLowerCase())) return false;
-
+      if (filtroDateInicio && t.dataIso && t.dataIso < filtroDateInicio) return false;
+      if (filtroDateFim && t.dataIso && t.dataIso > filtroDateFim) return false;
       return true;
     });
-  }, [tableData, search, filtroStatus, filtroCategoria, tblNomeMotorista, tblOrigem, tblDestino]);
+  }, [tableData, filtroStatus, filtroCategoria, filtroDateInicio, filtroDateFim]);
 
   // ── Status counts from filtered table data (for pie chart) ────────────
   const statusCounts = useMemo(() => {
@@ -141,16 +148,50 @@ export default function MotoristasScreen() {
     { name: 'Canceladas', value: statusCounts.canceladas, color: '#d64545' },
   ].filter((d) => d.value > 0), [statusCounts]);
 
-  // ── KPI metrics ───────────────────────────────────────────────────────
-  const totalMotoristas = motoristasData.length;
-  const emViagem = motoristasData.filter((m) => m.viagensAtivas > 0).length;
-  const semViagem = motoristasData.filter((m) => m.viagensAtivas === 0).length;
-  const comAgendadas = motoristasData.filter((m) => m.viagensAgendadas > 0).length;
-  const topDrivers = motoristasData.slice(0, 5);
-  const ratingList = motoristasData.filter((m) => m.rating != null && m.rating > 0);
-  const avgRating = ratingList.length > 0
-    ? (ratingList.reduce((s, m) => s + (m.rating ?? 0), 0) / ratingList.length).toFixed(1)
-    : '—';
+  // ── KPI metrics (mesma base que o gráfico: viagens após filtros de período/status/categoria) ──
+  const {
+    totalMotoristas,
+    emViagem,
+    semViagem,
+    comAgendadas,
+    topDrivers,
+    avgRating,
+  } = useMemo(() => {
+    const byDriver = new Map<string, { tripCount: number; emAndamento: boolean; agendadas: boolean }>();
+    for (const t of filteredTableData) {
+      let cur = byDriver.get(t.driverId);
+      if (!cur) {
+        cur = { tripCount: 0, emAndamento: false, agendadas: false };
+        byDriver.set(t.driverId, cur);
+      }
+      cur.tripCount++;
+      if (t.status === 'Em andamento') cur.emAndamento = true;
+      if (t.status === 'Agendado') cur.agendadas = true;
+    }
+    const idToMeta = new Map(motoristasData.map((m) => [m.id, m]));
+    let emViagem = 0;
+    let comAgendadas = 0;
+    for (const v of byDriver.values()) {
+      if (v.emAndamento) emViagem++;
+      if (v.agendadas) comAgendadas++;
+    }
+    const totalMotoristas = byDriver.size;
+    const semViagem = totalMotoristas - emViagem;
+    const topDrivers = [...byDriver.entries()]
+      .sort((a, b) => b[1].tripCount - a[1].tripCount)
+      .slice(0, 5)
+      .map(([id, v]) => {
+        const m = idToMeta.get(id);
+        return { id, nome: m?.nome ?? 'Sem nome', totalViagens: v.tripCount };
+      });
+    const ratings = [...byDriver.keys()]
+      .map((id) => idToMeta.get(id)?.rating)
+      .filter((r): r is number => r != null && r > 0);
+    const avgRating = ratings.length > 0
+      ? (ratings.reduce((s, r) => s + r, 0) / ratings.length).toFixed(1)
+      : '—';
+    return { totalMotoristas, emViagem, semViagem, comAgendadas, topDrivers, avgRating };
+  }, [filteredTableData, motoristasData]);
 
   // ── Pie tooltip ────────────────────────────────────────────────────────
   const customTooltip = ({ active, payload }: any) => {
@@ -169,6 +210,18 @@ export default function MotoristasScreen() {
       type: 'button', key: label, onClick,
       style: { padding: '6px 16px', borderRadius: 999, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600, ...font, background: active ? '#0d0d0d' : '#f1f1f1', color: active ? '#fff' : '#0d0d0d' },
     }, label);
+
+  // ── Cadastros filtered data (must be before early return to preserve hook order) ──
+  const filteredProfiles = useMemo(() => {
+    return allProfiles.filter((p) => {
+      if (approvalFilter !== 'todos' && p.approvalStatus !== approvalFilter) return false;
+      if (cadastrosSearch) {
+        const q = cadastrosSearch.toLowerCase();
+        if (!p.nome.toLowerCase().includes(q) && !(p.phone ?? '').toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  }, [allProfiles, approvalFilter, cadastrosSearch]);
 
   // ── Loading state ──────────────────────────────────────────────────────
   if (dataLoading) {
@@ -240,70 +293,14 @@ export default function MotoristasScreen() {
       style: { display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 16px', borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font },
     }, filterIconSvg, 'Filtros'));
 
-  // ── Table section ─────────────────────────────────────────────────────
-  const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 8px' };
-
-  const tableHeader = React.createElement('div', {
-    style: { display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9', padding: '0 16px', alignItems: 'center' },
-  },
-    ...tableCols.map((c) => React.createElement('div', {
-      key: c.label,
-      style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 8px', display: 'flex', alignItems: 'center', height: '100%' },
-    }, c.label)));
-
-  const tableRowEls = filteredTableData.map((t, idx) => {
-    const st = statusStyles[t.status] || { bg: '#eee', color: '#333' };
-    return React.createElement('div', {
-      key: t.tripId, 'data-testid': 'motorista-table-row',
-      style: { display: 'flex', height: 64, alignItems: 'center', padding: '0 16px', borderBottom: '1px solid #d9d9d9', background: '#f6f6f6' },
-    },
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth, gap: 8, overflow: 'hidden' } },
-        renderAvatar(t.nome, t.avatarUrl),
-        React.createElement('span', { style: { fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 } }, t.nome)),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 } }, t.origem),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 } }, t.destino),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth } }, t.data),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth } }, t.embarque),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth } }, t.chegada),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[6].flex, minWidth: tableCols[6].minWidth } },
-        React.createElement('span', {
-          style: { display: 'inline-block', padding: '4px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700, lineHeight: 1.5, whiteSpace: 'nowrap' as const, background: st.bg, color: st.color, ...font },
-        }, t.status)),
-      React.createElement('div', { style: { flex: tableCols[7].flex, minWidth: tableCols[7].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 } },
-        React.createElement('button', {
-          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar',
-          onClick: () => navigate(`/motoristas/${t.driverId}/viagem/${t.tripId}`, {
-            state: { trip: { passageiro: t.nome, origem: t.origem, destino: t.destino, data: t.data, embarque: t.embarque, chegada: t.chegada, status: t.status === 'Concluído' ? 'concluído' : t.status === 'Cancelado' ? 'cancelado' : t.status === 'Agendado' ? 'agendado' : 'em_andamento' } },
-          }),
-        }, eyeActionSvg),
-        React.createElement('button', {
-          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
-          onClick: () => navigate(`/motoristas/${t.driverId}/editar`),
-        }, pencilActionSvg)));
-  });
-
-  const tableSection = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' } },
-    React.createElement('div', { style: { background: '#fff', borderRadius: 16, overflow: 'hidden', width: '100%' } },
-      React.createElement('div', {
-        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 80, padding: '20px 28px', background: '#f6f6f6', borderRadius: '16px 16px 0 0' },
-      },
-        React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font } }, 'Lista de motoristas'),
-        React.createElement('button', {
-          type: 'button', onClick: () => setTblFilterOpen(true), 'data-testid': 'motoristas-open-table-filter',
-          style: { display: 'flex', alignItems: 'center', gap: 8, height: 40, padding: '8px 24px', background: '#fff', border: 'none', borderRadius: 999, cursor: 'pointer', fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font },
-        }, filterIconSvg, 'Filtro')),
-      React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } },
-        tableHeader,
-        ...tableRowEls)));
-
   // ── Filtro modal ───────────────────────────────────────────────────────
   const filtroModal = filtroOpen ? React.createElement('div', {
     role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'motoristas-filtro-titulo',
-    style: { position: 'fixed' as const, inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', padding: 24, background: 'rgba(0,0,0,0.18)' },
+    style: { position: 'fixed' as const, inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(0,0,0,0.4)' },
     onClick: () => setFiltroOpen(false),
   },
     React.createElement('div', {
-      style: { background: '#fff', borderRadius: 20, padding: 24, width: 380, maxHeight: '90vh', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 8px 40px rgba(0,0,0,0.18)' },
+      style: { background: '#fff', borderRadius: 20, padding: 24, width: 420, maxHeight: '90vh', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 8px 40px rgba(0,0,0,0.18)' },
       onClick: (e: React.MouseEvent) => e.stopPropagation(),
     },
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
@@ -353,52 +350,45 @@ export default function MotoristasScreen() {
           style: { flex: 1, height: 44, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 15, fontWeight: 600, cursor: 'pointer', ...font },
         }, 'Resetar')))) : null;
 
-  // ── Table filter modal ─────────────────────────────────────────────────
-  const tblFilterModal = tblFilterOpen ? React.createElement('div', {
-    role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'motoristas-filtro-tabela-titulo',
-    style: { position: 'fixed' as const, inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', padding: 24, background: 'rgba(0,0,0,0.18)' },
-    onClick: () => setTblFilterOpen(false),
+  const cadastroFiltroModal = cadastroFiltroOpen ? React.createElement('div', {
+    role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'motoristas-filtro-cadastro-titulo',
+    style: { position: 'fixed' as const, inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(0,0,0,0.4)' },
+    onClick: () => setCadastroFiltroOpen(false),
   },
     React.createElement('div', {
-      style: { background: '#fff', borderRadius: 20, padding: 24, width: 360, maxHeight: '90vh', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 8px 40px rgba(0,0,0,0.18)' },
+      style: { background: '#fff', borderRadius: 20, padding: 24, width: 420, maxHeight: '90vh', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 8px 40px rgba(0,0,0,0.18)' },
       onClick: (e: React.MouseEvent) => e.stopPropagation(),
     },
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-        React.createElement('h2', { id: 'motoristas-filtro-tabela-titulo', style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro da tabela'),
+        React.createElement('h2', { id: 'motoristas-filtro-cadastro-titulo', style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Filtro da lista'),
         React.createElement('button', {
-          type: 'button', onClick: () => setTblFilterOpen(false),
+          type: 'button', onClick: () => setCadastroFiltroOpen(false),
           style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
         }, closeSvg)),
       React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
-        React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Nome do motorista'),
+        React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Buscar por nome ou telefone'),
         React.createElement('input', {
-          type: 'text', value: tblNomeMotorista, placeholder: 'Ex: Carlos Silva',
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setTblNomeMotorista(e.target.value),
+          type: 'text', value: cadastrosSearch, placeholder: 'Ex: João ou 11999...',
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCadastrosSearch(e.target.value),
           style: { height: 40, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 12px', fontSize: 14, color: '#0d0d0d', outline: 'none', ...font },
         })),
-      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
-        React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Origem'),
-        React.createElement('input', {
-          type: 'text', value: tblOrigem, placeholder: 'Ex: São Paulo, SP',
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setTblOrigem(e.target.value),
-          style: { height: 40, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 12px', fontSize: 14, color: '#0d0d0d', outline: 'none', ...font },
-        })),
-      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
-        React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Destino'),
-        React.createElement('input', {
-          type: 'text', value: tblDestino, placeholder: 'Ex: Rio de Janeiro, RJ',
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setTblDestino(e.target.value),
-          style: { height: 40, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 12px', fontSize: 14, color: '#0d0d0d', outline: 'none', ...font },
-        })),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Status do cadastro'),
+        React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+          fChip('Todos', approvalFilter === 'todos', () => setApprovalFilter('todos')),
+          fChip('Pendentes', approvalFilter === 'pending', () => setApprovalFilter('pending')),
+          fChip('Aprovados', approvalFilter === 'approved', () => setApprovalFilter('approved')),
+          fChip('Rejeitados', approvalFilter === 'rejected', () => setApprovalFilter('rejected')),
+          fChip('Suspensos', approvalFilter === 'suspended', () => setApprovalFilter('suspended')))),
       React.createElement('div', { style: { display: 'flex', gap: 8 } },
         React.createElement('button', {
-          type: 'button', onClick: () => setTblFilterOpen(false),
+          type: 'button', onClick: () => setCadastroFiltroOpen(false),
           style: { flex: 1, height: 44, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer', ...font },
         }, 'Aplicar'),
         React.createElement('button', {
           type: 'button',
-          onClick: () => { setTblNomeMotorista(''); setTblOrigem(''); setTblDestino(''); setTblFilterOpen(false); },
+          onClick: () => { setCadastrosSearch(''); setApprovalFilter('todos'); setCadastroFiltroOpen(false); },
           style: { flex: 1, height: 44, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 15, fontWeight: 600, cursor: 'pointer', ...font },
         }, 'Resetar')))) : null;
 
@@ -491,6 +481,181 @@ export default function MotoristasScreen() {
           style: { height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#0d0d0d', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
         }, 'Cancelar')))) : null;
 
+  const cellBase: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    fontSize: 14,
+    color: '#0d0d0d',
+    ...font,
+    padding: '0 8px',
+    boxSizing: 'border-box' as const,
+    minWidth: 0,
+  };
+
+  // ── Approval status styles ─────────────────────────────────────────────
+  const approvalStatusStyle: Record<string, { bg: string; color: string; label: string }> = {
+    pending:   { bg: '#fef3c7', color: '#92400e', label: 'Pendente' },
+    approved:  { bg: '#b0e8d1', color: '#174f38', label: 'Aprovado' },
+    rejected:  { bg: '#eeafaa', color: '#551611', label: 'Rejeitado' },
+    suspended: { bg: '#e5e7eb', color: '#374151', label: 'Suspenso' },
+  };
+
+  // ── Lista de motoristas (cadastros) ──
+  const approvalCols = [
+    { label: 'Motorista' },
+    { label: 'Tipo' },
+    { label: 'Telefone' },
+    { label: 'Avaliação' },
+    { label: 'Cadastro' },
+    { label: 'Status' },
+    { label: 'Ações' },
+  ];
+
+  const cadastrosTableRowStyle: React.CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: cadastrosGridTemplate,
+    columnGap: 4,
+    width: '100%',
+    minWidth: 0,
+    boxSizing: 'border-box' as const,
+    alignItems: 'center',
+  };
+
+  const cadastroActionBtn: React.CSSProperties = {
+    padding: '4px 10px',
+    borderRadius: 999,
+    border: 'none',
+    fontSize: 11,
+    fontWeight: 700,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap' as const,
+    flexShrink: 0,
+    ...font,
+  };
+
+  const cadastroTitleRight = React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' as const, justifyContent: 'flex-end' } },
+    pendingCount > 0
+      ? React.createElement('span', { style: { background: '#fef3c7', color: '#92400e', borderRadius: 999, fontSize: 12, fontWeight: 700, padding: '4px 10px', ...font } }, `${pendingCount} pendente${pendingCount === 1 ? '' : 's'}`)
+      : null,
+    React.createElement('button', {
+      type: 'button', onClick: () => setCadastroFiltroOpen(true), 'data-testid': 'motoristas-open-cadastro-filter',
+      style: { display: 'flex', alignItems: 'center', gap: 8, height: 40, padding: '8px 24px', background: '#fff', border: 'none', borderRadius: 999, cursor: 'pointer', fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font },
+    }, filterIconSvg, 'Filtro'));
+
+  const motoristasCadastradosSection = profilesLoading
+    ? React.createElement('div', { style: { padding: 40, textAlign: 'center' as const, color: '#767676', ...font } }, 'Carregando cadastros...')
+    : React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' } },
+        React.createElement('div', { style: { background: '#fff', borderRadius: 16, overflow: 'hidden', width: '100%' } },
+          React.createElement('div', {
+            style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, minHeight: 80, padding: '20px 28px', background: '#f6f6f6', borderRadius: '16px 16px 0 0' },
+          },
+            React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font } },
+              `Lista de motoristas (${filteredProfiles.length})`),
+            cadastroTitleRight),
+          React.createElement('div', { style: { width: '100%', minWidth: 0, overflowX: 'auto' as const } },
+            React.createElement('div', {
+              style: {
+                ...cadastrosTableRowStyle,
+                height: 53,
+                background: '#e2e2e2',
+                borderBottom: '1px solid #d9d9d9',
+                padding: '0 16px',
+              },
+            },
+              ...approvalCols.map((c, i) => {
+                const last = i === approvalCols.length - 1;
+                return React.createElement('div', {
+                  key: c.label,
+                  style: {
+                    fontSize: 12,
+                    fontWeight: 400,
+                    color: '#0d0d0d',
+                    ...font,
+                    padding: '0 8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap' as const,
+                    justifyContent: last ? 'flex-end' : 'flex-start',
+                    boxSizing: 'border-box' as const,
+                  },
+                }, c.label);
+              })),
+            filteredProfiles.length === 0
+              ? React.createElement('div', { style: { padding: '32px 24px', color: '#767676', ...font, textAlign: 'center' as const } }, 'Nenhum motorista neste filtro.')
+              : React.createElement(React.Fragment, null,
+                  ...filteredProfiles.map((p) => {
+                    const st = approvalStatusStyle[p.approvalStatus] ?? approvalStatusStyle.pending;
+                    const isLoading = actionLoading === p.id;
+                    const fmtDate = (iso: string) => {
+                      try { return new Date(iso).toLocaleDateString('pt-BR'); } catch { return '—'; }
+                    };
+                    const openVisualizar = () => navigate(`/motoristas/${p.id}`);
+                    const openEditar = () => navigate(`/motoristas/${p.id}/editar`);
+                    return React.createElement('div', {
+                      key: p.id,
+                      'data-testid': 'motorista-cadastro-row',
+                      style: {
+                        ...cadastrosTableRowStyle,
+                        height: 64,
+                        padding: '0 16px',
+                        borderBottom: '1px solid #d9d9d9',
+                        background: '#f6f6f6',
+                      },
+                    },
+                      React.createElement('div', { style: { ...cellBase, gap: 8, overflow: 'hidden' } },
+                        renderAvatar(p.nome, p.avatarUrl),
+                        React.createElement('span', { style: { fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } }, p.nome)),
+                      React.createElement('div', { style: { ...cellBase, overflow: 'hidden' } },
+                        React.createElement('span', { style: { fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 999, background: p.subtype === 'take_me' ? '#dbeafe' : '#f3e8ff', color: p.subtype === 'take_me' ? '#1e40af' : '#6b21a8', whiteSpace: 'nowrap' as const, ...font } },
+                          p.subtype === 'take_me' ? 'Take Me' : 'Parceiro')),
+                      React.createElement('div', { style: { ...cellBase, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, p.phone ?? '—'),
+                      React.createElement('div', { style: { ...cellBase, fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } },
+                        p.rating != null ? `★ ${p.rating.toFixed(1)}` : '—'),
+                      React.createElement('div', { style: { ...cellBase, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, fmtDate(p.createdAt)),
+                      React.createElement('div', { style: { ...cellBase, overflow: 'hidden' } },
+                        React.createElement('span', {
+                          style: { display: 'inline-block', maxWidth: '100%', padding: '4px 8px', borderRadius: 999, fontSize: 12, fontWeight: 700, lineHeight: 1.5, whiteSpace: 'nowrap' as const, overflow: 'hidden', textOverflow: 'ellipsis', background: st.bg, color: st.color, ...font },
+                        }, st.label)),
+                      React.createElement('div', { style: { ...cellBase, justifyContent: 'flex-end', gap: 4, flexWrap: 'nowrap' as const, alignItems: 'center' } },
+                        React.createElement('button', {
+                          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar motorista',
+                          onClick: openVisualizar,
+                        }, eyeActionSvg),
+                        React.createElement('button', {
+                          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar motorista',
+                          onClick: openEditar,
+                        }, pencilActionSvg),
+                        p.approvalStatus === 'pending' || p.approvalStatus === 'rejected'
+                          ? React.createElement('button', {
+                              type: 'button', disabled: isLoading,
+                              onClick: () => handleApprove(p.id),
+                              style: { ...cadastroActionBtn, background: '#0d8344', color: '#fff', cursor: 'pointer', opacity: isLoading ? 0.5 : 1 },
+                            }, isLoading ? '...' : 'Aprovar')
+                          : null,
+                        p.approvalStatus === 'pending'
+                          ? React.createElement('button', {
+                              type: 'button', disabled: isLoading,
+                              onClick: () => handleReject(p.id),
+                              style: { ...cadastroActionBtn, background: '#d64545', color: '#fff', cursor: 'pointer', opacity: isLoading ? 0.5 : 1 },
+                            }, isLoading ? '...' : 'Rejeitar')
+                          : null,
+                        p.approvalStatus === 'suspended'
+                          ? React.createElement('button', {
+                              type: 'button', disabled: isLoading,
+                              onClick: () => handleApprove(p.id),
+                              style: { ...cadastroActionBtn, background: '#0d8344', color: '#fff', cursor: 'pointer', opacity: isLoading ? 0.5 : 1 },
+                            }, isLoading ? '...' : 'Reativar')
+                          : null));
+                  })))));
+
+  // ── Toast ──────────────────────────────────────────────────────────────
+  const toastEl = toastMsg ? React.createElement('div', {
+    style: { position: 'fixed' as const, bottom: 32, right: 32, zIndex: 9999, background: '#0d0d0d', color: '#fff', padding: '14px 24px', borderRadius: 12, fontSize: 14, fontWeight: 600, boxShadow: '0 4px 20px rgba(0,0,0,0.3)', ...font },
+  }, toastMsg) : null;
+
   // ── Render ─────────────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Motoristas'),
@@ -498,8 +663,9 @@ export default function MotoristasScreen() {
     metricCards,
     secondRow,
     chartSection,
-    tableSection,
+    motoristasCadastradosSection,
     trocarMotoristaPanel,
     filtroModal,
-    tblFilterModal);
+    cadastroFiltroModal,
+    toastEl);
 }

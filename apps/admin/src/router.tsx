@@ -32,6 +32,10 @@ import AtendimentoDetalheScreen from './screens/AtendimentoDetalheScreen';
 import ElaborarOrcamentoScreen from './screens/ElaborarOrcamentoScreen';
 import HistoricoViagensScreen from './screens/HistoricoViagensScreen';
 import ConfiguracoesScreen from './screens/ConfiguracoesScreen';
+import DependentesScreen from './screens/DependentesScreen';
+import NotificacoesScreen from './screens/NotificacoesScreen';
+import AvaliacoesScreen from './screens/AvaliacoesScreen';
+import AnalyticsScreen from './screens/AnalyticsScreen';
 
 export const router = createBrowserRouter([
   {
@@ -55,7 +59,9 @@ export const router = createBrowserRouter([
           { path: '/viagens/:id/editar', element: React.createElement(ViagemEditScreen) },
           { path: '/passageiros', element: React.createElement(PassageirosScreen) },
           { path: '/passageiros/:id', element: React.createElement(PassageiroDetalheScreen) },
+          { path: '/dependentes', element: React.createElement(DependentesScreen) },
           { path: '/motoristas', element: React.createElement(MotoristasScreen) },
+          { path: '/motoristas/:id', element: React.createElement(MotoristaEditScreen) },
           { path: '/motoristas/:mid/viagem/:id', element: React.createElement(ViagemDetalheScreen) },
           { path: '/motoristas/:mid/viagem/:id/historico', element: React.createElement(HistoricoViagensScreen) },
           { path: '/motoristas/:id/editar', element: React.createElement(MotoristaEditScreen) },
@@ -78,6 +84,9 @@ export const router = createBrowserRouter([
           { path: '/atendimentos', element: React.createElement(AtendimentosScreen) },
           { path: '/atendimentos/:id', element: React.createElement(AtendimentoDetalheScreen) },
           { path: '/atendimentos/:id/orcamento', element: React.createElement(ElaborarOrcamentoScreen) },
+          { path: '/notificacoes', element: React.createElement(NotificacoesScreen) },
+          { path: '/avaliacoes', element: React.createElement(AvaliacoesScreen) },
+          { path: '/analytics', element: React.createElement(AnalyticsScreen) },
           { path: '/configuracoes', element: React.createElement(ConfiguracoesScreen) },
         ],
       },

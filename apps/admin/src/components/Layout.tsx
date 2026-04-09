@@ -12,26 +12,24 @@ const navTabsList = [
   { label: 'Início', path: '/' },
   { label: 'Viagens', path: '/viagens' },
   { label: 'Passageiros', path: '/passageiros' },
+  { label: 'Dependentes', path: '/dependentes' },
   { label: 'Motoristas', path: '/motoristas' },
   { label: 'Destinos', path: '/destinos' },
   { label: 'Encomendas', path: '/encomendas' },
   { label: 'Preparadores', path: '/preparadores' },
   { label: 'Promoções', path: '/promocoes' },
   { label: 'Pagamentos', path: '/pagamentos' },
+  { label: 'Notificações', path: '/notificacoes' },
+  { label: 'Avaliações', path: '/avaliacoes' },
+  { label: 'Analytics', path: '/analytics' },
 ];
 
-// Chevron down SVG for "Mais" button
-const moreChevronSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-  React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+/** Máximo de abas na barra; o restante fica em "Ver mais". */
+const MAX_VISIBLE_NAV_TABS = 6;
 
-function getVisibleCount(width: number): number {
-  if (width >= 1340) return 9; // all items fit with logo + user block
-  if (width >= 1200) return 7;
-  if (width >= 1050) return 6;
-  if (width >= 900) return 5;
-  if (width >= 750) return 4;
-  return 3;
-}
+// Chevron right (>) para "Ver mais"
+const chevronRightSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', { d: 'M9 18l6-6-6-6', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 
 export default function Layout() {
   const location = useLocation();
@@ -44,7 +42,6 @@ export default function Layout() {
     if (scrollContainer) scrollContainer.scrollTop = 0;
   }, [location.pathname]);
 
-  const [visibleCount, setVisibleCount] = useState(() => getVisibleCount(typeof window !== 'undefined' ? window.innerWidth : 1280));
   const [moreOpen, setMoreOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [accountMenuPos, setAccountMenuPos] = useState<{ top: number; left: number } | null>(null);
@@ -52,15 +49,6 @@ export default function Layout() {
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
   const accountTriggerRef = useRef<HTMLButtonElement | null>(null);
   const accountDropdownRef = useRef<HTMLDivElement | null>(null);
-
-  const handleResize = useCallback(() => {
-    setVisibleCount(getVisibleCount(window.innerWidth));
-  }, []);
-
-  useEffect(() => {
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [handleResize]);
 
   const updateAccountMenuPosition = useCallback(() => {
     const el = accountTriggerRef.current;
@@ -126,12 +114,11 @@ export default function Layout() {
   const userEmail = session?.user?.email || 'pedro.henriq@gmail.com';
   const avatarLetter = userName.charAt(0).toUpperCase();
 
-  const needsMore = visibleCount < navTabsList.length;
-  const visibleTabs = needsMore ? navTabsList.slice(0, visibleCount) : navTabsList;
-  const overflowTabs = needsMore ? navTabsList.slice(visibleCount) : [];
+  const needsMore = navTabsList.length > MAX_VISIBLE_NAV_TABS;
+  const visibleTabs = needsMore ? navTabsList.slice(0, MAX_VISIBLE_NAV_TABS) : navTabsList;
+  const overflowTabs = needsMore ? navTabsList.slice(MAX_VISIBLE_NAV_TABS) : [];
 
-  // Check if the active tab is in the overflow
-  const activeInOverflow = activeNavIndex >= visibleCount;
+  const activeInOverflow = needsMore && activeNavIndex >= MAX_VISIBLE_NAV_TABS;
 
   const navButtons = visibleTabs.map((tab, i) =>
     React.createElement('button', {
@@ -141,7 +128,7 @@ export default function Layout() {
       onClick: () => navigate(tab.path),
     }, tab.label));
 
-  // "Mais" button with dropdown
+  // "Ver mais" com dropdown
   const moreButton = needsMore ? React.createElement('div', {
     key: '_more',
     ref: moreMenuRef,
@@ -149,13 +136,15 @@ export default function Layout() {
   },
     React.createElement('button', {
       type: 'button',
+      'aria-expanded': moreOpen,
+      'aria-haspopup': 'menu',
       style: {
         ...webStyles.navTab,
         ...(activeInOverflow ? webStyles.navTabActive : {}),
         flexDirection: 'row' as const, alignItems: 'center', justifyContent: 'center', gap: 4,
       } as React.CSSProperties,
       onClick: (e: React.MouseEvent) => { e.stopPropagation(); setMoreOpen((v) => !v); },
-    }, 'Mais', moreChevronSvg),
+    }, 'Ver mais', chevronRightSvg),
     // Dropdown
     moreOpen ? React.createElement('div', {
       style: {
