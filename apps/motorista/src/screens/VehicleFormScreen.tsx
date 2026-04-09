@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -21,7 +21,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
-import { storageUrl } from '../utils/storageUrl';
+import { resolveVehiclePhotoUri } from '../utils/storageUrl';
 import { uploadToStorage } from '../utils/uploadToStorage';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
@@ -67,6 +67,22 @@ export function VehicleFormScreen({ navigation, route }: Props) {
   const [saving, setSaving] = useState(false);
   const [existingDocUrl, setExistingDocUrl] = useState<string | null>(null);
   const [existingPhotoUrls, setExistingPhotoUrls] = useState<string[]>([]);
+  const [existingPhotoDisplayUris, setExistingPhotoDisplayUris] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const next: Record<string, string> = {};
+      await Promise.all(
+        existingPhotoUrls.map(async (storageRef) => {
+          const uri = await resolveVehiclePhotoUri(storageRef);
+          if (uri) next[storageRef] = uri;
+        }),
+      );
+      if (!cancelled) setExistingPhotoDisplayUris(next);
+    })();
+    return () => { cancelled = true; };
+  }, [JSON.stringify(existingPhotoUrls)]);
 
   useFocusEffect(
     useCallback(() => {
@@ -379,7 +395,11 @@ export function VehicleFormScreen({ navigation, route }: Props) {
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photosScroll}>
               {existingPhotoUrls.map((url, i) => (
                 <View key={`existing-${i}`} style={styles.photoThumbWrap}>
-                  <Image source={{ uri: storageUrl('vehicles', url) ?? undefined }} style={styles.photoThumb} resizeMode="cover" />
+                  <Image
+                    source={{ uri: existingPhotoDisplayUris[url] ?? undefined }}
+                    style={styles.photoThumb}
+                    resizeMode="cover"
+                  />
                   <TouchableOpacity style={styles.removePhotoBtn} onPress={() => removeExistingPhoto(url)}>
                     <Text style={styles.removePhotoText}>Remover foto</Text>
                   </TouchableOpacity>

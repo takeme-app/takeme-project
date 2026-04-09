@@ -29,6 +29,11 @@ export function LoginScreen({ navigation }: Props) {
   const [hidePassword, setHidePassword] = useState(true);
   const [loading, setLoading] = useState(false);
 
+  /** Sempre volta à entrada (Criar conta / Já tenho conta), não ao histórico anterior do stack. */
+  const goBackToWelcome = () => {
+    navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
+  };
+
   const handleLogin = async () => {
     const input = phoneOrEmail.trim();
     if (!input) {
@@ -142,7 +147,7 @@ export function LoginScreen({ navigation }: Props) {
           <StatusBar style="dark" />
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => navigation.goBack()}
+            onPress={goBackToWelcome}
             activeOpacity={0.7}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           >

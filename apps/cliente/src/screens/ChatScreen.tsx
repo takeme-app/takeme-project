@@ -9,7 +9,10 @@ import {
   Platform,
   ActivityIndicator,
   Image,
+  Alert,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
@@ -19,6 +22,15 @@ import type { ActivitiesStackParamList } from '../navigation/ActivitiesStackType
 import { supabase } from '../lib/supabase';
 import { ensureDriverClientConversation, markConversationReadByClient } from '../lib/chatConversations';
 import { storageUrl } from '../utils/storageUrl';
+import { uploadChatLocalFile } from '../utils/chatAttachments';
+import { useAppAlert } from '../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../utils/errorMessage';
+import { loadExpoAv } from '../utils/expoAvOptional';
+import {
+  ChatAttachmentImage,
+  ChatAttachmentAudio,
+  ChatAttachmentFile,
+} from '../components/chat/ChatAttachmentViews';
 
 const sb = supabase as { from: (table: string) => any };
 
@@ -40,6 +52,8 @@ type Message = {
   content: string;
   created_at: string;
   read_at: string | null;
+  message_kind?: string;
+  attachment_path?: string | null;
 };
 
 function formatTime(iso: string): string {
@@ -74,6 +88,7 @@ function getInitials(name: string): string {
 }
 
 export function ChatScreen({ navigation, route }: Props) {
+  const { showAlert } = useAppAlert();
   const contactName = route.params?.contactName ?? 'Suporte Take Me';
   const routeConversationId = route.params?.conversationId;
   const driverId = route.params?.driverId;
@@ -90,7 +105,10 @@ export function ChatScreen({ navigation, route }: Props) {
   const [sending, setSending] = useState(false);
   const [conversationStatus, setConversationStatus] = useState<'active' | 'closed'>('active');
   const [myId, setMyId] = useState<string | null>(null);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const flatListRef = useRef<FlatList>(null);
+  const recordingRef = useRef<{ stopAndUnloadAsync: () => Promise<void>; getURI: () => string | null } | null>(null);
 
   const conversationId = routeConversationId ?? resolvedConversationId;
 
@@ -98,6 +116,16 @@ export function ChatScreen({ navigation, route }: Props) {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (user) setMyId(user.id);
     });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      const r = recordingRef.current;
+      if (r) {
+        void r.stopAndUnloadAsync().catch(() => {});
+        recordingRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -137,7 +165,7 @@ export function ChatScreen({ navigation, route }: Props) {
     if (!conversationId) return;
     const { data } = await sb
       .from('messages')
-      .select('id, sender_id, content, created_at, read_at')
+      .select('id, sender_id, content, created_at, read_at, message_kind, attachment_path')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: true });
     setMessages((data ?? []) as Message[]);
@@ -188,16 +216,229 @@ export function ChatScreen({ navigation, route }: Props) {
     if (!conversationId) return;
     setSending(true);
     setInputText('');
+    try {
+      await sb.from('messages').insert({
+        conversation_id: conversationId,
+        sender_id: myId,
+        content: text,
+        message_kind: 'text',
+      });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const insertMessage = async (row: {
+    content: string;
+    message_kind: string;
+    attachment_path?: string | null;
+  }) => {
+    if (!myId || !conversationId) return;
     await sb.from('messages').insert({
       conversation_id: conversationId,
       sender_id: myId,
-      content: text,
+      content: row.content,
+      message_kind: row.message_kind,
+      attachment_path: row.attachment_path ?? null,
     });
-    setSending(false);
+  };
+
+  const sendWithAttachment = async (
+    localUri: string,
+    contentType: string,
+    ext: string,
+    messageKind: 'image' | 'audio' | 'file',
+    label: string,
+  ) => {
+    if (!myId || !conversationId || uploadingAttachment) return;
+    setUploadingAttachment(true);
+    try {
+      const path = await uploadChatLocalFile(conversationId, localUri, contentType, ext);
+      await insertMessage({
+        content: label,
+        message_kind: messageKind,
+        attachment_path: path,
+      });
+    } catch (e: unknown) {
+      showAlert('Erro', getUserErrorMessage(e));
+    } finally {
+      setUploadingAttachment(false);
+    }
+  };
+
+  const openAttachmentMenu = () => {
+    if (!conversationId) {
+      showAlert('Conversa', 'Aguarde a conversa carregar.');
+      return;
+    }
+    Alert.alert('Enviar anexo', 'Escolha uma opção', [
+      { text: 'Galeria de fotos', onPress: () => { void pickFromGallery(); } },
+      { text: 'Arquivo', onPress: () => { void pickDocument(); } },
+      { text: 'Cancelar', style: 'cancel' },
+    ]);
+  };
+
+  const pickFromGallery = async () => {
+    if (!conversationId) return;
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (perm.status !== 'granted') {
+        showAlert('Permissão', 'Precisamos de acesso à galeria para enviar fotos.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.85,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      const asset = result.assets[0];
+      const caption = inputText.trim();
+      if (caption) setInputText('');
+      await sendWithAttachment(asset.uri, 'image/jpeg', 'jpg', 'image', caption || '📷 Foto');
+    } catch (e: unknown) {
+      showAlert('Erro', getUserErrorMessage(e));
+    }
+  };
+
+  const openCamera = async () => {
+    if (!conversationId) return;
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (perm.status !== 'granted') {
+        showAlert('Permissão', 'Precisamos da câmera para tirar uma foto.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        quality: 0.85,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      const asset = result.assets[0];
+      const caption = inputText.trim();
+      if (caption) setInputText('');
+      await sendWithAttachment(asset.uri, 'image/jpeg', 'jpg', 'image', caption || '📷 Foto');
+    } catch (e: unknown) {
+      showAlert('Erro', getUserErrorMessage(e));
+    }
+  };
+
+  const pickDocument = async () => {
+    if (!conversationId) return;
+    try {
+      const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      const name = asset.name ?? 'arquivo';
+      const ext = name.includes('.') ? (name.split('.').pop() ?? 'bin') : 'bin';
+      const mime = asset.mimeType ?? 'application/octet-stream';
+      const caption = inputText.trim() || name;
+      if (inputText.trim()) setInputText('');
+      await sendWithAttachment(asset.uri, mime, ext, 'file', caption);
+    } catch (e: unknown) {
+      showAlert('Erro', getUserErrorMessage(e));
+    }
+  };
+
+  const toggleRecording = async () => {
+    if (!myId || !conversationId || uploadingAttachment) return;
+    if (isRecording) {
+      const rec = recordingRef.current;
+      recordingRef.current = null;
+      setIsRecording(false);
+      if (!rec) return;
+      try {
+        await rec.stopAndUnloadAsync();
+        const uri = rec.getURI();
+        if (uri) {
+          const caption = inputText.trim();
+          if (caption) setInputText('');
+          await sendWithAttachment(
+            uri,
+            Platform.OS === 'ios' ? 'audio/m4a' : 'audio/mp4',
+            'm4a',
+            'audio',
+            caption || '🎤 Áudio',
+          );
+        }
+      } catch (e: unknown) {
+        showAlert('Erro', getUserErrorMessage(e));
+      }
+      return;
+    }
+    try {
+      const av = await loadExpoAv();
+      if (!av) {
+        showAlert(
+          'Gravação indisponível',
+          'Este build do app ainda não inclui o suporte nativo a áudio. Rode um build novo do iOS (ex.: npx expo run:ios após pod install) ou envie um arquivo de áudio pelo botão de anexo.',
+        );
+        return;
+      }
+      const { Audio } = av;
+      const perm = await Audio.requestPermissionsAsync();
+      if (perm.status !== 'granted') {
+        showAlert('Permissão', 'Precisamos do microfone para gravar áudio.');
+        return;
+      }
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+      });
+      const recording = new Audio.Recording();
+      await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      await recording.startAsync();
+      recordingRef.current = recording;
+      setIsRecording(true);
+    } catch (e: unknown) {
+      showAlert('Erro', getUserErrorMessage(e));
+    }
   };
 
   const items = groupByDate(messages);
   const headerAvatarUri = storageUrl('avatars', participantAvatarKey);
+
+  const renderBubbleBody = (msg: Message, isOutgoing: boolean) => {
+    const kind = msg.message_kind ?? 'text';
+    const path = msg.attachment_path ?? null;
+    const pal = isOutgoing ? ('dark' as const) : ('gold' as const);
+
+    if (kind === 'image' && path) {
+      return (
+        <View>
+          <ChatAttachmentImage attachmentPath={path} isOutgoing={isOutgoing} outgoingPalette={pal} />
+          {msg.content && msg.content !== '📷 Foto' ? (
+            <Text style={[styles.bubbleText, isOutgoing && styles.bubbleTextOut, styles.captionBelow]}>
+              {msg.content}
+            </Text>
+          ) : null}
+        </View>
+      );
+    }
+    if (kind === 'audio' && path) {
+      return (
+        <View>
+          <ChatAttachmentAudio attachmentPath={path} isOutgoing={isOutgoing} outgoingPalette={pal} />
+          {msg.content && msg.content !== '🎤 Áudio' ? (
+            <Text style={[styles.bubbleText, isOutgoing && styles.bubbleTextOut, styles.captionBelow]}>
+              {msg.content}
+            </Text>
+          ) : null}
+        </View>
+      );
+    }
+    if (kind === 'file' && path) {
+      return (
+        <ChatAttachmentFile
+          attachmentPath={path}
+          contentLabel={msg.content}
+          isOutgoing={isOutgoing}
+          outgoingPalette={pal}
+        />
+      );
+    }
+    return <Text style={[styles.bubbleText, isOutgoing && styles.bubbleTextOut]}>{msg.content}</Text>;
+  };
 
   const renderItem = ({ item }: { item: typeof items[number] }) => {
     if ('type' in item && item.type === 'separator') {
@@ -214,7 +455,7 @@ export function ChatScreen({ navigation, route }: Props) {
     return (
       <View style={[styles.messageRow, isOutgoing ? styles.messageRowOut : styles.messageRowIn]}>
         <View style={[styles.bubble, isOutgoing ? styles.bubbleOut : styles.bubbleIn]}>
-          <Text style={[styles.bubbleText, isOutgoing && styles.bubbleTextOut]}>{msg.content}</Text>
+          {renderBubbleBody(msg, isOutgoing)}
           <View style={styles.bubbleFooter}>
             <Text style={[styles.bubbleTime, isOutgoing && styles.bubbleTimeOut]}>
               {formatTime(msg.created_at)}
@@ -231,6 +472,9 @@ export function ChatScreen({ navigation, route }: Props) {
       </View>
     );
   };
+
+  const inputDisabled =
+    sending || uploadingAttachment || !myId || isRecording || !conversationId;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -289,7 +533,15 @@ export function ChatScreen({ navigation, route }: Props) {
 
         {!resolveError && conversationStatus === 'active' && (
           <View style={styles.inputRow}>
-            <TouchableOpacity style={styles.inputAction}>
+            {isRecording ? (
+              <Text style={styles.recordingLabel}>Gravando… toque no microfone para enviar</Text>
+            ) : null}
+            <TouchableOpacity
+              style={styles.inputAction}
+              onPress={openAttachmentMenu}
+              disabled={inputDisabled}
+              activeOpacity={0.7}
+            >
               <MaterialIcons name="attach-file" size={24} color={COLORS.neutral700} />
             </TouchableOpacity>
             <TextInput
@@ -300,18 +552,32 @@ export function ChatScreen({ navigation, route }: Props) {
               onChangeText={setInputText}
               multiline
               maxLength={500}
-              editable={!!conversationId}
+              editable={!inputDisabled}
             />
-            <TouchableOpacity style={styles.inputAction}>
+            <TouchableOpacity
+              style={styles.inputAction}
+              onPress={() => { void openCamera(); }}
+              disabled={inputDisabled}
+              activeOpacity={0.7}
+            >
               <MaterialIcons name="camera-alt" size={24} color={COLORS.neutral700} />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.inputAction}>
-              <MaterialIcons name="mic" size={24} color={COLORS.neutral700} />
+            <TouchableOpacity
+              style={styles.inputAction}
+              onPress={() => { void toggleRecording(); }}
+              disabled={uploadingAttachment || !myId || !conversationId}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons
+                name="mic"
+                size={24}
+                color={isRecording ? '#DC2626' : COLORS.neutral700}
+              />
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.sendButton, (!inputText.trim() || sending || !myId) && styles.sendButtonDisabled]}
+              style={[styles.sendButton, (!inputText.trim() || inputDisabled) && styles.sendButtonDisabled]}
               onPress={sendMessage}
-              disabled={!inputText.trim() || sending || !conversationId || !myId}
+              disabled={!inputText.trim() || inputDisabled}
               activeOpacity={0.8}
             >
               {sending ? (
@@ -320,6 +586,9 @@ export function ChatScreen({ navigation, route }: Props) {
                 <MaterialIcons name="send" size={22} color="#FFFFFF" />
               )}
             </TouchableOpacity>
+            {uploadingAttachment ? (
+              <ActivityIndicator size="small" color={COLORS.black} style={{ marginLeft: 4 }} />
+            ) : null}
           </View>
         )}
       </KeyboardAvoidingView>
@@ -376,6 +645,7 @@ const styles = StyleSheet.create({
   bubbleIn: { backgroundColor: COLORS.bubbleIn, borderBottomLeftRadius: 4 },
   bubbleText: { fontSize: 15, color: COLORS.black, lineHeight: 20 },
   bubbleTextOut: { color: '#FFFFFF' },
+  captionBelow: { marginTop: 8 },
   bubbleFooter: {
     flexDirection: 'row', alignItems: 'center',
     justifyContent: 'flex-end', gap: 4, marginTop: 4,
@@ -394,11 +664,20 @@ const styles = StyleSheet.create({
   inputRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
+    flexWrap: 'wrap',
     paddingHorizontal: 8,
     paddingVertical: 8,
     borderTopWidth: 1,
     borderTopColor: COLORS.neutral300,
     backgroundColor: COLORS.background,
+  },
+  recordingLabel: {
+    width: '100%',
+    fontSize: 13,
+    color: '#DC2626',
+    fontWeight: '600',
+    marginBottom: 4,
+    paddingHorizontal: 4,
   },
   inputAction: { padding: 8 },
   input: {

@@ -17,6 +17,10 @@ export type RegistrationFormData = {
   cpf: string;
   age: string;
   city: string;
+  /** Metadados da cidade (Google Geocoding) para vínculo com bases. */
+  cityLocality: string | null;
+  cityAdminArea: string | null;
+  cityResolvedFromMaps: boolean;
   preferenceArea: string;
   experienceYears: string;
   bankCode: string;
@@ -55,6 +59,9 @@ const defaultFormData: RegistrationFormData = {
   cpf: '',
   age: '',
   city: '',
+  cityLocality: null,
+  cityAdminArea: null,
+  cityResolvedFromMaps: false,
   preferenceArea: '',
   experienceYears: '',
   bankCode: '',

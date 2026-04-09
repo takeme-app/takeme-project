@@ -125,6 +125,8 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
           cpfDigits,
           age: ageNum,
           city: formData.city.trim() || null,
+          cityLocality: formData.cityLocality ?? null,
+          cityAdminArea: formData.cityAdminArea ?? null,
           preferenceArea: formData.preferenceArea.trim() || null,
           experienceYears: formData.experienceYears ? parseInt(formData.experienceYears, 10) : null,
           bankCode: formData.bankCode.trim() || null,

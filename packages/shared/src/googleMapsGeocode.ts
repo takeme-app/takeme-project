@@ -8,28 +8,84 @@ export type GoogleGeocodeResult = {
   latitude: number;
   longitude: number;
   placeName: string;
+  /** Cidade (locality ou, em falta, administrative_area_level_2). */
+  locality: string | null;
+  /** Estado (administrative_area_level_1). */
+  adminAreaLevel1: string | null;
+};
+
+type AddressComponent = {
+  long_name: string;
+  short_name: string;
+  types: string[];
+};
+
+type GeocodeResultItem = {
+  formatted_address?: string;
+  geometry?: { location?: { lat: number; lng: number } };
+  address_components?: AddressComponent[];
 };
 
 type GeocodeResponse = {
-  results?: Array<{
-    formatted_address?: string;
-    geometry?: { location?: { lat: number; lng: number } };
-  }>;
+  results?: GeocodeResultItem[];
   status?: string;
 };
 
-function resultFromGeocodeItem(r: {
-  formatted_address?: string;
-  geometry?: { location?: { lat: number; lng: number } };
-}): GoogleGeocodeResult | null {
+function stripDiacritics(s: string): string {
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function extractLocalityAndState(
+  components: AddressComponent[] | undefined,
+): { locality: string | null; adminAreaLevel1: string | null } {
+  if (!components?.length) return { locality: null, adminAreaLevel1: null };
+  let adminAreaLevel1: string | null = null;
+  let locality: string | null = null;
+  for (const c of components) {
+    const t = c.types;
+    if (t.includes('administrative_area_level_1')) adminAreaLevel1 = c.long_name;
+    if (t.includes('locality')) locality = c.long_name;
+  }
+  if (!locality) {
+    for (const c of components) {
+      if (c.types.includes('administrative_area_level_2')) {
+        locality = c.long_name;
+        break;
+      }
+    }
+  }
+  return { locality, adminAreaLevel1 };
+}
+
+/** Resultado útil para busca por cidade (evita só "Brasil"). */
+function hasCityLikeComponent(components: AddressComponent[] | undefined): boolean {
+  if (!components?.length) return false;
+  return components.some(
+    (c) =>
+      c.types.includes('locality') ||
+      c.types.includes('administrative_area_level_2') ||
+      c.types.includes('administrative_area_level_1'),
+  );
+}
+
+function resultFromGeocodeItem(r: GeocodeResultItem): GoogleGeocodeResult | null {
   const loc = r.geometry?.location;
   if (!loc || !Number.isFinite(loc.lat) || !Number.isFinite(loc.lng)) return null;
+  const { locality, adminAreaLevel1 } = extractLocalityAndState(r.address_components);
   return {
     latitude: loc.lat,
     longitude: loc.lng,
     placeName: r.formatted_address ?? '',
+    locality,
+    adminAreaLevel1,
   };
 }
+
+export type GoogleGeocodeSuggestOptions = {
+  limit?: number;
+  /** Prioriza municípios locais (query com ", Brasil" + filtro por componentes). */
+  cityBias?: boolean;
+};
 
 export async function googleForwardGeocode(
   query: string,
@@ -55,12 +111,14 @@ export async function googleForwardGeocode(
 export async function googleGeocodeSuggest(
   query: string,
   apiKey: string,
-  options?: { limit?: number },
+  options?: GoogleGeocodeSuggestOptions,
 ): Promise<GoogleGeocodeResult[]> {
   const q = query.trim();
   if (q.length < 2 || !apiKey.trim()) return [];
   const limit = options?.limit ?? 6;
-  const url = `${GEOCODE}?address=${encodeURIComponent(q)}&components=country:BR&language=pt&key=${encodeURIComponent(apiKey)}`;
+  const cityBias = options?.cityBias === true;
+  const addressQuery = cityBias ? `${q}, Brasil` : q;
+  const url = `${GEOCODE}?address=${encodeURIComponent(addressQuery)}&components=country:BR&language=pt&key=${encodeURIComponent(apiKey)}`;
   try {
     const res = await fetch(url);
     if (!res.ok) return [];
@@ -68,12 +126,28 @@ export async function googleGeocodeSuggest(
     if (data.status !== 'OK' || !data.results?.length) return [];
     const out: GoogleGeocodeResult[] = [];
     for (const item of data.results) {
+      if (cityBias && !hasCityLikeComponent(item.address_components)) continue;
       const g = resultFromGeocodeItem(item);
       if (g) out.push(g);
       if (out.length >= limit) break;
+    }
+    if (cityBias && out.length === 0) {
+      for (const item of data.results) {
+        const g = resultFromGeocodeItem(item);
+        if (g) out.push(g);
+        if (out.length >= limit) break;
+      }
     }
     return out;
   } catch {
     return [];
   }
+}
+
+/** Normaliza texto para comparar cidade/estado com `public.bases`. */
+export function normalizeLocationKey(s: string): string {
+  return stripDiacritics(s)
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
 }

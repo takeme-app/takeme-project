@@ -16,7 +16,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
-import { storageUrl } from '../utils/storageUrl';
+import { normalizeVehiclePhotosUrls, resolveVehiclePhotoUris } from '../utils/storageUrl';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'VehicleDetail'>;
 
@@ -41,6 +41,7 @@ function docFilename(url: string | null): string | null {
 export function VehicleDetailScreen({ navigation, route }: Props) {
   const { vehicleId } = route.params;
   const [vehicle, setVehicle] = useState<VehicleDetail | null>(null);
+  const [resolvedPhotos, setResolvedPhotos] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -50,7 +51,15 @@ export function VehicleDetailScreen({ navigation, route }: Props) {
       .select('id, model, plate, year, passenger_capacity, renavam, use_type, vehicle_document_url, vehicle_photos_urls')
       .eq('id', vehicleId)
       .maybeSingle();
-    setVehicle(data as VehicleDetail | null);
+    const v = data as VehicleDetail | null;
+    if (v) {
+      const paths = normalizeVehiclePhotosUrls(v.vehicle_photos_urls);
+      const signed = await resolveVehiclePhotoUris(paths);
+      setResolvedPhotos(signed.filter((u): u is string => Boolean(u)));
+    } else {
+      setResolvedPhotos([]);
+    }
+    setVehicle(v);
     setLoading(false);
   }, [vehicleId]);
 
@@ -85,7 +94,6 @@ export function VehicleDetailScreen({ navigation, route }: Props) {
     );
   }
 
-  const photos = vehicle.vehicle_photos_urls ?? [];
   const isPrincipal = (vehicle.use_type ?? 'principal') === 'principal';
   const docName = docFilename(vehicle.vehicle_document_url);
 
@@ -148,13 +156,13 @@ export function VehicleDetailScreen({ navigation, route }: Props) {
             </>
           ) : null}
 
-          {photos.length > 0 ? (
+          {resolvedPhotos.length > 0 ? (
             <>
               <View style={styles.divider} />
               <View style={styles.photoGrid}>
-                {photos.map((url, i) => (
+                {resolvedPhotos.map((uri, i) => (
                   <View key={i} style={styles.photoCell}>
-                    <Image source={{ uri: storageUrl('vehicles', url) ?? undefined }} style={styles.photo} resizeMode="cover" />
+                    <Image source={{ uri }} style={styles.photo} resizeMode="cover" />
                   </View>
                 ))}
               </View>

@@ -22,6 +22,8 @@ import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
 import { formatPhoneBR } from '../utils/formatPhone';
 import { formatCurrencyBRLInput } from '../utils/formatCurrency';
 import { GooglePlacesAutocomplete } from '../components/GooglePlacesAutocomplete';
+import { GoogleCityAutocomplete } from '../components/GoogleCityAutocomplete';
+import type { GoogleGeocodeResult } from '@take-me/shared';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CompleteDriverRegistration'>;
 
@@ -48,6 +50,11 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
   const [cpf, setCpf] = useState('');
   const [age, setAge] = useState('');
   const [city, setCity] = useState('');
+  const [cityResolved, setCityResolved] = useState(false);
+  const [cityMeta, setCityMeta] = useState<{ locality: string | null; adminArea: string | null }>({
+    locality: null,
+    adminArea: null,
+  });
   const [preferenceArea, setPreferenceArea] = useState('');
   const [experienceYears, setExperienceYears] = useState('');
 
@@ -151,6 +158,10 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       showAlert('Atenção', 'Preencha a cidade.');
       return;
     }
+    if (!cityResolved) {
+      showAlert('Atenção', 'Selecione uma cidade na lista de sugestões (ou digite ao menos 2 caracteres se não houver chave do Google).');
+      return;
+    }
     if (isParceiro) {
       const expNum = parseInt(onlyDigits(experienceYears), 10);
       if (!expNum || expNum < 1 || expNum > 60) {
@@ -242,6 +253,9 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       cpf: formatCpf(cpfDigits),
       age: onlyDigits(age),
       city: city.trim(),
+      cityLocality: cityMeta.locality,
+      cityAdminArea: cityMeta.adminArea,
+      cityResolvedFromMaps: cityResolved,
       preferenceArea: isParceiro ? '' : preferenceArea.trim(),
       experienceYears: isParceiro ? onlyDigits(experienceYears) : '',
       bankCode: bankCode.trim(),
@@ -329,12 +343,19 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
           />
         </FieldBlock>
         <FieldBlock label="Cidade">
-          <TextInput
-            style={styles.input}
-            placeholder="Digite sua cidade"
-            placeholderTextColor="#9CA3AF"
+          <GoogleCityAutocomplete
+            placeholder="Busque sua cidade (ex: São Luís)"
             value={city}
             onChangeText={setCity}
+            onSelectPlace={(p: GoogleGeocodeResult) => {
+              setCityMeta({ locality: p.locality, adminArea: p.adminAreaLevel1 });
+            }}
+            onResolutionChange={(resolved) => {
+              setCityResolved(resolved);
+              if (!resolved) setCityMeta({ locality: null, adminArea: null });
+            }}
+            cityConfirmed={cityResolved}
+            inputStyle={styles.input}
           />
         </FieldBlock>
         {isParceiro ? (
@@ -483,13 +504,6 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
                 maxLength={isParceiro ? 2 : 1}
               />
             </FieldBlock>
-            <TouchableOpacity
-              style={styles.textLinkWrap}
-              onPress={() => showAlert('Em breve', 'Cadastro de mais de um veículo estará disponível em breve.')}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.textLink}>+ Adicionar outro veículo</Text>
-            </TouchableOpacity>
           </>
         ) : null}
 
