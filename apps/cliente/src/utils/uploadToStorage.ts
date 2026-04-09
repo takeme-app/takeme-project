@@ -1,8 +1,7 @@
 import { supabase } from '../lib/supabase';
 
 /**
- * Faz upload de um arquivo local (file:// ou content://) para o Supabase Storage
- * usando FormData + fetch direto na REST API — abordagem confiável no React Native/Hermes.
+ * Upload via FormData + fetch (React Native).
  */
 export async function uploadToStorage(
   bucket: string,
@@ -29,15 +28,8 @@ export async function uploadToStorage(
   });
 
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    let detail = '';
-    try {
-      const j = JSON.parse(text) as { message?: string; error?: string; statusCode?: string | number };
-      detail = [j.message, j.error].filter((x) => typeof x === 'string' && x.trim()).join(' — ') || '';
-    } catch {
-      detail = text.trim().slice(0, 300);
-    }
-    throw new Error(detail || `Upload falhou (HTTP ${res.status}).`);
+    const errJson = await res.json().catch(() => ({})) as { message?: string };
+    throw new Error(errJson.message ?? `Upload falhou: ${res.status}`);
   }
 
   const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);

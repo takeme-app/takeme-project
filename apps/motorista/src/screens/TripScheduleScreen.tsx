@@ -110,6 +110,7 @@ export function TripScheduleScreen({ navigation, route }: Props) {
 
       const { data, error } = res;
       if (error) {
+        console.warn('[TripScheduleScreen] scheduled_trips', error.message);
         setTrips([]);
         setDayStates({});
         setLoading(false);

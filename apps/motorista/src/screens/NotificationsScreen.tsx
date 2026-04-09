@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -21,68 +21,65 @@ type Props = NativeStackScreenProps<ProfileStackParamList, 'Notifications'>;
 
 const GOLD = '#C9A227';
 
-type NotifRow = {
-  id: string;
-  title: string;
-  body: string;
-  is_read: boolean;
-  created_at: string;
-};
+/** Alinhado a `notification_preferences` (migration 20250224000003) e ao app cliente. */
+const PREF_KEYS = [
+  {
+    key: 'travel_updates',
+    title: 'Atualizações de viagens',
+    desc: 'Corridas, solicitações pendentes e mudanças de status nas suas viagens.',
+  },
+  {
+    key: 'shipments_deliveries',
+    title: 'Envios e coletas',
+    desc: 'Encomendas e coletas quando você atua como preparador de encomendas.',
+  },
+  {
+    key: 'excursions_dependents',
+    title: 'Excursões',
+    desc: 'Pedidos e atualizações de excursões (preparador de excursões).',
+  },
+  {
+    key: 'payments_pending',
+    title: 'Pagamentos pendentes',
+    desc: 'Lembretes sobre repasses e valores em aberto.',
+  },
+  {
+    key: 'payment_receipts',
+    title: 'Comprovantes de pagamento',
+    desc: 'Recibos e confirmações de pagamento.',
+  },
+  {
+    key: 'offers_promotions',
+    title: 'Ofertas e promoções',
+    desc: 'Campanhas e novidades da plataforma.',
+  },
+  {
+    key: 'app_updates',
+    title: 'Atualizações do app',
+    desc: 'Novos recursos e melhorias.',
+  },
+  { key: 'disable_all', title: 'Desativar todas as notificações', desc: '' },
+] as const;
 
 type Tab = 'list' | 'config';
 
-type PrefGroup = {
+type NotifRow = {
+  id: string;
   title: string;
-  items: { key: string; label: string; sub: string }[];
-};
-
-const PREF_GROUPS: PrefGroup[] = [
-  {
-    title: 'Atividades e status',
-    items: [
-      { key: 'trip_updates', label: 'Atualizações de viagens', sub: 'Receba alertas sobre o andamento das suas corridas.' },
-      { key: 'deliveries', label: 'Envios e entregas', sub: 'Seja avisado quando seu envio for confirmado ou entregue.' },
-      { key: 'excursions', label: 'Excursões e dependentes', sub: 'Acompanhe atualizações de excursões e viagens de dependentes.' },
-    ],
-  },
-  {
-    title: 'Pagamentos',
-    items: [
-      { key: 'pending_payments', label: 'Pagamentos pendentes', sub: 'Receba lembretes sobre cobranças ou faturas em aberto.' },
-      { key: 'receipts', label: 'Comprovantes de pagamento', sub: 'Ative o envio automático de recibos e comprovantes.' },
-    ],
-  },
-  {
-    title: 'Recomendações e novidades',
-    items: [
-      { key: 'offers', label: 'Ofertas e promoções', sub: 'Saiba primeiro sobre descontos e campanhas.' },
-      { key: 'app_updates', label: 'Atualizações do app', sub: 'Mantenha-se informado sobre novos recursos e melhorias.' },
-    ],
-  },
-  {
-    title: 'Ações gerais',
-    items: [
-      { key: 'disable_all', label: 'Desativar todas as notificações', sub: '' },
-    ],
-  },
-];
-
-const DEFAULT_PREFS: Record<string, boolean> = {
-  trip_updates: true,
-  deliveries: false,
-  excursions: false,
-  pending_payments: true,
-  receipts: false,
-  offers: true,
-  app_updates: false,
-  disable_all: false,
+  message: string | null;
+  read_at: string | null;
+  created_at: string;
+  category: string | null;
 };
 
 function formatDate(iso: string): string {
   try {
     const d = new Date(iso);
-    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }) +
-      ' • ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    return (
+      d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }) +
+      ' • ' +
+      d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    );
   } catch {
     return '';
   }
@@ -92,33 +89,78 @@ export function NotificationsScreen({ navigation }: Props) {
   const [tab, setTab] = useState<Tab>('list');
   const [notifications, setNotifications] = useState<NotifRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [prefs, setPrefs] = useState<Record<string, boolean>>(DEFAULT_PREFS);
+  const [prefs, setPrefs] = useState<Record<string, boolean>>({});
+  const [prefsLoading, setPrefsLoading] = useState(true);
 
-  const load = useCallback(async () => {
+  const loadNotifications = useCallback(async () => {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
-    if (user?.id) {
-      const { data } = await supabase
-        .from('notifications')
-        .select('id, title, body, is_read, created_at')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
-        .limit(50);
+    if (!user?.id) {
+      setNotifications([]);
+      setLoading(false);
+      return;
+    }
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('id, title, message, read_at, created_at, category')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error) {
+      console.warn('[NotificationsScreen]', error.message);
+      setNotifications([]);
+    } else {
       setNotifications((data ?? []) as NotifRow[]);
     }
     setLoading(false);
   }, []);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(
+    useCallback(() => {
+      void loadNotifications();
+    }, [loadNotifications])
+  );
+
+  useEffect(() => {
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) {
+        setPrefsLoading(false);
+        return;
+      }
+      const { data } = await supabase
+        .from('notification_preferences')
+        .select('key, enabled')
+        .eq('user_id', user.id);
+
+      const map: Record<string, boolean> = {};
+      PREF_KEYS.forEach(({ key }) => {
+        map[key] = true;
+      });
+      (data ?? []).forEach((row: { key: string; enabled: boolean }) => {
+        map[row.key] = row.enabled;
+      });
+      setPrefs(map);
+      setPrefsLoading(false);
+    })();
+  }, []);
 
   const markRead = async (id: string) => {
-    setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, is_read: true } : n));
-    await supabase.from('notifications').update({ is_read: true } as never).eq('id', id);
+    const now = new Date().toISOString();
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read_at: now } : n)));
+    await supabase.from('notifications').update({ read_at: now } as never).eq('id', id);
   };
 
-  const togglePref = (key: string, value: boolean) => {
-    setPrefs((p) => ({ ...p, [key]: value }));
-  };
+  const setPref = useCallback(async (key: string, enabled: boolean) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user?.id) return;
+    setPrefs((prev) => ({ ...prev, [key]: enabled }));
+    await supabase.from('notification_preferences').upsert(
+      { user_id: user.id, key, enabled },
+      { onConflict: 'user_id,key' }
+    );
+  }, []);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -132,7 +174,6 @@ export function NotificationsScreen({ navigation }: Props) {
         <View style={{ width: 40 }} />
       </View>
 
-      {/* Tabs */}
       <View style={styles.tabBar}>
         <TouchableOpacity style={styles.tabItem} onPress={() => setTab('list')} activeOpacity={0.7}>
           <Text style={[styles.tabLabel, tab === 'list' && styles.tabLabelActive]}>Notificações</Text>
@@ -146,58 +187,127 @@ export function NotificationsScreen({ navigation }: Props) {
 
       {tab === 'list' ? (
         loading ? (
-          <View style={styles.center}><ActivityIndicator size="large" color="#111827" /></View>
+          <View style={styles.center}>
+            <ActivityIndicator size="large" color="#111827" />
+          </View>
         ) : notifications.length === 0 ? (
           <View style={styles.center}>
             <Text style={styles.emptyText}>Nenhuma notificação ainda.</Text>
+            <Text style={styles.emptyHint}>
+              Avisos importantes aparecem aqui. Novas solicitações e eventos podem gerar registros via servidor.
+            </Text>
           </View>
         ) : (
           <ScrollView showsVerticalScrollIndicator={false}>
-            {notifications.map((n, i) => (
-              <TouchableOpacity
-                key={n.id}
-                style={styles.notifRow}
-                onPress={() => markRead(n.id)}
-                activeOpacity={0.7}
-              >
-                {!n.is_read && <View style={styles.unreadDot} />}
-                <View style={[styles.bellCircle, { backgroundColor: n.is_read ? '#F3F4F6' : '#FEF3C7' }]}>
-                  <MaterialIcons name="notifications-none" size={22} color={n.is_read ? '#9CA3AF' : GOLD} />
-                </View>
-                <View style={styles.notifContent}>
-                  <Text style={[styles.notifTitle, !n.is_read && styles.notifTitleBold]}>{n.title}</Text>
-                  <Text style={styles.notifBody} numberOfLines={2}>{n.body}</Text>
-                  <Text style={styles.notifDate}>{formatDate(n.created_at)}</Text>
-                </View>
-                {i < notifications.length - 1 && <View style={styles.notifSep} />}
-              </TouchableOpacity>
-            ))}
+            {notifications.map((n, i) => {
+              const unread = n.read_at == null;
+              return (
+                <TouchableOpacity
+                  key={n.id}
+                  style={styles.notifRow}
+                  onPress={() => void markRead(n.id)}
+                  activeOpacity={0.7}
+                >
+                  {unread ? <View style={styles.unreadDot} /> : null}
+                  <View style={[styles.bellCircle, { backgroundColor: unread ? '#FEF3C7' : '#F3F4F6' }]}>
+                    <MaterialIcons name="notifications-none" size={22} color={unread ? GOLD : '#9CA3AF'} />
+                  </View>
+                  <View style={styles.notifContent}>
+                    <Text style={[styles.notifTitle, unread && styles.notifTitleBold]}>{n.title}</Text>
+                    <Text style={styles.notifBody} numberOfLines={3}>
+                      {n.message?.trim() ? n.message : '—'}
+                    </Text>
+                    <Text style={styles.notifDate}>{formatDate(n.created_at)}</Text>
+                  </View>
+                  {i < notifications.length - 1 ? <View style={styles.notifSep} /> : null}
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
         )
+      ) : prefsLoading ? (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color="#111827" />
+        </View>
       ) : (
         <ScrollView contentContainerStyle={styles.configScroll} showsVerticalScrollIndicator={false}>
-          {PREF_GROUPS.map((group) => (
-            <View key={group.title} style={styles.prefGroup}>
-              <Text style={styles.prefGroupTitle}>{group.title}</Text>
-              {group.items.map((item, i) => (
-                <View key={item.key}>
-                  <View style={styles.prefRow}>
-                    <View style={styles.prefText}>
-                      <Text style={styles.prefLabel}>{item.label}</Text>
-                      {item.sub ? <Text style={styles.prefSub}>{item.sub}</Text> : null}
-                    </View>
-                    <Switch
-                      value={prefs[item.key] ?? false}
-                      onValueChange={(v) => togglePref(item.key, v)}
-                      trackColor={{ false: '#E5E7EB', true: '#111827' }}
-                      thumbColor="#FFFFFF"
-                    />
+          <View style={styles.prefGroup}>
+            <Text style={styles.prefGroupTitle}>Atividades e status</Text>
+            {PREF_KEYS.slice(0, 3).map((item, i) => (
+              <View key={item.key}>
+                <View style={styles.prefRow}>
+                  <View style={styles.prefText}>
+                    <Text style={styles.prefLabel}>{item.title}</Text>
+                    {item.desc ? <Text style={styles.prefSub}>{item.desc}</Text> : null}
                   </View>
-                  {i < group.items.length - 1 && <View style={styles.prefSep} />}
+                  <Switch
+                    value={prefs[item.key] ?? true}
+                    onValueChange={(v) => void setPref(item.key, v)}
+                    trackColor={{ false: '#E5E7EB', true: '#111827' }}
+                    thumbColor="#FFFFFF"
+                  />
                 </View>
-              ))}
-            </View>
-          ))}
+                {i < 2 ? <View style={styles.prefSep} /> : null}
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.prefGroup}>
+            <Text style={styles.prefGroupTitle}>Pagamentos</Text>
+            {PREF_KEYS.slice(3, 5).map((item, i) => (
+              <View key={item.key}>
+                <View style={styles.prefRow}>
+                  <View style={styles.prefText}>
+                    <Text style={styles.prefLabel}>{item.title}</Text>
+                    {item.desc ? <Text style={styles.prefSub}>{item.desc}</Text> : null}
+                  </View>
+                  <Switch
+                    value={prefs[item.key] ?? true}
+                    onValueChange={(v) => void setPref(item.key, v)}
+                    trackColor={{ false: '#E5E7EB', true: '#111827' }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+                {i < 1 ? <View style={styles.prefSep} /> : null}
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.prefGroup}>
+            <Text style={styles.prefGroupTitle}>Recomendações e novidades</Text>
+            {PREF_KEYS.slice(5, 7).map((item, i) => (
+              <View key={item.key}>
+                <View style={styles.prefRow}>
+                  <View style={styles.prefText}>
+                    <Text style={styles.prefLabel}>{item.title}</Text>
+                    {item.desc ? <Text style={styles.prefSub}>{item.desc}</Text> : null}
+                  </View>
+                  <Switch
+                    value={prefs[item.key] ?? true}
+                    onValueChange={(v) => void setPref(item.key, v)}
+                    trackColor={{ false: '#E5E7EB', true: '#111827' }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+                {i < 1 ? <View style={styles.prefSep} /> : null}
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.prefGroup}>
+            <Text style={styles.prefGroupTitle}>Ações gerais</Text>
+            {PREF_KEYS.slice(7, 8).map((item) => (
+              <View key={item.key} style={styles.prefRow}>
+                <Text style={styles.prefLabel}>{item.title}</Text>
+                <Switch
+                  value={prefs[item.key] ?? false}
+                  onValueChange={(v) => void setPref(item.key, v)}
+                  trackColor={{ false: '#E5E7EB', true: '#111827' }}
+                  thumbColor="#FFFFFF"
+                />
+              </View>
+            ))}
+          </View>
         </ScrollView>
       )}
     </SafeAreaView>
@@ -206,32 +316,61 @@ export function NotificationsScreen({ navigation }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  emptyText: { color: '#9CA3AF', fontSize: 15 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
+  emptyText: { color: '#9CA3AF', fontSize: 15, textAlign: 'center' },
+  emptyHint: { color: '#D1D5DB', fontSize: 13, textAlign: 'center', marginTop: 10, lineHeight: 18 },
   header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingTop: 8 + SCREEN_TOP_EXTRA_PADDING, paddingBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 8 + SCREEN_TOP_EXTRA_PADDING,
+    paddingBottom: 12,
   },
   iconBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   headerTitle: { fontSize: 17, fontWeight: '700', color: '#111827' },
   tabBar: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
   tabItem: { flex: 1, alignItems: 'center', paddingBottom: 10, paddingTop: 4, position: 'relative' },
   tabLabel: { fontSize: 14, color: '#9CA3AF', fontWeight: '500' },
   tabLabelActive: { color: '#111827', fontWeight: '700' },
-  tabUnderline: { position: 'absolute', bottom: 0, left: 16, right: 16, height: 2, backgroundColor: '#111827', borderRadius: 1 },
+  tabUnderline: {
+    position: 'absolute',
+    bottom: 0,
+    left: 16,
+    right: 16,
+    height: 2,
+    backgroundColor: '#111827',
+    borderRadius: 1,
+  },
   notifRow: {
-    flexDirection: 'row', alignItems: 'flex-start',
-    paddingHorizontal: 20, paddingVertical: 16, gap: 14,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    gap: 14,
   },
   unreadDot: {
-    width: 8, height: 8, borderRadius: 4, backgroundColor: GOLD,
-    marginTop: 18, marginLeft: -4, marginRight: -10,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: GOLD,
+    marginTop: 18,
+    marginLeft: -4,
+    marginRight: -10,
   },
   bellCircle: {
-    width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   notifContent: { flex: 1 },
   notifTitle: { fontSize: 15, fontWeight: '500', color: '#111827', marginBottom: 4 },
@@ -243,8 +382,11 @@ const styles = StyleSheet.create({
   prefGroup: { marginTop: 28 },
   prefGroupTitle: { fontSize: 17, fontWeight: '700', color: '#111827', marginBottom: 16 },
   prefRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingVertical: 14, gap: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    gap: 16,
   },
   prefText: { flex: 1 },
   prefLabel: { fontSize: 15, fontWeight: '600', color: '#111827', marginBottom: 2 },

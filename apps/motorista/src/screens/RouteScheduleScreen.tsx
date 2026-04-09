@@ -182,11 +182,27 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user?.id) {
+      setTrips([]);
+      setDayToggles({});
+      setLoading(false);
+      return;
+    }
+    const { data, error } = await supabase
       .from('scheduled_trips')
       .select('id, day_of_week, departure_time, arrival_time, capacity, confirmed_count, price_per_person_cents, is_active')
       .eq('route_id', routeId)
+      .eq('driver_id', user.id)
       .order('day_of_week', { ascending: true });
+
+    if (error) {
+      console.warn('[RouteScheduleScreen] scheduled_trips', error.message);
+      setTrips([]);
+      setDayToggles({});
+      setLoading(false);
+      return;
+    }
 
     const rows = (data ?? []) as TripRow[];
     setTrips(rows);

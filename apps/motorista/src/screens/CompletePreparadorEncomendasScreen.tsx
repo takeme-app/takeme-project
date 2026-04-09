@@ -18,6 +18,9 @@ import * as ImagePicker from 'expo-image-picker';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext';
 import { supabase } from '../lib/supabase';
+import { resolveWorkerBaseId } from '../lib/resolveWorkerBaseId';
+import { GoogleCityAutocomplete } from '../components/GoogleCityAutocomplete';
+import type { GoogleGeocodeResult } from '@take-me/shared';
 import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
 import { formatPhoneBR } from '../utils/formatPhone';
 
@@ -43,6 +46,11 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
   const [cpf, setCpf] = useState('');
   const [age, setAge] = useState('');
   const [city, setCity] = useState('');
+  const [cityResolved, setCityResolved] = useState(false);
+  const [cityMeta, setCityMeta] = useState<{ locality: string | null; adminArea: string | null }>({
+    locality: null,
+    adminArea: null,
+  });
   const [experienceYears, setExperienceYears] = useState('');
 
   const [bankCode, setBankCode] = useState('');
@@ -96,6 +104,10 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
     const ageNum = parseInt(onlyDigits(age), 10);
     if (!ageNum || ageNum < 18 || ageNum > 100) { showAlert('Atenção', 'Informe uma idade válida (18–100).'); return; }
     if (!city.trim()) { showAlert('Atenção', 'Preencha a cidade.'); return; }
+    if (!cityResolved) {
+      showAlert('Atenção', 'Selecione uma cidade na lista de sugestões (ou digite ao menos 2 caracteres se não houver chave do Google).');
+      return;
+    }
     const expNum = parseInt(onlyDigits(experienceYears), 10);
     if (!expNum || expNum < 1 || expNum > 60) { showAlert('Atenção', 'Informe os anos de experiência (1–60).'); return; }
     if (!bankCode.trim() || !agencyNumber.trim() || !accountNumber.trim() || !pixKey.trim()) {
@@ -158,12 +170,15 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
 
       await supabase.from('profiles').update({ full_name: fullName.trim(), cpf: cpfDigits, city: city.trim(), updated_at: nowIso }).eq('id', userId);
 
+      const baseId = await resolveWorkerBaseId(cityMeta.locality, cityMeta.adminArea, city.trim());
+
       const { error: workerErr } = await supabase.from('worker_profiles').insert({
-        id: userId, role: 'driver', subtype: 'shipments', status: 'inactive',
+        id: userId, role: 'preparer', subtype: 'shipments', status: 'inactive',
         cpf: cpfDigits, age: ageNum, city: city.trim(), experience_years: expNum,
         bank_code: bankCode.trim(), bank_agency: agencyNumber.trim(), bank_account: accountNumber.trim(), pix_key: pixKey.trim(),
         has_own_vehicle: ownsVehicle, cnh_document_url: identityPath,
-        background_check_url: criminalPath ?? vehicleDocPath, created_at: nowIso, updated_at: nowIso,
+        background_check_url: criminalPath ?? vehicleDocPath, base_id: baseId,
+        created_at: nowIso, updated_at: nowIso,
       });
       if (workerErr) throw new Error(workerErr.message || 'Falha ao salvar perfil.');
 
@@ -213,7 +228,20 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
           <TextInput style={styles.input} placeholder="Ex: 30" placeholderTextColor="#9CA3AF" value={age} onChangeText={(t) => setAge(onlyDigits(t).slice(0, 3))} keyboardType="number-pad" maxLength={3} />
         </FieldBlock>
         <FieldBlock label="Cidade">
-          <TextInput style={styles.input} placeholder="Digite sua cidade" placeholderTextColor="#9CA3AF" value={city} onChangeText={setCity} />
+          <GoogleCityAutocomplete
+            placeholder="Busque sua cidade (ex: São Luís)"
+            value={city}
+            onChangeText={setCity}
+            onSelectPlace={(p: GoogleGeocodeResult) => {
+              setCityMeta({ locality: p.locality, adminArea: p.adminAreaLevel1 });
+            }}
+            onResolutionChange={(resolved) => {
+              setCityResolved(resolved);
+              if (!resolved) setCityMeta({ locality: null, adminArea: null });
+            }}
+            cityConfirmed={cityResolved}
+            inputStyle={styles.input}
+          />
         </FieldBlock>
         <FieldBlock label="Anos de experiência com encomendas">
           <TextInput style={styles.input} placeholder="Ex: 3" placeholderTextColor="#9CA3AF" value={experienceYears} onChangeText={(t) => setExperienceYears(onlyDigits(t).slice(0, 2))} keyboardType="number-pad" maxLength={2} />

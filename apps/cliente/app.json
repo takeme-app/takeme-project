@@ -62,7 +62,14 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "O app precisa acessar suas fotos para alterar a foto de perfil."
+          "photosPermission": "O app precisa acessar suas fotos para alterar a foto de perfil e para anexos no chat.",
+          "cameraPermission": "O app usa a câmera para fotos no chat."
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "O Take Me usa o microfone para mensagens de voz no chat."
         }
       ],
       [

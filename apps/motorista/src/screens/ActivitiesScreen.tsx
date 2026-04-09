@@ -65,6 +65,8 @@ type TripRow = {
   trunkPct: number;
   isConfirmed: boolean;
   driverJourneyStartedAt: string | null;
+  /** Viagem de rota com o dia desligado no cronograma (`is_active = false`). */
+  offerPaused: boolean;
 };
 
 type FilterCategory = 'Todas' | 'Viagens' | 'Envios' | 'Dependentes';
@@ -140,6 +142,7 @@ function buildTripRow(raw: RawTrip): TripRow {
     trunkPct,
     isConfirmed,
     driverJourneyStartedAt: raw.driver_journey_started_at ?? null,
+    offerPaused: raw.route_id != null && raw.is_active === false,
   };
 }
 
@@ -206,6 +209,11 @@ function TripCard({
 
       {/* Row 3: date */}
       <Text style={styles.dateText}>{formatDeparture(trip.departure_at)}</Text>
+      {trip.offerPaused ? (
+        <Text style={styles.offerPausedHint}>
+          Oferta pausada — ative o dia em Perfil → Cronograma das rotas.
+        </Text>
+      ) : null}
 
       {/* Row 4: passageiros + malas na mesma linha; encomendas abaixo (largura total) */}
       {(hasPassengers || hasLuggage || hasShipments) && (
@@ -274,7 +282,11 @@ function TripCard({
         )}
       </View>
 
-      {!journeyStarted && onStartTrip && trip.status !== 'cancelled' && trip.status !== 'completed' ? (
+      {!journeyStarted
+      && onStartTrip
+      && !trip.offerPaused
+      && trip.status !== 'cancelled'
+      && trip.status !== 'completed' ? (
         <TouchableOpacity
           onPress={onStartTrip}
           activeOpacity={0.85}
@@ -328,7 +340,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       return;
     }
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('scheduled_trips')
       .select(
         'id, origin_address, destination_address, departure_at, bags_available, trunk_occupancy_pct, status, route_id, is_active, driver_journey_started_at, bookings(id, passenger_count, bags_count, status)',
@@ -337,12 +349,16 @@ export function ActivitiesScreen({ navigation }: Props) {
       .in('status', ['active', 'scheduled'])
       .order('departure_at', { ascending: true });
 
+    if (error) {
+      console.warn('[ActivitiesScreen] scheduled_trips', error.message);
+      setConfirmedTrips([]);
+      setPlannedTrips([]);
+      setLoading(false);
+      return;
+    }
+
     const rawTrips = (data ?? []) as RawTrip[];
-    const visibleRaw = rawTrips.filter((t) => {
-      if (t.route_id != null && t.is_active === false) return false;
-      return true;
-    });
-    let rows = visibleRaw.map(buildTripRow);
+    let rows = rawTrips.map(buildTripRow);
 
     if (rows.length > 0) {
       const tripIds = rows.map((r) => r.id);
@@ -823,6 +839,12 @@ const styles = StyleSheet.create({
   },
   routeArrow: { marginHorizontal: 4 },
 
+  offerPausedHint: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#92400E',
+    lineHeight: 16,
+  },
   dateText: {
     fontSize: 13,
     color: '#6B7280',

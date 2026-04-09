@@ -68,7 +68,7 @@ function isRouteWaypointStop(s: Stop) {
   );
 }
 
-/** Ícone no mapa / sidebar: passageiro, encomenda (caixa), partida (carro), destino (bandeira), base, demais “place”. */
+/** Ícone no mapa / sidebar: passageiro, encomenda (caixa), partida (place), destino (bandeira), base, demais “place”. */
 function StopKindMarkerIcon({
   stop,
   completed,
@@ -90,7 +90,7 @@ function StopKindMarkerIcon({
     return <MaterialIcons name="inventory-2" size={size} color={color} />;
   }
   if (stop.stopType === 'driver_origin') {
-    return <MaterialIcons name="directions-car" size={size} color={color} />;
+    return <MaterialIcons name="place" size={size} color={color} />;
   }
   if (stop.stopType === 'trip_destination') {
     return <MaterialIcons name="flag" size={size} color={color} />;
@@ -1105,13 +1105,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                     ]}
                   >
                     <MaterialIcons
-                      name={
-                        currentStop.stopType === 'driver_origin'
-                          ? 'directions-car'
-                          : currentStop.stopType === 'trip_destination'
-                            ? 'flag'
-                            : 'place'
-                      }
+                      name={currentStop.stopType === 'trip_destination' ? 'flag' : 'place'}
                       size={26}
                       color="#fff"
                     />

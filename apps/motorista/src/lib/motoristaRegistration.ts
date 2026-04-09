@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { resolveWorkerBaseId } from './resolveWorkerBaseId';
 import type { RegistrationType } from '../navigation/types';
 
 /** Mapeia tipo de cadastro para subtype no banco. */
@@ -31,6 +32,8 @@ export type RegisterMotoristaWithAuthInput = {
   cpfDigits: string;
   age: number | null;
   city: string | null;
+  cityLocality: string | null;
+  cityAdminArea: string | null;
   preferenceArea: string | null;
   experienceYears: number | null;
   bankCode: string | null;
@@ -60,6 +63,8 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
     cpfDigits,
     age,
     city,
+    cityLocality,
+    cityAdminArea,
     preferenceArea,
     experienceYears,
     bankCode,
@@ -158,6 +163,8 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
   const ageForDb =
     age !== null && age !== undefined && Number.isFinite(age) ? Math.round(age) : null;
 
+  const baseId = await resolveWorkerBaseId(cityLocality, cityAdminArea, city?.trim() ?? '');
+
   const { error: workerErr } = await supabase.from('worker_profiles').insert({
     id: userId,
     role: 'driver',
@@ -166,6 +173,7 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
     cpf: cpfDigits,
     age: ageForDb,
     city: city?.trim() || null,
+    base_id: baseId,
     experience_years: experienceYears,
     bank_code: bankCode?.trim() || null,
     bank_agency: agencyNumber?.trim() || null,

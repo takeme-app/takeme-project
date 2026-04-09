@@ -31,6 +31,7 @@
     "@take-me/shared": "*",
     "expo": "^54.0.33",
     "expo-auth-session": "~7.0.10",
+    "expo-av": "~15.0.2",
     "expo-dev-client": "~6.0.20",
     "expo-document-picker": "~14.0.3",
     "expo-font": "~14.0.11",

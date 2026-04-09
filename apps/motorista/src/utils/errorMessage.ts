@@ -14,6 +14,14 @@ const ERROR_PT: Array<[RegExp, string]> = [
   [/session.*expired|refresh token/i, 'Sessão expirada. Faça login novamente.'],
   [/jwt expired/i, 'Sessão expirada. Faça login novamente.'],
   [/edge function|non-2xx/i, 'Serviço temporariamente indisponível. Tente novamente.'],
+  // Storage / anexos (Supabase)
+  [
+    /row-level security|violates row-level|new row violates|rls|unauthorized|403/i,
+    'Sem permissão para enviar o arquivo (conversa encerrada ou política do servidor). Verifique se o chat está ativo ou fale com o suporte.',
+  ],
+  [/bucket not found|bucket does not exist|not found.*bucket/i, 'O armazenamento de anexos ainda não foi configurado no servidor (bucket chat-attachments).'],
+  [/payload too large|entity too large|413|file too large|maximum.*size/i, 'Arquivo muito grande. Tente uma imagem menor ou outro formato.'],
+  [/invalid.*mime|mime type|content-type/i, 'Formato de arquivo não aceito. Tente JPG, PNG ou outro tipo suportado.'],
 ];
 
 const DEFAULT_MESSAGE = 'Algo deu errado. Tente novamente.';
@@ -42,5 +50,6 @@ export function getUserErrorMessage(error: unknown, fallback: string = DEFAULT_M
     }
   }
 
-  return fallback;
+  // Mensagens não mapeadas: mostrar o texto original (ex.: erro do Storage), não esconder atrás do genérico.
+  return raw.length > 0 ? raw : fallback;
 }

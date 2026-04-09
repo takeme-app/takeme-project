@@ -63,7 +63,14 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "O app precisa acessar suas fotos para enviar documentos e fotos do veículo."
+          "photosPermission": "O app precisa acessar suas fotos para enviar documentos e fotos do veículo.",
+          "cameraPermission": "O app usa a câmera para fotos no chat e no cadastro."
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "O Take Me Motorista usa o microfone para mensagens de voz no chat."
         }
       ]
     ]

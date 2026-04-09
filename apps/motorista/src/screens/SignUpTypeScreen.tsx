@@ -13,6 +13,10 @@ export function SignUpTypeScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const [selected, setSelected] = useState<RegistrationType | null>(null);
 
+  const goBackToWelcome = () => {
+    navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
+  };
+
   const handleNext = () => {
     if (!selected) return;
     navigation.navigate('SignUp', { registrationType: selected });
@@ -22,7 +26,7 @@ export function SignUpTypeScreen({ navigation }: Props) {
     <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom + 24 }]}>
       <StatusBar style="dark" />
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.backBtn} onPress={goBackToWelcome} activeOpacity={0.7}>
           <MaterialIcons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
       </View>

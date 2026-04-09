@@ -6,6 +6,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Animated,
+  Image,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -16,6 +17,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
+import { normalizeVehiclePhotosUrls, resolveVehiclePhotoUri } from '../utils/storageUrl';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'WorkerVehicles'>;
 
@@ -26,6 +28,8 @@ type VehicleRow = {
   year: number;
   passenger_capacity: number;
   use_type: string | null;
+  vehicle_photos_urls: string[] | null;
+  coverSignedUri: string | null;
 };
 
 const GOLD = '#C9A227';
@@ -69,10 +73,18 @@ export function WorkerVehiclesScreen({ navigation, route }: Props) {
     }
     const { data } = await supabase
       .from('vehicles')
-      .select('id, model, plate, year, passenger_capacity, use_type')
+      .select('id, model, plate, year, passenger_capacity, use_type, vehicle_photos_urls')
       .eq('worker_id', user.id)
       .order('created_at', { ascending: true });
-    setRows((data ?? []) as VehicleRow[]);
+    const raw = (data ?? []) as Omit<VehicleRow, 'coverSignedUri'>[];
+    const enriched: VehicleRow[] = await Promise.all(
+      raw.map(async (row) => {
+        const first = normalizeVehiclePhotosUrls(row.vehicle_photos_urls)[0] ?? null;
+        const coverSignedUri = first ? await resolveVehiclePhotoUri(first) : null;
+        return { ...row, coverSignedUri };
+      }),
+    );
+    setRows(enriched);
     setLoading(false);
   }, []);
 
@@ -127,7 +139,11 @@ export function WorkerVehiclesScreen({ navigation, route }: Props) {
                 onPress={() => navigation.navigate('VehicleDetail', { vehicleId: v.id })}
                 activeOpacity={0.85}
               >
-                <View style={styles.cardPhotoArea} />
+                <View style={styles.cardPhotoArea}>
+                  {v.coverSignedUri ? (
+                    <Image source={{ uri: v.coverSignedUri }} style={styles.cardPhoto} resizeMode="cover" />
+                  ) : null}
+                </View>
                 <View style={styles.cardBadgeRow}>
                   <View style={[styles.badge, isPrincipal ? styles.badgePrincipal : styles.badgeReserva]}>
                     <Text style={[styles.badgeText, isPrincipal ? styles.badgeTextPrincipal : styles.badgeTextReserva]}>
@@ -198,7 +214,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginBottom: 16,
   },
-  cardPhotoArea: { height: 100, backgroundColor: '#E5E7EB' },
+  cardPhotoArea: { height: 100, backgroundColor: '#E5E7EB', overflow: 'hidden' },
+  cardPhoto: { width: '100%', height: '100%' },
   cardBadgeRow: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
