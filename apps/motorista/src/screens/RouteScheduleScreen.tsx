@@ -119,6 +119,45 @@ function totalValue(base: number, count: number, adjust: PriceAdjust, dayIdx: nu
   return total;
 }
 
+/**
+ * Próxima data/hora de partida > agora (calendário local), para o weekday e horários fixos da rota.
+ * dayNum: 0=Dom … 6=Sáb (igual Date.getDay()).
+ */
+function computeNextDepartureArrivalFromWeekday(
+  dayNum: number,
+  departureTimeHHMM: string,
+  arrivalTimeHHMM: string,
+): { departureAt: Date; arrivalAt: Date } {
+  const depMatch = departureTimeHHMM.trim().match(/^(\d{1,2}):(\d{2})$/);
+  const arrMatch = arrivalTimeHHMM.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!depMatch || !arrMatch) {
+    throw new Error('Horário inválido.');
+  }
+  const depH = parseInt(depMatch[1], 10);
+  const depMin = parseInt(depMatch[2], 10);
+  const arrH = parseInt(arrMatch[1], 10);
+  const arrMin = parseInt(arrMatch[2], 10);
+
+  const now = new Date();
+  const maxScan = 400;
+  for (let add = 0; add < maxScan; add++) {
+    const cal = new Date(now.getFullYear(), now.getMonth(), now.getDate() + add, 0, 0, 0, 0);
+    if (cal.getDay() !== dayNum) continue;
+
+    const departureAt = new Date(cal);
+    departureAt.setHours(depH, depMin, 0, 0);
+    if (departureAt.getTime() <= now.getTime()) continue;
+
+    const arrivalAt = new Date(cal);
+    arrivalAt.setHours(arrH, arrMin, 0, 0);
+    if (arrivalAt.getTime() <= departureAt.getTime()) {
+      arrivalAt.setDate(arrivalAt.getDate() + 1);
+    }
+    return { departureAt, arrivalAt };
+  }
+  throw new Error('Não foi possível calcular a próxima data da viagem.');
+}
+
 export function RouteScheduleScreen({ navigation, route }: Props) {
   const { routeId, routeName } = route.params;
   const { showAlert } = useAppAlert();
@@ -171,11 +210,51 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
   const toggleDay = async (dayIdx: number, value: boolean) => {
     setDayToggles((p) => ({ ...p, [dayIdx]: value }));
     const dayNum = dayIdx === 6 ? 0 : dayIdx + 1;
-    await supabase
-      .from('scheduled_trips')
-      .update({ is_active: value } as never)
-      .eq('route_id', routeId)
-      .eq('day_of_week', dayNum);
+    try {
+      if (value) {
+        const list = dayTrips(dayIdx).filter(
+          (t) => /^\d{1,2}:\d{2}$/.test((t.departure_time ?? '').trim())
+            && /^\d{1,2}:\d{2}$/.test((t.arrival_time ?? '').trim()),
+        );
+        await Promise.all(
+          list.map((t) => {
+            const { departureAt, arrivalAt } = computeNextDepartureArrivalFromWeekday(
+              dayNum,
+              t.departure_time as string,
+              t.arrival_time as string,
+            );
+            return supabase
+              .from('scheduled_trips')
+              .update(
+                {
+                  is_active: true,
+                  status: 'active',
+                  departure_at: departureAt.toISOString(),
+                  arrival_at: arrivalAt.toISOString(),
+                  updated_at: new Date().toISOString(),
+                } as never,
+              )
+              .eq('id', t.id);
+          }),
+        );
+      } else {
+        await supabase
+          .from('scheduled_trips')
+          .update(
+            {
+              is_active: false,
+              status: 'active',
+              updated_at: new Date().toISOString(),
+              driver_journey_started_at: null,
+            } as never,
+          )
+          .eq('route_id', routeId)
+          .eq('day_of_week', dayNum);
+      }
+    } catch {
+      showAlert('Erro', 'Não foi possível atualizar o cronograma.');
+    }
+    await load();
   };
 
   const openAddModal = (dayIdx: number) => {
@@ -206,8 +285,30 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
     setTransferSaving(true);
     try {
       const dayNum = transferTargetDay === 6 ? 0 : transferTargetDay + 1;
+      const moved = trips.find((x) => x.id === transferTripId);
+      let patch: Record<string, unknown> = {
+        day_of_week: dayNum,
+        updated_at: new Date().toISOString(),
+      };
+      if (
+        moved?.departure_time
+        && moved?.arrival_time
+        && /^\d{1,2}:\d{2}$/.test(moved.departure_time.trim())
+        && /^\d{1,2}:\d{2}$/.test(moved.arrival_time.trim())
+      ) {
+        const { departureAt, arrivalAt } = computeNextDepartureArrivalFromWeekday(
+          dayNum,
+          moved.departure_time,
+          moved.arrival_time,
+        );
+        patch = {
+          ...patch,
+          departure_at: departureAt.toISOString(),
+          arrival_at: arrivalAt.toISOString(),
+        };
+      }
       await supabase.from('scheduled_trips')
-        .update({ day_of_week: dayNum, updated_at: new Date().toISOString() } as never)
+        .update(patch as never)
         .eq('id', transferTripId);
       closeTransferModal();
       await load();
@@ -252,23 +353,11 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
       // dayNum: 0=Dom, 1=Seg … 6=Sáb (mesmo que JS Date.getDay())
       const dayNum = addingDayIdx === 6 ? 0 : addingDayIdx + 1;
 
-      // Calcular departure_at e arrival_at para a próxima ocorrência desse dia da semana
-      const [depH, depM] = newDepart.split(':').map(Number);
-      const [arrH, arrM] = newArrive.split(':').map(Number);
-      const todayDay = new Date().getDay();
-      let daysAhead = (dayNum - todayDay + 7) % 7;
-      if (daysAhead === 0) daysAhead = 7; // sempre futura (próxima semana se hoje for o mesmo dia)
-
-      const baseDate = new Date();
-      baseDate.setDate(baseDate.getDate() + daysAhead);
-      baseDate.setHours(0, 0, 0, 0);
-
-      const departureAt = new Date(baseDate);
-      departureAt.setHours(depH, depM, 0, 0);
-
-      const arrivalAt = new Date(baseDate);
-      arrivalAt.setHours(arrH, arrM, 0, 0);
-      if (arrivalAt <= departureAt) arrivalAt.setDate(arrivalAt.getDate() + 1); // virada de meia-noite
+      const { departureAt, arrivalAt } = computeNextDepartureArrivalFromWeekday(
+        dayNum,
+        newDepart,
+        newArrive,
+      );
 
       const { error } = await supabase.from('scheduled_trips').insert({
         driver_id: user.id,
@@ -283,7 +372,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         bags_available: 0,
         confirmed_count: 0,
         is_active: true,
-        status: 'scheduled',
+        status: 'active',
         origin_address: r.origin_address,
         destination_address: r.destination_address,
         price_per_person_cents: r.price_per_person_cents,

@@ -65,12 +65,14 @@ export function PaymentConfirmedScreen({ navigation, route }: Props) {
       <Modal visible={showBookingModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Agendamento confirmado!</Text>
+            <Text style={styles.modalTitle}>Solicitação enviada!</Text>
             <Text style={styles.modalText}>
-              Sua viagem para {destinationLabel} foi agendada.
+              Sua viagem para {destinationLabel} foi solicitada ao motorista.
             </Text>
             {tripSummary ? <Text style={styles.modalText}>{tripSummary}</Text> : null}
-            <Text style={styles.modalText}>Você receberá uma confirmação em breve.</Text>
+            <Text style={styles.modalText}>
+              Você receberá a confirmação assim que o motorista aceitar a corrida.
+            </Text>
             <TouchableOpacity
               style={styles.modalButton}
               onPress={() => setShowBookingModal(false)}

@@ -15,7 +15,12 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { ProfileStackParamList, ChatExcStackParamList } from '../navigation/types';
+import type {
+  ProfileStackParamList,
+  ChatExcStackParamList,
+  ChatEncomendasStackParamList,
+  RootStackParamList,
+} from '../navigation/types';
 import { supabase } from '../lib/supabase';
 
 const sb = supabase as { from: (table: string) => any };
@@ -23,7 +28,9 @@ import { storageUrl } from '../utils/storageUrl';
 
 type Props =
   | NativeStackScreenProps<ProfileStackParamList, 'Chat'>
-  | NativeStackScreenProps<ChatExcStackParamList, 'ChatExcThread'>;
+  | NativeStackScreenProps<ChatExcStackParamList, 'ChatExcThread'>
+  | NativeStackScreenProps<ChatEncomendasStackParamList, 'ChatEncThread'>
+  | NativeStackScreenProps<RootStackParamList, 'DriverClientChat'>;
 
 const GOLD = '#C9A227';
 

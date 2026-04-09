@@ -203,7 +203,18 @@ export function TripScheduleScreen({ navigation, route }: Props) {
       },
     }));
     await Promise.all(
-      ids.map((id) => supabase.from('scheduled_trips').update({ is_active } as never).eq('id', id)),
+      ids.map((id) =>
+        supabase
+          .from('scheduled_trips')
+          .update(
+            {
+              is_active,
+              updated_at: new Date().toISOString(),
+              ...(is_active ? {} : { driver_journey_started_at: null }),
+            } as never,
+          )
+          .eq('id', id),
+      ),
     );
     setTrips((prev) => prev.map((t) => (ids.includes(t.id) ? { ...t, is_active } : t)));
     setSaving(null);

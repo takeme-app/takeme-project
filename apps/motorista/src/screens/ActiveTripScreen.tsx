@@ -11,7 +11,7 @@ import {
   Pressable,
   Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import { CommonActions } from '@react-navigation/native';
@@ -21,6 +21,7 @@ import {
   GoogleMapsMap,
   MapMarker,
   MapPolyline,
+  MapZoomControls,
   type GoogleMapsMapRef,
   type LatLng,
   type MapRegion,
@@ -30,12 +31,13 @@ import {
   MY_LOCATION_NAV_DELTA,
 } from '../components/googleMaps';
 import { supabase } from '../lib/supabase';
+import { tripDisplayEarningsCents } from '../lib/driverTripEarnings';
+import { closeConversationsForScheduledTrip } from '../lib/closeTripConversations';
 import { useTripStops, type TripStop, STOP_TYPE_COLORS } from '../hooks/useTripStops';
 import { Text } from '../components/Text';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getRouteWithDuration, getMultiPointRoute, formatEta } from '../lib/route';
 import { getGoogleMapsApiKey, getMapboxAccessToken } from '../lib/googleMapsConfig';
-
 // expo-location — defensive import (needs native rebuild if just added)
 let Location: any = null;
 try { Location = require('expo-location'); } catch { /* not available yet */ }
@@ -58,6 +60,123 @@ function isPassenger(s: Stop) { return s.stopType === 'passenger_pickup' || s.st
 /** Helper — stop é de encomenda */
 function isPackage(s: Stop) { return s.stopType === 'package_pickup' || s.stopType === 'package_dropoff'; }
 
+function isRouteWaypointStop(s: Stop) {
+  return (
+    s.stopType === 'excursion_stop' ||
+    s.stopType === 'driver_origin' ||
+    s.stopType === 'trip_destination'
+  );
+}
+
+/** Ícone no mapa / sidebar: passageiro, encomenda (caixa), partida (carro), destino (bandeira), base, demais “place”. */
+function StopKindMarkerIcon({
+  stop,
+  completed,
+  color,
+  size = 18,
+}: {
+  stop: Stop;
+  completed: boolean;
+  color: string;
+  size?: number;
+}) {
+  if (completed) {
+    return <MaterialIcons name="check" size={size} color={color} />;
+  }
+  if (isPassenger(stop)) {
+    return <MaterialIcons name="person" size={size} color={color} />;
+  }
+  if (isPackage(stop)) {
+    return <MaterialIcons name="inventory-2" size={size} color={color} />;
+  }
+  if (stop.stopType === 'driver_origin') {
+    return <MaterialIcons name="directions-car" size={size} color={color} />;
+  }
+  if (stop.stopType === 'trip_destination') {
+    return <MaterialIcons name="flag" size={size} color={color} />;
+  }
+  if (stop.stopType === 'base_dropoff') {
+    return <MaterialIcons name="business" size={size} color={color} />;
+  }
+  return <MaterialIcons name="place" size={size} color={color} />;
+}
+
+/** Rótulo curto no card inferior — nunca tratar desembarque de passageiro como “Entrega”. */
+function stopPhaseShortLabel(s: Stop): string {
+  switch (s.stopType) {
+    case 'passenger_pickup':
+      return 'Embarque';
+    case 'passenger_dropoff':
+      return 'Desembarque';
+    case 'package_pickup':
+      return 'Coleta';
+    case 'package_dropoff':
+      return 'Entrega';
+    case 'excursion_stop':
+      return 'Parada';
+    case 'driver_origin':
+      return 'Partida';
+    case 'trip_destination':
+      return 'Destino';
+    case 'base_dropoff':
+      return 'Base';
+    default:
+      return 'Viagem';
+  }
+}
+
+function detailSheetTitle(stop: Stop | null): string {
+  if (!stop) return '';
+  switch (stop.stopType) {
+    case 'passenger_pickup':
+      return 'Detalhes do embarque';
+    case 'passenger_dropoff':
+      return 'Detalhes do desembarque';
+    case 'package_pickup':
+      return 'Detalhes da coleta';
+    case 'package_dropoff':
+      return `Entrega para ${stop.label}`;
+    case 'excursion_stop':
+      return 'Parada na rota';
+    case 'driver_origin':
+      return 'Ponto de partida';
+    case 'trip_destination':
+      return 'Destino da viagem';
+    case 'base_dropoff':
+      return 'Entrega na base';
+    default:
+      return 'Detalhes da parada';
+  }
+}
+
+function confirmPickupTitle(stop: Stop | null | undefined): string {
+  if (!stop) return 'Confirmar';
+  if (stop.stopType === 'passenger_dropoff') return 'Confirmar desembarque';
+  if (stop.stopType === 'driver_origin') return 'Concluir partida';
+  if (stop.stopType === 'trip_destination') return 'Concluir chegada';
+  if (stop.stopType === 'excursion_stop') return 'Concluir parada';
+  if (stop.stopType === 'package_pickup') return 'Confirmar coleta';
+  return 'Confirmar embarque';
+}
+
+function confirmPickupSubtitle(stop: Stop | null | undefined): string {
+  if (!stop) return '';
+  if (isPackage(stop)) return 'Insira o código de 4 dígitos informado pelo remetente.';
+  if (stop.stopType === 'passenger_dropoff') return 'Confirme que o passageiro desembarcou neste ponto.';
+  if (stop.stopType === 'driver_origin') return 'Confirme que você iniciou a viagem a partir deste ponto.';
+  if (stop.stopType === 'trip_destination') return 'Confirme a chegada ao destino da viagem.';
+  if (stop.stopType === 'excursion_stop') return 'Confirme que esta parada na rota foi concluída.';
+  return 'Confirme o embarque do passageiro.';
+}
+
+function confirmPickupButtonLabel(stop: Stop | null | undefined): string {
+  if (!stop) return 'Confirmar';
+  if (stop.stopType === 'passenger_dropoff') return 'Confirmar desembarque';
+  if (isRouteWaypointStop(stop)) return 'Concluir';
+  if (stop.stopType === 'package_pickup') return 'Confirmar coleta';
+  return 'Confirmar embarque';
+}
+
 type TripRow = {
   id: string;
   origin_address: string;
@@ -67,8 +186,9 @@ type TripRow = {
   origin_lng: number | null;
   destination_lat: number | null;
   destination_lng: number | null;
-  amount_cents: number;
+  amount_cents: number | null;
   status: string;
+  bookings?: { amount_cents: number; status: string }[] | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -112,6 +232,38 @@ function dedupeConsecutivePoints(pts: LatLng[]): LatLng[] {
   return out;
 }
 
+/**
+ * Navegação: não envia o motorista de volta à “origem” cadastrada (driver_origin).
+ * Usa a primeira parada restante com coordenadas que seja cliente/encomenda/etc.
+ */
+function resolveNavigationDestination(
+  stopsList: TripStop[],
+  fromIndex: number,
+  finalDest: LatLng | null,
+): LatLng | null {
+  for (let i = fromIndex; i < stopsList.length; i++) {
+    const s = stopsList[i];
+    if (s.stopType === 'driver_origin') continue;
+    if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
+      return { latitude: s.lat, longitude: s.lng };
+    }
+  }
+  return finalDest;
+}
+
+/** Pontos da viagem restante para polyline (sem origem operacional do motorista). */
+function collectRemainingStopPoints(stopsList: TripStop[], fromIndex: number): LatLng[] {
+  const pts: LatLng[] = [];
+  for (let i = fromIndex; i < stopsList.length; i++) {
+    const s = stopsList[i];
+    if (s.stopType === 'driver_origin') continue;
+    if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
+      pts.push({ latitude: s.lat, longitude: s.lng });
+    }
+  }
+  return pts;
+}
+
 // ---------------------------------------------------------------------------
 // Main screen
 // ---------------------------------------------------------------------------
@@ -119,6 +271,7 @@ function dedupeConsecutivePoints(pts: LatLng[]): LatLng[] {
 export function ActiveTripScreen({ navigation, route }: Props) {
   const { tripId } = route.params;
   const { showAlert } = useAppAlert();
+  const insets = useSafeAreaInsets();
 
   // Data
   const [trip, setTrip] = useState<TripRow | null>(null);
@@ -241,7 +394,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     try {
       const { data: tripData } = await supabase
         .from('scheduled_trips')
-        .select('id, origin_address, destination_address, departure_at, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, status')
+        .select(
+          'id, origin_address, destination_address, departure_at, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, status, bookings(amount_cents, status)'
+        )
         .eq('id', tripId)
         .single();
       if (tripData) setTrip(tripData as TripRow);
@@ -287,6 +442,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     };
   }, [currentStop, trip]);
 
+  const completedTripEarningsLabel = useMemo(() => {
+    if (!trip) return '—';
+    const cents = tripDisplayEarningsCents(trip.bookings, trip.amount_cents);
+    return cents > 0 ? `R$ ${(cents / 100).toFixed(2).replace('.', ',')}` : '—';
+  }, [trip]);
+
   /** Último ponto válido do roteiro (entrega final / última parada) ou destino da viagem. */
   const finalDestination = useMemo((): LatLng | null => {
     for (let i = stops.length - 1; i >= 0; i--) {
@@ -303,6 +464,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     return pickStopCoord(trip.destination_lat, trip.destination_lng) ?? null;
   }, [stops, trip]);
 
+  const fallbackNavDest = useMemo(
+    () => resolveNavigationDestination(stops, currentStopIndex, finalDestination),
+    [stops, currentStopIndex, finalDestination],
+  );
+
   /** ~100m de resolução: atualiza rota dourada “você → destino” sem spammar Directions a cada tick de GPS. */
   const driverPositionKey = useMemo(() => {
     if (
@@ -314,39 +480,45 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     return `${driverPosition.latitude.toFixed(3)},${driverPosition.longitude.toFixed(3)}`;
   }, [driverPosition]);
 
-  const tripOriginLL = useMemo(
-    () => (trip ? pickStopCoord(trip.origin_lat, trip.origin_lng) : undefined),
-    [trip?.origin_lat, trip?.origin_lng, trip?.id],
-  );
   const tripDestLL = useMemo(
     () => (trip ? pickStopCoord(trip.destination_lat, trip.destination_lng) : undefined),
     [trip?.destination_lat, trip?.destination_lng, trip?.id],
   );
 
+  /** Evita dois botões com bandeira: parada trip_destination ou mesmo lugar do destino da viagem. */
+  const showSidebarTripEndFlag = useMemo(() => {
+    if (!tripDestLL) return false;
+    if (stops.some((s) => s.stopType === 'trip_destination')) return false;
+    const tlat = tripDestLL.latitude;
+    const tlng = tripDestLL.longitude;
+    const nearDeg = 0.002;
+    return !stops.some(
+      (s) =>
+        s.lat != null &&
+        s.lng != null &&
+        Math.abs(s.lat - tlat) < nearDeg &&
+        Math.abs(s.lng - tlng) < nearDeg,
+    );
+  }, [stops, tripDestLL]);
+
   /**
-   * Rota dourada (visão geral): paradas em ordem; se não der polyline multi,
-   * usa GPS → destino final (app de motorista: início = você).
+   * Rota dourada: a partir da posição atual → paradas restantes (sem driver_origin).
+   * Não obriga o trajeto a “passar” pela origem cadastrada da viagem.
    */
   useEffect(() => {
     if (loading) return;
     let cancelled = false;
     const routeOpts = { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() };
 
-    const stopPts: LatLng[] = [];
-    for (const s of stops) {
-      if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
-        stopPts.push({ latitude: s.lat, longitude: s.lng });
-      }
-    }
-    const dedupStops = dedupeConsecutivePoints(stopPts);
+    const stopPts = dedupeConsecutivePoints(collectRemainingStopPoints(stops, currentStopIndex));
 
     (async () => {
-      if (dedupStops.length >= 2) {
+      if (stopPts.length >= 2) {
         const withDriver =
           driverPosition &&
           isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
-            ? dedupeConsecutivePoints([driverPosition, ...dedupStops])
-            : dedupStops;
+            ? dedupeConsecutivePoints([driverPosition, ...stopPts])
+            : stopPts;
         const r = await getMultiPointRoute(withDriver, routeOpts);
         if (!cancelled && r?.coordinates?.length) {
           setStopsRouteCoords(r.coordinates);
@@ -356,20 +528,21 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       if (
         driverPosition &&
         isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) &&
-        dedupStops.length === 1
+        stopPts.length === 1
       ) {
-        const r = await getRouteWithDuration(driverPosition, dedupStops[0]!, routeOpts);
+        const r = await getRouteWithDuration(driverPosition, stopPts[0]!, routeOpts);
         if (!cancelled && r?.coordinates?.length) {
           setStopsRouteCoords(r.coordinates);
           return;
         }
       }
+      const navDest = resolveNavigationDestination(stops, currentStopIndex, finalDestination);
       if (
         driverPosition &&
         isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) &&
-        finalDestination
+        navDest
       ) {
-        const r = await getRouteWithDuration(driverPosition, finalDestination, routeOpts);
+        const r = await getRouteWithDuration(driverPosition, navDest, routeOpts);
         if (!cancelled && r?.coordinates?.length) {
           setStopsRouteCoords(r.coordinates);
           return;
@@ -381,9 +554,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [loading, stops, finalDestination, driverPositionKey]);
+  }, [loading, stops, finalDestination, driverPositionKey, currentStopIndex]);
 
-  // Trecho escuro: GPS → parada atual (ou → destino final se não houver paradas com coordenada).
+  // Trecho escuro: GPS → próximo alvo útil (ignora driver_origin como destino de navegação).
   useEffect(() => {
     if (
       !driverPosition ||
@@ -392,20 +565,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       return;
     }
 
-    const dest: LatLng | null = (() => {
-      if (stops.length > 0) {
-        const stop = stops[currentStopIndex];
-        if (
-          stop?.lat != null &&
-          stop?.lng != null &&
-          isValidGlobeCoordinate(stop.lat, stop.lng)
-        ) {
-          return { latitude: stop.lat, longitude: stop.lng };
-        }
-        return null;
-      }
-      return finalDestination;
-    })();
+    const dest =
+      stops.length > 0
+        ? resolveNavigationDestination(stops, currentStopIndex, finalDestination)
+        : finalDestination;
 
     if (!dest) return;
 
@@ -422,26 +585,61 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       .catch(() => {});
   }, [driverPosition, currentStopIndex, stops, finalDestination]);
 
-  // Região inicial estática — centrada na origem com zoom de rua.
-  // Não depende de driverPosition para evitar que updates de GPS resetem a câmera.
+  // Região inicial: paradas relevantes + destino (sem priorizar origem cadastrada da viagem).
   const mapInitialRegion = useMemo((): MapRegion => {
-    if (tripOriginLL) {
+    const pts = collectRemainingStopPoints(stops, 0);
+    if (tripDestLL) pts.push(tripDestLL);
+    if (pts.length > 0) return regionFromLatLngPoints(pts);
+    if (tripDestLL) {
       return {
-        latitude: tripOriginLL.latitude,
-        longitude: tripOriginLL.longitude,
-        latitudeDelta: 0.002,
-        longitudeDelta: 0.002,
+        latitude: tripDestLL.latitude,
+        longitude: tripDestLL.longitude,
+        latitudeDelta: 0.08,
+        longitudeDelta: 0.08,
       };
     }
-    const pts: LatLng[] = [];
-    for (const s of stops) {
-      if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
-        pts.push({ latitude: s.lat, longitude: s.lng });
-      }
-    }
-    if (tripDestLL) pts.push(tripDestLL);
-    return regionFromLatLngPoints(pts);
-  }, [trip?.id, tripOriginLL?.latitude, tripOriginLL?.longitude]);
+    return {
+      latitude: -2.53,
+      longitude: -44.3,
+      latitudeDelta: 0.5,
+      longitudeDelta: 0.5,
+    };
+  }, [trip?.id, tripDestLL, stops]);
+
+  const overlayTop = insets.top + 56;
+
+  const focusStopOnMap = useCallback(
+    (idx: number) => {
+      const stop = stops[idx];
+      if (!stop) return;
+      setFollowMyLocation(false);
+      const hasCoord =
+        stop.lat != null && stop.lng != null && isValidGlobeCoordinate(stop.lat, stop.lng);
+      const baseLat = mapInitialRegion.latitude;
+      const baseLng = mapInitialRegion.longitude;
+      const lat = hasCoord ? stop.lat! : baseLat + idx * 0.002;
+      const lng = hasCoord ? stop.lng! : baseLng + idx * 0.002;
+      mapRef.current?.animateToRegion(
+        { latitude: lat, longitude: lng, latitudeDelta: 0.045, longitudeDelta: 0.045 },
+        400,
+      );
+    },
+    [stops, mapInitialRegion.latitude, mapInitialRegion.longitude],
+  );
+
+  const focusTripDestinationOnMap = useCallback(() => {
+    if (!tripDestLL) return;
+    setFollowMyLocation(false);
+    mapRef.current?.animateToRegion(
+      {
+        latitude: tripDestLL.latitude,
+        longitude: tripDestLL.longitude,
+        latitudeDelta: 0.045,
+        longitudeDelta: 0.045,
+      },
+      400,
+    );
+  }, [tripDestLL]);
 
   /** Sem GPS e sem nenhuma coordenada de viagem/paradas → não confundir com mapa “real” centrado no BR. */
   const activeTripMapReady = useMemo(() => {
@@ -451,14 +649,14 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
     )
       return true;
-    if (tripOriginLL || tripDestLL) return true;
+    if (tripDestLL) return true;
     return stops.some(
       (s) =>
         s.lat != null &&
         s.lng != null &&
         isValidGlobeCoordinate(s.lat, s.lng),
     );
-  }, [loading, driverPosition, tripOriginLL, tripDestLL, stops]);
+  }, [loading, driverPosition, tripDestLL, stops]);
 
   // Primeira posição GPS: centraliza no motorista com zoom 16.
   useEffect(() => {
@@ -574,6 +772,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     setFinalizingTrip(true);
     try {
       await supabase.from('scheduled_trips').update({ status: 'completed' } as never).eq('id', tripId);
+      await closeConversationsForScheduledTrip(tripId);
       closeFinalize();
       setCompletedVisible(true);
     } finally {
@@ -635,10 +834,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         )}
 
         {/* Fallback: linha reta só entre pontos válidos (nunca 0,0) se Directions/OSRM falharem */}
-        {stopsRouteCoords.length < 2 && tripOriginLL && tripDestLL && (
+        {stopsRouteCoords.length < 2 &&
+          driverPosition &&
+          isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) &&
+          fallbackNavDest && (
           <MapPolyline
             id="fallback"
-            coordinates={[tripOriginLL, tripDestLL]}
+            coordinates={[driverPosition, fallbackNavDest]}
             strokeColor={GOLD}
             strokeWidth={4}
           />
@@ -664,13 +866,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               anchor={{ x: 0.5, y: 0.5 }}
             >
               <View style={[styles.mapMarker, { backgroundColor: markerBg }]}>
-                {isCompleted ? (
-                  <MaterialIcons name="check" size={18} color="#fff" />
-                ) : isPassenger(stop) ? (
-                  <MaterialIcons name="person" size={18} color="#fff" />
-                ) : (
-                  <MaterialIcons name="inventory-2" size={18} color="#fff" />
-                )}
+                <StopKindMarkerIcon stop={stop} completed={isCompleted} color="#fff" />
               </View>
             </MapMarker>
           );
@@ -699,12 +895,19 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         </View>
       )}
 
-      {/* ── Overlay UI ──────────────────────────────────────── */}
+      {/* ── Overlay UI (mesmo padrão da coleta ativa / Mapbox) ── */}
       <SafeAreaView edges={['top', 'bottom']} style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
 
-        {/* Botão centralizar no motorista — lado esquerdo */}
         <TouchableOpacity
-          style={styles.myLocationBtn}
+          style={[styles.backBtn, { top: insets.top + 8, left: 14 }]}
+          onPress={() => navigation.goBack()}
+          activeOpacity={0.8}
+        >
+          <MaterialIcons name="arrow-back" size={20} color={DARK} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.myLocationBtn, { top: overlayTop, left: 14 }]}
           activeOpacity={0.8}
           onPress={() => {
             if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) return;
@@ -714,11 +917,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           <MaterialIcons name="my-location" size={22} color={DARK} />
         </TouchableOpacity>
 
-        {/* Right sidebar — paradas + destino */}
-        {(stops.length > 0 || tripDestLL) && (
-          <View style={styles.sidebar}>
-            {/* Linha conectora atrás dos botões */}
-            {(stops.length + (tripDestLL ? 1 : 0)) > 1 && (
+        <View style={[styles.zoomWrap, { top: overlayTop + 46 + 10, left: 14 }]} pointerEvents="box-none">
+          <MapZoomControls
+            mapRef={mapRef}
+            floating={false}
+            onBeforeZoom={() => setFollowMyLocation(false)}
+          />
+        </View>
+
+        {(stops.length > 0 || showSidebarTripEndFlag) && (
+          <View style={[styles.sidebar, { top: overlayTop, right: 14 }]} pointerEvents="box-none">
+            {(stops.length + (showSidebarTripEndFlag ? 1 : 0)) > 1 && (
               <View style={styles.sidebarLine} pointerEvents="none" />
             )}
 
@@ -731,25 +940,22 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 <TouchableOpacity
                   key={stop.id}
                   style={[styles.sidebarBtn, { backgroundColor: btnBg }]}
-                  onPress={() => { if (idx === currentStopIndex) openDetail(); }}
+                  onPress={() => focusStopOnMap(idx)}
                   activeOpacity={0.8}
                 >
-                  {isCompleted ? (
-                    <MaterialIcons name="check" size={18} color={iconColor} />
-                  ) : isPassenger(stop) ? (
-                    <MaterialIcons name="person" size={18} color={iconColor} />
-                  ) : (
-                    <MaterialIcons name="inventory-2" size={18} color={iconColor} />
-                  )}
+                  <StopKindMarkerIcon stop={stop} completed={isCompleted} color={iconColor} />
                 </TouchableOpacity>
               );
             })}
 
-            {/* Ponto final: destino da viagem */}
-            {tripDestLL && (
-              <View style={[styles.sidebarBtn, styles.sidebarDestBtn]}>
+            {showSidebarTripEndFlag && (
+              <TouchableOpacity
+                style={[styles.sidebarBtn, styles.sidebarDestBtn]}
+                onPress={focusTripDestinationOnMap}
+                activeOpacity={0.85}
+              >
                 <MaterialIcons name="flag" size={18} color={DARK} />
-              </View>
+              </TouchableOpacity>
             )}
           </View>
         )}
@@ -768,9 +974,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               ]}>
                 <View style={styles.stopTypeDot} />
                 <Text style={styles.stopTypePillText}>
-                  {isPassenger(cardInfo)
-                    ? 'Viagem'
-                    : isPickup(cardInfo) ? 'Coleta' : 'Entrega'}
+                  {stopPhaseShortLabel(cardInfo)}
                 </Text>
               </View>
               {etaSeconds !== null && (
@@ -824,7 +1028,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               <MaterialIcons name="close" size={20} color={DARK} />
             </TouchableOpacity>
             <Text style={styles.detailTitle}>
-              {currentStop && isPickup(currentStop) ? 'Detalhes da coleta' : `Entrega para ${currentStop?.label ?? ''}`}
+              {detailSheetTitle(currentStop)}
             </Text>
             <TouchableOpacity style={styles.iconCircleBtn} activeOpacity={0.7}>
               <MaterialIcons name="phone" size={20} color={DARK} />
@@ -842,7 +1046,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 <Text style={styles.detailName}>{currentStop?.label}</Text>
                 <View style={styles.detailMetaRow}>
                 </View>
-                <Text style={styles.detailLabel}>Endereço da coleta</Text>
+                <Text style={styles.detailLabel}>
+                  {currentStop.stopType === 'package_pickup' ? 'Endereço da coleta' : 'Endereço do embarque'}
+                </Text>
                 <Text style={styles.detailValue}>{currentStop?.address}</Text>
                 {currentStop?.notes ? (
                   <>
@@ -855,10 +1061,83 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmPickupVisible(true); }}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.actionBtnText}>Iniciar coleta</Text>
+                  <Text style={styles.actionBtnText}>
+                    {currentStop.stopType === 'package_pickup' ? 'Iniciar coleta' : 'Iniciar embarque'}
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.cancelBtn} activeOpacity={0.7}>
-                  <Text style={styles.cancelBtnText}>Cancelar coleta</Text>
+                  <Text style={styles.cancelBtnText}>
+                    {currentStop.stopType === 'package_pickup' ? 'Cancelar coleta' : 'Cancelar embarque'}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            ) : currentStop && currentStop.stopType === 'passenger_dropoff' ? (
+              <>
+                <View style={styles.avatarCenter}>
+                  <View style={styles.avatarCircle}>
+                    <Text style={styles.avatarInitials}>{getInitials(currentStop?.label ?? '?')}</Text>
+                  </View>
+                </View>
+                <Text style={styles.detailName}>{currentStop.label}</Text>
+                <Text style={styles.detailLabel}>Endereço do desembarque</Text>
+                <Text style={styles.detailValue}>{currentStop.address}</Text>
+                {currentStop.notes ? (
+                  <>
+                    <Text style={styles.detailLabel}>Observações</Text>
+                    <Text style={styles.detailValue}>{currentStop.notes}</Text>
+                  </>
+                ) : null}
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmPickupVisible(true); }}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.actionBtnText}>Confirmar desembarque</Text>
+                </TouchableOpacity>
+              </>
+            ) : currentStop && isRouteWaypointStop(currentStop) ? (
+              <>
+                <View style={styles.avatarCenter}>
+                  <View
+                    style={[
+                      styles.avatarCircle,
+                      { backgroundColor: STOP_TYPE_COLORS[currentStop.stopType] },
+                    ]}
+                  >
+                    <MaterialIcons
+                      name={
+                        currentStop.stopType === 'driver_origin'
+                          ? 'directions-car'
+                          : currentStop.stopType === 'trip_destination'
+                            ? 'flag'
+                            : 'place'
+                      }
+                      size={26}
+                      color="#fff"
+                    />
+                  </View>
+                </View>
+                <Text style={styles.detailName}>{currentStop.label}</Text>
+                <Text style={styles.detailLabel}>Local</Text>
+                <Text style={styles.detailValue}>{currentStop.address}</Text>
+                {currentStop.notes ? (
+                  <>
+                    <Text style={styles.detailLabel}>Observações</Text>
+                    <Text style={styles.detailValue}>{currentStop.notes}</Text>
+                  </>
+                ) : null}
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmPickupVisible(true); }}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.actionBtnText}>
+                    {currentStop.stopType === 'driver_origin'
+                      ? 'Concluir partida'
+                      : currentStop.stopType === 'trip_destination'
+                        ? 'Concluir chegada'
+                        : 'Concluir parada'}
+                  </Text>
                 </TouchableOpacity>
               </>
             ) : (
@@ -904,12 +1183,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       >
         <View style={styles.centeredModalOverlay}>
           <View style={styles.centeredModal}>
-            <Text style={styles.centeredModalTitle}>Confirmar coleta</Text>
-            <Text style={styles.centeredModalSubtitle}>
-              {currentStop && isPackage(currentStop)
-                ? 'Insira o código de 4 dígitos informado pelo remetente.'
-                : 'Confirme a coleta do passageiro.'}
-            </Text>
+            <Text style={styles.centeredModalTitle}>{confirmPickupTitle(currentStop)}</Text>
+            <Text style={styles.centeredModalSubtitle}>{confirmPickupSubtitle(currentStop)}</Text>
             {currentStop && isPackage(currentStop) && (
               <>
                 <Text style={styles.fieldLabel}>Código de coleta</Text>
@@ -927,7 +1202,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             )}
             {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
             <TouchableOpacity style={styles.actionBtn} onPress={handleConfirmStop} activeOpacity={0.85}>
-              <Text style={styles.actionBtnText}>Confirmar coleta</Text>
+              <Text style={styles.actionBtnText}>{confirmPickupButtonLabel(currentStop)}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.cancelBtn}
@@ -1062,11 +1337,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               </View>
               <View style={styles.completedStatDivider} />
               <View style={styles.completedStatItem}>
-                <Text style={styles.completedStatValue}>
-                  {trip?.amount_cents
-                    ? `R$ ${(trip.amount_cents / 100).toFixed(2).replace('.', ',')}`
-                    : '—'}
-                </Text>
+                <Text style={styles.completedStatValue}>{completedTripEarningsLabel}</Text>
                 <Text style={styles.completedStatLabel}>Total recebido</Text>
               </View>
             </View>
@@ -1174,10 +1445,25 @@ const styles = StyleSheet.create({
   },
 
   // ── My location button — lado esquerdo ───────────────────
+  backBtn: {
+    position: 'absolute',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 5,
+    elevation: 4,
+  },
+
+  zoomWrap: { position: 'absolute' },
+
   myLocationBtn: {
     position: 'absolute',
-    left: 14,
-    top: 100,
     width: 46,
     height: 46,
     borderRadius: 23,
@@ -1194,8 +1480,6 @@ const styles = StyleSheet.create({
   // ── Right sidebar ─────────────────────────────────────────
   sidebar: {
     position: 'absolute',
-    right: 14,
-    top: 100,
     alignItems: 'center',
     gap: 6,
   },

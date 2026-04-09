@@ -30,6 +30,9 @@ import {
 } from '../../components/googleMaps';
 import { getGoogleMapsApiKey, getMapboxAccessToken } from '../../lib/googleMapsConfig';
 import { getRouteWithDuration, formatEta } from '../../lib/route';
+import { useAppAlert } from '../../contexts/AppAlertContext';
+import { coletaLetterFromShipmentId, shipmentCodesMatch } from '../../lib/preparerEncomendasBase';
+import { closeShipmentConversation } from '../../lib/shipmentConversation';
 
 let Location: any = null;
 try { Location = require('expo-location'); } catch { /* not linked yet */ }
@@ -45,11 +48,19 @@ type Shipment = {
   id: string;
   clientName: string;
   originAddress: string;
-  destinationAddress: string;
+  /** Destino final do cliente (informativo; rota do preparador não vai até aqui). */
+  finalDestinationAddress: string;
+  baseAddress: string;
+  baseName: string;
   originCoord: Coord;
-  destCoord: Coord;
+  baseCoord: Coord;
+  /** Se false, `baseCoord` é só fallback para o mapa (ex.: base sem lat/lng) — não usar proximidade para abrir modal de entrega. */
+  baseHasMapCoords: boolean;
   amountCents: number;
   confirmedAt: string;
+  pickupCodeExpected: string;
+  deliveryCodeExpected: string;
+  coletaLetter: string;
 };
 
 function haversineKm(a: Coord, b: Coord): number {
@@ -72,11 +83,16 @@ function routeDistanceKm(coords: Coord[]): number {
   return d;
 }
 
+/** ~150 m — abre modais de código ao aproximar da coleta ou da base. */
+const NEARBY_KM = 0.15;
+
 export function ActiveShipmentScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
+  const { showAlert } = useAppAlert();
   const { shipmentId } = route.params;
   const [shipment, setShipment] = useState<Shipment | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [step, setStep] = useState<Step>('to_pickup');
   const [driverPos, setDriverPos] = useState<Coord | null>(null);
   const [fullRouteCoords, setFullRouteCoords] = useState<Coord[]>([]);
@@ -103,6 +119,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
 
   const mapRef = useRef<GoogleMapsMapRef>(null);
   const locationSubRef = useRef<any>(null);
+  const autoModalRef = useRef({ pickup: false, delivery: false });
   const startTimeRef = useRef(Date.now());
   const [followMyLocation, setFollowMyLocation] = useState(false);
   const followFirstAnimDoneRef = useRef(false);
@@ -116,7 +133,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     }
     const pts: Coord[] = [];
     if (driverPos) pts.push(driverPos);
-    pts.push(shipment.originCoord, shipment.destCoord);
+    pts.push(shipment.originCoord, shipment.baseCoord);
     return regionFromLatLngPoints(pts);
   }, [shipment, driverPos, step]);
 
@@ -132,24 +149,77 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             latitudeDelta: 0.052,
             longitudeDelta: 0.052,
           }
-        : regionFromLatLngPoints([shipment.originCoord, shipment.destCoord]);
+        : regionFromLatLngPoints([shipment.originCoord, shipment.baseCoord]);
     const t = setTimeout(() => mapRef.current?.animateToRegion(region, 450), 100);
     return () => clearTimeout(t);
   }, [step, shipment, loading]);
 
-  // Load shipment
+  // Load shipment + base (devolução na base, não no destino final)
   useEffect(() => {
+    autoModalRef.current = { pickup: false, delivery: false };
+    setLoadError(null);
+    setShipment(null);
+    setFullRouteCoords([]);
     (async () => {
+      setLoading(true);
       const { data } = await supabase
         .from('shipments')
         .select(
-          'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, created_at, status, user_id',
+          'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, created_at, status, user_id, base_id, pickup_code, delivery_code, picked_up_at',
         )
         .eq('id', shipmentId)
         .maybeSingle();
 
-      if (!data) { setLoading(false); return; }
-      const row = data as any;
+      if (!data) {
+        setLoading(false);
+        setLoadError('Encomenda não encontrada.');
+        return;
+      }
+      const row = data as {
+        id: string;
+        origin_address: string | null;
+        destination_address: string | null;
+        origin_lat: number | null;
+        origin_lng: number | null;
+        destination_lat: number | null;
+        destination_lng: number | null;
+        amount_cents: number | null;
+        created_at: string;
+        status: string;
+        user_id: string;
+        base_id: string | null;
+        pickup_code: string | null;
+        delivery_code: string | null;
+        picked_up_at: string | null;
+      };
+
+      if (!row.base_id) {
+        setLoading(false);
+        setLoadError('Esta encomenda não está vinculada a uma base. A coleta não pode ser feita pelo app.');
+        return;
+      }
+
+      const { data: baseRow } = await supabase
+        .from('bases')
+        .select('id, name, address, city, state, lat, lng')
+        .eq('id', row.base_id)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (!baseRow) {
+        setLoading(false);
+        setLoadError('Base não encontrada ou inativa.');
+        return;
+      }
+
+      const b = baseRow as {
+        name: string;
+        address: string;
+        city: string;
+        state: string | null;
+        lat: number | null;
+        lng: number | null;
+      };
 
       const { data: prof } = await supabase
         .from('profiles')
@@ -159,24 +229,40 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       const p = prof as { full_name?: string | null } | null;
 
       const oLL = latLngFromDbColumns(row.origin_lat, row.origin_lng);
-      const dLL = latLngFromDbColumns(row.destination_lat, row.destination_lng);
+      const baseLL = latLngFromDbColumns(b.lat, b.lng);
+      const originCoord = oLL ?? { latitude: -23.5, longitude: -46.6 };
+      const baseHasMapCoords = Boolean(baseLL);
+      const baseCoord = baseLL ?? originCoord;
+
       const s: Shipment = {
         id: row.id,
         clientName: p?.full_name ?? 'Cliente',
         originAddress: row.origin_address ?? '',
-        destinationAddress: row.destination_address ?? '',
-        originCoord: oLL ?? { latitude: -23.5, longitude: -46.6 },
-        destCoord: dLL ?? { latitude: -23.51, longitude: -46.61 },
+        finalDestinationAddress: row.destination_address ?? '',
+        baseAddress: [b.name, b.address, b.city].filter(Boolean).join(' — ') || b.address,
+        baseName: b.name,
+        originCoord,
+        baseCoord,
+        baseHasMapCoords,
         amountCents: row.amount_cents ?? 0,
         confirmedAt: row.created_at,
+        pickupCodeExpected: String(row.pickup_code ?? ''),
+        deliveryCodeExpected: String(row.delivery_code ?? ''),
+        coletaLetter: coletaLetterFromShipmentId(row.id),
       };
       setShipment(s);
 
-      if (row.status === 'picked_up') setStep('to_delivery');
+      if (row.status === 'in_progress' || row.picked_up_at) setStep('to_delivery');
 
       const routeOpts = { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() };
-      const fullRoute = await getRouteWithDuration(s.originCoord, s.destCoord, routeOpts);
+      const fullRoute = await getRouteWithDuration(s.originCoord, s.baseCoord, routeOpts);
       if (fullRoute) setFullRouteCoords(fullRoute.coordinates);
+      else if (
+        isValidGlobeCoordinate(s.originCoord.latitude, s.originCoord.longitude) &&
+        isValidGlobeCoordinate(s.baseCoord.latitude, s.baseCoord.longitude)
+      ) {
+        setFullRouteCoords([s.originCoord, s.baseCoord]);
+      }
 
       setLoading(false);
     })();
@@ -227,7 +313,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
   // Driver → current stop route
   useEffect(() => {
     if (!driverPos || !shipment) return;
-    const target = step === 'to_pickup' ? shipment.originCoord : shipment.destCoord;
+    const target = step === 'to_pickup' ? shipment.originCoord : shipment.baseCoord;
     getRouteWithDuration(driverPos, target, { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() }).then((r) => {
       if (r) {
         setDriverRouteCoords(r.coordinates);
@@ -239,6 +325,26 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       }
     });
   }, [driverPos, step, shipment]);
+
+  /** Ao chegar perto da coleta ou da base, abre o modal de código (uma vez por etapa). */
+  useEffect(() => {
+    if (!driverPos || !shipment || loading) return;
+    if (step === 'to_pickup' && !pickupVisible && !autoModalRef.current.pickup) {
+      if (haversineKm(driverPos, shipment.originCoord) <= NEARBY_KM) {
+        autoModalRef.current.pickup = true;
+        setPickupVisible(true);
+      }
+    }
+    if (step === 'to_delivery' && !deliveryVisible && !autoModalRef.current.delivery) {
+      if (
+        shipment.baseHasMapCoords &&
+        haversineKm(driverPos, shipment.baseCoord) <= NEARBY_KM
+      ) {
+        autoModalRef.current.delivery = true;
+        setDeliveryVisible(true);
+      }
+    }
+  }, [driverPos, shipment, step, loading, pickupVisible, deliveryVisible]);
 
   const focusColeta = useCallback(() => {
     if (!shipment) return;
@@ -254,13 +360,13 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     );
   }, [shipment]);
 
-  const focusEntrega = useCallback(() => {
+  const focusBase = useCallback(() => {
     if (!shipment) return;
     setFollowMyLocation(false);
     mapRef.current?.animateToRegion(
       {
-        latitude: shipment.destCoord.latitude,
-        longitude: shipment.destCoord.longitude,
+        latitude: shipment.baseCoord.latitude,
+        longitude: shipment.baseCoord.longitude,
         latitudeDelta: 0.045,
         longitudeDelta: 0.045,
       },
@@ -270,23 +376,36 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
 
   const confirmPickup = async () => {
     if (!pickupCode.trim() || !shipment) return;
+    const exp = shipment.pickupCodeExpected.trim();
+    if (exp && !shipmentCodesMatch(exp, pickupCode)) {
+      showAlert('Código incorreto', 'Confira o código de confirmação da coleta com o cliente.');
+      return;
+    }
+    if (!exp && pickupCode.trim().length < 4) {
+      showAlert('Código inválido', 'Informe ao menos 4 caracteres.');
+      return;
+    }
     setPickupLoading(true);
     try {
-      await supabase
+      const { error: upErr } = await supabase
         .from('shipments')
         .update({
-          status: 'picked_up',
-          pickup_code: pickupCode.trim(),
+          status: 'in_progress',
           pickup_notes: pickupObs.trim() || null,
-          pickup_confirmed_at: new Date().toISOString(),
+          picked_up_at: new Date().toISOString(),
         } as never)
         .eq('id', shipment.id);
+      if (upErr) {
+        showAlert('Não foi possível confirmar', upErr.message || 'Tente novamente.');
+        return;
+      }
+      autoModalRef.current = { pickup: false, delivery: false };
       setStep('to_delivery');
       setPickupVisible(false);
       setPickupCode('');
       setPickupObs('');
       mapRef.current?.animateToRegion(
-        { ...shipment.destCoord, latitudeDelta: 0.02, longitudeDelta: 0.02 },
+        { ...shipment.baseCoord, latitudeDelta: 0.02, longitudeDelta: 0.02 },
         600,
       );
     } finally {
@@ -296,17 +415,30 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
 
   const confirmDelivery = async () => {
     if (!deliveryCode.trim() || !shipment) return;
+    const exp = shipment.deliveryCodeExpected.trim();
+    if (exp && !shipmentCodesMatch(exp, deliveryCode)) {
+      showAlert('Código incorreto', 'Confira o código informado pela base.');
+      return;
+    }
+    if (!exp && deliveryCode.trim().length < 4) {
+      showAlert('Código inválido', 'Informe ao menos 4 caracteres.');
+      return;
+    }
     setDeliveryLoading(true);
     try {
-      await supabase
+      const { error: upErr } = await supabase
         .from('shipments')
         .update({
           status: 'delivered',
-          delivery_code: deliveryCode.trim(),
           delivery_notes: deliveryObs.trim() || null,
           delivered_at: new Date().toISOString(),
         } as never)
         .eq('id', shipment.id);
+      if (upErr) {
+        showAlert('Não foi possível registrar', upErr.message || 'Tente novamente.');
+        return;
+      }
+      await closeShipmentConversation(shipment.id);
       setDeliveryVisible(false);
       setDeliveryCode('');
       setDeliveryObs('');
@@ -334,6 +466,17 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     }
   };
 
+  if (loadError) {
+    return (
+      <View style={styles.loadingCenter}>
+        <Text style={styles.errorText}>{loadError}</Text>
+        <TouchableOpacity style={styles.errorBackBtn} onPress={() => navigation.goBack()} activeOpacity={0.85}>
+          <Text style={styles.errorBackBtnText}>Voltar</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   if (loading || !shipment) {
     return (
       <View style={styles.loadingCenter}>
@@ -342,10 +485,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     );
   }
 
-  const currentAddress = step === 'to_pickup' ? shipment.originAddress : shipment.destinationAddress;
+  const currentAddress = step === 'to_pickup' ? shipment.originAddress : shipment.baseAddress;
   const elapsedSec = Math.round((Date.now() - startTimeRef.current) / 1000);
   const totalKm = routeDistanceKm(
-    fullRouteCoords.length > 1 ? fullRouteCoords : [shipment.originCoord, shipment.destCoord],
+    fullRouteCoords.length > 1 ? fullRouteCoords : [shipment.originCoord, shipment.baseCoord],
   );
 
   const pickupDone = step === 'to_delivery';
@@ -368,10 +511,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         {fullRouteCoords.length >= 2 ? (
           <MapPolyline id="full" coordinates={fullRouteCoords} strokeColor={GOLD} strokeWidth={5} />
         ) : isValidGlobeCoordinate(shipment.originCoord.latitude, shipment.originCoord.longitude) &&
-          isValidGlobeCoordinate(shipment.destCoord.latitude, shipment.destCoord.longitude) ? (
+          isValidGlobeCoordinate(shipment.baseCoord.latitude, shipment.baseCoord.longitude) ? (
           <MapPolyline
             id="fallback"
-            coordinates={[shipment.originCoord, shipment.destCoord]}
+            coordinates={[shipment.originCoord, shipment.baseCoord]}
             strokeColor={GOLD}
             strokeWidth={4}
           />
@@ -382,14 +525,14 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             <MaterialIcons name={pickupDone ? 'check' : 'inventory-2'} size={18} color="#fff" />
           </View>
         </MapMarker>
-        <MapMarker id="stop-delivery" coordinate={shipment.destCoord} anchor={{ x: 0.5, y: 0.5 }}>
+        <MapMarker id="stop-base" coordinate={shipment.baseCoord} anchor={{ x: 0.5, y: 0.5 }}>
           <View
             style={[
               styles.mapStopMarker,
               pickupDone ? { backgroundColor: GOLD } : styles.mapStopMarkerPending,
             ]}
           >
-            <MaterialIcons name="flag" size={18} color={pickupDone ? '#fff' : '#6B7280'} />
+            <MaterialIcons name="store" size={18} color={pickupDone ? '#fff' : '#6B7280'} />
           </View>
         </MapMarker>
 
@@ -451,10 +594,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
               styles.sidebarBtn,
               pickupDone ? styles.sidebarDestBtn : { backgroundColor: '#E5E7EB' },
             ]}
-            onPress={focusEntrega}
+            onPress={focusBase}
             activeOpacity={0.85}
           >
-            <MaterialIcons name="flag" size={18} color={pickupDone ? DARK : '#6B7280'} />
+            <MaterialIcons name="store" size={18} color={pickupDone ? DARK : '#6B7280'} />
           </TouchableOpacity>
         </View>
 
@@ -511,13 +654,18 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       </SafeAreaView>
 
       {/* ── Pickup modal ── */}
-      <Modal visible={pickupVisible} transparent animationType="slide">
+      <Modal
+        visible={pickupVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !pickupLoading && setPickupVisible(false)}
+      >
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kbav}>
           <View style={styles.modalOverlay}>
             <View style={styles.sheet}>
               <View style={styles.handle} />
               <View style={styles.sheetHeader}>
-                <Text style={styles.sheetTitle}>Deseja confirmar a Coleta?</Text>
+                <Text style={styles.sheetTitle}>Deseja confirmar a Coleta {shipment.coletaLetter}?</Text>
                 <TouchableOpacity style={styles.closeBtn} onPress={() => setPickupVisible(false)} activeOpacity={0.7}>
                   <MaterialIcons name="close" size={18} color="#374151" />
                 </TouchableOpacity>
@@ -568,7 +716,12 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       </Modal>
 
       {/* ── Delivery modal ── */}
-      <Modal visible={deliveryVisible} transparent animationType="slide">
+      <Modal
+        visible={deliveryVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !deliveryLoading && setDeliveryVisible(false)}
+      >
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kbav}>
           <View style={styles.modalOverlay}>
             <View style={styles.sheet}>
@@ -628,7 +781,12 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       </Modal>
 
       {/* ── Summary modal ── */}
-      <Modal visible={summaryVisible} transparent animationType="slide">
+      <Modal
+        visible={summaryVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !summaryLoading && setSummaryVisible(false)}
+      >
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kbav}>
           <View style={styles.modalOverlay}>
             <View style={styles.sheet}>
@@ -720,7 +878,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
-  loadingCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFF' },
+  loadingCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 24 },
+  errorText: { fontSize: 15, color: DARK, textAlign: 'center', lineHeight: 22, marginBottom: 20 },
+  errorBackBtn: { backgroundColor: DARK, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 28 },
+  errorBackBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
 
   zoomWrap: { position: 'absolute' },
 

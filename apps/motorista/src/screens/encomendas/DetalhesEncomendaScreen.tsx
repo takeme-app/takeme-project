@@ -49,7 +49,10 @@ type ShipmentDetail = {
   id: string;
   tripId: string;
   originAddress: string;
-  destinationAddress: string;
+  /** Destino final do envio (após a base). */
+  finalDestinationAddress: string;
+  baseAddress: string;
+  baseName: string;
   packageSize: string;
   amountCents: number;
   instructions: string | null;
@@ -58,7 +61,9 @@ type ShipmentDetail = {
   status: string;
   clientName: string;
   originCoord: LatLng | null;
-  destCoord: LatLng | null;
+  /** Ponto de devolução para o preparador. */
+  baseCoord: LatLng | null;
+  finalDestCoord: LatLng | null;
 };
 
 function tripId(id: string): string {
@@ -126,7 +131,7 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
     const { data } = await supabase
       .from('shipments')
       .select(
-        'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, package_size, amount_cents, instructions, created_at, scheduled_at, status, user_id',
+        'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, package_size, amount_cents, instructions, created_at, scheduled_at, status, user_id, base_id',
       )
       .eq('id', shipmentId)
       .maybeSingle();
@@ -138,6 +143,7 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
       destination_lat: number | null; destination_lng: number | null;
       package_size: string; amount_cents: number; instructions: string | null;
       created_at: string; scheduled_at: string | null; status: string; user_id: string;
+      base_id: string | null;
     };
 
     const { data: prof } = await supabase
@@ -145,13 +151,33 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
     const p = prof as { full_name?: string | null } | null;
 
     const originCoord = latLngFromDbColumns(row.origin_lat, row.origin_lng);
-    const destCoord = latLngFromDbColumns(row.destination_lat, row.destination_lng);
+    const finalDestCoord = latLngFromDbColumns(row.destination_lat, row.destination_lng);
+
+    let baseCoord: LatLng | null = null;
+    let baseAddress = '';
+    let baseName = '';
+    if (row.base_id) {
+      const { data: b } = await supabase
+        .from('bases')
+        .select('name, address, city, lat, lng')
+        .eq('id', row.base_id)
+        .eq('is_active', true)
+        .maybeSingle();
+      if (b) {
+        const br = b as { name: string; address: string; city: string; lat: number | null; lng: number | null };
+        baseName = br.name;
+        baseAddress = [br.name, br.address, br.city].filter(Boolean).join(' — ');
+        baseCoord = latLngFromDbColumns(br.lat, br.lng);
+      }
+    }
 
     setDetail({
       id: row.id,
       tripId: tripId(row.id),
       originAddress: row.origin_address,
-      destinationAddress: row.destination_address,
+      finalDestinationAddress: row.destination_address,
+      baseAddress: baseAddress || '—',
+      baseName,
       packageSize: packageSizeLabel(row.package_size),
       amountCents: row.amount_cents,
       instructions: row.instructions,
@@ -160,18 +186,20 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
       status: row.status,
       clientName: p?.full_name ?? 'Cliente',
       originCoord,
-      destCoord,
+      baseCoord,
+      finalDestCoord,
     });
     setLoading(false);
 
+    const routeEnd = baseCoord ?? finalDestCoord;
     if (
       originCoord &&
-      destCoord &&
+      routeEnd &&
       isValidGlobeCoordinate(originCoord.latitude, originCoord.longitude) &&
-      isValidGlobeCoordinate(destCoord.latitude, destCoord.longitude)
+      isValidGlobeCoordinate(routeEnd.latitude, routeEnd.longitude)
     ) {
       const routeOpts = { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() };
-      const res = await getRouteWithDuration(originCoord, destCoord, routeOpts);
+      const res = await getRouteWithDuration(originCoord, routeEnd, routeOpts);
       if (res?.coordinates?.length) setRouteCoords(res.coordinates);
     }
   }, [shipmentId]);
@@ -222,16 +250,26 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
   }, [preparerPos, followMyLocation]);
 
   const mapInitialRegion = useMemo(
-    () => (detail ? regionFocusedOnPickup(detail.originCoord, detail.destCoord) : regionFromLatLngPoints([])),
-    [detail?.originCoord?.latitude, detail?.originCoord?.longitude, detail?.destCoord?.latitude, detail?.destCoord?.longitude],
+    () => (detail ? regionFocusedOnPickup(detail.originCoord, detail.baseCoord ?? detail.finalDestCoord) : regionFromLatLngPoints([])),
+    [
+      detail?.originCoord?.latitude,
+      detail?.originCoord?.longitude,
+      detail?.baseCoord?.latitude,
+      detail?.baseCoord?.longitude,
+      detail?.finalDestCoord?.latitude,
+      detail?.finalDestCoord?.longitude,
+    ],
   );
 
   const mapReady = Boolean(
     detail?.originCoord &&
       isValidGlobeCoordinate(detail.originCoord.latitude, detail.originCoord.longitude),
   ) || Boolean(
-    detail?.destCoord &&
-      isValidGlobeCoordinate(detail.destCoord.latitude, detail.destCoord.longitude),
+    detail?.baseCoord &&
+      isValidGlobeCoordinate(detail.baseCoord.latitude, detail.baseCoord.longitude),
+  ) || Boolean(
+    detail?.finalDestCoord &&
+      isValidGlobeCoordinate(detail.finalDestCoord.latitude, detail.finalDestCoord.longitude),
   );
 
   const handleCall = () => {
@@ -302,16 +340,16 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
                       </View>
                     </MapMarker>
                   )}
-                  {detail.destCoord &&
-                    isValidGlobeCoordinate(detail.destCoord.latitude, detail.destCoord.longitude) && (
+                  {detail.baseCoord &&
+                    isValidGlobeCoordinate(detail.baseCoord.latitude, detail.baseCoord.longitude) && (
                     <MapMarker
-                      id="delivery"
-                      coordinate={detail.destCoord}
+                      id="base"
+                      coordinate={detail.baseCoord}
                       anchor={{ x: 0.5, y: 1 }}
                     >
                       <View style={styles.destPill}>
-                        <MaterialIcons name="place" size={12} color="#374151" />
-                        <Text style={styles.destPillText} numberOfLines={1}>Entrega</Text>
+                        <MaterialIcons name="store" size={12} color="#374151" />
+                        <Text style={styles.destPillText} numberOfLines={1}>Base</Text>
                       </View>
                     </MapMarker>
                   )}
@@ -362,8 +400,12 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
             <View style={styles.routeRow}>
               <Text style={styles.routeFrom} numberOfLines={1}>{detail.originAddress}</Text>
               <MaterialIcons name="arrow-forward" size={16} color="#C9A227" style={styles.routeArrow} />
-              <Text style={styles.routeTo} numberOfLines={1}>{detail.destinationAddress}</Text>
+              <Text style={styles.routeTo} numberOfLines={2}>{detail.baseAddress}</Text>
             </View>
+            <Text style={styles.routeHint}>Sua rota: coleta no cliente → devolução na base.</Text>
+            <Text style={styles.finalDestLabel} numberOfLines={2}>
+              Destino final do envio: {detail.finalDestinationAddress}
+            </Text>
 
             <View style={styles.cardDivider} />
 
@@ -586,6 +628,12 @@ const styles = StyleSheet.create({
   routeFrom: { fontSize: 15, fontWeight: '700', color: '#111827', flex: 1 },
   routeArrow: { marginHorizontal: 8 },
   routeTo: { fontSize: 15, fontWeight: '700', color: '#111827', flex: 1, textAlign: 'right' },
+  routeHint: {
+    fontSize: 12, color: '#6B7280', paddingHorizontal: 16, paddingBottom: 6, lineHeight: 17,
+  },
+  finalDestLabel: {
+    fontSize: 12, color: '#9CA3AF', paddingHorizontal: 16, paddingBottom: 12, lineHeight: 17,
+  },
   cardDivider: { height: 1, backgroundColor: '#F3F4F6' },
   timeline: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 4 },
   clientSection: { paddingHorizontal: 16, paddingVertical: 16 },
