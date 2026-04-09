@@ -15,7 +15,10 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { PagamentosEncStackParamList } from '../../navigation/types';
 import { supabase } from '../../lib/supabase';
+import { fetchWorkerShipmentBaseId } from '../../lib/preparerEncomendasBase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 
 const GOLD = '#C9A227';
@@ -51,8 +54,10 @@ function PixIcon() {
   );
 }
 
+type Nav = NativeStackNavigationProp<PagamentosEncStackParamList, 'PagamentosMain'>;
+
 export function PagamentosEncomendasScreen() {
-  const navigation = useNavigation<any>();
+  const navigation = useNavigation<Nav>();
   const [totalCents, setTotalCents] = useState(0);
   const [coletas, setColetas] = useState(0);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
@@ -67,6 +72,15 @@ export function PagamentosEncomendasScreen() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setLoading(false); return; }
 
+    const myBaseId = await fetchWorkerShipmentBaseId(user.id);
+    if (!myBaseId) {
+      setTransfers([]);
+      setColetas(0);
+      setTotalCents(0);
+      setLoading(false);
+      return;
+    }
+
     const { data: wp } = await supabase
       .from('worker_profiles')
       .select('pix_key')
@@ -80,17 +94,18 @@ export function PagamentosEncomendasScreen() {
 
     const { data: shipments } = await supabase
       .from('shipments')
-      .select('id, amount_cents, created_at')
+      .select('id, amount_cents, created_at, delivered_at')
       .eq('driver_id' as never, user.id)
-      .eq('status', 'confirmed')
-      .gte('created_at', start)
-      .lte('created_at', end)
-      .order('created_at', { ascending: false });
+      .eq('base_id' as never, myBaseId as never)
+      .eq('status', 'delivered')
+      .gte('delivered_at', start)
+      .lte('delivered_at', end)
+      .order('delivered_at', { ascending: false });
 
     const list: Transfer[] = (shipments ?? []).map((s: any) => ({
       id: s.id,
       amount_cents: s.amount_cents,
-      created_at: s.created_at,
+      created_at: s.delivered_at ?? s.created_at,
     }));
 
     setTransfers(list);
@@ -181,10 +196,10 @@ export function PagamentosEncomendasScreen() {
 
           <TouchableOpacity
             style={styles.historyLink}
-            onPress={() => navigation.getParent()?.navigate('ColetasEnc', { screen: 'HistoricoEncomendas' })}
+            onPress={() => navigation.navigate('PagamentosHistorico')}
             activeOpacity={0.7}
           >
-            <Text style={styles.historyLinkText}>Ver histórico completo</Text>
+            <Text style={styles.historyLinkText}>Ver histórico de pagamentos</Text>
           </TouchableOpacity>
         </ScrollView>
       )}

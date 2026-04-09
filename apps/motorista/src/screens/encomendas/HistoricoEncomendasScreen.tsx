@@ -18,6 +18,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ColetasEncomendasStackParamList } from '../../navigation/ColetasEncomendasStack';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { supabase } from '../../lib/supabase';
+import { fetchWorkerShipmentBaseId } from '../../lib/preparerEncomendasBase';
 
 type Props = NativeStackScreenProps<ColetasEncomendasStackParamList, 'HistoricoEncomendas'>;
 
@@ -101,10 +102,19 @@ export function HistoricoEncomendasScreen({ navigation }: Props) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user?.id) { setLoading(false); return; }
 
+    const myBaseId = await fetchWorkerShipmentBaseId(user.id);
+    if (!myBaseId) {
+      setAllItems([]);
+      setGroups([]);
+      setLoading(false);
+      return;
+    }
+
     const { data } = await supabase
       .from('shipments')
       .select('id, created_at, user_id')
       .eq('driver_id' as never, user.id)
+      .eq('base_id' as never, myBaseId as never)
       .order('created_at', { ascending: false });
 
     const rows = (data ?? []) as { id: string; created_at: string; user_id: string }[];

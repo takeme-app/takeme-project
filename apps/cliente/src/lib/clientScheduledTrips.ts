@@ -127,6 +127,7 @@ export async function loadClientScheduledTrips(): Promise<{
       'id, title, driver_id, route_id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, departure_at, arrival_at, seats_available, bags_available, badge, amount_cents, price_per_person_cents'
     )
     .eq('status', 'active')
+    .eq('is_active', true)
     .order('departure_at');
   if (tripsErr) {
     return { items: [], error: getUserErrorMessage(tripsErr, 'Não foi possível carregar as viagens.') };

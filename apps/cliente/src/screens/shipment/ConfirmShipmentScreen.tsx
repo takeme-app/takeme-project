@@ -14,6 +14,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ShipmentStackParamList } from '../../navigation/types';
 import { PaymentMethodSection, type PaymentMethodType } from '../../components/PaymentMethodSection';
 import { supabase } from '../../lib/supabase';
+import { resolveShipmentBaseId } from '../../lib/resolveShipmentBase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
 
@@ -119,6 +120,10 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
                 : 'dinheiro';
         const status =
           packageSize === 'grande' ? 'pending_review' : params.method === 'dinheiro' ? 'confirmed' : 'confirmed';
+        const baseId = await resolveShipmentBaseId({
+          origin: { latitude: origin.latitude, longitude: origin.longitude },
+          originAddress: origin.address,
+        });
         const { data: row, error } = await supabase
           .from('shipments')
           .insert({
@@ -140,6 +145,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
             payment_method: paymentMethodDb,
             amount_cents: amountCents,
             status,
+            ...(baseId ? { base_id: baseId } : {}),
           })
           .select('id')
           .single();

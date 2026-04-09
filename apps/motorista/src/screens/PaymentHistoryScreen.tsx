@@ -15,6 +15,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+import { fetchDriverPaymentTransfers, type DriverPaymentTransfer } from '../lib/driverPaymentTransfers';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PaymentHistory'>;
@@ -22,12 +23,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'PaymentHistory'>;
 const GOLD = '#C9A227';
 const CREAM = '#FFFBEB';
 
-type Transfer = {
-  id: string;
-  amount_cents: number;
-  paid_at: string;
-  source: 'payout' | 'booking';
-};
+type Transfer = DriverPaymentTransfer;
 
 type WeekGroup = {
   label: string;
@@ -114,44 +110,8 @@ export function PaymentHistoryScreen({ navigation }: Props) {
     const start = new Date(y, m, sd).toISOString();
     const end = new Date(y, m, clampedEd, 23, 59, 59, 999).toISOString();
 
-    // Fonte primária: tabela payouts
-    const { data: payoutsData } = await supabase
-      .from('payouts')
-      .select('id, worker_amount_cents, paid_at')
-      .eq('worker_id', user.id)
-      .eq('status', 'paid')
-      .gte('paid_at', start)
-      .lte('paid_at', end)
-      .order('paid_at', { ascending: false });
-
-    if (payoutsData && payoutsData.length > 0) {
-      setTransfers(
-        (payoutsData as any[]).map((p) => ({
-          id: p.id,
-          amount_cents: p.worker_amount_cents,
-          paid_at: p.paid_at,
-          source: 'payout' as const,
-        }))
-      );
-    } else {
-      // Fallback: bookings pagos
-      const { data: bookings } = await supabase
-        .from('bookings')
-        .select('id, amount_cents, paid_at, scheduled_trips!inner(driver_id)')
-        .eq('scheduled_trips.driver_id', user.id)
-        .eq('status', 'paid')
-        .gte('paid_at', start)
-        .lte('paid_at', end)
-        .order('paid_at', { ascending: false });
-      setTransfers(
-        (bookings ?? []).map((b: any) => ({
-          id: b.id,
-          amount_cents: b.amount_cents,
-          paid_at: b.paid_at,
-          source: 'booking' as const,
-        }))
-      );
-    }
+    const list = await fetchDriverPaymentTransfers(supabase, user.id, start, end);
+    setTransfers(list);
     setLoading(false);
   }, []);
 
@@ -241,7 +201,11 @@ export function PaymentHistoryScreen({ navigation }: Props) {
                       <PixIcon />
                       <View style={styles.transferInfo}>
                         <Text style={styles.transferAmount}>{formatCents(t.amount_cents)}</Text>
-                        <Text style={styles.transferMeta}>Pix • {formatHour(t.paid_at)}</Text>
+                        <Text style={styles.transferMeta}>
+                          {t.source === 'completed_trip'
+                            ? `Viagem concluída • ${formatHour(t.paid_at)}`
+                            : `Pix • ${formatHour(t.paid_at)}`}
+                        </Text>
                       </View>
                       <Text style={styles.transferDate}>{formatShortDate(t.paid_at)}</Text>
                     </View>

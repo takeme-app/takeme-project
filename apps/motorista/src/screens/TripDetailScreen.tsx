@@ -18,6 +18,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+import { closeConversationsForScheduledTrip } from '../lib/closeTripConversations';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import {
   GoogleMapsMap,
@@ -55,6 +56,7 @@ type Trip = {
   bags_available: number | null;
   status: string;
   amount_cents: number | null;
+  driver_journey_started_at?: string | null;
 };
 
 type Profile = {
@@ -398,7 +400,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
         supabase
           .from('scheduled_trips')
           .select(
-            'id, origin_address, destination_address, departure_at, arrival_at, origin_lat, origin_lng, destination_lat, destination_lng, bags_available, status, amount_cents'
+            'id, origin_address, destination_address, departure_at, arrival_at, origin_lat, origin_lng, destination_lat, destination_lng, bags_available, status, amount_cents, driver_journey_started_at'
           )
           .eq('id', tripId)
           .single(),
@@ -408,7 +410,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
             'id, passenger_count, bags_count, status, amount_cents, profiles(full_name, avatar_url, rating)'
           )
           .eq('scheduled_trip_id', tripId)
-          .in('status', ['confirmed', 'paid']),
+          .in('status', ['pending', 'paid', 'confirmed']),
         supabase
           .from('shipments')
           .select(
@@ -435,12 +437,20 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const handleStartTrip = async () => {
     if (!trip) return;
     setStartLoading(true);
+    const now = new Date().toISOString();
     const { error } = await supabase
       .from('scheduled_trips')
-      .update({ status: 'active', updated_at: new Date().toISOString() } as never)
+      .update(
+        {
+          status: 'active',
+          driver_journey_started_at: now,
+          updated_at: now,
+        } as never,
+      )
       .eq('id', trip.id);
     setStartLoading(false);
     if (!error) {
+      setTrip((prev) => (prev ? { ...prev, status: 'active', driver_journey_started_at: now } : prev));
       navigation.navigate('ActiveTrip', { tripId: trip.id });
     }
   };
@@ -454,6 +464,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
       .eq('id', trip.id);
     setCancelLoading(false);
     if (!error) {
+      await closeConversationsForScheduledTrip(trip.id);
       setCancelVisible(false);
       setTrip((prev) => (prev ? { ...prev, status: 'cancelled' } : prev));
     }
@@ -495,10 +506,17 @@ export function TripDetailScreen({ route, navigation }: Props) {
 
   // ── Derived ───────────────────────────────────────────────────────────────────
 
-  const confirmedBookings = bookings.filter((b) => b.status === 'confirmed' || b.status === 'paid');
-  const totalPax = confirmedBookings.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
-  const totalBags = bookings.reduce((s, b) => s + (b.bags_count ?? 0), 0);
-  const totalRevenueCents = confirmedBookings.reduce((s, b) => s + (b.amount_cents ?? 0), 0);
+  const awaitingBookings = bookings.filter(
+    (b) => b.status === 'pending' || b.status === 'paid',
+  );
+  const confirmedTripBookings = bookings.filter((b) => b.status === 'confirmed');
+  const bookingsInTrip = [...awaitingBookings, ...confirmedTripBookings];
+  const totalPax = bookingsInTrip.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
+  const totalBags = bookingsInTrip.reduce((s, b) => s + (b.bags_count ?? 0), 0);
+  const totalRevenueCents = confirmedTripBookings.reduce(
+    (s, b) => s + (b.amount_cents ?? 0),
+    0,
+  );
 
   const bagsCapacity = trip?.bags_available ?? 0;
   const bagsOccupancyPct =
@@ -591,7 +609,11 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const isScheduled = trip.status === 'scheduled';
   const isActive = trip.status === 'active';
   const isCompleted = trip.status === 'completed';
-  const showPassengerSection = (isScheduled || isActive) && confirmedBookings.length > 0;
+  const journeyStarted = Boolean(trip.driver_journey_started_at);
+  const showStartButton =
+    !isCompleted && trip.status !== 'cancelled' && !journeyStarted;
+  const showPassengerSection =
+    (isScheduled || isActive) && bookingsInTrip.length > 0;
   const showShipmentSection = (isScheduled || isActive) && shipments.length > 0;
   const showContactInfo = isCompleted && shipments.length > 0;
 
@@ -715,7 +737,12 @@ export function TripDetailScreen({ route, navigation }: Props) {
           {showPassengerSection && (
             <>
               <Text style={styles.sectionTitle}>Passageiros</Text>
-              {confirmedBookings.map((booking) => {
+              {awaitingBookings.length > 0 ? (
+                <Text style={styles.passengerSectionHint}>
+                  Aguardando seu aceite (Viagens pendentes)
+                </Text>
+              ) : null}
+              {awaitingBookings.map((booking) => {
                 const profile = booking.profiles;
                 const initials = getInitials(profile?.full_name);
                 const pax = booking.passenger_count ?? 0;
@@ -725,12 +752,48 @@ export function TripDetailScreen({ route, navigation }: Props) {
                 if (bags > 0) labelParts.push(`${bags} bag`);
                 return (
                   <View key={booking.id} style={styles.passengerRow}>
-                    {/* Avatar */}
                     <View style={styles.avatar}>
                       <Text style={styles.avatarText}>{initials}</Text>
                     </View>
-
-                    {/* Name + rating */}
+                    <View style={styles.passengerInfo}>
+                      <Text style={styles.passengerName} numberOfLines={1}>
+                        {profile?.full_name ?? 'Passageiro'}
+                      </Text>
+                      <View style={styles.ratingRow}>
+                        <MaterialIcons name="star" size={14} color={GOLD} />
+                        <Text style={styles.ratingText}>
+                          {profile?.rating != null ? profile.rating.toFixed(1) : '—'}
+                        </Text>
+                        {labelParts.length > 0 && (
+                          <Text style={styles.bagLabel}> • {labelParts.join(' ')}</Text>
+                        )}
+                      </View>
+                      <View style={styles.bookingAwaitingPill}>
+                        <Text style={styles.bookingAwaitingPillText}>Solicitação pendente</Text>
+                      </View>
+                    </View>
+                    <TouchableOpacity style={styles.phoneBtn} activeOpacity={0.75}>
+                      <MaterialIcons name="phone" size={20} color="#111827" />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+              {confirmedTripBookings.length > 0 && awaitingBookings.length > 0 ? (
+                <Text style={styles.passengerSectionHint}>Confirmados por você</Text>
+              ) : null}
+              {confirmedTripBookings.map((booking) => {
+                const profile = booking.profiles;
+                const initials = getInitials(profile?.full_name);
+                const pax = booking.passenger_count ?? 0;
+                const bags = booking.bags_count ?? 0;
+                const labelParts: string[] = [];
+                if (pax > 0) labelParts.push(`${pax} pax`);
+                if (bags > 0) labelParts.push(`${bags} bag`);
+                return (
+                  <View key={booking.id} style={styles.passengerRow}>
+                    <View style={styles.avatar}>
+                      <Text style={styles.avatarText}>{initials}</Text>
+                    </View>
                     <View style={styles.passengerInfo}>
                       <Text style={styles.passengerName} numberOfLines={1}>
                         {profile?.full_name ?? 'Passageiro'}
@@ -745,8 +808,6 @@ export function TripDetailScreen({ route, navigation }: Props) {
                         )}
                       </View>
                     </View>
-
-                    {/* Phone button */}
                     <TouchableOpacity style={styles.phoneBtn} activeOpacity={0.75}>
                       <MaterialIcons name="phone" size={20} color="#111827" />
                     </TouchableOpacity>
@@ -882,7 +943,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
       {/* ── Fixed bottom actions ─────────────────────────────────────────────── */}
       {!isCompleted && trip.status !== 'cancelled' && (
         <View style={styles.bottomActions}>
-          {isScheduled && (
+          {showStartButton && (
             <TouchableOpacity
               style={styles.btnStart}
               onPress={handleStartTrip}
@@ -1037,6 +1098,26 @@ const styles = StyleSheet.create({
     color: '#111827',
     marginTop: 24,
     marginBottom: 12,
+  },
+  passengerSectionHint: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#92400E',
+    marginBottom: 10,
+    marginTop: -6,
+  },
+  bookingAwaitingPill: {
+    alignSelf: 'flex-start',
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: '#FEF3C7',
+  },
+  bookingAwaitingPillText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#92400E',
   },
 
   // Passengers
