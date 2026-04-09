@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { latLngFromDbColumns } from '../components/googleMaps';
+import { latLngFromDbColumns, isValidGlobeCoordinate } from '../components/googleMaps';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -70,13 +70,13 @@ export function useTripStops(tripId: string | null) {
       if (fetchErr) {
         // Table might not exist yet — fall back to manual join
         const fallback = await buildStopsManually(tripId);
-        setStops(fallback);
+        setStops(await finalizeStopsForTrip(tripId, fallback));
         setLoading(false);
         return;
       }
 
       if (data && data.length > 0) {
-        setStops(mapRows(data));
+        setStops(await finalizeStopsForTrip(tripId, mapRows(data)));
         setLoading(false);
         return;
       }
@@ -99,7 +99,7 @@ export function useTripStops(tripId: string | null) {
           .order('sequence_order', { ascending: true });
 
         if (generated && generated.length > 0) {
-          setStops(mapRows(generated));
+          setStops(await finalizeStopsForTrip(tripId, mapRows(generated)));
           setLoading(false);
           return;
         }
@@ -107,7 +107,7 @@ export function useTripStops(tripId: string | null) {
 
       // 3. RPC not available or returned nothing — manual join fallback
       const fallback = await buildStopsManually(tripId);
-      setStops(fallback);
+      setStops(await finalizeStopsForTrip(tripId, fallback));
     } catch (e: any) {
       setError(e?.message ?? 'Erro ao carregar paradas');
     } finally {
@@ -182,6 +182,237 @@ function mapRows(rows: any[]): TripStop[] {
   }));
 }
 
+/** Ponto de “partida cadastrada” não entra na rota do app: o GPS já é o início da corrida. */
+function omitDriverOriginStops(stops: TripStop[]): TripStop[] {
+  return stops.filter((s) => s.stopType !== 'driver_origin');
+}
+
+type ShipmentRow = {
+  id: string;
+  instructions?: string | null;
+  origin_address?: string | null;
+  destination_address?: string | null;
+  origin_lat?: unknown;
+  origin_lng?: unknown;
+  destination_lat?: unknown;
+  destination_lng?: unknown;
+  recipient_name?: string | null;
+  pickup_code?: string | null;
+  delivery_code?: string | null;
+};
+
+/** Paradas de coleta/entrega derivadas de `shipments` (motorista = driver da viagem). */
+async function buildShipmentStopsOnly(tripId: string): Promise<TripStop[]> {
+  const { data: tripDriverRow } = await supabase
+    .from('scheduled_trips')
+    .select('driver_id')
+    .eq('id', tripId)
+    .maybeSingle();
+  const tripDriverId = (tripDriverRow as { driver_id?: string | null } | null)?.driver_id ?? null;
+  if (!tripDriverId) return [];
+
+  const { data: shipments } = await supabase
+    .from('shipments')
+    .select(`
+      id,
+      instructions,
+      origin_address,
+      destination_address,
+      origin_lat,
+      origin_lng,
+      destination_lat,
+      destination_lng,
+      recipient_name,
+      pickup_code,
+      delivery_code
+    `)
+    .eq('scheduled_trip_id', tripId)
+    .eq('driver_id', tripDriverId)
+    .in('status', ['confirmed', 'in_progress']);
+
+  const out: TripStop[] = [];
+  for (const s of (shipments ?? []) as ShipmentRow[]) {
+    const originShort = (s.origin_address ?? '').split(',')[0]?.trim() || 'Coleta';
+    const pickupLL = latLngFromDbColumns(s.origin_lat, s.origin_lng);
+    const dropLL = latLngFromDbColumns(s.destination_lat, s.destination_lng);
+    out.push({
+      id: `shipment-pickup-${s.id}`,
+      scheduledTripId: tripId,
+      stopType: 'package_pickup',
+      entityId: s.id,
+      label: originShort,
+      address: s.origin_address ?? '',
+      lat: pickupLL?.latitude ?? null,
+      lng: pickupLL?.longitude ?? null,
+      sequenceOrder: 0,
+      status: 'pending',
+      notes: s.instructions ?? null,
+      code: s.pickup_code ?? null,
+    });
+    out.push({
+      id: `shipment-dropoff-${s.id}`,
+      scheduledTripId: tripId,
+      stopType: 'package_dropoff',
+      entityId: s.id,
+      label: s.recipient_name?.trim() || 'Destinatário',
+      address: s.destination_address ?? '',
+      lat: dropLL?.latitude ?? null,
+      lng: dropLL?.longitude ?? null,
+      sequenceOrder: 0,
+      status: 'pending',
+      notes: null,
+      code: s.delivery_code ?? null,
+    });
+  }
+  return out;
+}
+
+function renumberStopSequence(stops: TripStop[]): TripStop[] {
+  return stops.map((s, i) => ({ ...s, sequenceOrder: i + 1 }));
+}
+
+/** Mesmo shipment: `entity_id` no trip_stops ou id sintético `shipment-pickup|dropoff-{uuid}`. */
+function normalizeShipmentEntityKey(stop: TripStop): string {
+  const raw = String(stop.entityId ?? '').trim().toLowerCase();
+  if (raw) return raw;
+  const m = String(stop.id).match(/^shipment-(?:pickup|dropoff)-([0-9a-f-]{36})$/i);
+  return (m?.[1] ?? '').toLowerCase();
+}
+
+function shipmentLegAlreadyInStops(
+  stops: TripStop[],
+  shipmentId: string,
+  leg: 'package_pickup' | 'package_dropoff',
+): boolean {
+  const sid = shipmentId.trim().toLowerCase();
+  return stops.some((x) => {
+    if (x.stopType !== leg) return false;
+    if (String(x.entityId ?? '').trim().toLowerCase() === sid) return true;
+    const wantId = leg === 'package_pickup' ? `shipment-pickup-${shipmentId}` : `shipment-dropoff-${shipmentId}`;
+    return x.id === wantId;
+  });
+}
+
+/** Remove coleta/entrega duplicada do mesmo envio (merge + trip_stops com chaves diferentes). */
+function dedupePackageStopsByShipment(stops: TripStop[]): TripStop[] {
+  const seenPickup = new Set<string>();
+  const seenDropoff = new Set<string>();
+  const out: TripStop[] = [];
+  for (const s of stops) {
+    if (s.stopType !== 'package_pickup' && s.stopType !== 'package_dropoff') {
+      out.push(s);
+      continue;
+    }
+    const key = normalizeShipmentEntityKey(s);
+    if (!key) {
+      out.push(s);
+      continue;
+    }
+    if (s.stopType === 'package_pickup') {
+      if (seenPickup.has(key)) continue;
+      seenPickup.add(key);
+    } else {
+      if (seenDropoff.has(key)) continue;
+      seenDropoff.add(key);
+    }
+    out.push(s);
+  }
+  return out;
+}
+
+/**
+ * `trip_stops` pode existir sem linhas de encomenda; o app ainda precisa exibir coleta/entrega do `shipments`.
+ */
+async function mergeMissingShipmentStopsIntoList(tripId: string, stops: TripStop[]): Promise<TripStop[]> {
+  const manual = await buildShipmentStopsOnly(tripId);
+  if (manual.length === 0) return stops;
+
+  const byEntity = new Map<string, { pickup?: TripStop; dropoff?: TripStop }>();
+  for (const s of manual) {
+    const cur = byEntity.get(s.entityId) ?? {};
+    if (s.stopType === 'package_pickup') cur.pickup = s;
+    if (s.stopType === 'package_dropoff') cur.dropoff = s;
+    byEntity.set(s.entityId, cur);
+  }
+
+  const additions: TripStop[] = [];
+  for (const [entityId, pair] of byEntity) {
+    const hasP = shipmentLegAlreadyInStops(stops, entityId, 'package_pickup');
+    const hasD = shipmentLegAlreadyInStops(stops, entityId, 'package_dropoff');
+    if (hasP && hasD) continue;
+    if (!hasP && pair.pickup) additions.push(pair.pickup);
+    if (!hasD && pair.dropoff) additions.push(pair.dropoff);
+  }
+
+  if (additions.length === 0) return stops;
+
+  const destIdx = stops.findIndex((s) => s.stopType === 'trip_destination');
+  const merged =
+    destIdx === -1
+      ? [...stops, ...additions]
+      : [...stops.slice(0, destIdx), ...additions, ...stops.slice(destIdx)];
+
+  return renumberStopSequence(merged);
+}
+
+/**
+ * trip_stops do admin podem vir sem lat/lng; preenche coleta/entrega a partir de `shipments`
+ * para o mapa traçar rota até origem e destino da encomenda.
+ */
+async function enrichPackageStopsFromShipments(tripId: string, stops: TripStop[]): Promise<TripStop[]> {
+  const needs = stops.some(
+    (s) =>
+      (s.stopType === 'package_pickup' || s.stopType === 'package_dropoff') &&
+      Boolean(s.entityId) &&
+      (s.lat == null || s.lng == null || !isValidGlobeCoordinate(s.lat, s.lng)),
+  );
+  if (!needs) return stops;
+
+  const { data: tripDriverRow } = await supabase
+    .from('scheduled_trips')
+    .select('driver_id')
+    .eq('id', tripId)
+    .maybeSingle();
+  const tripDriverId = (tripDriverRow as { driver_id?: string | null } | null)?.driver_id ?? null;
+  if (!tripDriverId) return stops;
+
+  const { data: rows } = await supabase
+    .from('shipments')
+    .select('id, origin_lat, origin_lng, destination_lat, destination_lng')
+    .eq('scheduled_trip_id', tripId)
+    .eq('driver_id', tripDriverId)
+    .in('status', ['confirmed', 'in_progress']);
+
+  const byId = new Map<string, { origin_lat: unknown; origin_lng: unknown; destination_lat: unknown; destination_lng: unknown }>();
+  for (const r of rows ?? []) {
+    const row = r as { id?: string };
+    if (row.id) byId.set(row.id, r as { origin_lat: unknown; origin_lng: unknown; destination_lat: unknown; destination_lng: unknown });
+  }
+
+  return stops.map((s) => {
+    if (s.stopType !== 'package_pickup' && s.stopType !== 'package_dropoff') return s;
+    if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) return s;
+    const row = byId.get(s.entityId);
+    if (!row) return s;
+    if (s.stopType === 'package_pickup') {
+      const ll = latLngFromDbColumns(row.origin_lat, row.origin_lng);
+      if (!ll) return s;
+      return { ...s, lat: ll.latitude, lng: ll.longitude };
+    }
+    const ll = latLngFromDbColumns(row.destination_lat, row.destination_lng);
+    if (!ll) return s;
+    return { ...s, lat: ll.latitude, lng: ll.longitude };
+  });
+}
+
+async function finalizeStopsForTrip(tripId: string, stops: TripStop[]): Promise<TripStop[]> {
+  const merged = await mergeMissingShipmentStopsIntoList(tripId, stops);
+  const withoutOrigin = omitDriverOriginStops(merged);
+  const enriched = await enrichPackageStopsFromShipments(tripId, withoutOrigin);
+  const deduped = dedupePackageStopsByShipment(enriched);
+  return renumberStopSequence(deduped);
+}
+
 async function buildStopsManually(tripId: string): Promise<TripStop[]> {
   const result: TripStop[] = [];
   let seq = 1;
@@ -252,66 +483,9 @@ async function buildStopsManually(tripId: string): Promise<TripStop[]> {
     });
   }
 
-  const { data: tripDriverRow } = await supabase
-    .from('scheduled_trips')
-    .select('driver_id')
-    .eq('id', tripId)
-    .maybeSingle();
-  const tripDriverId = (tripDriverRow as { driver_id?: string | null } | null)?.driver_id ?? null;
-
-  // Shipments na viagem: só após o motorista aceitar (driver_id = motorista da viagem)
-  const { data: shipments } = tripDriverId
-    ? await supabase
-        .from('shipments')
-        .select(`
-          id,
-          description,
-          notes,
-          origin_address,
-          destination_address,
-          origin_lat,
-          origin_lng,
-          destination_lat,
-          destination_lng,
-          sender_name,
-          receiver_name,
-          pickup_code,
-          delivery_code
-        `)
-        .eq('scheduled_trip_id', tripId)
-        .eq('driver_id', tripDriverId)
-        .in('status', ['confirmed', 'in_progress'])
-    : { data: [] as Record<string, unknown>[] };
-
-  for (const s of shipments ?? []) {
-    result.push({
-      id: `shipment-pickup-${s.id}`,
-      scheduledTripId: tripId,
-      stopType: 'package_pickup',
-      entityId: s.id,
-      label: s.sender_name ?? 'Remetente',
-      address: s.origin_address ?? '',
-      lat: s.origin_lat ?? null,
-      lng: s.origin_lng ?? null,
-      sequenceOrder: seq++,
-      status: 'pending',
-      notes: s.notes ?? null,
-      code: s.pickup_code ?? null,
-    });
-    result.push({
-      id: `shipment-dropoff-${s.id}`,
-      scheduledTripId: tripId,
-      stopType: 'package_dropoff',
-      entityId: s.id,
-      label: s.receiver_name ?? 'Destinatário',
-      address: s.destination_address ?? '',
-      lat: s.destination_lat ?? null,
-      lng: s.destination_lng ?? null,
-      sequenceOrder: seq++,
-      status: 'pending',
-      notes: null,
-      code: s.delivery_code ?? null,
-    });
+  const shipmentStops = await buildShipmentStopsOnly(tripId);
+  for (const s of shipmentStops) {
+    result.push({ ...s, sequenceOrder: seq++ });
   }
 
   return result;
