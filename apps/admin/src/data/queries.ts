@@ -25,6 +25,7 @@ import type {
   AdminUserListItem,
   BookingDetailForAdmin,
   EncomendaEditDetail,
+  TripShipmentListItem,
 } from './types';
 
 // ── Edge Function Helper ─────────────────────────────────────────────────
@@ -160,16 +161,53 @@ function shortAddr(addr: string): string {
   return addr;
 }
 
-type BookingDbStatus = 'pending' | 'confirmed' | 'paid' | 'cancelled';
-type TripDbStatus = 'active' | 'cancelled' | 'completed';
+/** Comparação tolerante a PT/EN, maiúsculas e acentos (dados legados ou edição manual no SQL). */
+function normViagemStatusKey(raw: unknown): string {
+  return String(raw ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
 
-function mapViagemStatus(
-  bookingStatus: BookingDbStatus,
-  tripStatus: TripDbStatus,
-): ViagemListItem['status'] {
-  if (bookingStatus === 'cancelled' || tripStatus === 'cancelled') return 'cancelado';
-  if (tripStatus === 'completed' || bookingStatus === 'paid') return 'concluído';
-  if (tripStatus === 'active' && (bookingStatus === 'confirmed' || bookingStatus === 'pending')) return 'em_andamento';
+function viagemDbIsCancelled(s: string): boolean {
+  const n = normViagemStatusKey(s);
+  return n === 'cancelled' || n === 'canceled' || n === 'cancelado' || n === 'cancelada';
+}
+
+function viagemDbIsPaidBooking(s: string): boolean {
+  const n = normViagemStatusKey(s);
+  return n === 'paid' || n === 'pago';
+}
+
+function viagemDbIsTripCompleted(s: string): boolean {
+  const n = normViagemStatusKey(s);
+  return n === 'completed' || n === 'concluido' || n === 'concluida';
+}
+
+function viagemDbIsTripActive(s: string): boolean {
+  const n = normViagemStatusKey(s);
+  return n === 'active' || n === 'ativo' || n === '';
+}
+
+function viagemDbIsConfirmed(s: string): boolean {
+  const n = normViagemStatusKey(s);
+  return n === 'confirmed' || n === 'confirmado' || n === 'confirmada';
+}
+
+function viagemDbIsPending(s: string): boolean {
+  const n = normViagemStatusKey(s);
+  return n === 'pending' || n === 'pendente';
+}
+
+function mapViagemStatus(bookingStatusRaw: unknown, tripStatusRaw: unknown): ViagemListItem['status'] {
+  const bookingKey = normViagemStatusKey(bookingStatusRaw);
+  const tripStr = String(tripStatusRaw ?? '').trim();
+  const tripKey = tripStr === '' ? normViagemStatusKey('active') : normViagemStatusKey(tripStatusRaw);
+
+  if (viagemDbIsCancelled(bookingKey) || viagemDbIsCancelled(tripKey)) return 'cancelado';
+  if (viagemDbIsTripCompleted(tripKey) || viagemDbIsPaidBooking(bookingKey)) return 'concluído';
+  if (viagemDbIsTripActive(tripKey) && (viagemDbIsConfirmed(bookingKey) || viagemDbIsPending(bookingKey))) return 'em_andamento';
   return 'agendado';
 }
 
@@ -365,6 +403,8 @@ export async function fetchBookingDetailForAdmin(bookingOrTripId: string): Promi
     const n = typeof v === 'number' ? v : parseFloat(String(v));
     return Number.isFinite(n) ? n : null;
   };
+  const depAt = trip?.departure_at;
+  const arrAt = trip?.arrival_at;
   return {
     listItem,
     originFull: row.origin_address ?? '',
@@ -380,7 +420,42 @@ export async function fetchBookingDetailForAdmin(bookingOrTripId: string): Promi
     userId: row.user_id,
     clientPhone,
     trunkOccupancyPct: Number.isFinite(trunk) ? trunk : 0,
+    tripDepartureAtIso: depAt ? new Date(depAt as string).toISOString() : null,
+    tripArrivalAtIso: arrAt ? new Date(arrAt as string).toISOString() : null,
   };
+}
+
+/** Encomendas atribuídas à viagem agendada (`shipments.scheduled_trip_id`). */
+export async function fetchShipmentsForScheduledTrip(tripId: string): Promise<TripShipmentListItem[]> {
+  if (!isSupabaseConfigured || !tripId) return [];
+  const { data, error } = await supabase
+    .from('shipments')
+    .select('id, user_id, package_size, amount_cents, recipient_name, origin_address, destination_address, instructions, photo_url, status')
+    .eq('scheduled_trip_id', tripId)
+    .order('created_at', { ascending: true });
+  if (error || !data?.length) return [];
+  type Row = { id: string; user_id: string; package_size?: string | null; amount_cents?: number | null; recipient_name?: string | null; origin_address?: string | null; destination_address?: string | null; instructions?: string | null; photo_url?: string | null; status?: string | null };
+  const rows = data as Row[];
+  const userIds = [...new Set(rows.map((s) => s.user_id).filter(Boolean))];
+  const senderMap: Record<string, string> = {};
+  if (userIds.length > 0) {
+    const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', userIds);
+    (profs || []).forEach((p: { id: string; full_name?: string | null }) => {
+      senderMap[p.id] = p.full_name?.trim() || '—';
+    });
+  }
+  return rows.map((s) => ({
+    id: s.id,
+    packageSize: s.package_size ?? null,
+    amountCents: Number(s.amount_cents ?? 0),
+    recipientName: (s.recipient_name && String(s.recipient_name).trim()) || '—',
+    senderName: senderMap[s.user_id] ?? '—',
+    originAddress: s.origin_address ?? '',
+    destinationAddress: s.destination_address ?? '',
+    instructions: s.instructions ?? null,
+    photoUrl: s.photo_url ?? null,
+    status: String(s.status ?? ''),
+  }));
 }
 
 export async function fetchBookingsForDriver(driverId: string): Promise<ViagemListItem[]> {
@@ -626,18 +701,47 @@ export async function fetchDriverTripRowsForPaymentDetail(driverId: string): Pro
     .limit(50);
   if (error || !trips?.length) return [];
   const fmtMoney = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`;
-  return (trips as any[]).map((t) => ({
-    tripId: t.id,
-    origem: shortAddr(t.origin_address || ''),
-    destino: shortAddr(t.destination_address || ''),
-    data: t.departure_at ? fmtDate(t.departure_at) : '—',
-    embarque: t.departure_at ? fmtTime(t.departure_at) : '—',
-    chegada: t.arrival_at ? fmtTime(t.arrival_at) : '—',
-    valor: fmtMoney(Number(t.amount_cents ?? 0)),
-    pctMotorista: '—',
-    pctAdmin: '—',
-    pagamento: '—',
-  }));
+
+  // Buscar payouts vinculados às viagens para calcular splits reais
+  const tripIds = (trips as any[]).map((t) => t.id);
+  const { data: payouts } = await (supabase as any)
+    .from('payouts')
+    .select('entity_id, worker_amount_cents, admin_amount_cents, gross_amount_cents, status, payment_method')
+    .in('entity_id', tripIds);
+
+  const payoutMap = new Map<string, any>();
+  for (const p of (payouts ?? []) as any[]) {
+    payoutMap.set(p.entity_id, p);
+  }
+
+  const fmtPct = (num: number, denom: number) =>
+    denom > 0 ? `${Math.round((num / denom) * 100)}%` : '—';
+  const fmtPayMethod = (method: string | null) => {
+    if (!method) return '—';
+    if (method === 'pix') return 'Pix';
+    if (method === 'credit_card') return 'Crédito';
+    if (method === 'debit_card') return 'Débito';
+    return method;
+  };
+
+  return (trips as any[]).map((t) => {
+    const payout = payoutMap.get(t.id);
+    const gross = Number(payout?.gross_amount_cents ?? 0);
+    const workerAmt = Number(payout?.worker_amount_cents ?? 0);
+    const adminAmt = Number(payout?.admin_amount_cents ?? 0);
+    return {
+      tripId: t.id,
+      origem: shortAddr(t.origin_address || ''),
+      destino: shortAddr(t.destination_address || ''),
+      data: t.departure_at ? fmtDate(t.departure_at) : '—',
+      embarque: t.departure_at ? fmtTime(t.departure_at) : '—',
+      chegada: t.arrival_at ? fmtTime(t.arrival_at) : '—',
+      valor: fmtMoney(Number(t.amount_cents ?? 0)),
+      pctMotorista: payout ? fmtPct(workerAmt, gross) : '—',
+      pctAdmin: payout ? fmtPct(adminAmt, gross) : '—',
+      pagamento: payout ? fmtPayMethod(payout.payment_method) : '—',
+    };
+  });
 }
 
 export interface PreparerEncTrechoRow {
@@ -979,6 +1083,7 @@ export async function fetchPassageiros(): Promise<PassageiroListItem[]> {
       cidade: p.city ?? '—',
       estado: p.state ?? '—',
       dataCriacao: fmtDate(p.created_at),
+      createdAtIso: p.created_at ? (p.created_at as string).slice(0, 10) : '',
       cpf: p.cpf ?? '—',
       status: p.verified ? 'Ativo' as const : 'Inativo' as const,
       avatarUrl: p.avatar_url,
@@ -1018,6 +1123,7 @@ export async function fetchPassageiroDetailForAdmin(userId: string): Promise<Pas
     cidade: row.city ?? '—',
     estado: row.state ?? '—',
     dataCriacao: fmtDate(row.created_at),
+    createdAtIso: row.created_at ? (row.created_at as string).slice(0, 10) : '',
     cpf: row.cpf ?? '—',
     status: row.verified ? 'Ativo' : 'Inativo',
     avatarUrl: row.avatar_url,
@@ -1096,36 +1202,50 @@ export async function fetchEncomendaCounts(): Promise<EncomendaCounts> {
 
 // ── Motoristas ──────────────────────────────────────────────────────────
 
+/**
+ * Lista motoristas para KPIs e selects admin.
+ * Agrega viagens por `scheduled_trips`, mas a base de IDs vem também de `worker_profiles` (role = driver),
+ * alinhado à lista de cadastros. Assim o total / média / ranking não zeram quando não há viagens visíveis
+ * (RLS, erro na query) ou motoristas ainda sem viagem.
+ */
 export async function fetchMotoristas(): Promise<MotoristaListItem[]> {
-  const { data: trips, error } = await supabase
-    .from('scheduled_trips')
-    .select('driver_id, status')
-    .limit(5000);
+  if (!isSupabaseConfigured) return [];
 
-  if (error || !trips) return [];
+  const [{ data: trips, error: tripsError }, { data: workers, error: workersError }] = await Promise.all([
+    supabase.from('scheduled_trips').select('driver_id, status').limit(5000),
+    sb.from('worker_profiles').select('id').eq('role', 'driver').order('created_at', { ascending: false }).limit(500),
+  ]);
 
   const driverMap = new Map<string, { total: number; active: number; scheduled: number }>();
-  for (const t of trips as any[]) {
-    const did = t.driver_id as string;
-    const entry = driverMap.get(did) ?? { total: 0, active: 0, scheduled: 0 };
-    entry.total++;
-    if (t.status === 'active') entry.active++;
-    if (t.status === 'active') entry.scheduled++;
-    driverMap.set(did, entry);
+  if (!tripsError && trips) {
+    for (const t of trips as any[]) {
+      const did = t.driver_id as string | null | undefined;
+      if (!did) continue;
+      const entry = driverMap.get(did) ?? { total: 0, active: 0, scheduled: 0 };
+      entry.total++;
+      if (t.status === 'active') entry.active++;
+      if (t.status === 'scheduled') entry.scheduled++;
+      driverMap.set(did, entry);
+    }
   }
 
-  const driverIds = Array.from(driverMap.keys());
-  if (driverIds.length === 0) return [];
+  const workerIds: string[] =
+    !workersError && workers?.length
+      ? (workers as any[]).map((w) => w.id as string)
+      : [];
+
+  const allIds = new Set<string>([...workerIds, ...driverMap.keys()]);
+  if (allIds.size === 0) return [];
 
   const { data: profiles } = await supabase
     .from('profiles')
     .select('id, full_name, avatar_url, rating')
-    .in('id', driverIds);
+    .in('id', [...allIds]);
 
   const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p]));
 
-  return driverIds.map((did) => {
-    const stats = driverMap.get(did)!;
+  return [...allIds].map((did) => {
+    const stats = driverMap.get(did) ?? { total: 0, active: 0, scheduled: 0 };
     const p = profileMap.get(did) as any;
     return {
       id: did,
@@ -1141,12 +1261,25 @@ export async function fetchMotoristas(): Promise<MotoristaListItem[]> {
 
 // ── Motorista Table Rows (with trip details) ────────────────────────────
 
+/**
+ * `worker_profiles.subtype` no Postgres (CHECK): 'takeme' | 'partner' | 'shipments' | 'excursions'.
+ * UI admin: take_me = frota Take Me; parceiro = motorista parceiro.
+ * Qualquer valor que não seja claramente parceiro cai em take_me (incl. takeme, null, shipments em linhas legadas).
+ */
+function motoristaCategoriaFromWorkerSubtype(subtype: string | null | undefined): 'take_me' | 'parceiro' {
+  const s = String(subtype ?? '').trim().toLowerCase();
+  if (s === 'partner' || s === 'parceiro') return 'parceiro';
+  return 'take_me';
+}
+
 export interface MotoristaTableRow {
   tripId: string;
   nome: string;
   origem: string;
   destino: string;
   data: string;
+  /** ISO date string for filtering (e.g. '2025-09-01') */
+  dataIso: string;
   embarque: string;
   chegada: string;
   status: 'Concluído' | 'Cancelado' | 'Agendado' | 'Em andamento';
@@ -1162,7 +1295,7 @@ export async function fetchMotoristaTableRows(): Promise<MotoristaTableRow[]> {
     .from('scheduled_trips')
     .select('id, driver_id, origin_address, destination_address, departure_at, arrival_at, status')
     .order('departure_at', { ascending: false })
-    .limit(100);
+    .limit(5000);
 
   if (error || !trips || trips.length === 0) return [];
 
@@ -1190,12 +1323,49 @@ export async function fetchMotoristaTableRows(): Promise<MotoristaTableRow[]> {
       origem: shortAddr(t.origin_address || ''),
       destino: shortAddr(t.destination_address || ''),
       data: t.departure_at ? fmtDate(t.departure_at) : '—',
+      dataIso: t.departure_at ? new Date(t.departure_at).toISOString().slice(0, 10) : '',
       embarque: t.departure_at ? fmtTime(t.departure_at) : '—',
       chegada: t.arrival_at ? fmtTime(t.arrival_at) : '—',
       status: uiStatus,
       driverId: t.driver_id,
       avatarUrl: p?.avatar_url ?? null,
-      categoria: w?.subtype === 'partner' ? 'parceiro' as const : 'take_me' as const,
+      categoria: motoristaCategoriaFromWorkerSubtype(w?.subtype),
+    };
+  });
+}
+
+/** Fetches ALL worker profiles (all approval statuses) for the admin approval view. */
+export async function fetchAllMotoristaProfiles(): Promise<import('./types').WorkerApprovalRow[]> {
+  if (!isSupabaseConfigured) return [];
+  const { data: workers, error } = await (supabase as any)
+    .from('worker_profiles')
+    .select('id, role, subtype, status, rejection_reason, reviewed_at, created_at')
+    .eq('role', 'driver')
+    .order('created_at', { ascending: false })
+    .limit(500);
+  if (error || !workers || workers.length === 0) return [];
+
+  const ids: string[] = workers.map((w: any) => w.id as string);
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('id, full_name, avatar_url, rating, phone')
+    .in('id', ids);
+
+  const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p]));
+
+  return workers.map((w: any) => {
+    const p = profileMap.get(w.id) as any;
+    return {
+      id: w.id as string,
+      nome: p?.full_name ?? 'Sem nome',
+      phone: p?.phone ?? null,
+      avatarUrl: p?.avatar_url ?? null,
+      rating: typeof p?.rating === 'number' ? p.rating : null,
+      subtype: motoristaCategoriaFromWorkerSubtype(w.subtype),
+      approvalStatus: (w.status ?? 'pending') as import('./types').WorkerApprovalStatus,
+      rejectionReason: w.rejection_reason ?? null,
+      createdAt: w.created_at ?? '',
+      reviewedAt: w.reviewed_at ?? null,
     };
   });
 }
@@ -1318,26 +1488,35 @@ function asRecord(raw: unknown): Record<string, unknown> {
 }
 
 export async function fetchPreparadores(): Promise<PreparadorListItem[]> {
-  const { data, error } = await supabase
+  // FK preparer_id → auth.users (not public.profiles), so we do two queries
+  const { data, error } = await (supabase as any)
     .from('excursion_requests')
-    .select(`
-      id, destination, excursion_date, status, preparer_id, scheduled_departure_at, created_at,
-      profiles!excursion_requests_preparer_id_fkey ( full_name )
-    `)
+    .select('id, destination, excursion_date, status, preparer_id, scheduled_departure_at, created_at')
     .not('preparer_id', 'is', null)
     .order('created_at', { ascending: false })
     .limit(200);
 
-  if (error || !data) return [];
+  if (error || !data || data.length === 0) return [];
+
+  // Fetch preparer names from profiles (keyed by user id)
+  const preparerIds: string[] = [...new Set<string>(data.map((e: any) => e.preparer_id as string))];
+  const { data: profilesData } = await (supabase as any)
+    .from('profiles')
+    .select('id, full_name')
+    .in('id', preparerIds);
+
+  const profileMap: Record<string, string> = {};
+  (profilesData ?? []).forEach((p: any) => { profileMap[p.id] = p.full_name ?? 'Preparador'; });
 
   return data.map((e: any) => {
-    const profile = e.profiles;
+    const dateIso: string = (e.scheduled_departure_at || e.excursion_date || '');
     return {
       id: e.id,
-      nome: profile?.full_name ?? 'Preparador',
+      nome: profileMap[e.preparer_id] ?? 'Preparador',
       origem: '—',
       destino: e.destination,
-      dataInicio: e.scheduled_departure_at ? `${fmtDate(e.scheduled_departure_at)}\n${fmtTime(e.scheduled_departure_at)}` : fmtDate(e.excursion_date),
+      dataInicio: dateIso ? `${fmtDate(dateIso)}\n${fmtTime(dateIso)}` : '—',
+      rawDate: dateIso ? dateIso.slice(0, 10) : '',
       previsao: '—',
       avaliacao: null,
       status: mapPreparadorStatus(e.status),
@@ -1347,25 +1526,29 @@ export async function fetchPreparadores(): Promise<PreparadorListItem[]> {
 
 export async function fetchPreparadorById(id: string): Promise<PreparadorListItem | null> {
   if (!isSupabaseConfigured) return null;
-  const { data, error } = await supabase
+  const { data, error } = await (supabase as any)
     .from('excursion_requests')
-    .select(`
-      id, destination, excursion_date, status, preparer_id, scheduled_departure_at, created_at,
-      profiles!excursion_requests_preparer_id_fkey ( full_name )
-    `)
+    .select('id, destination, excursion_date, status, preparer_id, scheduled_departure_at, created_at')
     .eq('id', id)
     .maybeSingle();
 
   if (error || !data) return null;
 
   const e = data as any;
-  const profile = e.profiles;
+  let nome = 'Preparador';
+  if (e.preparer_id) {
+    const { data: prof } = await (supabase as any)
+      .from('profiles').select('full_name').eq('id', e.preparer_id).maybeSingle();
+    if (prof?.full_name) nome = prof.full_name;
+  }
+  const dateIso: string = (e.scheduled_departure_at || e.excursion_date || '');
   return {
     id: e.id,
-    nome: profile?.full_name ?? 'Preparador',
+    nome,
     origem: '—',
     destino: e.destination,
-    dataInicio: e.scheduled_departure_at ? `${fmtDate(e.scheduled_departure_at)}\n${fmtTime(e.scheduled_departure_at)}` : fmtDate(e.excursion_date),
+    dataInicio: dateIso ? `${fmtDate(dateIso)}\n${fmtTime(dateIso)}` : '—',
+    rawDate: dateIso ? dateIso.slice(0, 10) : '',
     previsao: '—',
     avaliacao: null,
     status: mapPreparadorStatus(e.status),
@@ -1380,7 +1563,7 @@ export async function fetchPreparadorEditDetail(id: string): Promise<PreparadorE
     .select(`
       id, user_id, destination, excursion_date, people_count, fleet_type, observations, status,
       total_amount_cents, scheduled_departure_at, preparer_id, vehicle_details, budget_lines, assignment_notes,
-      excursion_passengers ( id, full_name, cpf, phone, observations )
+      excursion_passengers ( id, full_name, cpf, phone, observations, status_departure, status_return, absence_justified, age )
     `)
     .eq('id', id)
     .maybeSingle();
@@ -1395,6 +1578,10 @@ export async function fetchPreparadorEditDetail(id: string): Promise<PreparadorE
     cpf: p.cpf ?? null,
     phone: p.phone ?? null,
     observations: p.observations ?? null,
+    statusDeparture: (p.status_departure ?? null) as PreparadorEditPassenger['statusDeparture'],
+    statusReturn: p.status_return ?? null,
+    absenceJustified: p.absence_justified === true,
+    age: typeof p.age === 'number' ? p.age : null,
   }));
 
   const [{ data: clientProf }, { data: prepProf }, { data: worker }, { data: vehs }] = await Promise.all([
@@ -1532,7 +1719,7 @@ export async function savePreparadorExcursionFields(
 
 export async function saveProfileFields(
   profileId: string,
-  fields: { full_name?: string; cpf?: string | null },
+  fields: { full_name?: string; cpf?: string | null; city?: string | null },
 ): Promise<{ error: string | null }> {
   const { error } = await (supabase.from('profiles') as any).update(fields).eq('id', profileId);
   return { error: error ? (error as Error).message : null };
@@ -1544,6 +1731,8 @@ export async function saveWorkerProfileFields(
     cpf?: string | null;
     age?: number | null;
     experience_years?: number | null;
+    city?: string | null;
+    has_own_vehicle?: boolean;
     bank_code?: string | null;
     bank_agency?: string | null;
     bank_account?: string | null;
@@ -1668,6 +1857,53 @@ export async function fetchDependentsByUser(userId: string): Promise<any[]> {
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
   return data || [];
+}
+
+export interface DependentAdminRow {
+  id: string;
+  userId: string;
+  responsavelNome: string;
+  responsavelAvatarUrl: string | null;
+  nome: string;
+  age: number | null;
+  gender: string | null;
+  status: 'pending' | 'validated';
+  documentUrl: string | null;
+  createdAt: string;
+}
+
+/** Fetches ALL dependents across all users for admin validation view. */
+export async function fetchAllDependents(): Promise<DependentAdminRow[]> {
+  if (!isSupabaseConfigured) return [];
+  const { data, error } = await (supabase as any)
+    .from('dependents')
+    .select('id, user_id, full_name, age, gender, status, document_url, created_at')
+    .order('created_at', { ascending: false })
+    .limit(500);
+  if (error || !data || data.length === 0) return [];
+
+  const userIds: string[] = [...new Set<string>(data.map((d: any) => d.user_id as string))];
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('id, full_name, avatar_url')
+    .in('id', userIds);
+  const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p]));
+
+  return data.map((d: any) => {
+    const p = profileMap.get(d.user_id) as any;
+    return {
+      id: d.id as string,
+      userId: d.user_id as string,
+      responsavelNome: p?.full_name ?? 'Responsável',
+      responsavelAvatarUrl: p?.avatar_url ?? null,
+      nome: d.full_name ?? 'Sem nome',
+      age: typeof d.age === 'number' ? d.age : null,
+      gender: d.gender ?? null,
+      status: (d.status ?? 'pending') as 'pending' | 'validated',
+      documentUrl: d.document_url ?? null,
+      createdAt: d.created_at ?? '',
+    };
+  });
 }
 
 // ── Excursion status management ─────────────────────────────────────
@@ -2230,4 +2466,289 @@ export async function createShipmentTripDirect(
  */
 export async function recalculateTripStops(tripId: string): Promise<void> {
   await sb.rpc('generate_trip_stops', { p_trip_id: tripId });
+}
+
+// ── Worker Routes (admin CRUD) ──────────────────────────────────────────
+
+export async function createWorkerRoute(
+  workerId: string,
+  data: {
+    origin: string;
+    destination: string;
+    priceCents: number;
+    originLat?: number | null;
+    originLng?: number | null;
+    destinationLat?: number | null;
+    destinationLng?: number | null;
+  },
+): Promise<{ error: string | null }> {
+  const { error } = await (supabase as any).from('worker_routes').insert({
+    worker_id: workerId,
+    origin_address: data.origin,
+    destination_address: data.destination,
+    price_per_person_cents: data.priceCents,
+    is_active: true,
+    ...(data.originLat != null && data.originLng != null
+      ? { origin_lat: data.originLat, origin_lng: data.originLng }
+      : {}),
+    ...(data.destinationLat != null && data.destinationLng != null
+      ? { destination_lat: data.destinationLat, destination_lng: data.destinationLng }
+      : {}),
+  });
+  return { error: error?.message ?? null };
+}
+
+export async function toggleWorkerRouteActive(routeId: string, isActive: boolean): Promise<void> {
+  await (supabase as any).from('worker_routes').update({ is_active: isActive }).eq('id', routeId);
+}
+
+export async function deleteWorkerRoute(routeId: string): Promise<void> {
+  await (supabase as any).from('worker_routes').delete().eq('id', routeId);
+}
+
+// ── Pending Counts (for HomeScreen dashboard) ────────────────────────
+
+export interface PendingCounts {
+  pendingWorkers: number;
+  pendingDependents: number;
+  pendingPayouts: number;
+}
+
+export async function fetchPendingCounts(): Promise<PendingCounts> {
+  const [wRes, dRes, pRes] = await Promise.all([
+    sb.from('worker_profiles').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+    (supabase as any).from('dependents').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+    sb.from('payouts').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+  ]);
+  return {
+    pendingWorkers: (wRes as any).count ?? 0,
+    pendingDependents: (dRes as any).count ?? 0,
+    pendingPayouts: (pRes as any).count ?? 0,
+  };
+}
+
+// ── Notifications (admin management) ─────────────────────────────────
+
+export interface NotificationAdminRow {
+  id: string;
+  userId: string;
+  userName: string;
+  title: string;
+  message: string | null;
+  category: string | null;
+  readAt: string | null;
+  createdAt: string;
+}
+
+export async function fetchAllNotifications(): Promise<NotificationAdminRow[]> {
+  const { data, error } = await (supabase as any)
+    .from('notifications')
+    .select('id, user_id, title, message, category, read_at, created_at')
+    .order('created_at', { ascending: false })
+    .limit(200);
+
+  if (error || !data) return [];
+
+  const userIds = [...new Set((data as any[]).map((n: any) => n.user_id).filter(Boolean))] as string[];
+  const nameMap: Record<string, string> = {};
+  if (userIds.length > 0) {
+    const { data: profiles } = await supabase.from('profiles').select('id, full_name').in('id', userIds);
+    (profiles || []).forEach((p: any) => { nameMap[p.id] = p.full_name || 'Sem nome'; });
+  }
+
+  return (data as any[]).map((n: any) => ({
+    id: n.id,
+    userId: n.user_id,
+    userName: nameMap[n.user_id] || 'Sem nome',
+    title: n.title,
+    message: n.message,
+    category: n.category,
+    readAt: n.read_at,
+    createdAt: fmtDate(n.created_at),
+  }));
+}
+
+export async function createNotificationForUser(userId: string, title: string, message: string, category?: string): Promise<{ error: string | null }> {
+  const { error } = await (supabase as any).from('notifications').insert({
+    user_id: userId,
+    title,
+    message,
+    category: category || null,
+  });
+  return { error: error?.message ?? null };
+}
+
+export async function createNotificationBroadcast(title: string, message: string, category?: string): Promise<{ count: number; error: string | null }> {
+  // Fetch all active user IDs (non-workers — passengers)
+  const { data: profiles } = await supabase.from('profiles').select('id').limit(1000);
+  if (!profiles || profiles.length === 0) return { count: 0, error: null };
+
+  const rows = profiles.map((p: any) => ({
+    user_id: p.id,
+    title,
+    message,
+    category: category || 'broadcast',
+  }));
+
+  const { error } = await (supabase as any).from('notifications').insert(rows);
+  return { count: rows.length, error: error?.message ?? null };
+}
+
+export async function deleteNotification(notifId: string): Promise<void> {
+  await (supabase as any).from('notifications').delete().eq('id', notifId);
+}
+
+// ── Enhanced Ratings (admin moderation) ──────────────────────────────
+
+export async function deleteRating(table: 'booking_ratings' | 'shipment_ratings', ratingId: string): Promise<void> {
+  await (supabase as any).from(table).delete().eq('id', ratingId);
+}
+
+export async function fetchAllRatingsEnhanced(): Promise<(RatingListItem & { table: string; ratingId: string })[]> {
+  const [bRes, sRes] = await Promise.all([
+    supabase.from('booking_ratings').select('id, booking_id, rating, comment, created_at, user_id').order('created_at', { ascending: false }).limit(100),
+    supabase.from('shipment_ratings').select('id, shipment_id, rating, comment, created_at, user_id').order('created_at', { ascending: false }).limit(100),
+  ]);
+
+  const all = [
+    ...((bRes.data || []) as any[]).map((r: any) => ({ ...r, entityType: 'Viagem', table: 'booking_ratings' })),
+    ...((sRes.data || []) as any[]).map((r: any) => ({ ...r, entityType: 'Encomenda', table: 'shipment_ratings' })),
+  ];
+
+  const userIds = [...new Set(all.map((r) => r.user_id).filter(Boolean))];
+  const nameMap: Record<string, string> = {};
+  if (userIds.length > 0) {
+    const { data: profiles } = await supabase.from('profiles').select('id, full_name').in('id', userIds);
+    (profiles || []).forEach((p: any) => { nameMap[p.id] = p.full_name || 'Anônimo'; });
+  }
+
+  return all
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .map((r) => ({
+      id: r.id,
+      ratingId: r.id,
+      table: r.table,
+      workerName: '—',
+      ratedByName: nameMap[r.user_id] || 'Anônimo',
+      entityType: r.entityType,
+      rating: r.rating,
+      comment: r.comment || '',
+      createdAt: fmtDate(r.created_at),
+    }));
+}
+
+// ── Analytics Dashboard ─────────────────────────────────────────────────
+
+export interface AnalyticsData {
+  totalRevenueCents: number;
+  revenueByMonth: { month: string; revenue: number }[];
+  tripsByMonth: { month: string; count: number }[];
+  tripsByStatus: { status: string; count: number }[];
+  totalUsers: number;
+  newUsersByMonth: { month: string; count: number }[];
+  totalDrivers: number;
+  driversByStatus: { status: string; count: number }[];
+  totalShipments: number;
+  shipmentsByMonth: { month: string; count: number }[];
+  avgRating: number;
+  totalRatings: number;
+}
+
+export async function fetchAnalyticsData(): Promise<AnalyticsData> {
+  if (!isSupabaseConfigured) {
+    return {
+      totalRevenueCents: 0, revenueByMonth: [], tripsByMonth: [], tripsByStatus: [],
+      totalUsers: 0, newUsersByMonth: [], totalDrivers: 0, driversByStatus: [],
+      totalShipments: 0, shipmentsByMonth: [], avgRating: 0, totalRatings: 0,
+    };
+  }
+
+  const [bookingsRes, profilesRes, workersRes, shipmentsRes, bRatingsRes, sRatingsRes] = await Promise.all([
+    sb.from('bookings').select('id, status, amount_cents, created_at'),
+    supabase.from('profiles').select('id, created_at'),
+    sb.from('worker_profiles').select('id, status, created_at'),
+    sb.from('shipments').select('id, status, created_at'),
+    sb.from('booking_ratings').select('id, rating, created_at'),
+    sb.from('shipment_ratings').select('id, rating, created_at'),
+  ]);
+
+  const bookings: any[] = bookingsRes.data || [];
+  const profiles: any[] = profilesRes.data || [];
+  const workers: any[] = workersRes.data || [];
+  const shipments: any[] = shipmentsRes.data || [];
+  const bRatings: any[] = bRatingsRes.data || [];
+  const sRatings: any[] = sRatingsRes.data || [];
+
+  // Revenue
+  const totalRevenueCents = bookings.reduce((s: number, b: any) => s + (b.amount_cents || 0), 0);
+  const revenueByMonthMap: Record<string, number> = {};
+  bookings.forEach((b: any) => {
+    if (!b.created_at) return;
+    const m = b.created_at.slice(0, 7);
+    revenueByMonthMap[m] = (revenueByMonthMap[m] || 0) + (b.amount_cents || 0);
+  });
+  const revenueByMonth = Object.entries(revenueByMonthMap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-12)
+    .map(([month, revenue]) => ({ month, revenue }));
+
+  // Trips by month
+  const tripsByMonthMap: Record<string, number> = {};
+  bookings.forEach((b: any) => {
+    if (!b.created_at) return;
+    const m = b.created_at.slice(0, 7);
+    tripsByMonthMap[m] = (tripsByMonthMap[m] || 0) + 1;
+  });
+  const tripsByMonth = Object.entries(tripsByMonthMap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-12)
+    .map(([month, count]) => ({ month, count }));
+
+  // Trips by status
+  const tripStatusMap: Record<string, number> = {};
+  bookings.forEach((b: any) => { tripStatusMap[b.status || 'unknown'] = (tripStatusMap[b.status || 'unknown'] || 0) + 1; });
+  const tripsByStatus = Object.entries(tripStatusMap).map(([status, count]) => ({ status, count }));
+
+  // Users
+  const totalUsers = profiles.length;
+  const newUsersByMonthMap: Record<string, number> = {};
+  profiles.forEach((p: any) => {
+    if (!p.created_at) return;
+    const m = p.created_at.slice(0, 7);
+    newUsersByMonthMap[m] = (newUsersByMonthMap[m] || 0) + 1;
+  });
+  const newUsersByMonth = Object.entries(newUsersByMonthMap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-12)
+    .map(([month, count]) => ({ month, count }));
+
+  // Drivers
+  const totalDrivers = workers.length;
+  const driverStatusMap: Record<string, number> = {};
+  workers.forEach((w: any) => { driverStatusMap[w.status || 'unknown'] = (driverStatusMap[w.status || 'unknown'] || 0) + 1; });
+  const driversByStatus = Object.entries(driverStatusMap).map(([status, count]) => ({ status, count }));
+
+  // Shipments
+  const totalShipments = shipments.length;
+  const shipmentsByMonthMap: Record<string, number> = {};
+  shipments.forEach((s: any) => {
+    if (!s.created_at) return;
+    const m = s.created_at.slice(0, 7);
+    shipmentsByMonthMap[m] = (shipmentsByMonthMap[m] || 0) + 1;
+  });
+  const shipmentsByMonth = Object.entries(shipmentsByMonthMap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-12)
+    .map(([month, count]) => ({ month, count }));
+
+  // Ratings
+  const allRatings = [...bRatings, ...sRatings];
+  const totalRatings = allRatings.length;
+  const avgRating = totalRatings > 0 ? allRatings.reduce((s: number, r: any) => s + r.rating, 0) / totalRatings : 0;
+
+  return {
+    totalRevenueCents, revenueByMonth, tripsByMonth, tripsByStatus,
+    totalUsers, newUsersByMonth, totalDrivers, driversByStatus,
+    totalShipments, shipmentsByMonth, avgRating, totalRatings,
+  };
 }

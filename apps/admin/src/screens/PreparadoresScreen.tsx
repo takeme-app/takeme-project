@@ -7,7 +7,6 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
-  searchIconSvg,
   filterIconSvg,
 } from '../styles/webStyles';
 import { fetchPreparadores } from '../data/queries';
@@ -30,8 +29,8 @@ const calendarSvgLg = React.createElement('svg', { width: 20, height: 20, viewBo
 const closeModalSvg = React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
 
-type FiltroStatusChip = 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas';
-type FiltroPeriodo = 'semana' | 'mes' | 'ano';
+type FiltroStatusChip = 'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas';
+type FiltroPeriodo = 'todos' | 'semana' | 'mes' | 'ano';
 type FiltroCategoria = 'todos' | 'takeme' | 'parceiro';
 
 // Avatar colors
@@ -45,12 +44,13 @@ type PrepRow = {
   origem: string;
   destino: string;
   dataInicio: string;
+  rawDate: string; // ISO date for filtering (YYYY-MM-DD)
   previsao: string;
   avaliacao: number;
   status: 'Em andamento' | 'Agendado' | 'Cancelado' | 'Concluído';
 };
 
-const statusChipParaRow: Record<FiltroStatusChip, PrepRow['status']> = {
+const statusChipParaRow: Record<Exclude<FiltroStatusChip, 'todos'>, PrepRow['status']> = {
   em_andamento: 'Em andamento',
   agendadas: 'Agendado',
   concluidas: 'Concluído',
@@ -95,16 +95,6 @@ const s = {
     width: '100%', background: '#f6f6f6', borderRadius: 16, padding: 24,
     display: 'flex', flexDirection: 'column' as const, gap: 16, boxSizing: 'border-box' as const,
   } as React.CSSProperties,
-  donutWrap: {
-    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 40, flexWrap: 'wrap' as const,
-  } as React.CSSProperties,
-  donut: {
-    width: 200, height: 200, borderRadius: '50%', position: 'relative' as const, flexShrink: 0,
-  } as React.CSSProperties,
-  donutHole: {
-    position: 'absolute' as const, top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-    width: 100, height: 100, borderRadius: '50%', background: '#f6f6f6',
-  } as React.CSSProperties,
 };
 
 const chipFiltro = (label: string, selecionado: boolean, onClick: () => void) =>
@@ -129,22 +119,23 @@ const chipFiltro = (label: string, selecionado: boolean, onClick: () => void) =>
 
 export default function PreparadoresScreen() {
   const navigate = useNavigate();
+  const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } = require('recharts');
+
   const [viewportW, setViewportW] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1200));
   const [activeTab, setActiveTab] = useState<'encomendas' | 'excursoes'>('encomendas');
-  const [search, setSearch] = useState('');
   // ── Filtro da página (Figma 898-22995) ──────────────────────────────
   const [filtroPaginaOpen, setFiltroPaginaOpen] = useState(false);
-  const [appliedPeriodoPagina, setAppliedPeriodoPagina] = useState<FiltroPeriodo>('semana');
-  const [appliedDataInicialPagina, setAppliedDataInicialPagina] = useState('05 de setembro-2025');
-  const [appliedDataFinalPagina, setAppliedDataFinalPagina] = useState('31 de setembro');
-  const [appliedStatusPagina, setAppliedStatusPagina] = useState<FiltroStatusChip>('em_andamento');
-  const [draftPeriodoPagina, setDraftPeriodoPagina] = useState<FiltroPeriodo>('semana');
-  const [draftDataInicialPagina, setDraftDataInicialPagina] = useState('05 de setembro-2025');
-  const [draftDataFinalPagina, setDraftDataFinalPagina] = useState('31 de setembro');
-  const [draftStatusPagina, setDraftStatusPagina] = useState<FiltroStatusChip>('em_andamento');
+  const [appliedPeriodoPagina, setAppliedPeriodoPagina] = useState<FiltroPeriodo>('todos');
+  const [appliedDataInicialPagina, setAppliedDataInicialPagina] = useState('');
+  const [appliedDataFinalPagina, setAppliedDataFinalPagina] = useState('');
+  const [appliedStatusPagina, setAppliedStatusPagina] = useState<FiltroStatusChip>('todos');
+  const [draftPeriodoPagina, setDraftPeriodoPagina] = useState<FiltroPeriodo>('todos');
+  const [draftDataInicialPagina, setDraftDataInicialPagina] = useState('');
+  const [draftDataFinalPagina, setDraftDataFinalPagina] = useState('');
+  const [draftStatusPagina, setDraftStatusPagina] = useState<FiltroStatusChip>('todos');
   // ── Filtro da tabela (Figma 1280-35489) ─────────────────────────────
   const [filtroTabelaOpen, setFiltroTabelaOpen] = useState(false);
-  const [appliedStatusTabela, setAppliedStatusTabela] = useState<FiltroStatusChip>('em_andamento');
+  const [appliedStatusTabela, setAppliedStatusTabela] = useState<FiltroStatusChip>('todos');
   const [appliedNomeModal, setAppliedNomeModal] = useState('');
   const [appliedOrigemModal, setAppliedOrigemModal] = useState('');
   const [appliedDestinoModal, setAppliedDestinoModal] = useState('');
@@ -152,7 +143,7 @@ export default function PreparadoresScreen() {
   const [appliedHoraChegada, setAppliedHoraChegada] = useState('');
   const [appliedDataInicialTabela, setAppliedDataInicialTabela] = useState('');
   const [appliedCategoria, setAppliedCategoria] = useState<FiltroCategoria>('todos');
-  const [draftStatusTabela, setDraftStatusTabela] = useState<FiltroStatusChip>('em_andamento');
+  const [draftStatusTabela, setDraftStatusTabela] = useState<FiltroStatusChip>('todos');
   const [draftNomeModal, setDraftNomeModal] = useState('');
   const [draftOrigemModal, setDraftOrigemModal] = useState('');
   const [draftDestinoModal, setDraftDestinoModal] = useState('');
@@ -239,71 +230,86 @@ export default function PreparadoresScreen() {
     return () => { cancelled = true; };
   }, []);
 
-  const tableRows: PrepRow[] = preparadoresData.map((p) => ({
+  const tableRows: PrepRow[] = useMemo(() => preparadoresData.map((p) => ({
     id: p.id,
     nome: p.nome,
     origem: p.origem,
     destino: p.destino,
     dataInicio: p.dataInicio,
+    rawDate: p.rawDate ?? '',
     previsao: p.previsao,
     avaliacao: p.avaliacao ?? 0,
     status: p.status,
-  }));
+  })), [preparadoresData]);
 
+  // ── filteredData: base for KPIs and chart ───────────────────────────
+  const filteredData = useMemo(() => {
+    return tableRows.filter((r) => {
+      if (appliedStatusPagina !== 'todos') {
+        const expected = statusChipParaRow[appliedStatusPagina as Exclude<FiltroStatusChip, 'todos'>];
+        if (r.status !== expected) return false;
+      }
+      if (appliedDataInicialPagina && r.rawDate && r.rawDate < appliedDataInicialPagina) return false;
+      if (appliedDataFinalPagina && r.rawDate && r.rawDate > appliedDataFinalPagina) return false;
+      return true;
+    });
+  }, [tableRows, appliedStatusPagina, appliedDataInicialPagina, appliedDataFinalPagina]);
+
+  // ── tableRowsFiltered ───────────────────────────────────────────────
   const tableRowsFiltered = useMemo(() => {
-    const alvoStatus = statusChipParaRow[appliedStatusTabela];
-    let rows = tableRows.filter((r) => r.status === alvoStatus);
-    const q = search.trim().toLowerCase();
-    if (q) {
-      rows = rows.filter((r) =>
-        r.nome.toLowerCase().includes(q)
-        || r.origem.toLowerCase().includes(q)
-        || r.destino.toLowerCase().includes(q));
+    let rows = [...filteredData];
+    // Table filter: status (overrides page filter if set)
+    if (appliedStatusTabela !== 'todos') {
+      rows = rows.filter((r) => r.status === statusChipParaRow[appliedStatusTabela as Exclude<FiltroStatusChip, 'todos'>]);
     }
-    const diPag = appliedDataInicialPagina.trim().toLowerCase();
-    if (diPag) {
-      rows = rows.filter((r) =>
-        r.dataInicio.toLowerCase().includes(diPag)
-        || r.previsao.toLowerCase().includes(diPag));
-    }
-    const dfPag = appliedDataFinalPagina.trim().toLowerCase();
-    if (dfPag) {
-      rows = rows.filter((r) =>
-        r.dataInicio.toLowerCase().includes(dfPag)
-        || r.previsao.toLowerCase().includes(dfPag));
-    }
+    // Table filter: text fields
     const n = appliedNomeModal.trim().toLowerCase();
     if (n) rows = rows.filter((r) => r.nome.toLowerCase().includes(n));
     const o = appliedOrigemModal.trim().toLowerCase();
     if (o) rows = rows.filter((r) => r.origem.toLowerCase().includes(o));
     const d = appliedDestinoModal.trim().toLowerCase();
     if (d) rows = rows.filter((r) => r.destino.toLowerCase().includes(d));
-    const he = appliedHoraEmbarque.trim().toLowerCase();
-    if (he) rows = rows.filter((r) => r.dataInicio.toLowerCase().includes(he));
-    const hc = appliedHoraChegada.trim().toLowerCase();
-    if (hc) rows = rows.filter((r) => r.previsao.toLowerCase().includes(hc));
-    const diTab = appliedDataInicialTabela.trim().toLowerCase();
-    if (diTab) {
-      rows = rows.filter((r) =>
-        r.dataInicio.toLowerCase().includes(diTab)
-        || r.previsao.toLowerCase().includes(diTab));
-    }
+    const diTab = appliedDataInicialTabela.trim();
+    if (diTab) rows = rows.filter((r) => !r.rawDate || r.rawDate >= diTab);
     return rows;
-  }, [tableRows, appliedStatusTabela, search, appliedDataInicialPagina, appliedDataFinalPagina, appliedNomeModal, appliedOrigemModal, appliedDestinoModal, appliedHoraEmbarque, appliedHoraChegada, appliedDataInicialTabela]);
+  }, [filteredData, appliedStatusTabela, appliedNomeModal, appliedOrigemModal, appliedDestinoModal, appliedDataInicialTabela]);
 
-  const emAndamento = preparadoresData.filter((p) => p.status === 'Em andamento').length;
+  // ── KPIs from filteredData ──────────────────────────────────────────
   const isExcursoes = activeTab === 'excursoes';
+  const emAndamento = filteredData.filter((p) => p.status === 'Em andamento').length;
+  const avgRating = filteredData.length > 0
+    ? (filteredData.reduce((s, p) => s + (p.avaliacao ?? 0), 0) / filteredData.length).toFixed(1)
+    : '—';
   const metrics = isExcursoes
     ? [
-        { title: 'Total de preparadores ativos', value: String(preparadoresData.length || 41), pct: '+6%', desc: 'vs semana anterior' },
-        { title: 'Excursões em andamento', value: String(emAndamento || 17), pct: '+9%', desc: 'vs semana anterior' },
-        { title: 'Avaliação média geral', value: preparadoresData.length ? (preparadoresData.reduce((s, p) => s + (p.avaliacao ?? 0), 0) / (preparadoresData.length || 1)).toFixed(1) : '4.9', pct: '+4%', desc: 'vs semana anterior' },
+        { title: 'Total de preparadores ativos', value: String(filteredData.length) },
+        { title: 'Excursões em andamento', value: String(emAndamento) },
+        { title: 'Avaliação média geral', value: avgRating },
       ]
     : [
-        { title: 'Total de preparadores ativos', value: String(preparadoresData.length || 47), pct: '+8%', desc: 'vs semana anterior' },
-        { title: 'Encomendas em andamento', value: String(emAndamento || 23), pct: '+12%', desc: 'vs semana anterior' },
-        { title: 'Avaliação média geral', value: preparadoresData.length ? (preparadoresData.reduce((s, p) => s + (p.avaliacao ?? 0), 0) / (preparadoresData.length || 1)).toFixed(1) : '4.8', pct: '+3%', desc: 'vs semana anterior' },
+        { title: 'Total de preparadores ativos', value: String(filteredData.length) },
+        { title: 'Encomendas em andamento', value: String(emAndamento) },
+        { title: 'Avaliação média geral', value: avgRating },
       ];
+
+  // ── Recharts data ───────────────────────────────────────────────────
+  const statusCounts = useMemo(() => {
+    const c = { emAndamento: 0, agendado: 0, concluido: 0, cancelado: 0 };
+    filteredData.forEach((p) => {
+      if (p.status === 'Em andamento') c.emAndamento++;
+      else if (p.status === 'Agendado') c.agendado++;
+      else if (p.status === 'Concluído') c.concluido++;
+      else if (p.status === 'Cancelado') c.cancelado++;
+    });
+    return c;
+  }, [filteredData]);
+
+  const pieData = useMemo(() => [
+    { name: 'Em andamento', value: statusCounts.emAndamento, color: '#cba04b' },
+    { name: 'Agendado', value: statusCounts.agendado, color: '#016df9' },
+    { name: 'Concluído', value: statusCounts.concluido, color: '#0d8344' },
+    { name: 'Cancelado', value: statusCounts.cancelado, color: '#d64545' },
+  ].filter((d) => d.value > 0), [statusCounts]);
 
   // ── Tabs ──────────────────────────────────────────────────────────────
   const tabs = React.createElement('div', { style: s.tabsRow },
@@ -319,22 +325,10 @@ export default function PreparadoresScreen() {
     style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font },
   }, activeTab === 'encomendas' ? 'Preparador de encomendas' : 'Preparador de excursões');
 
-  // ── Search row ────────────────────────────────────────────────────────
+  // ── Search row (Filtro button only, aligned right) ────────────────────
   const searchRow = React.createElement('div', {
-    style: { display: 'flex', alignItems: 'center', gap: 12, width: '100%' },
+    style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, width: '100%' },
   },
-    React.createElement('div', {
-      style: {
-        flex: 1, display: 'flex', alignItems: 'center', gap: 8,
-        background: '#f1f1f1', borderRadius: 999, height: 44, paddingLeft: 16, paddingRight: 16,
-      },
-    },
-      searchIconSvg,
-      React.createElement('input', {
-        type: 'text', value: search, placeholder: 'Buscar por preparador, destino ou origem...',
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value),
-        style: { flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 14, color: '#0d0d0d', ...font },
-      })),
     React.createElement('button', {
       type: 'button',
       onClick: abrirFiltroPagina,
@@ -344,7 +338,7 @@ export default function PreparadoresScreen() {
         background: '#f1f1f1', border: 'none', borderRadius: 999,
         fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
       },
-    }, filterIconSvg, 'Filtro'));
+    }, filterIconSvg, 'Filtros'));
 
   // ── Metrics ───────────────────────────────────────────────────────────
   const metricCards = React.createElement('div', {
@@ -353,25 +347,33 @@ export default function PreparadoresScreen() {
     ...metrics.map((m) =>
       React.createElement('div', { key: m.title, style: s.metricCard },
         React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, m.title),
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
-          React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, m.pct),
-          React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, m.desc)),
         React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, m.value))));
 
-  // ── Donut chart ───────────────────────────────────────────────────────
-  const donutGradient = 'conic-gradient(#767676 0% 65%, #cba04b 65% 100%)';
+  // ── Recharts PieChart ─────────────────────────────────────────────────
   const chartSection = React.createElement('div', { style: s.chartCard },
-    React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Distribuição por tipo de preparo'),
-    React.createElement('div', { style: s.donutWrap },
-      React.createElement('div', { style: { ...s.donut, background: donutGradient } },
-        React.createElement('div', { style: s.donutHole })),
-      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-          React.createElement('div', { style: { width: 16, height: 16, borderRadius: '50%', background: '#767676' } }),
-          React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Encomendas 65%')),
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-          React.createElement('div', { style: { width: 16, height: 16, borderRadius: '50%', background: '#cba04b' } }),
-          React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#cba04b', ...font } }, 'Excursões 35%')))));
+    React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Distribuição por status'),
+    React.createElement(ResponsiveContainer, { width: '100%', height: 220 },
+      React.createElement(PieChart, null,
+        React.createElement(Pie, {
+          data: pieData,
+          dataKey: 'value',
+          innerRadius: 60,
+          outerRadius: 100,
+          paddingAngle: pieData.length > 1 ? 2 : 0,
+        },
+          ...pieData.map((entry: { name: string; value: number; color: string }) =>
+            React.createElement(Cell, { key: entry.name, fill: entry.color }))),
+        React.createElement(Tooltip, null))),
+    React.createElement('div', {
+      style: { display: 'flex', flexWrap: 'wrap' as const, gap: 12, justifyContent: 'center' },
+    },
+      ...pieData.map((entry: { name: string; value: number; color: string }) =>
+        React.createElement('div', {
+          key: entry.name,
+          style: { display: 'flex', alignItems: 'center', gap: 6 },
+        },
+          React.createElement('div', { style: { width: 12, height: 12, borderRadius: '50%', background: entry.color, flexShrink: 0 } }),
+          React.createElement('span', { style: { fontSize: 13, color: '#0d0d0d', ...font } }, `${entry.name} (${entry.value})`)))));
 
   // ── Table ─────────────────────────────────────────────────────────────
   const cellBase: React.CSSProperties = {
@@ -604,10 +606,10 @@ export default function PreparadoresScreen() {
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, borderRadius: 8, background: '#f1f1f1', paddingLeft: 16, overflow: 'hidden', width: '100%', boxSizing: 'border-box' as const } },
         calendarSvgLg,
         React.createElement('input', {
-          type: 'text',
+          type: 'date',
           value: valor,
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
-          placeholder: '01 de setembro',
+          placeholder: '',
           style: { ...inputTabelaStyle, color: valor ? '#0d0d0d' : '#767676' },
         })));
 
@@ -619,10 +621,9 @@ export default function PreparadoresScreen() {
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', height: 44, borderRadius: 8, background: '#f1f1f1', paddingLeft: 16, overflow: 'hidden', width: '100%', boxSizing: 'border-box' as const } },
         calendarSvgLg,
         React.createElement('input', {
-          type: 'text',
+          type: 'date',
           value: valor,
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
-          placeholder: rotulo,
           style: { ...inputTabelaStyle, color: valor ? '#0d0d0d' : '#767676' },
         })));
 
@@ -686,12 +687,14 @@ export default function PreparadoresScreen() {
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
           React.createElement('span', { style: tituloSecaoModal18 }, 'Período'),
           React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
+            chipFiltro('Todos', draftPeriodoPagina === 'todos', () => setDraftPeriodoPagina('todos')),
             chipFiltro('Esta semana', draftPeriodoPagina === 'semana', () => setDraftPeriodoPagina('semana')),
             chipFiltro('Este mês', draftPeriodoPagina === 'mes', () => setDraftPeriodoPagina('mes')),
             chipFiltro('Este ano', draftPeriodoPagina === 'ano', () => setDraftPeriodoPagina('ano')))),
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
           React.createElement('span', { style: tituloSecaoModal18 }, 'Status'),
           React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
+            chipFiltro('Todos', draftStatusPagina === 'todos', () => setDraftStatusPagina('todos')),
             chipFiltro('Em andamento', draftStatusPagina === 'em_andamento', () => setDraftStatusPagina('em_andamento')),
             chipFiltro('Agendadas', draftStatusPagina === 'agendadas', () => setDraftStatusPagina('agendadas')),
             chipFiltro('Concluídas', draftStatusPagina === 'concluidas', () => setDraftStatusPagina('concluidas')),
@@ -707,12 +710,12 @@ export default function PreparadoresScreen() {
           }, 'Aplicar filtro'),
           React.createElement('button', {
             type: 'button',
-            onClick: fecharFiltroPagina,
+            onClick: () => { setDraftPeriodoPagina('todos'); setDraftDataInicialPagina(''); setDraftDataFinalPagina(''); setDraftStatusPagina('todos'); },
             style: {
-              width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'transparent', color: '#0d0d0d',
+              width: '100%', height: 48, borderRadius: 8, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838',
               fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font,
             },
-          }, 'Voltar'))))
+          }, 'Redefinir filtros'))))
     : null;
 
   const filtroTabelaModal = filtroTabelaOpen
@@ -766,6 +769,7 @@ export default function PreparadoresScreen() {
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, paddingLeft: 24, paddingRight: 24, width: '100%', boxSizing: 'border-box' as const } },
           React.createElement('span', { style: tituloSecaoModal18 }, isExcursoes ? 'Status da viagem' : 'Status da encomenda'),
           React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, alignItems: 'center' } },
+            chipFiltro('Todos', draftStatusTabela === 'todos', () => setDraftStatusTabela('todos')),
             chipFiltro('Em andamento', draftStatusTabela === 'em_andamento', () => setDraftStatusTabela('em_andamento')),
             chipFiltro('Agendadas', draftStatusTabela === 'agendadas', () => setDraftStatusTabela('agendadas')),
             chipFiltro('Concluídas', draftStatusTabela === 'concluidas', () => setDraftStatusTabela('concluidas')),
@@ -787,12 +791,12 @@ export default function PreparadoresScreen() {
           }, 'Aplicar filtro'),
           React.createElement('button', {
             type: 'button',
-            onClick: fecharFiltroTabela,
+            onClick: () => { setDraftStatusTabela('todos'); setDraftNomeModal(''); setDraftOrigemModal(''); setDraftDestinoModal(''); setDraftHoraEmbarque(''); setDraftHoraChegada(''); setDraftDataInicialTabela(''); setDraftCategoria('todos'); },
             style: {
-              width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'transparent', color: '#0d0d0d',
+              width: '100%', height: 48, borderRadius: 8, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838',
               fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font,
             },
-          }, 'Voltar'))))
+          }, 'Redefinir filtros'))))
     : null;
 
   if (dataLoading) {

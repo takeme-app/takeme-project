@@ -30,6 +30,7 @@ import {
   type ViagemListFilter,
 } from '../data/queries';
 import type { ViagemListItem } from '../data/types';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 // SVG icons for view/edit actions (stroke-based, matching project icons)
 const eyeActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
@@ -53,11 +54,44 @@ export default function ViagensScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const load = async (showSpinner: boolean) => {
+      if (showSpinner) setDataLoading(true);
       const items = await fetchViagens();
-      if (!cancelled) { setViagens(items); setDataLoading(false); }
-    })();
-    return () => { cancelled = true; };
+      if (!cancelled) {
+        setViagens(items);
+        setDataLoading(false);
+      }
+    };
+    void load(true);
+
+    if (!isSupabaseConfigured) {
+      return () => { cancelled = true; };
+    }
+
+    const scheduleRefetch = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        void (async () => {
+          const items = await fetchViagens();
+          if (!cancelled) setViagens(items);
+        })();
+      }, 450);
+    };
+
+    const channel = supabase
+      .channel('admin-viagens-list')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, scheduleRefetch)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'scheduled_trips' }, scheduleRefetch)
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      void supabase.removeChannel(channel);
+    };
   }, []);
 
   // Search row filter modal (Figma 763-21823)
@@ -160,6 +194,14 @@ export default function ViagensScreen() {
   const viagensChartCard = React.createElement('div', { style: webStyles.viagensChartCard },
     React.createElement('h3', { style: webStyles.chartCardTitle }, 'Distribuição de viagens por status'),
     React.createElement('p', { style: webStyles.chartCardDesc }, 'Dados consolidados com base no período selecionado'),
+    React.createElement('p', {
+      style: {
+        ...webStyles.chartCardDesc,
+        fontSize: 12,
+        marginTop: 4,
+        color: '#767676',
+      },
+    }, 'Esta página reage a alterações em reservas e viagens (tempo quase real). Ida e volta: duas reservas, um trecho cada.'),
     React.createElement('div', { style: { display: 'flex', gap: 72, alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' as const } },
       // Recharts PieChart (260px conforme Figma)
       React.createElement('div', { style: { width: 260, height: 260, flexShrink: 0 } },

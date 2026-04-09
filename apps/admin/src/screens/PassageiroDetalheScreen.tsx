@@ -174,7 +174,7 @@ export default function PassageiroDetalheScreen() {
       }
     : undefined);
 
-  const [activeTab, setActiveTab] = useState<'dados' | 'historico'>('dados');
+  const [activeTab, setActiveTab] = useState<'dados' | 'dependentes' | 'pagamentos' | 'historico'>('dados');
   const isVerified = detailLoad ? detailLoad.status === 'Ativo' : passageiro?.status === 'Verificado';
   const [verifying, setVerifying] = useState(false);
   const [dependents, setDependents] = useState<any[]>([]);
@@ -303,6 +303,12 @@ export default function PassageiroDetalheScreen() {
       type: 'button', onClick: () => setActiveTab('dados'), style: s.tab(activeTab === 'dados'),
     }, 'Dados pessoais'),
     React.createElement('button', {
+      type: 'button', onClick: () => setActiveTab('dependentes'), style: s.tab(activeTab === 'dependentes'),
+    }, dependents.length > 0 ? `Dependentes (${dependents.length})` : 'Dependentes'),
+    React.createElement('button', {
+      type: 'button', onClick: () => setActiveTab('pagamentos'), style: s.tab(activeTab === 'pagamentos'),
+    }, 'Pagamentos'),
+    React.createElement('button', {
       type: 'button', onClick: () => setActiveTab('historico'), style: s.tab(activeTab === 'historico'),
     }, 'Histórico de atividades'));
 
@@ -330,54 +336,86 @@ export default function PassageiroDetalheScreen() {
           React.createElement('div', { style: s.fieldValue }, cidade)),
         React.createElement('div', { style: s.fieldGroup },
           React.createElement('label', { style: s.fieldLabel }, 'Estado'),
-          React.createElement('div', { style: s.fieldValue }, estado))),
-      // Separator
-      React.createElement('div', { style: { width: '100%', height: 1, background: '#e2e2e2' } }),
-      // Métodos de pagamento
-      React.createElement('h3', { style: s.subtitle }, 'Métodos de pagamento'),
-      paymentMethods.length === 0
-        ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhum método de pagamento cadastrado.')
-        : React.createElement('div', { style: s.paymentGrid },
-          ...paymentMethods.map((pm, i) =>
-            React.createElement('div', { key: i, style: s.paymentCard },
-              pm.icon,
-              React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const } },
-                React.createElement('span', { style: s.paymentName },
-                  pm.lastDigits ? `${pm.name} ${pm.type.toLowerCase()} ••••${pm.lastDigits}` : pm.name),
-                pm.type && pm.lastDigits
-                  ? React.createElement('span', { style: s.paymentDetails }, pm.type)
-                  : null)))),
-      // Add payment link
-      React.createElement('button', { type: 'button', style: s.addPaymentBtn, onClick: () => setPayModalOpen(true) }, plusSvg, 'Adicionar método de pagamento')));
+          React.createElement('div', { style: s.fieldValue }, estado)))));
 
-  // ── Dependents section (appended to dados tab) ──────────────────────
-  const dependentsSection = dependents.length > 0
-    ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, marginTop: 24 } },
-        React.createElement('h2', { style: s.sectionTitle }, 'Dependentes'),
-        ...dependents.map((dep: any, i: number) =>
-          React.createElement('div', {
-            key: dep.id || i,
-            style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: '#f6f6f6', borderRadius: 12, border: '1px solid #e2e2e2' },
-          },
-            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 2 } },
-              React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, dep.full_name),
-              React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, `Idade: ${dep.age || '—'} • Status: ${dep.status === 'validated' ? 'Validado' : 'Pendente'}`)),
-            dep.status !== 'validated'
-              ? React.createElement('button', {
-                  type: 'button',
-                  onClick: async () => {
-                    await updateDependentStatus(dep.id, 'validated');
-                    if (passageiroId) fetchDependentsByUser(passageiroId).then(setDependents);
-                  },
-                  style: { height: 32, padding: '0 14px', borderRadius: 999, border: 'none', background: '#22c55e', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font },
-                }, 'Validar')
-              : React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', padding: '4px 10px', borderRadius: 999, background: '#e8f5e9', ...font } }, '✓ Validado'))))
-    : null;
+  // ── Tab: Dependentes ──────────────────────────────────────────────────
+  const dependentesTab = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+    React.createElement('h2', { style: s.sectionTitle }, 'Dependentes'),
+    dependents.length === 0
+      ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhum dependente cadastrado para este passageiro.')
+      : null,
+    ...dependents.map((dep: any, i: number) =>
+      React.createElement('div', {
+        key: dep.id || i,
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', background: '#f6f6f6', borderRadius: 12, border: '1px solid #e2e2e2' },
+      },
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+          React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, dep.full_name),
+          React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } },
+            [dep.age ? `${dep.age} anos` : null, dep.gender || null].filter(Boolean).join(' • ') || '—'),
+          React.createElement('span', { style: { fontSize: 12, color: dep.status === 'validated' ? '#22c55e' : '#92400e', fontWeight: 600, ...font } },
+            dep.status === 'validated' ? 'Validado' : 'Pendente de validação')),
+        dep.status !== 'validated'
+          ? React.createElement('button', {
+              type: 'button',
+              onClick: async () => {
+                await updateDependentStatus(dep.id, 'validated');
+                if (passageiroId) fetchDependentsByUser(passageiroId).then(setDependents);
+              },
+              style: { height: 36, padding: '0 16px', borderRadius: 999, border: 'none', background: '#22c55e', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font },
+            }, 'Validar')
+          : React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', padding: '6px 12px', borderRadius: 999, background: '#e8f5e9', ...font } }, '✓ Validado'))));
 
-  // Append dependents to dados tab if present
-  if (dependentsSection) {
-    // We'll render it in the return alongside dadosTab
-  }
+  // ── Tab: Pagamentos ─────────────────────────────────────────────────
+  const recentPayments = useMemo(() => bookings.filter((b) => b.amountCents && b.amountCents > 0).slice(0, 15), [bookings]);
+  const totalPago = useMemo(() => recentPayments.reduce((sum, b) => sum + (b.amountCents || 0), 0), [recentPayments]);
+
+  const pagamentosTab = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24 } },
+    // Métodos de pagamento
+    React.createElement('h2', { style: s.sectionTitle }, 'Métodos de pagamento'),
+    paymentMethods.length === 0
+      ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhum método de pagamento cadastrado.')
+      : React.createElement('div', { style: s.paymentGrid },
+        ...paymentMethods.map((pm, i) =>
+          React.createElement('div', { key: i, style: s.paymentCard },
+            pm.icon,
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const } },
+              React.createElement('span', { style: s.paymentName },
+                pm.lastDigits ? `${pm.name} ${pm.type.toLowerCase()} ••••${pm.lastDigits}` : pm.name),
+              pm.type && pm.lastDigits
+                ? React.createElement('span', { style: s.paymentDetails }, pm.type)
+                : null)))),
+    React.createElement('button', { type: 'button', style: s.addPaymentBtn, onClick: () => setPayModalOpen(true) }, plusSvg, 'Adicionar método de pagamento'),
+
+    // Separator
+    React.createElement('div', { style: { width: '100%', height: 1, background: '#e2e2e2' } }),
+
+    // Histórico de pagamentos
+    React.createElement('h3', { style: s.subtitle }, 'Histórico de pagamentos'),
+    totalPago > 0
+      ? React.createElement('div', {
+          style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const, marginBottom: 8 },
+        },
+          React.createElement('div', { style: { flex: '1 1 200px', background: '#f6f6f6', borderRadius: 16, padding: '16px 20px', display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+            React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, 'Total gasto'),
+            React.createElement('span', { style: { fontSize: 28, fontWeight: 700, color: '#0d0d0d', ...font } }, `R$ ${(totalPago / 100).toFixed(2)}`)),
+          React.createElement('div', { style: { flex: '1 1 200px', background: '#f6f6f6', borderRadius: 16, padding: '16px 20px', display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+            React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, 'Viagens pagas'),
+            React.createElement('span', { style: { fontSize: 28, fontWeight: 700, color: '#0d0d0d', ...font } }, String(recentPayments.length))))
+      : null,
+    recentPayments.length === 0
+      ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhum pagamento registrado.')
+      : null,
+    ...recentPayments.map((b, idx) =>
+      React.createElement('div', {
+        key: idx,
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: '#f6f6f6', borderRadius: 12, border: '1px solid #e2e2e2' },
+      },
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 2, minWidth: 0, flex: 1 } },
+          React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, `${b.origem} → ${b.destino}`),
+          React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, `${b.data} · ${b.status}`)),
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font, flexShrink: 0 } },
+          `R$ ${((b.amountCents || 0) / 100).toFixed(2)}`))));
 
   // ── Tab: Histórico (Figma 802:24098 — blocos 1185:39674 + 1185:39705) ──
   const metricsSection = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' } },
@@ -612,6 +650,9 @@ export default function PassageiroDetalheScreen() {
     breadcrumb,
     headerRow,
     tabs,
-    activeTab === 'dados' ? React.createElement(React.Fragment, null, dadosTab, dependentsSection) : historicoTab,
+    activeTab === 'dados' ? dadosTab
+      : activeTab === 'dependentes' ? dependentesTab
+      : activeTab === 'pagamentos' ? pagamentosTab
+      : historicoTab,
     payModal);
 }

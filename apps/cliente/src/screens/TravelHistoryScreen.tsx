@@ -7,7 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../navigation/ActivitiesStackTypes';
 import { supabase } from '../lib/supabase';
-import { StatusBadge, bookingStatusToBadge } from '../components/StatusBadge';
+import { StatusBadge, clientViagemStatusBadge, type TripStatusBadge } from '../components/StatusBadge';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'TravelHistory'>;
 
@@ -17,7 +17,7 @@ type HistoryItem = {
   destinationOrId: string;
   dateTime: string;
   detailLine: string;
-  status: 'concluida' | 'cancelada';
+  badgeVariant: TripStatusBadge;
 };
 
 const COLORS = {
@@ -42,6 +42,7 @@ function formatHistoryDate(iso: string): string {
 export function TravelHistoryScreen({ navigation }: Props) {
   const [completed, setCompleted] = useState<HistoryItem[]>([]);
   const [cancelled, setCancelled] = useState<HistoryItem[]>([]);
+  const [active, setActive] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -49,32 +50,45 @@ export function TravelHistoryScreen({ navigation }: Props) {
     if (!user) {
       setCompleted([]);
       setCancelled([]);
+      setActive([]);
       setLoading(false);
       return;
     }
     const { data: bookings } = await supabase
       .from('bookings')
-      .select('id, origin_address, destination_address, status, created_at')
+      .select('id, origin_address, destination_address, status, created_at, scheduled_trips(status)')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(100);
     const completedList: HistoryItem[] = [];
     const cancelledList: HistoryItem[] = [];
-    (bookings ?? []).forEach((b) => {
-      const status = bookingStatusToBadge((b as { status?: string }).status);
+    const activeList: HistoryItem[] = [];
+    (bookings ?? []).forEach((row) => {
+      const b = row as {
+        id: string;
+        destination_address?: string;
+        status?: string;
+        created_at: string;
+        scheduled_trips?: { status?: string } | { status?: string }[] | null;
+      };
+      const st = b.scheduled_trips;
+      const tripStatus = Array.isArray(st) ? st[0]?.status : st?.status;
+      const badgeVariant = clientViagemStatusBadge(b.status, tripStatus ?? null);
       const item: HistoryItem = {
         id: b.id,
         type: 'viagem',
-        destinationOrId: (b as { destination_address?: string }).destination_address ?? b.id.slice(0, 8).toUpperCase(),
-        dateTime: formatHistoryDate((b as { created_at: string }).created_at),
+        destinationOrId: b.destination_address ?? b.id.slice(0, 8).toUpperCase(),
+        dateTime: formatHistoryDate(b.created_at),
         detailLine: '1 passageiro',
-        status: status === 'cancelada' ? 'cancelada' : 'concluida',
+        badgeVariant,
       };
-      if (status === 'cancelada') cancelledList.push(item);
-      else completedList.push(item);
+      if (badgeVariant === 'cancelada') cancelledList.push(item);
+      else if (badgeVariant === 'concluida') completedList.push(item);
+      else activeList.push(item);
     });
     setCompleted(completedList);
     setCancelled(cancelledList);
+    setActive(activeList);
     setLoading(false);
   }, []);
 
@@ -85,7 +99,7 @@ export function TravelHistoryScreen({ navigation }: Props) {
   const renderItem = ({ item }: { item: HistoryItem }) => (
     <TouchableOpacity
       style={styles.row}
-      onPress={() => item.status === 'concluida' && navigation.navigate('TripDetail', { bookingId: item.id })}
+      onPress={() => navigation.navigate('TripDetail', { bookingId: item.id })}
       activeOpacity={0.7}
     >
       <View style={styles.iconWrap}>
@@ -96,7 +110,7 @@ export function TravelHistoryScreen({ navigation }: Props) {
         <Text style={styles.dateTime}>{item.dateTime}</Text>
         <Text style={styles.detailLine}>{item.detailLine}</Text>
       </View>
-      <StatusBadge variant={item.status} />
+      <StatusBadge variant={item.badgeVariant} />
     </TouchableOpacity>
   );
 
@@ -116,6 +130,14 @@ export function TravelHistoryScreen({ navigation }: Props) {
         </View>
       ) : (
         <ScrollView style={styles.scroll} contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}>
+          {active.length > 0 && (
+            <>
+              <Text style={[styles.sectionTitle, { color: COLORS.neutral700 }]}>Em andamento ou aguardando</Text>
+              {active.map((item) => (
+                <View key={item.id}>{renderItem({ item })}</View>
+              ))}
+            </>
+          )}
           {completed.length > 0 && (
             <>
               <Text style={[styles.sectionTitle, { color: COLORS.green }]}>Viagens concluídas</Text>
@@ -132,7 +154,7 @@ export function TravelHistoryScreen({ navigation }: Props) {
               ))}
             </>
           )}
-          {completed.length === 0 && cancelled.length === 0 && (
+          {completed.length === 0 && cancelled.length === 0 && active.length === 0 && (
             <View style={styles.centered}>
               <Text style={styles.subtitle}>Nenhuma viagem no histórico</Text>
             </View>

@@ -345,6 +345,10 @@ export function PlanRideScreen({ navigation, route }: Props) {
           <MaterialIcons name="edit" size={20} color={COLORS.neutral700} style={styles.editIcon} />
         </TouchableOpacity>
 
+        <Text style={styles.roundTripHint}>
+          Ida e volta: faça uma reserva para cada trecho (volta em outro horário ou dia), conforme as viagens ofertadas pelo motorista.
+        </Text>
+
         {/* Lista filtrada por partida, destino e horário — seleção obrigatória para Agendar */}
         {tripsLoading && (
           <View style={styles.tripsLoadingWrap}>
@@ -625,6 +629,12 @@ const styles = StyleSheet.create({
   routeAddresses: { flex: 1 },
   routeAddress: { fontSize: 14, fontWeight: '500', color: COLORS.black },
   routeAddressPlaceholder: { color: COLORS.neutral700 },
+  roundTripHint: {
+    fontSize: 13,
+    color: COLORS.neutral700,
+    lineHeight: 18,
+    marginBottom: 14,
+  },
   routeAddressDivider: {
     height: 1,
     backgroundColor: COLORS.neutral400,
