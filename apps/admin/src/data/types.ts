@@ -128,6 +128,12 @@ export interface BookingDetailForAdmin {
   tripDepartureAtIso: string | null;
   /** `scheduled_trips.arrival_at` em ISO (duração no resumo). */
   tripArrivalAtIso: string | null;
+  /** Lugares disponíveis na viagem agendada (`scheduled_trips.seats_available`). */
+  seatsAvailable: number | null;
+  /** Bagagens disponíveis na viagem (`scheduled_trips.bags_available`). */
+  bagsAvailable: number | null;
+  /** `bookings.created_at` em ISO (histórico mínimo no painel). */
+  bookingCreatedAtIso: string | null;
 }
 
 /** Shipment ligado à viagem (`scheduled_trip_id`) — lista no detalhe da viagem. */
@@ -136,6 +142,8 @@ export interface TripShipmentListItem {
   packageSize: string | null;
   amountCents: number;
   recipientName: string;
+  /** `shipments.recipient_phone` */
+  recipientPhone: string | null;
   /** Remetente: `profiles.full_name` do `shipments.user_id`. */
   senderName: string;
   originAddress: string;

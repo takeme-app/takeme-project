@@ -31,6 +31,12 @@ export interface MapWaypoint extends MapCoord {
 export interface MapViewProps {
   origin?: MapCoord;
   destination?: MapCoord;
+  /**
+   * Partida real do motorista (ex.: `trip_stops.driver_origin` ou `scheduled_trips.origin_*`).
+   * Quando definido, o pin de carro fica aqui e a rota Directions começa neste ponto;
+   * `origin` continua a representar o embarque do passageiro (waypoints / booking).
+   */
+  driverStart?: MapCoord;
   /** Pontos intermediarios (passageiros, encomendas, bases) — renderizados na ordem */
   waypoints?: MapWaypoint[];
   /** Ponto atual (tracking em tempo real) */
@@ -55,8 +61,16 @@ export interface MapViewProps {
    * Overlays do Figma (792:1593 + 792:1595). Default off para mapa limpo como referência de produto.
    */
   showFigmaMapChrome?: boolean;
+  /** Quando true, o mapa aproxima e centra em `followTarget` (ex.: veículo); atualiza se as coords mudarem. */
+  followVehicle?: boolean;
+  followTarget?: MapCoord;
+  /** Chamado quando o utilizador arrasta ou roda o mapa — para desligar o modo acompanhar. */
+  onFollowVehicleInterrupted?: () => void;
   style?: React.CSSProperties;
 }
+
+const FOLLOW_VEHICLE_ZOOM_MIN = 14;
+const FOLLOW_VEHICLE_ZOOM_MAX = 17;
 
 const LINE_SOURCE_ID = 'takeme-trip-line';
 const LINE_LAYER_ID = 'takeme-trip-line-layer';
@@ -257,6 +271,50 @@ function fitMapToCoordinates(map: any, mapboxgl: any, coordinates: number[][]) {
     }
   }
   map.fitBounds(bounds, { padding: 64, maxZoom: 14, duration: 0 });
+}
+
+function coordsNearlyEqual(a: MapCoord, b: MapCoord, eps = 1e-5): boolean {
+  return Math.abs(a.lat - b.lat) < eps && Math.abs(a.lng - b.lng) < eps;
+}
+
+/** Desloca o pin do carro em px quando partilha coordenadas com um waypoint (ex.: mesmo edifício). */
+function carMarkerOffsetPx(
+  driverStart: MapCoord | undefined,
+  origin: MapCoord | undefined,
+  waypoints: MapWaypoint[] | undefined,
+): [number, number] {
+  const anchor = driverStart ?? origin;
+  if (!anchor || !waypoints?.length) return [0, 0];
+  const dup = waypoints.some((wp) => coordsNearlyEqual(wp, anchor));
+  return dup ? [-22, 0] : [0, 0];
+}
+
+/** Inclui a polyline e todos os pins relevantes — evita cortar o motorista fora do viewport. */
+function fitMapToRouteAndMarkers(
+  map: any,
+  mapboxgl: any,
+  lineCoordinates: number[][] | null | undefined,
+  markerPoints: Array<MapCoord | undefined>,
+) {
+  const bounds = new mapboxgl.LngLatBounds();
+  let has = false;
+  if (lineCoordinates?.length) {
+    for (const c of lineCoordinates) {
+      if (Array.isArray(c) && c.length >= 2 && Number.isFinite(c[0]) && Number.isFinite(c[1])) {
+        bounds.extend(c as [number, number]);
+        has = true;
+      }
+    }
+  }
+  for (const p of markerPoints) {
+    if (p && Number.isFinite(p.lat) && Number.isFinite(p.lng)) {
+      bounds.extend([p.lng, p.lat]);
+      has = true;
+    }
+  }
+  if (has) {
+    map.fitBounds(bounds, { padding: 64, maxZoom: 14, duration: 0 });
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -494,6 +552,7 @@ export default function MapView(props: MapViewProps) {
   const {
     origin,
     destination,
+    driverStart,
     currentPosition,
     height = 300,
     waypoints,
@@ -501,8 +560,13 @@ export default function MapView(props: MapViewProps) {
     connectPoints = true,
     directionsProfile = 'driving-traffic',
     showFigmaMapChrome = false,
+    followVehicle = false,
+    followTarget,
+    onFollowVehicleInterrupted,
     style,
   } = props;
+  const followVehicleRef = useRef(followVehicle);
+  followVehicleRef.current = followVehicle;
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const mapboxglRef = useRef<any>(null);
@@ -590,10 +654,16 @@ export default function MapView(props: MapViewProps) {
         const styleUrl =
           Platform.OS === 'web' ? mapboxGlStyleUrl(accessToken) : MAPBOX_STYLE_LIGHT;
 
+        const initialCenter =
+          driverStart && Number.isFinite(driverStart.lat) && Number.isFinite(driverStart.lng)
+            ? [driverStart.lng, driverStart.lat]
+            : origin
+              ? [origin.lng, origin.lat]
+              : [-46.6333, -23.5505];
         const map = new (mapboxgl as any).Map({
           container: mapContainerRef.current,
           style: styleUrl,
-          center: origin ? [origin.lng, origin.lat] : [-46.6333, -23.5505],
+          center: initialCenter,
           zoom: 11,
           interactive: true,
           failIfMajorPerformanceCaveat: false,
@@ -629,10 +699,30 @@ export default function MapView(props: MapViewProps) {
           markersRef.current.forEach((mk) => mk.remove());
           markersRef.current = [];
 
-          if (origin) {
+          const routeOrigin =
+            driverStart && Number.isFinite(driverStart.lat) && Number.isFinite(driverStart.lng)
+              ? driverStart
+              : origin;
+          const carOffset = carMarkerOffsetPx(
+            driverStart && Number.isFinite(driverStart.lat) && Number.isFinite(driverStart.lng) ? driverStart : undefined,
+            origin,
+            waypoints,
+          );
+          const fitMarkerPoints: Array<MapCoord | undefined> = [
+            routeOrigin,
+            origin,
+            destination,
+            ...(waypoints || []),
+          ];
+
+          if (routeOrigin) {
             markersRef.current.push(
-              new (mapboxgl as any).Marker({ element: createTripOriginMarkerElement(), anchor: MAP_MARKER_ANCHOR })
-                .setLngLat([origin.lng, origin.lat])
+              new (mapboxgl as any).Marker({
+                element: createTripOriginMarkerElement(),
+                anchor: MAP_MARKER_ANCHOR,
+                offset: carOffset,
+              })
+                .setLngLat([routeOrigin.lng, routeOrigin.lat])
                 .addTo(m),
             );
           }
@@ -656,52 +746,65 @@ export default function MapView(props: MapViewProps) {
             });
           }
 
-          if (connectPoints && origin && destination) {
+          if (connectPoints && routeOrigin && destination) {
             try {
               removeTripLineLayer(m);
               const intermediateCoords = (waypoints || []).filter(
                 (wp) => wp.lat != null && wp.lng != null && Number.isFinite(wp.lat) && Number.isFinite(wp.lng),
               );
-              let line = await fetchDirectionsLineString(origin, destination, token, directionsProfile, ac.signal, intermediateCoords);
+              let line = await fetchDirectionsLineString(routeOrigin, destination, token, directionsProfile, ac.signal, intermediateCoords);
               if (cancelled || !mapRef.current) return;
               if (!line && directionsProfile === 'driving-traffic') {
-                line = await fetchDirectionsLineString(origin, destination, token, 'driving', ac.signal, intermediateCoords);
+                line = await fetchDirectionsLineString(routeOrigin, destination, token, 'driving', ac.signal, intermediateCoords);
               }
               if (cancelled || !mapRef.current) return;
               if (line) {
                 setTripRouteLayer(m, line);
-                fitMapToCoordinates(m, mapboxgl, line.coordinates);
+                if (!followVehicleRef.current) {
+                  fitMapToRouteAndMarkers(m, mapboxgl, line.coordinates, fitMarkerPoints);
+                }
               } else {
-                addStraightFallbackLine(m, origin, destination);
-                const bounds = new (mapboxgl as any).LngLatBounds();
-                bounds.extend([origin.lng, origin.lat]);
-                bounds.extend([destination.lng, destination.lat]);
-                m.fitBounds(bounds, { padding: 56, maxZoom: 14, duration: 0 });
+                addStraightFallbackLine(m, routeOrigin, destination);
+                if (!followVehicleRef.current) {
+                  fitMapToRouteAndMarkers(
+                    m,
+                    mapboxgl,
+                    [[routeOrigin.lng, routeOrigin.lat], [destination.lng, destination.lat]],
+                    fitMarkerPoints,
+                  );
+                }
               }
             } catch {
               if (cancelled || ac.signal.aborted || !mapRef.current) return;
               try {
                 removeTripLineLayer(m);
-                addStraightFallbackLine(m, origin, destination);
-                const bounds = new (mapboxgl as any).LngLatBounds();
-                bounds.extend([origin.lng, origin.lat]);
-                bounds.extend([destination.lng, destination.lat]);
-                m.fitBounds(bounds, { padding: 56, maxZoom: 14, duration: 0 });
+                addStraightFallbackLine(m, routeOrigin, destination);
+                if (!followVehicleRef.current) {
+                  fitMapToRouteAndMarkers(
+                    m,
+                    mapboxgl,
+                    [[routeOrigin.lng, routeOrigin.lat], [destination.lng, destination.lat]],
+                    fitMarkerPoints,
+                  );
+                }
               } catch { /* ignore */ }
             }
           } else {
             removeTripLineLayer(m);
-            if (origin && destination) {
-              const bounds = new (mapboxgl as any).LngLatBounds();
-              bounds.extend([origin.lng, origin.lat]);
-              bounds.extend([destination.lng, destination.lat]);
-              m.fitBounds(bounds, { padding: 56, maxZoom: 14, duration: 0 });
-            } else if (origin) {
-              m.setCenter([origin.lng, origin.lat]);
-              m.setZoom(12);
+            if (routeOrigin && destination) {
+              if (!followVehicleRef.current) {
+                fitMapToRouteAndMarkers(m, mapboxgl, null, fitMarkerPoints);
+              }
+            } else if (routeOrigin) {
+              if (!followVehicleRef.current) {
+                m.setCenter([routeOrigin.lng, routeOrigin.lat]);
+                m.setZoom(12);
+              }
             } else if (destination) {
-              m.setCenter([destination.lng, destination.lat]);
-              m.setZoom(12);
+              if (!followVehicleRef.current) {
+                m.setCenter([destination.lng, destination.lat]);
+                m.setZoom(12);
+              }
             }
           }
         };
@@ -763,6 +866,8 @@ export default function MapView(props: MapViewProps) {
     origin?.lng,
     destination?.lat,
     destination?.lng,
+    driverStart?.lat,
+    driverStart?.lng,
   ]);
 
   // ── Efeito separado: atualiza markers/rota quando waypoints mudam ──────────
@@ -778,10 +883,30 @@ export default function MapView(props: MapViewProps) {
     markersRef.current.forEach((mk) => mk.remove());
     markersRef.current = [];
 
-    if (origin) {
+    const routeOrigin =
+      driverStart && Number.isFinite(driverStart.lat) && Number.isFinite(driverStart.lng)
+        ? driverStart
+        : origin;
+    const carOffset = carMarkerOffsetPx(
+      driverStart && Number.isFinite(driverStart.lat) && Number.isFinite(driverStart.lng) ? driverStart : undefined,
+      origin,
+      waypoints,
+    );
+    const fitMarkerPoints: Array<MapCoord | undefined> = [
+      routeOrigin,
+      origin,
+      destination,
+      ...(waypoints || []),
+    ];
+
+    if (routeOrigin) {
       markersRef.current.push(
-        new mapboxgl.Marker({ element: createTripOriginMarkerElement(), anchor: MAP_MARKER_ANCHOR })
-          .setLngLat([origin.lng, origin.lat])
+        new mapboxgl.Marker({
+          element: createTripOriginMarkerElement(),
+          anchor: MAP_MARKER_ANCHOR,
+          offset: carOffset,
+        })
+          .setLngLat([routeOrigin.lng, routeOrigin.lat])
           .addTo(m),
       );
     }
@@ -804,28 +929,34 @@ export default function MapView(props: MapViewProps) {
       });
     }
 
-    // Atualizar rota com novos waypoints
-    if (connectPoints && origin && destination && token) {
+    // Atualizar rota com novos waypoints / partida do motorista
+    if (connectPoints && routeOrigin && destination && token) {
       const intermediateCoords = (waypoints || []).filter((wp) => wp.lat != null && wp.lng != null);
       let cancelled = false;
       (async () => {
         try {
           removeTripLineLayer(m);
-          let line = await fetchDirectionsLineString(origin, destination, token, directionsProfile, undefined, intermediateCoords);
+          let line = await fetchDirectionsLineString(routeOrigin, destination, token, directionsProfile, undefined, intermediateCoords);
           if (cancelled || !mapRef.current) return;
           if (!line && directionsProfile === 'driving-traffic') {
-            line = await fetchDirectionsLineString(origin, destination, token, 'driving', undefined, intermediateCoords);
+            line = await fetchDirectionsLineString(routeOrigin, destination, token, 'driving', undefined, intermediateCoords);
           }
           if (cancelled || !mapRef.current) return;
           if (line) {
             setTripRouteLayer(m, line);
-            fitMapToCoordinates(m, mapboxgl, line.coordinates);
+            if (!followVehicleRef.current) {
+              fitMapToRouteAndMarkers(m, mapboxgl, line.coordinates, fitMarkerPoints);
+            }
           } else {
-            addStraightFallbackLine(m, origin, destination);
-            const bounds = new mapboxgl.LngLatBounds();
-            bounds.extend([origin.lng, origin.lat]);
-            bounds.extend([destination.lng, destination.lat]);
-            m.fitBounds(bounds, { padding: 56, maxZoom: 14, duration: 0 });
+            addStraightFallbackLine(m, routeOrigin, destination);
+            if (!followVehicleRef.current) {
+              fitMapToRouteAndMarkers(
+                m,
+                mapboxgl,
+                [[routeOrigin.lng, routeOrigin.lat], [destination.lng, destination.lat]],
+                fitMarkerPoints,
+              );
+            }
           }
         } catch { /* ignore */ }
       })();
@@ -838,9 +969,52 @@ export default function MapView(props: MapViewProps) {
     origin?.lng,
     destination?.lat,
     destination?.lng,
+    driverStart?.lat,
+    driverStart?.lng,
     connectPoints,
     directionsProfile,
     token,
+  ]);
+
+  // Acompanhar veículo: zoom + centro em followTarget; reage a atualizações de coordenadas (GPS futuro).
+  useEffect(() => {
+    if (staticMode || useStatic || !followVehicle || !followTarget) return;
+    const map = mapRef.current;
+    if (!map || !mapStyleReady) return;
+    const { lat, lng } = followTarget;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    try {
+      const cur = typeof map.getZoom === 'function' ? map.getZoom() : 11;
+      const z = Math.min(FOLLOW_VEHICLE_ZOOM_MAX, Math.max(FOLLOW_VEHICLE_ZOOM_MIN, cur));
+      map.easeTo({
+        center: [lng, lat],
+        zoom: z,
+        duration: 600,
+        essential: true,
+      });
+    } catch { /* ignore */ }
+  }, [followVehicle, followTarget?.lat, followTarget?.lng, mapStyleReady, staticMode, useStatic]);
+
+  useEffect(() => {
+    if (!onFollowVehicleInterrupted || !followVehicle) return;
+    if (staticMode || useStatic) return;
+    const map = mapRef.current;
+    if (!map || !mapStyleReady) return;
+    const endFollow = () => onFollowVehicleInterrupted();
+    map.on('dragstart', endFollow);
+    map.on('rotatestart', endFollow);
+    return () => {
+      try {
+        map.off('dragstart', endFollow);
+        map.off('rotatestart', endFollow);
+      } catch { /* ignore */ }
+    };
+  }, [
+    followVehicle,
+    onFollowVehicleInterrupted,
+    mapStyleReady,
+    staticMode,
+    useStatic,
   ]);
 
   useEffect(() => {

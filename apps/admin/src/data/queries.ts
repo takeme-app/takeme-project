@@ -405,6 +405,13 @@ export async function fetchBookingDetailForAdmin(bookingOrTripId: string): Promi
   };
   const depAt = trip?.departure_at;
   const arrAt = trip?.arrival_at;
+  const seatsRaw = trip?.seats_available;
+  const bagsTripRaw = trip?.bags_available;
+  const seatsAvailable =
+    seatsRaw != null && Number.isFinite(Number(seatsRaw)) ? Math.round(Number(seatsRaw)) : null;
+  const bagsAvailable =
+    bagsTripRaw != null && Number.isFinite(Number(bagsTripRaw)) ? Math.round(Number(bagsTripRaw)) : null;
+  const createdRaw = row.created_at as string | undefined;
   return {
     listItem,
     originFull: row.origin_address ?? '',
@@ -422,6 +429,9 @@ export async function fetchBookingDetailForAdmin(bookingOrTripId: string): Promi
     trunkOccupancyPct: Number.isFinite(trunk) ? trunk : 0,
     tripDepartureAtIso: depAt ? new Date(depAt as string).toISOString() : null,
     tripArrivalAtIso: arrAt ? new Date(arrAt as string).toISOString() : null,
+    seatsAvailable,
+    bagsAvailable,
+    bookingCreatedAtIso: createdRaw ? new Date(createdRaw).toISOString() : null,
   };
 }
 
@@ -430,11 +440,11 @@ export async function fetchShipmentsForScheduledTrip(tripId: string): Promise<Tr
   if (!isSupabaseConfigured || !tripId) return [];
   const { data, error } = await supabase
     .from('shipments')
-    .select('id, user_id, package_size, amount_cents, recipient_name, origin_address, destination_address, instructions, photo_url, status')
+    .select('id, user_id, package_size, amount_cents, recipient_name, recipient_phone, origin_address, destination_address, instructions, photo_url, status')
     .eq('scheduled_trip_id', tripId)
     .order('created_at', { ascending: true });
   if (error || !data?.length) return [];
-  type Row = { id: string; user_id: string; package_size?: string | null; amount_cents?: number | null; recipient_name?: string | null; origin_address?: string | null; destination_address?: string | null; instructions?: string | null; photo_url?: string | null; status?: string | null };
+  type Row = { id: string; user_id: string; package_size?: string | null; amount_cents?: number | null; recipient_name?: string | null; recipient_phone?: string | null; origin_address?: string | null; destination_address?: string | null; instructions?: string | null; photo_url?: string | null; status?: string | null };
   const rows = data as Row[];
   const userIds = [...new Set(rows.map((s) => s.user_id).filter(Boolean))];
   const senderMap: Record<string, string> = {};
@@ -449,6 +459,7 @@ export async function fetchShipmentsForScheduledTrip(tripId: string): Promise<Tr
     packageSize: s.package_size ?? null,
     amountCents: Number(s.amount_cents ?? 0),
     recipientName: (s.recipient_name && String(s.recipient_name).trim()) || '—',
+    recipientPhone: s.recipient_phone != null && String(s.recipient_phone).trim() ? String(s.recipient_phone).trim() : null,
     senderName: senderMap[s.user_id] ?? '—',
     originAddress: s.origin_address ?? '',
     destinationAddress: s.destination_address ?? '',
@@ -651,6 +662,7 @@ export async function updateShipmentFields(
     package_size?: string;
     when_option?: string;
     scheduled_at?: string | null;
+    scheduled_trip_id?: string | null;
   },
 ): Promise<{ error: string | null }> {
   if (!isSupabaseConfigured) return { error: 'Supabase not configured' };

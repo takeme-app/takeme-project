@@ -5,7 +5,12 @@ import { parseCoordPair } from '../lib/mapCoordUtils';
 import { geocodeAddress } from '../lib/googleGeocoding';
 import { getGoogleMapsApiKey } from '../lib/expoExtra';
 
-export type TripMapCoords = { origin?: { lat: number; lng: number }; destination?: { lat: number; lng: number } };
+export type TripMapCoords = {
+  origin?: { lat: number; lng: number };
+  destination?: { lat: number; lng: number };
+  /** Partida da viagem agendada (`scheduled_trips.origin_*`) — costuma ser o ponto do motorista, distinto do embarque do passageiro. */
+  vehicleOrigin?: { lat: number; lng: number };
+};
 
 /**
  * Coordenadas para o mapa: `bookings` → `scheduled_trips` → Geocoding Google (se chave configurada).
@@ -25,19 +30,21 @@ export function useTripMapCoords(detail: BookingDetailForAdmin | null): [TripMap
       let destination = parseCoordPair(detail.destinationLat, detail.destinationLng);
       const tripId = detail.listItem.tripId;
 
-      if ((!origin || !destination) && tripId) {
+      let vehicleOrigin: { lat: number; lng: number } | undefined;
+      if (tripId) {
         const { data } = await (supabase as any)
           .from('scheduled_trips')
           .select('origin_lat, origin_lng, destination_lat, destination_lng')
           .eq('id', tripId)
           .maybeSingle();
         if (!cancelled && data) {
-          if (!origin) origin = parseCoordPair(data.origin_lat, data.origin_lng);
+          vehicleOrigin = parseCoordPair(data.origin_lat, data.origin_lng) ?? undefined;
+          if (!origin) origin = vehicleOrigin;
           if (!destination) destination = parseCoordPair(data.destination_lat, data.destination_lng);
         }
       }
 
-      let next: TripMapCoords = { origin, destination };
+      let next: TripMapCoords = { origin, destination, vehicleOrigin };
       if (!cancelled) setCoords(next);
 
       const key = getGoogleMapsApiKey();

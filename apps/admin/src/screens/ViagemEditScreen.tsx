@@ -19,10 +19,12 @@ import {
 import {
   fetchBookingDetailForAdmin,
   fetchMotoristas,
+  fetchShipmentsForScheduledTrip,
   updateBookingFields,
   updateScheduledTripFields,
+  updateShipmentFields,
 } from '../data/queries';
-import type { BookingDetailForAdmin, MotoristaListItem } from '../data/types';
+import type { BookingDetailForAdmin, MotoristaListItem, TripShipmentListItem } from '../data/types';
 import MapView from '../components/MapView';
 import { useTripStops } from '../hooks/useTripStops';
 import { recalculateTripStops } from '../data/queries';
@@ -89,6 +91,13 @@ function fromDatetimeLocalValue(s: string): string | null {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+/** Mesmo padrão visual de `fmtDate` em queries (dd/mm/aaaa). */
+function fmtDateBrFromLocalInput(localOrIso: string): string {
+  const d = new Date(localOrIso);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+}
+
 function rowFromDetail(d: BookingDetailForAdmin): ViagemRow {
   const v = d.listItem;
   return {
@@ -128,10 +137,9 @@ export default function ViagemEditScreen() {
   const [origem, setOrigem] = useState('');
   const [destino, setDestino] = useState('');
   const [departureLocal, setDepartureLocal] = useState('');
-  const [rota, setRota] = useState('');
   const [ocupacao, setOcupacao] = useState(0);
   const [selectedMotorista, setSelectedMotorista] = useState(0);
-  const [dataMotorista, setDataMotorista] = useState('');
+  const [tripShipments, setTripShipments] = useState<TripShipmentListItem[]>([]);
   const [removePassageiroIdx, setRemovePassageiroIdx] = useState<number | null>(null);
   const [editEncomendaIdx, setEditEncomendaIdx] = useState<number | null>(null);
   const [editEncomendaData, setEditEncomendaData] = useState({ nome: '', recolha: '', entrega: '', destinatario: '', telefone: '', observacoes: '' });
@@ -203,8 +211,21 @@ export default function ViagemEditScreen() {
   }, [routeId]);
 
   useEffect(() => {
-    fetchMotoristas().then((m) => setDriversList(m.slice(0, 24)));
+    fetchMotoristas().then((m) => setDriversList(m));
   }, []);
+
+  useEffect(() => {
+    const tripId = detail?.listItem?.tripId;
+    if (!tripId) {
+      setTripShipments([]);
+      return;
+    }
+    let cancel = false;
+    fetchShipmentsForScheduledTrip(tripId).then((rows) => {
+      if (!cancel) setTripShipments(rows);
+    });
+    return () => { cancel = true; };
+  }, [detail?.listItem?.tripId, detail?.listItem?.bookingId]);
 
   // Veículo do motorista (coordenadas do mapa vêm de useTripMapCoords)
   useEffect(() => {
@@ -232,10 +253,8 @@ export default function ViagemEditScreen() {
     setOrigem(detail.originFull || detail.listItem.origem);
     setDestino(detail.destinationFull || detail.listItem.destino);
     setDepartureLocal(toDatetimeLocalValue(detail.listItem.departureAtIso));
-    setRota(`${detail.listItem.origem} → ${detail.listItem.destino}`);
     const trunk = detail.trunkOccupancyPct;
     setOcupacao(Number.isFinite(trunk) ? Math.min(100, Math.max(0, Math.round(trunk))) : 0);
-    setDataMotorista(detail.listItem.data);
   }, [detail]);
 
   useEffect(() => {
@@ -248,6 +267,16 @@ export default function ViagemEditScreen() {
     if (detail) return rowFromDetail(detail);
     return stateTrip;
   }, [detail, stateTrip]);
+
+  const rotaLinha = useMemo(() => `${origem} → ${destino}`, [origem, destino]);
+  const dataViagemFmt = useMemo(() => fmtDateBrFromLocalInput(departureLocal), [departureLocal]);
+  const horaSaidaLocalFmt = useMemo(() => {
+    if (!departureLocal) return '';
+    const d = new Date(departureLocal);
+    if (Number.isNaN(d.getTime())) return '';
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }, [departureLocal]);
 
   const saveTrip = useCallback(async () => {
     if (!detail?.listItem.bookingId) return;
@@ -306,6 +335,11 @@ export default function ViagemEditScreen() {
       showToast('Viagem atualizada com sucesso');
       const d2 = await fetchBookingDetailForAdmin(detail.listItem.bookingId);
       if (d2) setDetail(d2);
+      const tid = (d2 ?? detail).listItem.tripId;
+      if (tid) {
+        const rows = await fetchShipmentsForScheduledTrip(tid);
+        setTripShipments(rows);
+      }
     }
   }, [detail, departureLocal, origem, destino, ocupacao, driversList, selectedMotorista, showToast, tripCoords]);
 
@@ -431,7 +465,13 @@ export default function ViagemEditScreen() {
     // Rota
     React.createElement('div', { style: fieldWrap },
       React.createElement('label', { style: labelStyle }, 'Rota'),
-      React.createElement('input', { type: 'text', value: rota, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setRota(e.target.value), style: inputStyle })),
+      React.createElement('input', {
+        type: 'text',
+        value: rotaLinha,
+        readOnly: true,
+        title: 'Derivada de origem e destino',
+        style: { ...inputStyle, opacity: 0.92, cursor: 'default' },
+      })),
     // Horário de saída (espelha partida agendada)
     React.createElement('div', { style: fieldWrap },
       React.createElement('label', { style: labelStyle }, 'Horario de saída'),
@@ -482,17 +522,24 @@ export default function ViagemEditScreen() {
     ocupacaoBag: string;
   };
 
+  const unitPassageiroCents =
+    detail.passengerCount > 0 ? Math.round(detail.amountCents / detail.passengerCount) : detail.amountCents;
+  const lugaresLivres =
+    detail.seatsAvailable != null && Number.isFinite(detail.seatsAvailable)
+      ? String(Math.max(0, detail.seatsAvailable))
+      : '—';
+
   const motoristaRows: MotoristaCardRow[] = driversList.map((m) => ({
     name: m.nome,
     badge: 'Motorista',
     rating: m.rating != null ? String(m.rating) : '—',
     trips: m.totalViagens,
-    origemDestino: rota,
-    data: trip.data,
-    horaSaida: trip.embarque,
-    valorTotal: '—',
-    valorUnitario: '—',
-    pessoasRestantes: '—',
+    origemDestino: rotaLinha,
+    data: dataViagemFmt || trip.data,
+    horaSaida: horaSaidaLocalFmt || trip.embarque,
+    valorTotal: fmtBRL(detail.amountCents),
+    valorUnitario: fmtBRL(unitPassageiroCents),
+    pessoasRestantes: lugaresLivres,
     ocupacaoBag: `${ocupacao}%`,
   }));
 
@@ -504,7 +551,7 @@ export default function ViagemEditScreen() {
   const motoristaCard = (m: MotoristaCardRow, idx: number) => {
     const isSelected = selectedMotorista === idx;
     return React.createElement('div', {
-      key: idx,
+      key: driversList[idx]?.id ?? `motorista-${idx}`,
       style: {
         border: isSelected ? '2px solid #0d0d0d' : '1px solid #e2e2e2', borderRadius: 12,
         padding: '16px 24px', display: 'flex', flexDirection: 'column' as const, gap: 12, cursor: 'pointer',
@@ -538,7 +585,7 @@ export default function ViagemEditScreen() {
       motoristaInfoRow('Hora de saída', m.horaSaida),
       motoristaInfoRow('Valor total', m.valorTotal),
       motoristaInfoRow('Valor unitário', m.valorUnitario),
-      motoristaInfoRow('Pessoas restantes', m.pessoasRestantes),
+      motoristaInfoRow('Lugares livres (viagem)', m.pessoasRestantes),
       motoristaInfoRow('Ocupação do bagageiro', m.ocupacaoBag));
   };
 
@@ -547,8 +594,16 @@ export default function ViagemEditScreen() {
     React.createElement('div', { style: { background: '#ffffff', border: '1px solid #e2e2e2', borderRadius: 12, padding: 24, display: 'flex', flexDirection: 'column' as const, gap: 24 } },
       // Date select
       React.createElement('div', { style: fieldWrap },
-        React.createElement('label', { style: grayText }, 'Selecione a data'),
-        inputWithIcon(calendarIconSvg, dataMotorista, setDataMotorista)),
+        React.createElement('label', { style: grayText }, 'Data da viagem'),
+        React.createElement('div', { style: { position: 'relative' as const, width: '100%' } },
+          React.createElement('div', { style: { position: 'absolute' as const, left: 12, top: '50%', transform: 'translateY(-50%)', display: 'flex', alignItems: 'center', pointerEvents: 'none' as const } }, calendarIconSvg),
+          React.createElement('input', {
+            type: 'text',
+            readOnly: true,
+            value: dataViagemFmt,
+            title: 'Use o horário agendado à esquerda para alterar data e hora',
+            style: { ...inputStyle, paddingLeft: 40, opacity: 0.92, cursor: 'default' },
+          }))),
       // 2x2 grid
       motoristaRows.length === 0
         ? React.createElement('p', { style: { ...grayText, margin: 0 } }, 'Nenhum motorista cadastrado.')
@@ -578,7 +633,8 @@ export default function ViagemEditScreen() {
         } }, checkSvg, 'Confirmar substituição'))));
 
   // ── 4. Passageiros & Encomendas ──────────────────────────────────────
-  const unitCents = detail.passengerCount > 0 ? Math.round(detail.amountCents / detail.passengerCount) : detail.amountCents;
+  const unitCents =
+    detail.passengerCount > 0 ? Math.round(detail.amountCents / detail.passengerCount) : detail.amountCents;
   const passageiros: { name: string; rating: string; mala: string; valor: string }[] = [];
   passageiros.push({
     name: detail.listItem.passageiro,
@@ -644,7 +700,25 @@ export default function ViagemEditScreen() {
         style: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#0d0d0d', textDecoration: 'underline', alignSelf: 'flex-start', padding: 0, ...font },
       }, '+ Adicionar')));
 
-  const encomendas: { name: string; recolha: string; entrega: string; destinatario: string; observacoes: string; valor: string }[] = [];
+  const encomendas: {
+    name: string;
+    senderName: string;
+    recolha: string;
+    entrega: string;
+    destinatario: string;
+    observacoes: string;
+    valor: string;
+    telefone: string;
+  }[] = tripShipments.map((s) => ({
+    name: s.recipientName,
+    senderName: s.senderName,
+    recolha: s.originAddress.trim() ? s.originAddress : '—',
+    entrega: s.destinationAddress.trim() ? s.destinationAddress : '—',
+    destinatario: s.recipientName,
+    observacoes: s.instructions?.trim() ? s.instructions : '—',
+    valor: fmtBRL(s.amountCents),
+    telefone: s.recipientPhone?.trim() ? s.recipientPhone : '',
+  }));
 
   const encomendaInfoRow = (label: string, value: string) =>
     React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '2px 0' } },
@@ -652,12 +726,42 @@ export default function ViagemEditScreen() {
       React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, value));
 
   const encomendaCard = (enc: typeof encomendas[0], idx: number) =>
-    React.createElement('div', { key: idx, style: { paddingBottom: 16, borderBottom: idx < encomendas.length - 1 ? '1px solid #e2e2e2' : 'none', display: 'flex', flexDirection: 'column' as const, gap: 8 } },
-      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-        React.createElement('span', { style: boldText }, enc.name),
-        React.createElement('div', { style: { display: 'flex', gap: 8 } },
-          React.createElement('button', { type: 'button', onClick: () => { setEditEncomendaIdx(idx); setEditEncomendaData({ nome: enc.name.replace('Encomenda ', ''), recolha: enc.recolha, entrega: enc.entrega, destinatario: enc.destinatario, telefone: '(21) 98888-7777', observacoes: enc.observacoes }); }, style: { background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' } }, editPencilSvg),
-          React.createElement('button', { type: 'button', style: { background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' } }, trashSvg))),
+    React.createElement('div', { key: tripShipments[idx]?.id ?? idx, style: { paddingBottom: 16, borderBottom: idx < encomendas.length - 1 ? '1px solid #e2e2e2' : 'none', display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 } },
+        React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+          React.createElement('div', { style: boldText }, enc.name),
+          React.createElement('div', { style: { ...grayText, fontSize: 13, marginTop: 2 } }, 'Remetente: ', enc.senderName || '—')),
+        React.createElement('div', { style: { display: 'flex', gap: 8, flexShrink: 0 } },
+          React.createElement('button', {
+            type: 'button',
+            onClick: () => {
+              setEditEncomendaIdx(idx);
+              setEditEncomendaData({
+                nome: enc.senderName && enc.senderName !== '—' ? enc.senderName : '',
+                recolha: enc.recolha === '—' ? '' : enc.recolha,
+                entrega: enc.entrega === '—' ? '' : enc.entrega,
+                destinatario: enc.destinatario,
+                telefone: enc.telefone,
+                observacoes: enc.observacoes === '—' ? '' : enc.observacoes,
+              });
+            },
+            style: { background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' },
+          }, editPencilSvg),
+          React.createElement('button', {
+            type: 'button',
+            title: 'Desvincular encomenda desta viagem',
+            onClick: async () => {
+              const row = tripShipments[idx];
+              if (!row) return;
+              const { error } = await updateShipmentFields(row.id, { scheduled_trip_id: null });
+              if (error) showToast(error);
+              else {
+                showToast('Encomenda desvinculada desta viagem');
+                setTripShipments((prev) => prev.filter((x) => x.id !== row.id));
+              }
+            },
+            style: { background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' },
+          }, trashSvg))),
       encomendaInfoRow('Recolha', enc.recolha),
       encomendaInfoRow('Entrega', enc.entrega),
       encomendaInfoRow('Destinatário', enc.destinatario),
@@ -683,7 +787,7 @@ export default function ViagemEditScreen() {
   const metricas = [
     { title: 'Ocupação do bagageiro', icon: inventorySvg, value: `${ocupacao}%` },
     { title: 'Passageiros (reserva)', icon: peopleSvg, value: String(detail.passengerCount) },
-    { title: 'Encomendas vinculadas', icon: chartSvg, value: String(encomendas.length) },
+    { title: 'Encomendas vinculadas', icon: chartSvg, value: String(tripShipments.length) },
   ];
 
   const metricCard = (m: typeof metricas[0], idx: number) =>
@@ -698,8 +802,20 @@ export default function ViagemEditScreen() {
     React.createElement('div', { style: { display: 'flex', gap: 16, width: '100%' } },
       ...metricas.map(metricCard)));
 
-  // ── 6. Histórico de alterações (sem tabela de auditoria — estado honesto)
+  // ── 6. Histórico de alterações (sem auditoria completa — ao menos criação da reserva)
   const historico: { icon: React.ReactNode; action: string; name: string; date: string }[] = [];
+  if (detail.bookingCreatedAtIso) {
+    const dt = new Date(detail.bookingCreatedAtIso);
+    const dateStr = Number.isNaN(dt.getTime())
+      ? detail.bookingCreatedAtIso
+      : dt.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    historico.push({
+      icon: clockSvg,
+      action: 'Reserva registrada',
+      name: detail.listItem.passageiro,
+      date: dateStr,
+    });
+  }
 
   const historicoItem = (h: (typeof historico)[0], idx: number) =>
     React.createElement('div', { key: idx, style: { display: 'flex', alignItems: 'center', gap: 12, background: '#f6f6f6', borderRadius: 12, padding: 16 } },
@@ -714,7 +830,7 @@ export default function ViagemEditScreen() {
   const historicoSection = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' } },
     React.createElement('h2', { style: sectionTitle }, 'Histórico de alterações'),
     historico.length === 0
-      ? React.createElement('p', { style: { ...grayText, margin: 0 } }, 'Não há registro de alterações no painel (sem fonte de auditoria).')
+      ? React.createElement('p', { style: { ...grayText, margin: 0 } }, 'Não há mais registros no painel (auditoria detalhada indisponível).')
       : React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
         ...historico.map(historicoItem)));
 
@@ -808,7 +924,7 @@ export default function ViagemEditScreen() {
               React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))),
           // Fields
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, flex: 1 } },
-            editEncField('Nome', 'nome'),
+            editEncField('Remetente (cliente)', 'nome'),
             editEncField('Recolha', 'recolha'),
             editEncField('Entrega', 'entrega'),
             editEncField('Destinatário', 'destinatario'),
@@ -830,7 +946,32 @@ export default function ViagemEditScreen() {
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, marginTop: 24, flexShrink: 0 } },
             React.createElement('button', {
               type: 'button',
-              onClick: () => { setEditEncomendaIdx(null); showToast('Encomenda atualizada com sucesso'); },
+              onClick: async () => {
+                if (editEncomendaIdx === null || !detail?.listItem?.tripId) return;
+                const s = tripShipments[editEncomendaIdx];
+                if (!s) {
+                  setEditEncomendaIdx(null);
+                  return;
+                }
+                const dest =
+                  editEncomendaData.destinatario.trim() || editEncomendaData.nome.trim() || s.recipientName;
+                let phone = editEncomendaData.telefone.trim();
+                if (!phone) phone = s.recipientPhone?.trim() || '-';
+                const { error } = await updateShipmentFields(s.id, {
+                  origin_address: editEncomendaData.recolha.trim() || s.originAddress,
+                  destination_address: editEncomendaData.entrega.trim() || s.destinationAddress,
+                  recipient_name: dest,
+                  recipient_phone: phone,
+                  instructions: editEncomendaData.observacoes.trim() || null,
+                });
+                if (error) showToast(error);
+                else {
+                  showToast('Encomenda atualizada');
+                  setEditEncomendaIdx(null);
+                  const rows = await fetchShipmentsForScheduledTrip(detail.listItem.tripId);
+                  setTripShipments(rows);
+                }
+              },
               style: { width: '100%', height: 48, background: '#0d0d0d', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 16, fontWeight: 500, color: '#fff', ...font },
             }, 'Salvar ajustes'),
             React.createElement('button', {
@@ -896,12 +1037,30 @@ export default function ViagemEditScreen() {
             React.createElement('button', {
               type: 'button', onClick: async () => {
                 if (!addEncomendaData.destinatario.trim()) { showToast('Preencha ao menos o destinatário.'); return; }
+                if (!detail?.userId) {
+                  showToast('Reserva sem cliente (user_id); não é possível criar encomenda.');
+                  return;
+                }
+                const tripId = detail.listItem.tripId;
+                if (!tripId) {
+                  showToast('Viagem agendada ausente; não é possível vincular a encomenda.');
+                  return;
+                }
+                const originAddr = addEncomendaData.recolha.trim() || origem;
+                const destAddr = addEncomendaData.entrega.trim() || destino;
+                if (!originAddr.trim() || !destAddr.trim()) {
+                  showToast('Defina recolha e entrega (ou preencha origem e destino da viagem).');
+                  return;
+                }
+                const phone = addEncomendaData.contato.trim() || '-';
                 const { error } = await (supabase as any).from('shipments').insert({
-                  user_id: detail?.userId || detail?.listItem?.bookingId,
-                  origin_address: addEncomendaData.recolha.trim() || origem,
-                  destination_address: addEncomendaData.entrega.trim() || destino,
+                  user_id: detail.userId,
+                  scheduled_trip_id: tripId,
+                  origin_address: originAddr,
+                  destination_address: destAddr,
                   recipient_name: addEncomendaData.destinatario.trim(),
-                  recipient_phone: addEncomendaData.contato.trim() || null,
+                  recipient_email: 'nao-informado@encomenda.placeholder',
+                  recipient_phone: phone,
                   instructions: addEncomendaData.observacoes.trim() || null,
                   amount_cents: Math.round(parseFloat(addEncomendaData.valor.replace(/[^\d.,]/g, '').replace(',', '.') || '0') * 100),
                   package_size: 'medio',
@@ -911,6 +1070,8 @@ export default function ViagemEditScreen() {
                 });
                 if (error) { showToast(error.message || 'Erro ao criar encomenda'); } else {
                   showToast('Encomenda adicionada com sucesso');
+                  const rows = await fetchShipmentsForScheduledTrip(tripId);
+                  setTripShipments(rows);
                 }
                 setAddEncomendaOpen(false);
               },
@@ -1107,6 +1268,7 @@ export default function ViagemEditScreen() {
           React.createElement(MapView, {
             origin: tripCoords.origin,
             destination: tripCoords.destination,
+            waypoints: tripWaypoints.length > 0 ? tripWaypoints : undefined,
             height: 675,
             staticMode: false,
             connectPoints: true,
