@@ -14,7 +14,7 @@ import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRoute } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { ProfileStackParamList, ChatExcStackParamList } from '../navigation/types';
+import type { ProfileStackParamList, ChatExcStackParamList, ChatEncomendasStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 
 const sb = supabase as { from: (table: string) => any };
@@ -23,7 +23,8 @@ import { storageUrl } from '../utils/storageUrl';
 
 type Props =
   | NativeStackScreenProps<ProfileStackParamList, 'Conversations'>
-  | NativeStackScreenProps<ChatExcStackParamList, 'ChatExcList'>;
+  | NativeStackScreenProps<ChatExcStackParamList, 'ChatExcList'>
+  | NativeStackScreenProps<ChatEncomendasStackParamList, 'ChatEncList'>;
 
 const GOLD = '#C9A227';
 const SUPPORT_COLOR = '#7C3D6E';

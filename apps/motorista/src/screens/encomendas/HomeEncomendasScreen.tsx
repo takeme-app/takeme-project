@@ -15,9 +15,12 @@ import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { supabase } from '../../lib/supabase';
+import { fetchWorkerShipmentBaseId } from '../../lib/preparerEncomendasBase';
+import { createOrGetShipmentConversation } from '../../lib/shipmentConversation';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type PackageSize = 'Pequeno' | 'Médio' | 'Grande';
 
@@ -59,6 +62,8 @@ function formatTime(iso: string | null): string {
 type Promotion = { id: string; title: string; description: string };
 
 export function HomeEncomendasScreen() {
+  const navigation = useNavigation<any>();
+  const { showAlert } = useAppAlert();
   const [preparadorName, setPreparadorName] = useState('Preparador');
   const [gpsEnabled, setGpsEnabled] = useState(false);
   const [notifEnabled, setNotifEnabled] = useState(false);
@@ -69,13 +74,25 @@ export function HomeEncomendasScreen() {
   const [actioning, setActioning] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [promoModal, setPromoModal] = useState<Promotion | null>(null);
+  const [missingBase, setMissingBase] = useState(false);
+  const [queueLoadError, setQueueLoadError] = useState<string | null>(null);
   const locationSubRef = useRef<any>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setMissingBase(false);
+    setQueueLoadError(null);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user?.id) { setLoading(false); return; }
     setUserId(user.id);
+
+    const myBaseId = await fetchWorkerShipmentBaseId(user.id);
+    if (!myBaseId) {
+      setMissingBase(true);
+      setSolicitacoes([]);
+      setLoading(false);
+      return;
+    }
 
     // Busca nome do preparador
     const { data: profile } = await supabase
@@ -89,14 +106,15 @@ export function HomeEncomendasScreen() {
       if (firstName) setPreparadorName(firstName);
     }
 
-    // Busca encomendas pendentes (sem driver atribuído)
-    const { data: shipments } = await supabase
-      .from('shipments')
-      .select('id, origin_address, package_size, amount_cents, instructions, scheduled_at, created_at, user_id')
-      .eq('status', 'pending_review')
-      .is('driver_id' as never, null)
-      .order('created_at', { ascending: false })
-      .limit(50);
+    // RPC com SECURITY DEFINER: não depende da RLS de SELECT em shipments (que costuma devolver [] sem erro)
+    const { data: shipments, error: shipmentsErr } = await supabase.rpc('preparer_shipment_queue');
+
+    if (shipmentsErr) {
+      setQueueLoadError(shipmentsErr.message || 'Não foi possível carregar as solicitações.');
+      setSolicitacoes([]);
+      setLoading(false);
+      return;
+    }
 
     const rows = (shipments ?? []) as {
       id: string;
@@ -171,20 +189,52 @@ export function HomeEncomendasScreen() {
     if (!acceptModal || !userId) return;
     setActioning(true);
     try {
-      await supabase
+      const { data: row, error: upErr } = await supabase
         .from('shipments')
         .update({
           status: 'confirmed',
           driver_id: userId,
           driver_accepted_at: new Date().toISOString(),
         } as never)
-        .eq('id', acceptModal.id);
+        .eq('id', acceptModal.id)
+        .is('driver_id', null)
+        .select('id')
+        .maybeSingle();
+
+      if (upErr) {
+        showAlert('Erro', upErr.message || 'Não foi possível aceitar a coleta.');
+        return;
+      }
+      if (!row) {
+        showAlert(
+          'Coleta indisponível',
+          'Outro preparador já aceitou esta encomenda. A lista será atualizada.',
+        );
+        await load();
+        return;
+      }
+
       setAccepted((prev) => [...prev, acceptModal.id]);
+
+      const conv = await createOrGetShipmentConversation(acceptModal.id, userId);
+      if (conv.error && !conv.conversationId) {
+        showAlert('Chat', `Coleta aceita, mas o chat não pôde ser criado: ${conv.error}`);
+      }
+
+      if (conv.conversationId) {
+        navigation.navigate('ChatEnc', {
+          screen: 'ChatEncThread',
+          params: {
+            conversationId: conv.conversationId,
+            participantName: acceptModal.clientName,
+          },
+        });
+      }
     } finally {
       setActioning(false);
       setAcceptModal(null);
     }
-  }, [acceptModal, userId]);
+  }, [acceptModal, userId, navigation, showAlert, load]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -192,7 +242,11 @@ export function HomeEncomendasScreen() {
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
 
         <Text style={styles.greeting}>Olá, {preparadorName}!</Text>
-        <Text style={styles.subGreeting}>Veja as solicitações de coleta disponíveis.</Text>
+        <Text style={styles.subGreeting}>
+          {missingBase
+            ? 'Vincule-se a uma base no cadastro para ver solicitações da sua região.'
+            : 'Veja as solicitações de coleta disponíveis na sua base.'}
+        </Text>
 
         <Text style={styles.sectionTitle}>Ações necessárias</Text>
         <View style={styles.actionCard}>
@@ -230,7 +284,13 @@ export function HomeEncomendasScreen() {
         ) : solicitacoes.length === 0 ? (
           <View style={styles.emptyState}>
             <MaterialIcons name="inventory-2" size={40} color="#D1D5DB" />
-            <Text style={styles.emptyText}>Nenhuma solicitação disponível</Text>
+            <Text style={styles.emptyText}>
+              {queueLoadError
+                ? `${queueLoadError}\n\nConfira as migrations RLS da fila do preparador no repositório (Supabase).`
+                : missingBase
+                  ? 'Perfil sem base atribuída. Entre em contato com o suporte.'
+                  : 'Nenhuma solicitação na fila da sua base.'}
+            </Text>
           </View>
         ) : (
           solicitacoes.map((s) => {

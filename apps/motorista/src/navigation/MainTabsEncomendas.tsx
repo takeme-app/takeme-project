@@ -1,18 +1,20 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import type { NavigatorScreenParams } from '@react-navigation/native';
 import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HomeEncomendasScreen } from '../screens/encomendas/HomeEncomendasScreen';
 import { ColetasEncomendasStack } from './ColetasEncomendasStack';
-import { ChatEncomendasScreen } from '../screens/encomendas/ChatEncomendasScreen';
-import { PagamentosEncomendasScreen } from '../screens/encomendas/PagamentosEncomendasScreen';
+import { ChatEncomendasStack } from './ChatEncomendasStack';
+import { PagamentosEncomendasStack } from './PagamentosEncomendasStack';
 import { PerfilEncomendasStack } from './PerfilEncomendasStack';
+import type { ChatEncomendasStackParamList, PagamentosEncStackParamList } from './types';
 
 type EncomendasTabParamList = {
   HomeEnc: undefined;
   ColetasEnc: undefined;
-  ChatEnc: undefined;
-  PagamentosEnc: undefined;
+  ChatEnc: NavigatorScreenParams<ChatEncomendasStackParamList>;
+  PagamentosEnc: NavigatorScreenParams<PagamentosEncStackParamList>;
   PerfilEnc: undefined;
 };
 
@@ -75,7 +77,7 @@ export function MainTabsEncomendas() {
       />
       <Tab.Screen
         name="ChatEnc"
-        component={ChatEncomendasScreen}
+        component={ChatEncomendasStack}
         options={{
           title: 'Chat',
           tabBarIcon: ({ color }) => <MaterialIcons name="message" size={24} color={color} />,
@@ -83,7 +85,7 @@ export function MainTabsEncomendas() {
       />
       <Tab.Screen
         name="PagamentosEnc"
-        component={PagamentosEncomendasScreen}
+        component={PagamentosEncomendasStack}
         options={{
           title: 'Pagamentos',
           tabBarIcon: ({ color }) => <MaterialIcons name="payments" size={24} color={color} />,
