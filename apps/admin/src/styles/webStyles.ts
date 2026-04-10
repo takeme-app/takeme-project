@@ -28,6 +28,22 @@ export function getLogoSrc(): string | null {
 
 // ── SVG Icons ──────────────────────────────────────────────────────────
 export const logoArrowSvg = React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } }, React.createElement('path', { d: 'M7 17L17 7M17 7h-8M17 7v8', stroke: '#F59E0B', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+
+/** Ícone my_location (Material) — Figma 844:17526, branco 20×20 */
+export const liveFollowMyLocationSvg = React.createElement(
+  'svg',
+  {
+    width: 20,
+    height: 20,
+    viewBox: '0 0 24 24',
+    fill: '#ffffff',
+    style: { display: 'block', flexShrink: 0 },
+    'aria-hidden': true,
+  },
+  React.createElement('path', {
+    d: 'M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3A8.001 8.001 0 0013 3.06V1h-2v2.06A8.001 8.001 0 003.06 11H1v2h2.06A8.001 8.001 0 0011 20.94V23h2v-2.06A8.001 8.001 0 0020.94 13H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z',
+  }),
+);
 export const logoArrowSmallSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } }, React.createElement('path', { d: 'M7 17L17 7M17 7h-8M17 7v8', stroke: '#F59E0B', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 export const searchIconSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 20 20', fill: 'none', style: { display: 'block' } }, React.createElement('path', { d: 'M9 17A8 8 0 1 0 9 1a8 8 0 0 0 0 16zm0-2a6 6 0 1 1 0-12 6 6 0 0 1 0 12z', fill: '#767676' }), React.createElement('path', { d: 'M19 19l-4.35-4.35', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' }));
 export const chevronDownSvg = React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } }, React.createElement('path', { d: 'M8 10l4 4 4-4', stroke: '#545454', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
@@ -424,6 +440,25 @@ export const webStyles = {
   detailBackBtn: { display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '8px 24px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', borderRadius: 8 },
   detailDocBtns: { display: 'flex', alignItems: 'center', gap: 16 },
   detailDocBtn: { display: 'flex', alignItems: 'center', gap: 8, height: 44, minWidth: 104, padding: '8px 24px', background: '#f1f1f1', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', borderRadius: 999 },
+  /** “Acompanhar em tempo real” — Figma 844:17525 (action container + my_location 20px) */
+  detailLiveFollowBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    minHeight: 44,
+    padding: '10px 16px',
+    background: '#0d0d0d',
+    border: 'none',
+    borderRadius: 90,
+    cursor: 'pointer',
+    fontSize: 14,
+    fontWeight: 500,
+    color: '#ffffff',
+    fontFamily: 'Inter, sans-serif',
+    lineHeight: 1.5,
+    boxSizing: 'border-box' as const,
+  },
   detailMapTimelineRow: { display: 'flex', alignItems: 'stretch', gap: 24, width: '100%', flexWrap: 'wrap' as const },
   detailMapWrap: {
     flex: '1 1 400px',

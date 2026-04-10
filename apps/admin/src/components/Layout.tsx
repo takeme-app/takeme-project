@@ -12,7 +12,6 @@ const navTabsList = [
   { label: 'Início', path: '/' },
   { label: 'Viagens', path: '/viagens' },
   { label: 'Passageiros', path: '/passageiros' },
-  { label: 'Dependentes', path: '/dependentes' },
   { label: 'Motoristas', path: '/motoristas' },
   { label: 'Destinos', path: '/destinos' },
   { label: 'Encomendas', path: '/encomendas' },
