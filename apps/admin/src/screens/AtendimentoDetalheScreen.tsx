@@ -2,9 +2,10 @@
  * AtendimentoDetalheScreen — Tela de atendimento individual conforme Figma 1425-21190 / 1429-33119 / 1430-34188.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
 import { useAuth } from '../contexts/AuthContext';
 import ChatPanel from '../components/ChatPanel';
 import {
@@ -13,6 +14,7 @@ import {
   fetchSupportHistoryForClient,
   fetchProfileBasics,
   fetchBookingDetailForAdmin,
+  updateWorkerStatus,
 } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -128,7 +130,7 @@ export default function AtendimentoDetalheScreen() {
   const [solicitacaoShort, setSolicitacaoShort] = useState(conversationId ? String(conversationId).slice(0, 8).toUpperCase() : '—');
   const [subjectUserId, setSubjectUserId] = useState<string>('');
   const [ctxJson, setCtxJson] = useState<Record<string, unknown>>({});
-  const [historicoReal, setHistoricoReal] = useState<Array<{ titulo: string; atendente: string; data: string; desc: string; desc2: string }>>([]);
+  const [historicoReal, setHistoricoReal] = useState<Array<{ id: string; titulo: string; atendente: string; data: string; desc: string; desc2: string }>>([]);
   const [complaintBody, setComplaintBody] = useState('');
 
   const status = ticket.status || 'nao_atendida';
@@ -136,16 +138,86 @@ export default function AtendimentoDetalheScreen() {
     () => categoria.toLowerCase().includes('excursão') || categoria.toLowerCase().includes('excursao'),
     [categoria],
   );
+
+  /** Motorista do ticket: `context.worker_id` (cadastro) ou usuário do ticket de cadastro de transporte. */
+  const motoristaDocWorkerId = useMemo(() => {
+    const w = typeof ctxJson.worker_id === 'string' ? ctxJson.worker_id.trim() : '';
+    if (w) return w;
+    if (rawCategory === 'cadastro_transporte' && subjectUserId.trim()) return subjectUserId.trim();
+    return '';
+  }, [ctxJson.worker_id, rawCategory, subjectUserId]);
   const [chatOpen, setChatOpen] = useState(false);
+  /** Mensagens do requerente ainda não lidas pelo operador (read_at null, sender ≠ admin). */
+  const [subjectUnreadForOperator, setSubjectUnreadForOperator] = useState(0);
   const [chatMsg, setChatMsg] = useState('');
+
+  const fetchSubjectUnreadForOperator = useCallback(async () => {
+    if (!isSupabaseConfigured || !conversationId || !currentUserId) {
+      setSubjectUnreadForOperator(0);
+      return;
+    }
+    const { count, error } = await (supabase as any)
+      .from('messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('conversation_id', conversationId)
+      .neq('sender_id', currentUserId)
+      .is('read_at', null);
+    if (error) {
+      setSubjectUnreadForOperator(0);
+      return;
+    }
+    setSubjectUnreadForOperator(count ?? 0);
+  }, [conversationId, currentUserId]);
+
+  useEffect(() => {
+    void fetchSubjectUnreadForOperator();
+    if (!isSupabaseConfigured || !conversationId) return () => {};
+    const channel = (supabase as any)
+      .channel(`atendimento-operator-unread:${conversationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'messages',
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        () => { void fetchSubjectUnreadForOperator(); },
+      )
+      .subscribe();
+    return () => {
+      (supabase as any).removeChannel(channel);
+    };
+  }, [conversationId, fetchSubjectUnreadForOperator]);
+
+  const hadChatOpenRef = useRef(false);
+  useEffect(() => {
+    if (chatOpen) {
+      hadChatOpenRef.current = true;
+      return undefined;
+    }
+    if (hadChatOpenRef.current) {
+      hadChatOpenRef.current = false;
+      void fetchSubjectUnreadForOperator();
+    }
+    return undefined;
+  }, [chatOpen, fetchSubjectUnreadForOperator]);
+
   const [editStatusOpen, setEditStatusOpen] = useState(false);
   const [currentStatus, setCurrentStatus] = useState(status);
   const [finalizarOpen, setFinalizarOpen] = useState(false);
   const [finishNoteDraft, setFinishNoteDraft] = useState('');
   const [reprovarOpen, setReprovarOpen] = useState(false);
   const [autorizarOpen, setAutorizarOpen] = useState(false);
+  const [autorizarSubmitting, setAutorizarSubmitting] = useState(false);
+  const [reprovarSubmitting, setReprovarSubmitting] = useState(false);
+  /** `worker_profiles.status` do motorista vinculado ao ticket de cadastro (para esconder aprovar/reprovar). */
+  const [workerCadastroStatus, setWorkerCadastroStatus] = useState<string | null>(null);
   const [dadosCadastraisOpen, setDadosCadastraisOpen] = useState(false);
   const [documentosOpen, setDocumentosOpen] = useState(false);
+  type SupportDocRow = { key: string; section: string; fileLabel: string; href: string | null; rawPresent: boolean; hasWarning: boolean };
+  const [supportDocRows, setSupportDocRows] = useState<SupportDocRow[]>([]);
+  const [supportDocsLoading, setSupportDocsLoading] = useState(false);
   const [encomendaOpen, setEncomendaOpen] = useState(false);
   const [viagemOpen, setViagemOpen] = useState(false);
   const [pagamentoOpen, setPagamentoOpen] = useState(false);
@@ -155,6 +227,76 @@ export default function AtendimentoDetalheScreen() {
   const showToast = useCallback((msg: string) => setToastMsg(msg), []);
   useEffect(() => { if (!toastMsg) return; const t = setTimeout(() => setToastMsg(null), 3000); return () => clearTimeout(t); }, [toastMsg]);
   const [tempStatus, setTempStatus] = useState(status);
+
+  const openPerfilCompletoRelacionado = useCallback(() => {
+    if (motoristaDocWorkerId) {
+      setDadosCadastraisOpen(false);
+      setDocumentosOpen(false);
+      navigate(`/motoristas/${motoristaDocWorkerId}`);
+      return;
+    }
+    if (subjectUserId.trim()) {
+      setDadosCadastraisOpen(false);
+      setDocumentosOpen(false);
+      navigate(`/passageiros/${subjectUserId.trim()}`);
+      return;
+    }
+    showToast('Não foi possível abrir o perfil.');
+  }, [motoristaDocWorkerId, navigate, showToast, subjectUserId]);
+
+  useEffect(() => {
+    if (!documentosOpen || !isSupabaseConfigured) return;
+    const wid = motoristaDocWorkerId;
+    if (!wid) {
+      setSupportDocRows([]);
+      setSupportDocsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setSupportDocsLoading(true);
+    setSupportDocRows([]);
+    const db = supabase as any;
+    void (async () => {
+      const { data: wp } = await db
+        .from('worker_profiles')
+        .select('cnh_document_url, cnh_document_back_url, background_check_url')
+        .eq('id', wid)
+        .maybeSingle();
+      const { data: vehList } = await db
+        .from('vehicles')
+        .select('vehicle_document_url')
+        .eq('worker_id', wid)
+        .order('is_active', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: true })
+        .limit(1);
+      const veh = Array.isArray(vehList) ? vehList[0] : vehList;
+      if (cancelled) return;
+      const w = wp as { cnh_document_url?: string | null; cnh_document_back_url?: string | null; background_check_url?: string | null } | null;
+      const v = veh as { vehicle_document_url?: string | null } | undefined;
+      const specs: Array<{ key: string; section: string; fileLabel: string; raw: string | null | undefined; hasWarning: boolean }> = [
+        { key: 'cnh_f', section: 'CNH (frente)', fileLabel: 'documento_cnh_frente.jpg', raw: w?.cnh_document_url, hasWarning: false },
+        { key: 'cnh_b', section: 'CNH (verso)', fileLabel: 'documento_cnh_verso.jpg', raw: w?.cnh_document_back_url, hasWarning: false },
+        { key: 'bg', section: 'Antecedentes criminais', fileLabel: 'antecedentes_criminais.jpg', raw: w?.background_check_url, hasWarning: true },
+        { key: 'veh', section: 'Documento do veículo', fileLabel: 'documento_veiculo.jpg', raw: v?.vehicle_document_url, hasWarning: false },
+      ];
+      const rows: SupportDocRow[] = [];
+      for (const s of specs) {
+        const t = typeof s.raw === 'string' ? s.raw.trim() : '';
+        if (!t) {
+          rows.push({ key: s.key, section: s.section, fileLabel: s.fileLabel, href: null, rawPresent: false, hasWarning: s.hasWarning });
+          continue;
+        }
+        let href: string | null = await resolveStorageDisplayUrl(supabase, t);
+        if (!href && /^https?:\/\//i.test(t)) href = t;
+        rows.push({ key: s.key, section: s.section, fileLabel: s.fileLabel, href, rawPresent: true, hasWarning: s.hasWarning });
+      }
+      if (!cancelled) {
+        setSupportDocRows(rows);
+        setSupportDocsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [documentosOpen, motoristaDocWorkerId]);
 
   useEffect(() => {
     if (!isSupabaseConfigured || !conversationId) return;
@@ -188,6 +330,7 @@ export default function AtendimentoDetalheScreen() {
       const hist = await fetchSupportHistoryForClient(conv.client_id, conv.id);
       if (!cancelled) {
         setHistoricoReal(hist.map((h) => ({
+          id: h.id,
           titulo: h.titulo,
           atendente: h.atendente,
           data: h.data,
@@ -231,6 +374,24 @@ export default function AtendimentoDetalheScreen() {
     return () => { cancelled = true; };
   }, [conversationId]);
 
+  useEffect(() => {
+    if (!isSupabaseConfigured || rawCategory !== 'cadastro_transporte' || !motoristaDocWorkerId) {
+      setWorkerCadastroStatus(null);
+      return;
+    }
+    let cancelled = false;
+    void (supabase as any)
+      .from('worker_profiles')
+      .select('status')
+      .eq('id', motoristaDocWorkerId)
+      .maybeSingle()
+      .then(({ data }: { data: { status?: string } | null }) => {
+        if (cancelled) return;
+        setWorkerCadastroStatus(typeof data?.status === 'string' ? data.status : null);
+      });
+    return () => { cancelled = true; };
+  }, [rawCategory, motoristaDocWorkerId]);
+
   const statusOpts = [
     { key: 'nao_atendida', label: 'Não atendida', dot: '#b53838', bg: '#eeafaa', color: '#551611' },
     { key: 'em_atendimento', label: 'Em atendimento', dot: '#cba04b', bg: '#fee59a', color: '#654c01' },
@@ -242,6 +403,51 @@ export default function AtendimentoDetalheScreen() {
   const statusDot = curOpt.dot;
   const statusBg = curOpt.bg;
   const statusColor = curOpt.color;
+
+  const cadastroWorkerDecidido =
+    workerCadastroStatus === 'approved' ||
+    workerCadastroStatus === 'rejected' ||
+    workerCadastroStatus === 'suspended';
+  const hideCadastroAprovarReprovar =
+    rawCategory === 'cadastro_transporte' && Boolean(motoristaDocWorkerId) && cadastroWorkerDecidido;
+
+  const cadastroDecididoBanner = hideCadastroAprovarReprovar
+    ? (() => {
+        const s = workerCadastroStatus;
+        const meta =
+          s === 'approved'
+            ? { bg: '#b0e8d1', color: '#174f38', border: '#22c55e', label: 'Cadastro de motorista aprovado' }
+            : s === 'rejected'
+              ? { bg: '#eeafaa', color: '#551611', border: '#b53838', label: 'Cadastro de motorista reprovado' }
+              : { bg: '#fee59a', color: '#654c01', border: '#cba04b', label: 'Cadastro suspenso' };
+        return React.createElement(
+          'div',
+          {
+            style: {
+              marginTop: 8,
+              padding: '14px 18px',
+              borderRadius: 12,
+              background: meta.bg,
+              border: `1px solid ${meta.border}`,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              ...font,
+            },
+          },
+          React.createElement('span', {
+            style: {
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              background: meta.border,
+              flexShrink: 0,
+            },
+          }),
+          React.createElement('span', { style: { fontSize: 15, fontWeight: 600, color: meta.color } }, meta.label),
+        );
+      })()
+    : null;
 
   // ── Left panel ────────────────────────────────────────────────────────
   const leftPanel = React.createElement('div', {
@@ -387,26 +593,44 @@ export default function AtendimentoDetalheScreen() {
           },
         }, label))),
 
-    // Bottom action buttons
-    React.createElement('div', { style: { display: 'flex', gap: 12, marginTop: 8 } },
-      // Reprovar button
-      React.createElement('button', {
-        type: 'button',
-        onClick: () => setReprovarOpen(true),
-        style: {
-          flex: '0 0 auto', height: 48, padding: '0 28px', borderRadius: 999, border: 'none',
-          background: '#eeafaa', color: '#551611', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
-        },
-      }, isExcursao ? 'Reprovar excursão' : 'Reprovar cadastro'),
-      // Main action button
-      React.createElement('button', {
-        type: 'button',
-        onClick: () => { if (isExcursao && !orcamentoCriado) navigate('/atendimentos/0/orcamento'); else if (isExcursao && orcamentoCriado) { /* enviar */ } else setAutorizarOpen(true); },
-        style: {
-          flex: 1, height: 48, padding: '0 28px', borderRadius: 999, border: 'none',
-          background: '#22c55e', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
-        },
-      }, isExcursao ? (orcamentoCriado ? 'Enviar orçamento' : 'Elaborar orçamento') : 'Autorizar cadastro')));
+    // Bottom: excursão = ações de orçamento; cadastro de transporte já decidido = só banner; senão aprovar/reprovar
+    isExcursao
+      ? React.createElement('div', { style: { display: 'flex', gap: 12, marginTop: 8 } },
+          React.createElement('button', {
+            type: 'button',
+            onClick: () => setReprovarOpen(true),
+            style: {
+              flex: '0 0 auto', height: 48, padding: '0 28px', borderRadius: 999, border: 'none',
+              background: '#eeafaa', color: '#551611', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
+            },
+          }, 'Reprovar excursão'),
+          React.createElement('button', {
+            type: 'button',
+            onClick: () => { if (!orcamentoCriado) navigate('/atendimentos/0/orcamento'); else { /* enviar */ } },
+            style: {
+              flex: 1, height: 48, padding: '0 28px', borderRadius: 999, border: 'none',
+              background: '#22c55e', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
+            },
+          }, orcamentoCriado ? 'Enviar orçamento' : 'Elaborar orçamento'))
+      : hideCadastroAprovarReprovar
+        ? cadastroDecididoBanner
+        : React.createElement('div', { style: { display: 'flex', gap: 12, marginTop: 8 } },
+            React.createElement('button', {
+              type: 'button',
+              onClick: () => setReprovarOpen(true),
+              style: {
+                flex: '0 0 auto', height: 48, padding: '0 28px', borderRadius: 999, border: 'none',
+                background: '#eeafaa', color: '#551611', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
+              },
+            }, 'Reprovar cadastro'),
+            React.createElement('button', {
+              type: 'button',
+              onClick: () => setAutorizarOpen(true),
+              style: {
+                flex: 1, height: 48, padding: '0 28px', borderRadius: 999, border: 'none',
+                background: '#22c55e', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
+              },
+            }, 'Autorizar cadastro')));
 
   // ── Right panel: Histórico ────────────────────────────────────────────
   const rightPanel = React.createElement('div', {
@@ -414,28 +638,44 @@ export default function AtendimentoDetalheScreen() {
       flex: '1 1 45%', minWidth: 300, display: 'flex', flexDirection: 'column' as const, gap: 0,
     },
   },
-    React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: '0 0 16px 0', ...font } }, 'Histórico de atendimentos'),
     React.createElement('div', {
       style: {
         background: '#f6f6f6', borderRadius: 16, padding: 24, display: 'flex',
         flexDirection: 'column' as const, gap: 0,
       },
     },
-      React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: '0 0 16px 0', ...font } }, 'Histórico de atendimentos'),
-      ...(historicoReal.length ? historicoReal : []).map((item, idx) =>
+      React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: '0 0 16px 0', ...font } }, 'Histórico de atendimentos'),
+      historicoReal.length === 0
+        ? React.createElement('p', {
+          style: { fontSize: 14, color: '#767676', margin: 0, lineHeight: 1.5, ...font },
+        }, 'Nenhum outro atendimento deste usuário nos últimos 6 meses (exceto o ticket atual).')
+        : null,
+      ...historicoReal.map((item, idx) =>
         React.createElement('div', {
-          key: idx,
+          key: item.id || String(idx),
           style: {
             padding: '16px 0', borderTop: idx > 0 ? '1px solid #e2e2e2' : 'none',
-            display: 'flex', flexDirection: 'column' as const, gap: 6,
+            display: 'flex', flexDirection: 'column' as const, gap: 8,
           },
         },
-          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
-            React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, item.titulo),
-            React.createElement('span', { style: { fontSize: 12, color: '#767676', flexShrink: 0, marginLeft: 12, ...font } }, item.data)),
-          React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, `Atendente: ${item.atendente}`),
-          React.createElement('p', { style: { fontSize: 13, color: '#767676', margin: 0, lineHeight: 1.5, ...font } }, item.desc),
-          item.desc2 ? React.createElement('p', { style: { fontSize: 13, color: '#767676', margin: 0, lineHeight: 1.5, ...font } }, item.desc2) : null))),
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 } },
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6, flex: 1, minWidth: 0 } },
+              React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, alignItems: 'center', gap: 8 } },
+                item.desc2
+                  ? React.createElement('span', {
+                    style: {
+                      fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 999, flexShrink: 0,
+                      background: item.desc2 === 'Encerrado' ? '#e2e2e2' : '#fee59a',
+                      color: item.desc2 === 'Encerrado' ? '#3a3a3a' : '#654c01',
+                      ...font,
+                    },
+                  }, item.desc2)
+                  : null,
+                React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, item.titulo)),
+              React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, `Atendente: ${item.atendente}`)),
+            React.createElement('span', { style: { fontSize: 12, color: '#767676', flexShrink: 0, ...font } }, item.data)),
+          React.createElement('p', { style: { fontSize: 13, color: '#767676', margin: 0, lineHeight: 1.5, ...font } }, item.desc))),
+    ),
 
     // Conversa floating bar (toggles chat)
     React.createElement('div', {
@@ -448,16 +688,22 @@ export default function AtendimentoDetalheScreen() {
       onClick: () => setChatOpen(!chatOpen),
     },
       React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#fff', ...font } }, 'Conversa'),
-      React.createElement('span', {
-        style: {
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          width: 22, height: 22, borderRadius: '50%', background: '#b53838',
-          fontSize: 12, fontWeight: 700, color: '#fff', ...font,
-        },
-      }, '5'),
+      subjectUnreadForOperator > 0 && !chatOpen
+        ? React.createElement('span', {
+          key: 'op-unread',
+          style: {
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            minWidth: 22, height: 22, padding: '0 6px', borderRadius: '50%', background: '#b53838',
+            fontSize: 12, fontWeight: 700, color: '#fff', ...font,
+          },
+        }, subjectUnreadForOperator > 99 ? '99+' : String(subjectUnreadForOperator))
+        : null,
       React.createElement('button', {
         type: 'button',
-        onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        onClick: (e: React.MouseEvent) => {
+          e.stopPropagation();
+          void fetchSubjectUnreadForOperator();
+        },
         style: { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', marginLeft: 8 },
       }, refreshSvg),
       React.createElement('button', {
@@ -496,6 +742,7 @@ export default function AtendimentoDetalheScreen() {
     currentUserId,
     participantName: nome,
     onClose: () => setChatOpen(false),
+    onAfterMarkRead: () => { void fetchSubjectUnreadForOperator(); },
     floating: true,
   }) : null;
 
@@ -684,7 +931,7 @@ export default function AtendimentoDetalheScreen() {
         readField('Estado', 'Maranhão')),
       // Ver perfil completo button
       React.createElement('button', {
-        type: 'button', onClick: () => { setDadosCadastraisOpen(false); navigate('/passageiros/0'); },
+        type: 'button', onClick: openPerfilCompletoRelacionado,
         style: {
           width: '100%', height: 48, borderRadius: 999, border: 'none',
           background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font,
@@ -701,11 +948,81 @@ export default function AtendimentoDetalheScreen() {
     React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#cba04b', strokeWidth: 2 }),
     React.createElement('path', { d: 'M12 8v4M12 16h.01', stroke: '#cba04b', strokeWidth: 2, strokeLinecap: 'round' }));
 
-  const docItems = [
-    { section: 'CNH (frente e verso)', file: 'documento_do_carro.pdf', hasWarning: false },
-    { section: 'Antecedentes Criminais', file: 'atencedentes_criminais.pdf', hasWarning: true },
-    { section: 'Documento do veículo', file: 'documentos_do_veiculo.pdf', hasWarning: false },
-  ];
+  const documentosRowElements =
+    supportDocsLoading || !motoristaDocWorkerId
+      ? []
+      : supportDocRows.map((doc) =>
+          React.createElement(
+            'div',
+            { key: doc.key, style: { display: 'flex', flexDirection: 'column' as const, gap: 8, marginBottom: 16 } },
+            React.createElement(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+              doc.hasWarning ? infoIcon : null,
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, doc.section),
+            ),
+            React.createElement(
+              'div',
+              {
+                style: {
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '12px 0',
+                  borderBottom: '1px solid #f1f1f1',
+                },
+              },
+              React.createElement(
+                'div',
+                { style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 } },
+                docFileIcon,
+                React.createElement(
+                  'span',
+                  {
+                    style: {
+                      fontSize: 14,
+                      color: doc.rawPresent && !doc.href ? '#b53838' : '#0d0d0d',
+                      ...font,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap' as const,
+                    },
+                  },
+                  !doc.rawPresent
+                    ? 'Nenhum arquivo enviado'
+                    : !doc.href
+                      ? 'Arquivo indisponível (permissões de storage)'
+                      : doc.fileLabel
+                )
+              ),
+              doc.href
+                ? React.createElement(
+                    'a',
+                    {
+                      href: doc.href,
+                      target: '_blank',
+                      rel: 'noopener noreferrer',
+                      title: 'Abrir ou baixar',
+                      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+                      style: {
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: 0,
+                        display: 'flex',
+                        flexShrink: 0,
+                      },
+                    },
+                    downloadIcon,
+                  )
+                : React.createElement(
+                    'span',
+                    { style: { display: 'flex', opacity: doc.rawPresent ? 0.35 : 0.25, flexShrink: 0 } },
+                    downloadIcon,
+                  ),
+            ),
+          ),
+        );
 
   const documentosModal = documentosOpen ? React.createElement('div', {
     style: {
@@ -731,28 +1048,16 @@ export default function AtendimentoDetalheScreen() {
         }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
           React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
       React.createElement('div', { style: { height: 1, background: '#e2e2e2', marginBottom: 16 } }),
-      // Doc items
-      ...docItems.map((doc, idx) =>
-        React.createElement('div', { key: idx, style: { display: 'flex', flexDirection: 'column' as const, gap: 8, marginBottom: 16 } },
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-            doc.hasWarning ? infoIcon : null,
-            React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, doc.section)),
-          React.createElement('div', {
-            style: {
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '12px 0', borderBottom: '1px solid #f1f1f1',
-            },
-          },
-            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-              docFileIcon,
-              React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, doc.file)),
-            React.createElement('button', {
-              type: 'button',
-              style: { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' },
-            }, downloadIcon)))),
+      supportDocsLoading
+        ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: '0 0 16px', ...font } }, 'Carregando documentos…')
+        : null,
+      !supportDocsLoading && !motoristaDocWorkerId
+        ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: '0 0 16px', ...font } }, 'Não há motorista vinculado a este ticket para exibir documentos.')
+        : null,
+      ...documentosRowElements,
       // Ver perfil completo
       React.createElement('button', {
-        type: 'button', onClick: () => { setDocumentosOpen(false); navigate('/passageiros/0'); },
+        type: 'button', onClick: openPerfilCompletoRelacionado,
         style: {
           width: '100%', height: 48, borderRadius: 999, border: 'none', marginTop: 8,
           background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font,
@@ -1257,12 +1562,32 @@ export default function AtendimentoDetalheScreen() {
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
         React.createElement('button', {
           type: 'button',
-          onClick: () => { setReprovarOpen(false); showToast('Cadastro reprovado'); setTimeout(() => navigate('/atendimentos'), 1500); },
+          disabled: reprovarSubmitting,
+          onClick: async () => {
+            if (rawCategory === 'cadastro_transporte') {
+              const wid = (typeof ctxJson.worker_id === 'string' && ctxJson.worker_id.trim()) || subjectUserId;
+              if (!wid) {
+                showToast('Não foi possível identificar o motorista.');
+                return;
+              }
+              setReprovarSubmitting(true);
+              const { error } = await updateWorkerStatus(wid, 'rejected');
+              setReprovarSubmitting(false);
+              if (error) {
+                showToast(`Erro ao reprovar: ${error}`);
+                return;
+              }
+              setWorkerCadastroStatus('rejected');
+            }
+            setReprovarOpen(false);
+            showToast('Cadastro reprovado');
+            setTimeout(() => navigate('/atendimentos'), 1500);
+          },
           style: {
             width: '100%', height: 48, borderRadius: 999, border: 'none',
-            background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font,
+            background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: reprovarSubmitting ? 'wait' : 'pointer', opacity: reprovarSubmitting ? 0.65 : 1, ...font,
           },
-        }, 'Sim, reprovar'),
+        }, reprovarSubmitting ? 'Reprovando…' : 'Sim, reprovar'),
         React.createElement('button', {
           type: 'button', onClick: () => setReprovarOpen(false),
           style: {
@@ -1298,12 +1623,32 @@ export default function AtendimentoDetalheScreen() {
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
         React.createElement('button', {
           type: 'button',
-          onClick: () => { setAutorizarOpen(false); showToast('Cadastro aprovado'); setTimeout(() => navigate('/atendimentos'), 1500); },
+          disabled: autorizarSubmitting,
+          onClick: async () => {
+            if (rawCategory === 'cadastro_transporte') {
+              const wid = (typeof ctxJson.worker_id === 'string' && ctxJson.worker_id.trim()) || subjectUserId;
+              if (!wid) {
+                showToast('Não foi possível identificar o motorista.');
+                return;
+              }
+              setAutorizarSubmitting(true);
+              const { error } = await updateWorkerStatus(wid, 'approved');
+              setAutorizarSubmitting(false);
+              if (error) {
+                showToast(`Erro ao aprovar: ${error}`);
+                return;
+              }
+              setWorkerCadastroStatus('approved');
+            }
+            setAutorizarOpen(false);
+            showToast('Cadastro aprovado');
+            setTimeout(() => navigate('/atendimentos'), 1500);
+          },
           style: {
             width: '100%', height: 48, borderRadius: 999, border: 'none',
-            background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font,
+            background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: autorizarSubmitting ? 'wait' : 'pointer', opacity: autorizarSubmitting ? 0.65 : 1, ...font,
           },
-        }, 'Sim, aprovar'),
+        }, autorizarSubmitting ? 'Aprovando…' : 'Sim, aprovar'),
         React.createElement('button', {
           type: 'button', onClick: () => setAutorizarOpen(false),
           style: {
@@ -1355,16 +1700,29 @@ export default function AtendimentoDetalheScreen() {
           type: 'button',
           onClick: async () => {
             if (isSupabaseConfigured && conversationId) {
-              await (supabase as any).from('conversations').update({
-                status: 'closed',
-                finish_note: finishNoteDraft.trim() || null,
-                finished_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              }).eq('id', conversationId);
+              const note = finishNoteDraft.trim();
+              const { error } = await (supabase as any).rpc('close_support_conversation', {
+                p_conversation_id: conversationId,
+                p_finish_note: note.length ? note : null,
+              });
+              if (error) {
+                const msg = String(error.message || '');
+                if (/forbidden/i.test(msg)) {
+                  showToast('Sem permissão para finalizar este atendimento.');
+                } else if (/not_found/i.test(msg)) {
+                  showToast('Atendimento não encontrado.');
+                } else if (/not_authenticated/i.test(msg)) {
+                  showToast('Sessão expirada. Entre novamente.');
+                } else {
+                  showToast(`Não foi possível finalizar: ${msg}`);
+                }
+                return;
+              }
             }
             setCurrentStatus('finalizada');
             setConvStatus('closed');
             setFinalizarOpen(false);
+            setFinishNoteDraft('');
             showToast('Atendimento finalizado');
             setTimeout(() => navigate('/atendimentos'), 1500);
           },
