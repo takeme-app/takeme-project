@@ -4,7 +4,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
+    "authorization, x-auth-token, x-client-info, apikey, content-type",
 };
 
 const STRIPE_API = "https://api.stripe.com/v1";
@@ -42,16 +42,7 @@ function isAdmin(user: { app_metadata?: Record<string, unknown> }): boolean {
 }
 
 /**
- * process-refund
- *
- * Processa estorno integral ou parcial via Stripe.
- * Pode ser chamado pelo admin ou internamente (respond-assignment em caso de recusa).
- *
- * Body:
- *   entity_type: "booking" | "shipment" | "dependent_shipment" | "excursion"
- *   entity_id: uuid
- *   amount_cents?: number (se omitido = estorno integral)
- *   reason?: string
+ * process-refund — estorno Stripe (admin JWT ou service_role para cron).
  */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -59,18 +50,22 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
+    const authHeader = req.headers.get("Authorization") ?? req.headers.get("x-auth-token");
+    const token = authHeader?.startsWith("Bearer ")
+      ? authHeader.replace("Bearer ", "").trim()
+      : (authHeader ?? "").trim();
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const stripeSecret = Deno.env.get("STRIPE_SECRET_KEY");
+
+    if (!token) {
       return new Response(JSON.stringify({ error: "Não autorizado" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    const token = authHeader.replace("Bearer ", "");
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const stripeSecret = Deno.env.get("STRIPE_SECRET_KEY");
 
     if (!stripeSecret) {
       return new Response(
@@ -82,21 +77,25 @@ Deno.serve(async (req) => {
       );
     }
 
-    const userClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    });
-    const {
-      data: { user },
-      error: userError,
-    } = await userClient.auth.getUser(token);
-    if (userError || !user || !isAdmin(user)) {
-      return new Response(
-        JSON.stringify({ error: "Acesso restrito a administradores" }),
-        {
-          status: 403,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
+    const isServiceRole = token === serviceRoleKey;
+
+    if (!isServiceRole) {
+      const userClient = createClient(supabaseUrl, anonKey, {
+        global: { headers: { Authorization: `Bearer ${token}` } },
+      });
+      const {
+        data: { user },
+        error: userError,
+      } = await userClient.auth.getUser(token);
+      if (userError || !user || !isAdmin(user)) {
+        return new Response(
+          JSON.stringify({ error: "Acesso restrito a administradores ou chamadas internas" }),
+          {
+            status: 403,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          }
+        );
+      }
     }
 
     const body = (await req.json().catch(() => ({}))) as {
@@ -120,7 +119,6 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Determinar tabela e campo de valor
     let table: string;
     let amountField: string;
     switch (entity_type) {
@@ -152,7 +150,6 @@ Deno.serve(async (req) => {
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
 
-    // Buscar entidade
     const { data: entity, error: entityErr } = await admin
       .from(table)
       .select(`id, ${amountField}, user_id, payment_method_id, stripe_payment_intent_id`)
@@ -180,19 +177,16 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Valor do estorno: parcial ou integral
-    const refundAmount = amount_cents && amount_cents > 0
-      ? Math.min(amount_cents, entityAmount)
-      : entityAmount;
+    const refundAmount =
+      amount_cents && amount_cents > 0
+        ? Math.min(amount_cents, entityAmount)
+        : entityAmount;
 
-    // Buscar payment_intent_id
-    // Nota: o campo stripe_payment_intent_id precisa existir na tabela.
-    // Se ainda não existir, este é um placeholder — o estorno só funciona com o PI salvo.
     const paymentIntentId = entity.stripe_payment_intent_id as string | null;
 
     if (!paymentIntentId) {
       console.warn(
-        `[process-refund] ${entity_type}/${entity_id}: stripe_payment_intent_id não encontrado. Estorno não processado.`
+        `[process-refund] ${entity_type}/${entity_id}: stripe_payment_intent_id não encontrado.`
       );
       return new Response(
         JSON.stringify({
@@ -206,7 +200,6 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Processar refund no Stripe
     const refundParams = new URLSearchParams({
       payment_intent: paymentIntentId,
       amount: String(refundAmount),
@@ -223,24 +216,22 @@ Deno.serve(async (req) => {
       refundParams
     )) as { id: string; status: string; amount: number };
 
-    // Atualizar status da entidade para cancelado
     const cancelStatus = "cancelled";
-    await admin
-      .from(table)
-      .update({
-        status: cancelStatus,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", entity_id);
+    const now = new Date().toISOString();
+    const updatePayload: Record<string, string> = {
+      status: cancelStatus,
+      updated_at: now,
+    };
+    await admin.from(table).update(updatePayload as never).eq("id", entity_id);
 
-    // Notificar cliente
-    if (entity.user_id) {
+    const userId = entity.user_id as string | null | undefined;
+    if (userId) {
       await admin.from("notifications").insert({
-        user_id: entity.user_id,
+        user_id: userId,
         title: "Estorno processado",
         message: `O valor de R$ ${(refundAmount / 100).toFixed(2).replace(".", ",")} será devolvido ao seu método de pagamento.`,
         category: entity_type,
-      });
+      } as never);
     }
 
     return new Response(

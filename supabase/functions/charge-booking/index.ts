@@ -95,7 +95,7 @@ Deno.serve(async (req) => {
 
     const { data: booking, error: bookingErr } = await admin
       .from("bookings")
-      .select("id, user_id, amount_cents, status")
+      .select("id, user_id, amount_cents, status, worker_payout_cents, scheduled_trips(driver_id)")
       .eq("id", bookingId)
       .eq("user_id", userId)
       .single();
@@ -148,6 +148,43 @@ Deno.serve(async (req) => {
       );
     }
 
+    const stRaw = booking.scheduled_trips as { driver_id?: string } | { driver_id?: string }[] | null;
+    const st = Array.isArray(stRaw) ? stRaw[0] : stRaw;
+    const driverId = st?.driver_id?.trim();
+    let connectAccountId: string | null = null;
+    let applicationFeeCents: number | null = null;
+
+    if (driverId) {
+      const { data: wp } = await admin
+        .from("worker_profiles")
+        .select("stripe_connect_account_id")
+        .eq("id", driverId)
+        .maybeSingle();
+      connectAccountId = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? null;
+
+      const workerPayout = booking.worker_payout_cents;
+      const payout =
+        workerPayout != null && Number.isFinite(Number(workerPayout))
+          ? Math.max(0, Math.floor(Number(workerPayout)))
+          : null;
+
+      if (connectAccountId && payout != null) {
+        if (payout > amountCents) {
+          return new Response(
+            JSON.stringify({ error: "Inconsistência de valores da reserva (repasse > total)" }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        applicationFeeCents = amountCents - payout;
+        if (applicationFeeCents < 0) {
+          return new Response(
+            JSON.stringify({ error: "Taxa de aplicação inválida para Stripe Connect" }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      }
+    }
+
     const piParams = new URLSearchParams({
       amount: String(amountCents),
       currency: "brl",
@@ -156,6 +193,11 @@ Deno.serve(async (req) => {
       confirm: "true",
       "metadata[booking_id]": bookingId,
     });
+    if (connectAccountId && applicationFeeCents != null) {
+      piParams.set("application_fee_amount", String(applicationFeeCents));
+      piParams.set("transfer_data[destination]", connectAccountId);
+      piParams.set("metadata[stripe_connect_destination]", connectAccountId);
+    }
     const pi = await stripeFetch(stripeSecret, "POST", "/payment_intents", piParams) as {
       id?: string;
       status?: string;
@@ -184,6 +226,38 @@ Deno.serve(async (req) => {
         JSON.stringify({ error: "Reserva cobrada mas falha ao atualizar status; contate o suporte" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
+    }
+
+    if (driverId) {
+      const workerPayout = booking.worker_payout_cents;
+      const payoutCents =
+        workerPayout != null && Number.isFinite(Number(workerPayout))
+          ? Math.max(0, Math.floor(Number(workerPayout)))
+          : null;
+      if (payoutCents != null) {
+        const { data: existingPayout } = await admin
+          .from("payouts")
+          .select("id")
+          .eq("entity_type", "booking")
+          .eq("entity_id", bookingId)
+          .maybeSingle();
+        if (!existingPayout) {
+          const adminCents = Math.max(0, amountCents - payoutCents);
+          const { error: payoutErr } = await admin.from("payouts").insert({
+            worker_id: driverId,
+            entity_type: "booking",
+            entity_id: bookingId,
+            gross_amount_cents: amountCents,
+            worker_amount_cents: payoutCents,
+            admin_amount_cents: adminCents,
+            status: "pending",
+            payout_method: "pix",
+          } as never);
+          if (payoutErr) {
+            console.error("[charge-booking] payout insert:", payoutErr);
+          }
+        }
+      }
     }
 
     return new Response(
