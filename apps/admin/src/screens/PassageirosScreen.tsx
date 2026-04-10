@@ -8,11 +8,10 @@ import {
   webStyles,
   searchIconSvg,
   filterIconSvg,
-  editIconSvg,
   calendarIconSvg,
   closeIconSvg,
 } from '../styles/webStyles';
-import { fetchPassageiros, fetchPassageiroBookings } from '../data/queries';
+import { fetchPassageiros } from '../data/queries';
 import type { PassageiroListItem } from '../data/types';
 
 const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } = require('recharts');
@@ -23,10 +22,6 @@ const font = { fontFamily: 'Inter, sans-serif' };
 const eyeActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
   React.createElement('circle', { cx: 12, cy: 12, r: 3, stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
-
-const pencilActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-  React.createElement('path', { d: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-  React.createElement('path', { d: 'M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 
 const closeSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
   React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
@@ -39,7 +34,7 @@ const tableCols = [
   { label: 'Data criação', flex: '0 0 105px', minWidth: 105 },
   { label: 'CPF', flex: '0 0 140px', minWidth: 140 },
   { label: 'Status', flex: '0 0 100px', minWidth: 100 },
-  { label: 'Visualizar/Editar', flex: '0 0 96px', minWidth: 96 },
+  { label: 'Visualizar', flex: '0 0 56px', minWidth: 56 },
 ];
 
 const statusStyles = {
@@ -254,35 +249,11 @@ export default function PassageirosScreen() {
       React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth } }, p.cpf),
       React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth } },
         React.createElement('span', { style: { display: 'inline-block', padding: '4px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' as const, ...st, ...font } }, p.status)),
-      React.createElement('div', { style: { flex: tableCols[6].flex, minWidth: tableCols[6].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 } },
+      React.createElement('div', { style: { flex: tableCols[6].flex, minWidth: tableCols[6].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' } },
         React.createElement('button', {
           type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar',
-          onClick: () => {
-            void (async () => {
-              const bookings = await fetchPassageiroBookings(p.id);
-              const first = bookings[0];
-              if (first) {
-                navigate(`/passageiros/${p.id}/viagem/${first.bookingId}`, {
-                  state: { trip: { passageiro: p.nome, origem: first.origem, destino: first.destino, data: first.data, embarque: first.embarque, chegada: first.chegada, status: first.status } },
-                });
-              } else navigate(`/passageiros/${p.id}`);
-            })();
-          },
-        }, eyeActionSvg),
-        React.createElement('button', {
-          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
-          onClick: () => {
-            void (async () => {
-              const bookings = await fetchPassageiroBookings(p.id);
-              const first = bookings[0];
-              if (first) {
-                navigate(`/passageiros/${p.id}/viagem/${first.bookingId}/editar`, {
-                  state: { trip: { passageiro: p.nome, origem: first.origem, destino: first.destino, data: first.data, embarque: first.embarque, chegada: first.chegada, status: first.status }, from: 'Passageiros' },
-                });
-              } else navigate(`/passageiros/${p.id}`);
-            })();
-          },
-        }, pencilActionSvg)));
+          onClick: () => navigate(`/passageiros/${p.id}`),
+        }, eyeActionSvg)));
   });
 
   const tableSection = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' } },
@@ -302,7 +273,7 @@ export default function PassageirosScreen() {
   // ── Filtro modal ───────────────────────────────────────────────────────
   const filtroModal = filtroOpen ? React.createElement('div', {
     role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'filtro-titulo',
-    style: { position: 'fixed' as const, inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', padding: 24, background: 'rgba(0,0,0,0.18)' },
+    style: { position: 'fixed' as const, inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(0,0,0,0.18)' },
     onClick: () => setFiltroOpen(false),
   },
     React.createElement('div', {
@@ -351,7 +322,7 @@ export default function PassageirosScreen() {
   // ── Filtro de tabela modal ─────────────────────────────────────────────
   const tblFiltroModal = tblFiltroOpen ? React.createElement('div', {
     role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'tbl-filtro-titulo',
-    style: { position: 'fixed' as const, inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', padding: 24, background: 'rgba(0,0,0,0.18)' },
+    style: { position: 'fixed' as const, inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(0,0,0,0.18)' },
     onClick: () => setTblFiltroOpen(false),
   },
     React.createElement('div', {
