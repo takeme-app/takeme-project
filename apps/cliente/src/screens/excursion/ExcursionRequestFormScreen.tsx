@@ -19,6 +19,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ExcursionStackParamList } from '../../navigation/types';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
+import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { CalendarPicker } from '../../components/CalendarPicker';
 import {
@@ -180,6 +181,7 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
       showAlert('Erro', message);
       return;
     }
+    if (row?.id) void tryOpenSupportTicket('excursao', { excursion_request_id: row.id });
     navigation.replace('ExcursionSuccess', { requestId: row?.id });
   }, [
     destination,

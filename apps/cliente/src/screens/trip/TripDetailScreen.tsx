@@ -26,6 +26,7 @@ import {
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
+import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib/route';
 import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
 import { getAvailableTimeSlots, ALL_TIME_SLOTS, toISODate } from '../../lib/dateTimeSlots';
@@ -100,6 +101,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
         .from('bookings')
         .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
         .eq('id', bookingId);
+      void tryOpenSupportTicket('reembolso', { booking_id: bookingId });
       setShowCancelTripModal(false);
       navigation.goBack();
     } finally {

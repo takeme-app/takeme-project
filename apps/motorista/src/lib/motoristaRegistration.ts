@@ -209,6 +209,13 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
     }
   }
 
+  try {
+    const { tryOpenSupportTicket } = await import('./supportTickets');
+    void tryOpenSupportTicket('cadastro_transporte', { worker_id: userId });
+  } catch {
+    /* ignore */
+  }
+
   for (const r of routes) {
     const { error: routeErr } = await supabase.from('worker_routes').insert({
       worker_id: userId,

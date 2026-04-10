@@ -1,9 +1,10 @@
 /**
  * EncomendaEditScreen — Editar encomenda conforme Figma 849-37300.
  * Secção motoristas: Figma 1283-34111.
+ * Mapa e dados alinhados ao detalhe da viagem (roteiro, coords reais, perfis).
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   fetchApprovedDriversForEncomendaUI,
@@ -14,16 +15,33 @@ import {
 } from '../data/queries';
 import type { EncomendaEditDetail } from '../data/types';
 import MapView from '../components/MapView';
-import { supabase } from '../lib/supabase';
+import { DETAIL_TRIP_MAP_HEIGHT, webStyles } from '../styles/webStyles';
+import { useTripStops } from '../hooks/useTripStops';
+import { useEncomendaMapCoords } from '../hooks/useEncomendaMapCoords';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
 const driverWaitingAsset = require('../../assets/driver-waiting.png');
-const motoristaAvatar1 = require('../../assets/motoristas/m1.png');
-const motoristaAvatar2 = require('../../assets/motoristas/m2.png');
-const motoristaAvatar3 = require('../../assets/motoristas/m3.png');
-const motoristaAvatar4 = require('../../assets/motoristas/m4.png');
 const logoTakeMeBadge = require('../../assets/motoristas/logo-takeme.png');
+
+const SHIPMENT_STATUS_LABEL: Record<string, string> = {
+  pending_review: 'Pendente de análise',
+  confirmed: 'Confirmada',
+  in_progress: 'Em andamento',
+  delivered: 'Entregue',
+  cancelled: 'Cancelada',
+};
+
+function shipmentStatusLabel(status: string): string {
+  return SHIPMENT_STATUS_LABEL[status] || status || '—';
+}
+
+function packageSizeLabel(ps: string): string {
+  if (ps === 'pequeno') return 'Pequeno';
+  if (ps === 'medio') return 'Médio';
+  if (ps === 'grande') return 'Grande';
+  return ps || '—';
+}
 
 type MotoristaBadge = 'takeme' | 'parceiro';
 
@@ -33,8 +51,7 @@ type MotoristaDisponivel = {
   nota: number;
   viagensTexto: string;
   badge: MotoristaBadge;
-  foto: string | number;
-  fotoLargura?: number;
+  avatarUrl: string | null;
   rota: string;
   data: string;
   horaSaida: string;
@@ -115,8 +132,30 @@ const badgeMotorista = (tipo: MotoristaBadge) => {
 };
 
 const cartaoMotorista = (m: MotoristaDisponivel, selecionado: boolean, onSelect: () => void) => {
-  const w = m.fotoLargura ?? 56;
+  const w = 56;
   const h = 56;
+  const inicial = (m.nome || '?').trim().charAt(0).toUpperCase() || '?';
+  const avatarBlock = m.avatarUrl
+    ? React.createElement('img', {
+      src: m.avatarUrl,
+      alt: '',
+      style: { width: w, height: h, borderRadius: 9999, objectFit: 'cover', display: 'block' },
+    })
+    : React.createElement('div', {
+      style: {
+        width: w,
+        height: h,
+        borderRadius: 9999,
+        background: '#e2e2e2',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 20,
+        fontWeight: 700,
+        color: '#545454',
+        ...font,
+      },
+    }, inicial);
   const blocoNota = React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: '4px 8px', alignItems: 'center' } },
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
       starSvg,
@@ -131,12 +170,7 @@ const cartaoMotorista = (m: MotoristaDisponivel, selecionado: boolean, onSelect:
       blocoNota));
   const cabecalho = React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 12, width: '100%' } },
     React.createElement('div', { style: { display: 'flex', gap: 16, alignItems: 'flex-start', width: '100%', minWidth: 0 } },
-      React.createElement('div', { style: { flexShrink: 0 } },
-        React.createElement('img', {
-          src: m.foto,
-          alt: '',
-          style: { width: w, height: h, borderRadius: 9999, objectFit: 'cover', display: 'block' },
-        })),
+      React.createElement('div', { style: { flexShrink: 0 } }, avatarBlock),
       colunaTexto));
   const detalhes = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%' } },
     motoristaLinha('Origem - Destino', m.rota),
@@ -189,11 +223,11 @@ function toDatetimeLocalValue(iso: string | null | undefined): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-const encomendaCard = (tamanho: string, valor: string, remetente: string, destinatario: string, recolha: string, entrega: string, obs: string) =>
+const encomendaCard = (lead: React.ReactNode, tamanho: string, valor: string, remetente: string, destinatario: string, recolha: string, entrega: string, obs: string) =>
   React.createElement('div', {
     style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, padding: 20, border: '1px solid #e2e2e2', borderRadius: 16, background: '#fff', alignItems: 'flex-start' },
   },
-    React.createElement('div', { style: { width: 56, height: 56, borderRadius: 12, background: '#f1f1f1', flexShrink: 0 } }),
+    React.createElement('div', { style: { flexShrink: 0 } }, lead),
     React.createElement('div', { style: { flex: 1, minWidth: 200, display: 'flex', flexWrap: 'wrap' as const, gap: '12px 24px' } },
       React.createElement('div', null,
         React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Tamanho:'),
@@ -219,8 +253,6 @@ const encomendaCard = (tamanho: string, valor: string, remetente: string, destin
           React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, obs)))),
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: '50%', background: '#faf5eb' } }, headphoneSvg));
 
-const avatarsPool = [motoristaAvatar1, motoristaAvatar2, motoristaAvatar3, motoristaAvatar4];
-
 export default function EncomendaEditScreen() {
   const navigate = useNavigate();
   const { id: routeId } = useParams<{ id: string }>();
@@ -229,8 +261,6 @@ export default function EncomendaEditScreen() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-
-  const [encomendaCoords, setEncomendaCoords] = useState<{ origin?: { lat: number; lng: number }; destination?: { lat: number; lng: number } }>({});
 
   const [origem, setOrigem] = useState('');
   const [destino, setDestino] = useState('');
@@ -248,6 +278,44 @@ export default function EncomendaEditScreen() {
 
   const [motoristas, setMotoristas] = useState<MotoristaDisponivel[]>([]);
   const [motoristaSelecionado, setMotoristaSelecionado] = useState('');
+
+  const scheduledTripId = detail?.kind === 'shipment' ? detail.scheduledTripId : null;
+  const { waypoints: tripWaypoints, stops: tripStops } = useTripStops(scheduledTripId);
+
+  const coordsMatchSavedAddresses =
+    !!detail
+    && origem === detail.originAddress
+    && destino === detail.destinationAddress;
+
+  const mapCoordsInput = useMemo(() => {
+    if (!detail) return null;
+    const oLat = coordsMatchSavedAddresses ? detail.originLat : null;
+    const oLng = coordsMatchSavedAddresses ? detail.originLng : null;
+    const dLat = coordsMatchSavedAddresses ? detail.destinationLat : null;
+    const dLng = coordsMatchSavedAddresses ? detail.destinationLng : null;
+    return {
+      scheduledTripId: detail.kind === 'shipment' ? detail.scheduledTripId : null,
+      originLat: oLat,
+      originLng: oLng,
+      destinationLat: dLat,
+      destinationLng: dLng,
+      originAddress: origem,
+      destinationAddress: destino,
+    };
+  }, [detail, coordsMatchSavedAddresses, origem, destino]);
+
+  const encomendaMapCoords = useEncomendaMapCoords(mapCoordsInput);
+
+  const driverStartCoord = useMemo(() => {
+    const d = tripStops.find((s) => s.stop_type === 'driver_origin' && s.lat != null && s.lng != null);
+    if (d) return { lat: d.lat!, lng: d.lng! };
+    if (encomendaMapCoords.vehicleOrigin) return encomendaMapCoords.vehicleOrigin;
+    return undefined;
+  }, [tripStops, encomendaMapCoords.vehicleOrigin]);
+
+  const tripPainelEncerrado =
+    !!detail
+    && (detail.status === 'delivered' || detail.status === 'cancelled');
 
   useEffect(() => {
     if (!toast) return;
@@ -291,34 +359,15 @@ export default function EncomendaEditScreen() {
     });
   }, [routeId]);
 
-  // Fetch shipment coordinates
-  useEffect(() => {
-    if (!detail) return;
-    let cancel = false;
-    const table = detail.kind === 'shipment' ? 'shipments' : 'dependent_shipments';
-    (supabase as any).from(table)
-      .select('origin_lat, origin_lng, destination_lat, destination_lng')
-      .eq('id', detail.id)
-      .single()
-      .then(({ data }: any) => {
-        if (cancel || !data) return;
-        const c: any = {};
-        if (data.origin_lat && data.origin_lng) c.origin = { lat: data.origin_lat, lng: data.origin_lng };
-        if (data.destination_lat && data.destination_lng) c.destination = { lat: data.destination_lat, lng: data.destination_lng };
-        setEncomendaCoords(c);
-      });
-    return () => { cancel = true; };
-  }, [detail?.id, detail?.kind]);
-
   useEffect(() => {
     fetchApprovedDriversForEncomendaUI().then((list) => {
-      const ui: MotoristaDisponivel[] = list.map((d, i) => ({
+      const ui: MotoristaDisponivel[] = list.map((d) => ({
         id: d.id,
         nome: d.nome,
         nota: Number(d.rating ?? 0),
         viagensTexto: `(${d.totalViagens} viagens)`,
         badge: d.isPartner ? 'parceiro' : 'takeme',
-        foto: avatarsPool[i % avatarsPool.length],
+        avatarUrl: d.avatarUrl,
         rota: '—',
         data: '—',
         horaSaida: '—',
@@ -381,12 +430,18 @@ export default function EncomendaEditScreen() {
       React.createElement('button', { type: 'button', onClick: () => navigate(-1), style: { alignSelf: 'flex-start', cursor: 'pointer' } }, 'Voltar'));
   }
 
-  const dataLinha = scheduledLocal
-    ? new Date(scheduledLocal).toLocaleDateString('pt-BR')
-    : new Date(detail.createdAt).toLocaleDateString('pt-BR');
-  const horaLinha = scheduledLocal
-    ? new Date(scheduledLocal).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-    : '—';
+  const dataLinha =
+    detail.kind === 'shipment' && detail.tripDepartureAt
+      ? new Date(detail.tripDepartureAt).toLocaleDateString('pt-BR')
+      : scheduledLocal
+        ? new Date(scheduledLocal).toLocaleDateString('pt-BR')
+        : new Date(detail.createdAt).toLocaleDateString('pt-BR');
+  const horaLinha =
+    detail.kind === 'shipment' && detail.tripDepartureAt
+      ? new Date(detail.tripDepartureAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      : scheduledLocal
+        ? new Date(scheduledLocal).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+        : '—';
   const motoristasComRota = motoristas.map((m) => ({
     ...m,
     rota: `${origem.slice(0, 40)} → ${destino.slice(0, 40)}`,
@@ -395,18 +450,52 @@ export default function EncomendaEditScreen() {
   }));
 
   const resumoId = `#${detail.id.slice(0, 8)}`;
-  const statusLabel = detail.status || '—';
+  const statusLabel = shipmentStatusLabel(detail.status || '');
+  const leadShipment = detail.kind === 'shipment' && detail.photoUrl
+    ? React.createElement('img', {
+      src: detail.photoUrl,
+      alt: '',
+      style: { width: 56, height: 56, borderRadius: 12, objectFit: 'cover' as const, display: 'block' },
+    })
+    : React.createElement('div', {
+      style: {
+        width: 56,
+        height: 56,
+        borderRadius: 12,
+        background: '#e2e2e2',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 22,
+        lineHeight: 1,
+      },
+    }, '\u{1F4E6}');
+  const leadDependent = React.createElement('div', {
+    style: {
+      width: 56,
+      height: 56,
+      borderRadius: 12,
+      background: '#e2e2e2',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: 22,
+      lineHeight: 1,
+    },
+  }, '\u{1F9F3}');
   const encomendaPreview = detail.kind === 'shipment'
     ? encomendaCard(
-        packageSize || '—',
+        leadShipment,
+        packageSizeLabel(packageSize),
         formatCurrencyBRL(detail.amountCents),
-        '—',
+        detail.senderName || '—',
         recipientName || '—',
         origem,
         destino,
         instructions || '—',
       )
     : encomendaCard(
+        leadDependent,
         `${bagsCount || '0'} mala(s)`,
         formatCurrencyBRL(detail.amountCents),
         fullName || '—',
@@ -445,24 +534,60 @@ export default function EncomendaEditScreen() {
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, padding: '14px 20px', background: '#f6f6f6', borderRadius: 12, width: '100%', boxSizing: 'border-box' as const } },
       infoSvg,
       React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, 'Você está editando esta encomenda')),
-    // Map + Summary
-    React.createElement('div', { style: { display: 'flex', gap: 24, flexWrap: 'wrap' as const } },
-      React.createElement('div', { style: { flex: '1 1 350px', height: 220, borderRadius: 16, overflow: 'hidden' } },
+    // Mapa (igual detalhe da viagem) + resumo
+    React.createElement('div', { style: webStyles.detailMapTimelineRow },
+      React.createElement('div', { style: { ...webStyles.detailMapWrap, position: 'relative' as const } },
         React.createElement(MapView, {
-          origin: encomendaCoords.origin,
-          destination: encomendaCoords.destination,
-          height: 220,
-          staticMode: true,
+          origin: encomendaMapCoords.origin,
+          destination: encomendaMapCoords.destination,
+          driverStart: driverStartCoord,
+          waypoints: tripWaypoints.length > 0 ? tripWaypoints : undefined,
+          height: DETAIL_TRIP_MAP_HEIGHT,
+          staticMode: false,
+          connectPoints: true,
           showFigmaMapChrome: false,
+          tripCompleted: tripPainelEncerrado,
+          style: { borderRadius: 0 },
         })),
-      React.createElement('div', { style: { flex: '0 0 280px', display: 'flex', flexDirection: 'column' as const, gap: 12 } },
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+      React.createElement('div', { style: { flex: '0 1 308px', display: 'flex', flexDirection: 'column' as const, gap: 12, minWidth: 0 } },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' as const } },
           React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#767676', ...font } }, 'Resumo da viagem •'),
           React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, resumoId)),
         React.createElement('span', { style: { display: 'inline-block', padding: '4px 14px', borderRadius: 999, background: '#a8c6ef', color: '#102d57', fontSize: 13, fontWeight: 700, alignSelf: 'flex-start', ...font } }, statusLabel),
+        detail.kind === 'shipment' && detail.scheduledTripId
+          ? React.createElement('button', {
+            type: 'button',
+            onClick: () => navigate(`/encomendas/${detail.id}/viagem/${detail.scheduledTripId}`),
+            style: {
+              alignSelf: 'flex-start',
+              border: 'none',
+              background: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              fontSize: 13,
+              fontWeight: 600,
+              color: '#102d57',
+              textDecoration: 'underline',
+              ...font,
+            },
+          }, 'Abrir detalhes da viagem agendada')
+          : null,
         React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Rota'),
-        React.createElement('div', { style: { height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } },
-          `${origem.slice(0, 28)}… → ${destino.slice(0, 28)}…`))),
+        React.createElement('div', {
+          style: {
+            minHeight: 44,
+            borderRadius: 8,
+            background: '#f1f1f1',
+            padding: '10px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            fontSize: 14,
+            color: '#0d0d0d',
+            ...font,
+            lineHeight: 1.4,
+            wordBreak: 'break-word' as const,
+          },
+        }, `${origem} → ${destino}`))),
     // Trajeto
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
       React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#767676', ...font } }, 'Trajeto de origem e destino'),

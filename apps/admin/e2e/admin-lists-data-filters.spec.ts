@@ -145,9 +145,9 @@ test.describe('listas, dados da API e filtros', () => {
     const rows = page.getByTestId('encomenda-table-row');
     const initial = await rows.count();
     assertHasRows(initial, 'encomendas');
-    await page.getByPlaceholder('Buscar motorista, destino ou origem...').fill('__e2e_no_match_xyz__');
+    await page.getByRole('searchbox', { name: 'Buscar encomendas' }).fill('__e2e_no_match_xyz__');
     await expect(rows).toHaveCount(0);
-    await page.getByPlaceholder('Buscar motorista, destino ou origem...').fill('');
+    await page.getByRole('searchbox', { name: 'Buscar encomendas' }).fill('');
     await expect(rows).toHaveCount(initial);
     await page.getByTestId('encomendas-open-table-filter').click();
     const dialog = page.getByRole('dialog', { name: 'Filtro da tabela' });
@@ -342,6 +342,7 @@ test.describe('listas, dados da API e filtros', () => {
     await page.goto('/atendimentos');
     await expect(page.getByRole('heading', { name: /Visão geral/ })).toBeVisible({ timeout: 25_000 });
     await expect(page.getByText('Viagens no momento')).toBeVisible();
+    await expect(page.getByText('SLA de 1 dia para marcar como atrasada')).toBeVisible();
     const tickets = page.getByTestId('atendimento-ticket-row');
     const n = await tickets.count();
     if (process.env.E2E_REQUIRE_CONVERSATIONS === '1') {
@@ -350,6 +351,10 @@ test.describe('listas, dados da API e filtros', () => {
     } else if (n > 0) {
       await expect(tickets.first()).toBeVisible();
     }
+    const meuDropdown = page.getByRole('button', { name: /Meu atendimento/ });
+    await meuDropdown.click();
+    await page.getByRole('button', { name: 'Atendimento geral', exact: true }).click();
+    await expect(meuDropdown).toContainText('Atendimento geral');
   });
 
   test('Configurações — página carrega', async ({ page }) => {

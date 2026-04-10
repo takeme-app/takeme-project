@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
 import { fetchViagemCounts, fetchEncomendaCounts, fetchMotoristas } from '../data/queries';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -20,6 +21,17 @@ const statusMap: Record<string, { dot: string; bg: string; color: string; label:
   finalizada: { dot: '#22c55e', bg: '#b0e8d1', color: '#174f38', label: 'Finalizada' },
 };
 
+/** Figma 1054:45062 — ordem e rótulos dos filtros por categoria (Meu atendimento). */
+const MEU_ATENDIMENTO_CATEGORIAS_CONFIG = [
+  { label: 'Todos', matches: null as readonly string[] | null },
+  { label: 'Excursão', matches: ['Excursão'] as const },
+  { label: 'Encomendas', matches: ['Encomendas'] as const },
+  { label: 'Reembolso', matches: ['Reembolso'] as const },
+  { label: 'Cadastro de transporte', matches: ['Cadastro de transporte'] as const },
+  { label: 'Autorizar menores', matches: ['Autorizar menores'] as const },
+  { label: 'Outros', matches: ['Outros'] as const },
+] as const;
+
 // ── Ticket data (first section — "Meu atendimento") ────────────────────
 type Ticket = {
   id: string;
@@ -29,7 +41,24 @@ type Ticket = {
   descricao: string;
   tempo: string;
   status: string;
+  adminId: string | null;
+  /** Categoria bruta da API (excursao, reembolso, …) */
+  rawCategory: string;
 };
+
+/** Figma 1062:26998 — segunda lista: ordem e rótulos; Ouvidoria/Denúncia filtram por `categoria`, resto por estado derivado. */
+const TODOS_ATENDIMENTOS_CHIPS_CONFIG: {
+  label: string;
+  match: ((t: Ticket) => boolean) | null;
+}[] = [
+  { label: 'Todos', match: null },
+  { label: 'Atrasadas', match: (t) => t.status === 'atrasada' },
+  { label: 'Não atendidas', match: (t) => t.status === 'nao_atendida' },
+  { label: 'Em atendimento', match: (t) => t.status === 'em_atendimento' },
+  { label: 'Ouvidoria', match: (t) => t.categoria === 'Ouvidoria' },
+  { label: 'Denúncia', match: (t) => t.categoria === 'Denúncia' },
+  { label: 'Finalizadas', match: (t) => t.status === 'finalizada' },
+];
 
 // ── Avatar colors ───────────────────────────────────────────────────────
 const avatarColors: Record<string, string> = {
@@ -49,6 +78,10 @@ const chevronDownSvg = React.createElement('svg', { width: 14, height: 14, viewB
 
 export default function AtendimentosScreen() {
   const navigate = useNavigate();
+  const { session } = useAuth();
+  const currentUserId = session?.user?.id || '';
+  const [meuSubtype, setMeuSubtype] = useState<string | null>(null);
+  const [ticketReloadKey, setTicketReloadKey] = useState(0);
   const [meuCatActive, setMeuCatActive] = useState('Todos');
   /** Filtro de status na visão "Meu atendimento" (modal Filtrar status) — não confundir com categoria. */
   const [meuStatusFilter, setMeuStatusFilter] = useState('Todos');
@@ -77,6 +110,16 @@ export default function AtendimentosScreen() {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    if (!isSupabaseConfigured || !currentUserId) return;
+    let cancelled = false;
+    (supabase as any).from('worker_profiles').select('subtype').eq('id', currentUserId).maybeSingle()
+      .then(({ data }: { data: { subtype?: string } | null }) => {
+        if (!cancelled) setMeuSubtype(data?.subtype ?? null);
+      });
+    return () => { cancelled = true; };
+  }, [currentUserId]);
+
   // ── Real conversations from Supabase as tickets ─────────────────────
   const [realTickets, setRealTickets] = useState<Ticket[]>([]);
   useEffect(() => {
@@ -84,9 +127,10 @@ export default function AtendimentosScreen() {
     let cancelled = false;
     (supabase as any)
       .from('conversations')
-      .select('id, driver_id, client_id, status, participant_name, last_message, last_message_at, created_at, category, sla_deadline_at, admin_id')
+      .select('id, driver_id, client_id, status, participant_name, last_message, last_message_at, created_at, category, sla_deadline_at, admin_id, conversation_kind, context')
+      .eq('conversation_kind', 'support_backoffice')
       .order('last_message_at', { ascending: false })
-      .limit(50)
+      .limit(80)
       .then(({ data, error }: { data: any[] | null; error: Error | null }) => {
         if (cancelled) return;
         if (error || !data) {
@@ -114,7 +158,7 @@ export default function AtendimentosScreen() {
             : diffLastMsgMin < 1440
               ? `há ${Math.floor(diffLastMsgMin / 60)}h`
               : `há ${Math.floor(diffLastMsgMin / 1440)} dias`;
-          // SLA 24h: prazo explícito ou 24h desde a abertura (created_at), não desde a última mensagem
+          // SLA 1 dia (sla_deadline_at preenchido na criação; fallback 24h desde abertura)
           const isOverSLA = c.sla_deadline_at
             ? now > new Date(c.sla_deadline_at).getTime()
             : now - createdAt > 24 * 60 * 60000;
@@ -136,26 +180,32 @@ export default function AtendimentosScreen() {
             descricao: c.last_message || 'Sem mensagens',
             tempo,
             status: ticketStatus,
+            adminId: c.admin_id ? String(c.admin_id) : null,
+            rawCategory: String(c.category || 'outros'),
           };
         });
         setRealTickets(tickets);
       })
       .catch(() => { if (!cancelled) setRealTickets([]); });
     return () => { cancelled = true; };
-  }, []);
+  }, [ticketReloadKey]);
 
-  const activeMeuTickets = realTickets.filter((t) => t.status !== 'finalizada');
+  const ticketsEscopoMeu = useMemo(() => {
+    if (meuAtendimentoLabel !== 'Meu atendimento' || !currentUserId) return realTickets;
+    return realTickets.filter((t) => t.adminId === currentUserId);
+  }, [realTickets, meuAtendimentoLabel, currentUserId]);
+
+  const activeMeuTickets = ticketsEscopoMeu.filter((t) => t.status !== 'finalizada');
   const activeTodosTickets = realTickets;
 
   const meuCategorias = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const t of activeMeuTickets) {
-      counts.set(t.categoria, (counts.get(t.categoria) || 0) + 1);
-    }
-    return [
-      { label: 'Todos', count: activeMeuTickets.length },
-      ...[...counts.entries()].map(([label, count]) => ({ label, count })),
-    ];
+    const total = activeMeuTickets.length;
+    return MEU_ATENDIMENTO_CATEGORIAS_CONFIG.map((row) => {
+      if (row.matches == null) return { label: row.label, count: total };
+      const set = new Set(row.matches);
+      const count = activeMeuTickets.filter((t) => set.has(t.categoria)).length;
+      return { label: row.label, count };
+    });
   }, [activeMeuTickets]);
 
   const statusLabelToKey: Record<string, string> = {
@@ -167,7 +217,14 @@ export default function AtendimentosScreen() {
 
   const meuTicketsFiltered = useMemo(() => {
     let list = activeMeuTickets;
-    if (meuCatActive !== 'Todos') list = list.filter((t) => t.categoria === meuCatActive);
+    if (meuCatActive !== 'Todos') {
+      const row = MEU_ATENDIMENTO_CATEGORIAS_CONFIG.find((r) => r.label === meuCatActive);
+      const allowed = row?.matches;
+      if (allowed?.length) {
+        const set = new Set(allowed);
+        list = list.filter((t) => set.has(t.categoria));
+      }
+    }
     if (meuStatusFilter !== 'Todos') {
       const key = statusLabelToKey[meuStatusFilter];
       if (key) list = list.filter((t) => t.status === key);
@@ -175,23 +232,20 @@ export default function AtendimentosScreen() {
     return list;
   }, [activeMeuTickets, meuCatActive, meuStatusFilter]);
 
-  /** Contagens alinhadas ao mesmo mapeamento de status usado nos cards (não só active/closed do BD). */
+  /** Figma 1062:26998 — chips fixos na ordem do desenho. */
   const todosStatusChips = useMemo(() => {
     const all = activeTodosTickets;
-    return [
-      { label: 'Todos', count: all.length },
-      { label: 'Não atendida', count: all.filter((t) => t.status === 'nao_atendida').length },
-      { label: 'Em atendimento', count: all.filter((t) => t.status === 'em_atendimento').length },
-      { label: 'Atrasada', count: all.filter((t) => t.status === 'atrasada').length },
-      { label: 'Finalizadas', count: all.filter((t) => t.status === 'finalizada').length },
-    ];
+    return TODOS_ATENDIMENTOS_CHIPS_CONFIG.map((row) => ({
+      label: row.label,
+      count: row.match == null ? all.length : all.filter(row.match).length,
+    }));
   }, [activeTodosTickets]);
 
   const todosTicketsFiltered = useMemo(() => {
     if (todosStatusActive === 'Todos') return activeTodosTickets;
-    const key = statusLabelToKey[todosStatusActive];
-    if (key) return activeTodosTickets.filter((t) => t.status === key);
-    return activeTodosTickets;
+    const row = TODOS_ATENDIMENTOS_CHIPS_CONFIG.find((r) => r.label === todosStatusActive);
+    if (!row?.match) return activeTodosTickets;
+    return activeTodosTickets.filter(row.match);
   }, [activeTodosTickets, todosStatusActive]);
 
   const metrics = [
@@ -201,31 +255,66 @@ export default function AtendimentosScreen() {
     { title: 'Encomendas no momento', value: String(realMetrics.encomendas || 0) },
   ];
 
-  // ── Helper: chip ──────────────────────────────────────────────────────
-  const chip = (label: string, count: number, active: boolean, onClick: () => void) =>
+  /** Chip de categoria — Figma 1054:45062 / 1062:26998: inactivo = fundo transparente + badge preto; activo = pill preta + badge branco. */
+  const categoryChipFigma = (label: string, count: number, active: boolean, onClick: () => void) =>
     React.createElement('button', {
-      type: 'button', onClick,
+      type: 'button',
+      onClick,
       style: {
-        display: 'flex', alignItems: 'center', gap: 6, height: 36, padding: '0 16px',
-        borderRadius: 999, border: active ? '2px solid #0d0d0d' : '1px solid #e2e2e2',
-        background: active ? '#0d0d0d' : '#fff', color: active ? '#fff' : '#0d0d0d',
-        fontSize: 14, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' as const, ...font,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        height: 40,
+        padding: '0 16px',
+        borderRadius: 999,
+        border: 'none',
+        background: active ? '#0d0d0d' : 'transparent',
+        color: active ? '#fff' : '#0d0d0d',
+        fontSize: 14,
+        fontWeight: 500,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap' as const,
+        boxSizing: 'border-box' as const,
+        ...font,
       },
     },
-      label,
+      React.createElement('span', { style: { lineHeight: 1.5 } }, label),
       React.createElement('span', {
         style: {
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          minWidth: 20, height: 20, borderRadius: 999, padding: '0 6px',
-          background: active ? '#fff' : '#f1f1f1', color: active ? '#0d0d0d' : '#767676',
-          fontSize: 12, fontWeight: 600, ...font,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minWidth: 34,
+          padding: '0 8px',
+          height: 'auto',
+          minHeight: 24,
+          borderRadius: 16,
+          background: active ? '#fff' : '#0d0d0d',
+          color: active ? '#0d0d0d' : '#fff',
+          fontSize: 14,
+          fontWeight: 500,
+          lineHeight: 1.5,
+          ...font,
         },
       }, String(count)));
+
+  const podeAssumirTicket = (t: Ticket) =>
+    !t.adminId
+    && t.status !== 'finalizada'
+    && (meuSubtype === 'admin' || meuSubtype === 'suporte' || (meuSubtype === 'financeiro' && t.categoria === 'Reembolso'));
+
+  const claimTicket = async (t: Ticket, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!isSupabaseConfigured) return;
+    const { error } = await (supabase as any).rpc('claim_support_conversation', { p_conversation_id: t.id });
+    if (!error) setTicketReloadKey((k) => k + 1);
+  };
 
   // ── Helper: ticket card ───────────────────────────────────────────────
   const ticketCard = (t: Ticket, idx: number) => {
     const st = statusMap[t.status] || statusMap.nao_atendida;
     const avatarBg = avatarColors[t.avatar] || '#999';
+    const showAssumir = podeAssumirTicket(t);
     return React.createElement('div', {
       key: t.id || `${t.nome}-${idx}`,
       'data-testid': 'atendimento-ticket-row',
@@ -272,16 +361,28 @@ export default function AtendimentosScreen() {
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
               clockSvg,
               React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, t.tempo)))),
-        // Atender button
-        React.createElement('button', {
-          type: 'button',
-          onClick: () => navigate(`/atendimentos/${t.id}`, { state: { ticket: t } }),
-          style: {
-            height: 44, padding: '0 24px', borderRadius: 999, border: '1px solid #0d0d0d',
-            background: '#fff', fontSize: 14, fontWeight: 600, color: '#0d0d0d',
-            cursor: 'pointer', whiteSpace: 'nowrap' as const, flexShrink: 0, ...font,
-          },
-        }, 'Atender')));
+        // Ações
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 } },
+          showAssumir
+            ? React.createElement('button', {
+              type: 'button',
+              onClick: (e: React.MouseEvent) => { void claimTicket(t, e); },
+              style: {
+                height: 44, padding: '0 20px', borderRadius: 999, border: '1px solid #cba04b',
+                background: '#fff9e6', fontSize: 14, fontWeight: 600, color: '#654c01',
+                cursor: 'pointer', whiteSpace: 'nowrap' as const, ...font,
+              },
+            }, 'Assumir')
+            : null,
+          React.createElement('button', {
+            type: 'button',
+            onClick: () => navigate(`/atendimentos/${t.id}`, { state: { ticket: t } }),
+            style: {
+              height: 44, padding: '0 24px', borderRadius: 999, border: '1px solid #0d0d0d',
+              background: '#fff', fontSize: 14, fontWeight: 600, color: '#0d0d0d',
+              cursor: 'pointer', whiteSpace: 'nowrap' as const, ...font,
+            },
+          }, 'Atender'))));
   };
 
   // ── Visão geral + Online status dropdown ────────────────────────────────
@@ -393,9 +494,15 @@ export default function AtendimentosScreen() {
             }, opt))) : null)));
 
   const meuCatChips = React.createElement('div', {
-    style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const },
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap' as const,
+      alignItems: 'center',
+    },
   },
-    ...meuCategorias.map((c) => chip(c.label, c.count, meuCatActive === c.label, () => setMeuCatActive(c.label))));
+    ...meuCategorias.map((c) =>
+      categoryChipFigma(c.label, c.count, meuCatActive === c.label, () => setMeuCatActive(c.label))));
 
   const meuTicketCards = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, background: '#f6f6f6', borderRadius: 16, padding: '0 24px' },
@@ -413,12 +520,18 @@ export default function AtendimentosScreen() {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 4 },
   },
     React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Atendimentos'),
-    React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'SLA de 24h para marcar como atrasada'));
+    React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'SLA de 1 dia para marcar como atrasada'));
 
   const todosChips = React.createElement('div', {
-    style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const },
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap' as const,
+      alignItems: 'center',
+    },
   },
-    ...todosStatusChips.map((c) => chip(c.label, c.count, todosStatusActive === c.label, () => setTodosStatusActive(c.label))));
+    ...todosStatusChips.map((c) =>
+      categoryChipFigma(c.label, c.count, todosStatusActive === c.label, () => setTodosStatusActive(c.label))));
 
   const todosCards = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, background: '#f6f6f6', borderRadius: 16, padding: '0 24px' },
