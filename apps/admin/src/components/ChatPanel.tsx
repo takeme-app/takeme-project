@@ -13,6 +13,8 @@ export interface ChatPanelProps {
   participantAvatar?: string;
   /** Fecha o painel */
   onClose?: () => void;
+  /** Chamado após marcar mensagens como lidas (ex.: atualizar badge na tela pai). */
+  onAfterMarkRead?: () => void;
   /** Modo flutuante (fixed bottom-right) ou inline */
   floating?: boolean;
   style?: React.CSSProperties;
@@ -168,7 +170,7 @@ function MessageBubble(props: { msg: RealtimeMessage; isOwn: boolean }) {
 
 // ── Component ────────────────────────────────────────────────────────
 export default function ChatPanel(props: ChatPanelProps) {
-  const { conversationId, currentUserId, participantName, participantAvatar, onClose, floating = false, style } = props;
+  const { conversationId, currentUserId, participantName, participantAvatar, onClose, onAfterMarkRead, floating = false, style } = props;
   const [inputText, setInputText] = useState('');
   const [showUpload, setShowUpload] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -181,8 +183,13 @@ export default function ChatPanel(props: ChatPanelProps) {
 
   // Marcar como lido quando abrir
   useEffect(() => {
-    if (conversationId) markAsRead();
-  }, [conversationId, markAsRead]);
+    if (!conversationId) return undefined;
+    void (async () => {
+      await markAsRead();
+      onAfterMarkRead?.();
+    })();
+    return undefined;
+  }, [conversationId, markAsRead, onAfterMarkRead]);
 
   const handleSend = useCallback(() => {
     if (!inputText.trim()) return;
