@@ -2,12 +2,18 @@
  * AtendimentoDetalheScreen — Tela de atendimento individual conforme Figma 1425-21190 / 1429-33119 / 1430-34188.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import ChatPanel from '../components/ChatPanel';
-import { invokeEdgeFunction } from '../data/queries';
+import {
+  invokeEdgeFunction,
+  fetchSupportConversationDetail,
+  fetchSupportHistoryForClient,
+  fetchProfileBasics,
+  fetchBookingDetailForAdmin,
+} from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -29,15 +35,27 @@ const refreshSvg = React.createElement('svg', { width: 18, height: 18, viewBox: 
 const closeSvg = React.createElement('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round' }));
 
-// ── Histórico data ──────────────────────────────────────────────────────
-const historicoItems = [
-  { titulo: 'Denúncia - Carro sujo • Ana Júlia', atendente: 'Ana Carolina', data: '15/07/2025', desc: 'Cliente teve problema com limpeza do veículo.', desc2: 'Reset realizado com sucesso.' },
-  { titulo: 'Denúncia - Carro sujo • Anônimo', atendente: 'Ana Carolina', data: '15/01/2025', desc: 'Cliente teve problema com limpeza do veículo.', desc2: '' },
-  { titulo: 'Denúncia - Carro sujo • Anônimo', atendente: 'Ana Carolina', data: '15/01/2025', desc: 'Cliente teve problema com limpeza do veículo.', desc2: '' },
-];
+function supportActionChipsForCategory(raw: string | null | undefined): string[] {
+  const c = String(raw || '').toLowerCase();
+  if (c === 'excursao') return ['Dados cadastrais', 'Documentos', 'Viagens', 'Pagamentos', 'Solicitação'];
+  if (c === 'encomendas') return ['Dados cadastrais', 'Encomendas', 'Pagamentos', 'Solicitação'];
+  if (c === 'reembolso') return ['Pagamentos', 'Reembolso', 'Viagens', 'Solicitação'];
+  if (c === 'cadastro_transporte') return ['Dados cadastrais', 'Documentos', 'Veículo', 'Solicitação'];
+  if (c === 'autorizar_menores') return ['Dados cadastrais', 'Documentos', 'Menores', 'Viagens', 'Solicitação'];
+  if (c === 'ouvidoria' || c === 'denuncia') return ['Solicitação', 'Viagens'];
+  return ['Dados cadastrais', 'Documentos', 'Encomendas', 'Viagens', 'Pagamentos', 'Solicitação'];
+}
 
-// ── Action chip labels ──────────────────────────────────────────────────
-const actionChips = ['Dados cadastrais', 'Documentos', 'Encomendas', 'Viagens', 'Pagamentos', 'Solicitação', 'Reembolso', 'Veículo', 'Menores'];
+const categoryLabelPt: Record<string, string> = {
+  excursao: 'Excursão',
+  encomendas: 'Encomendas',
+  reembolso: 'Reembolso',
+  cadastro_transporte: 'Cadastro de transporte',
+  autorizar_menores: 'Autorizar menores',
+  denuncia: 'Denúncia',
+  ouvidoria: 'Ouvidoria',
+  outros: 'Outros',
+};
 
 export default function AtendimentoDetalheScreen() {
   const navigate = useNavigate();
@@ -93,16 +111,37 @@ export default function AtendimentoDetalheScreen() {
   const [minorAuthOpen, setMinorAuthOpen] = useState(false);
   const [minorData, setMinorData] = useState<any>(null);
 
-  const nome = ticket.nome || 'Maria Silva';
-  const email = ticket.email || 'maria.silva@gmail.com';
-  const categoria = ticket.categoria || 'Cadastro de motorista';
+  const labelToRaw = (lab: string) => {
+    const e = Object.entries(categoryLabelPt).find(([, v]) => v === lab);
+    return e ? e[0] : 'outros';
+  };
+
+  const [nome, setNome] = useState(ticket.nome || '—');
+  const [email, setEmail] = useState(ticket.email || '—');
+  const [categoria, setCategoria] = useState(ticket.categoria || 'Outros');
+  const [rawCategory, setRawCategory] = useState<string>(ticket.rawCategory || labelToRaw(ticket.categoria || 'Outros'));
+  const [trechoLinha, setTrechoLinha] = useState('—');
+  const [periodoLinha, setPeriodoLinha] = useState('—');
+  const [viagemRefLinha, setViagemRefLinha] = useState('—');
+  const [viagemStatusLinha, setViagemStatusLinha] = useState('—');
+  const [atendenteNome, setAtendenteNome] = useState('Não atribuído');
+  const [solicitacaoShort, setSolicitacaoShort] = useState(conversationId ? String(conversationId).slice(0, 8).toUpperCase() : '—');
+  const [subjectUserId, setSubjectUserId] = useState<string>('');
+  const [ctxJson, setCtxJson] = useState<Record<string, unknown>>({});
+  const [historicoReal, setHistoricoReal] = useState<Array<{ titulo: string; atendente: string; data: string; desc: string; desc2: string }>>([]);
+  const [complaintBody, setComplaintBody] = useState('');
+
   const status = ticket.status || 'nao_atendida';
-  const isExcursao = categoria.toLowerCase().includes('excursão') || categoria.toLowerCase().includes('excursao');
+  const isExcursao = useMemo(
+    () => categoria.toLowerCase().includes('excursão') || categoria.toLowerCase().includes('excursao'),
+    [categoria],
+  );
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMsg, setChatMsg] = useState('');
   const [editStatusOpen, setEditStatusOpen] = useState(false);
   const [currentStatus, setCurrentStatus] = useState(status);
   const [finalizarOpen, setFinalizarOpen] = useState(false);
+  const [finishNoteDraft, setFinishNoteDraft] = useState('');
   const [reprovarOpen, setReprovarOpen] = useState(false);
   const [autorizarOpen, setAutorizarOpen] = useState(false);
   const [dadosCadastraisOpen, setDadosCadastraisOpen] = useState(false);
@@ -116,6 +155,81 @@ export default function AtendimentoDetalheScreen() {
   const showToast = useCallback((msg: string) => setToastMsg(msg), []);
   useEffect(() => { if (!toastMsg) return; const t = setTimeout(() => setToastMsg(null), 3000); return () => clearTimeout(t); }, [toastMsg]);
   const [tempStatus, setTempStatus] = useState(status);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !conversationId) return;
+    let cancelled = false;
+    void (async () => {
+      const conv = await fetchSupportConversationDetail(conversationId);
+      if (cancelled || !conv) return;
+      if (conv.status === 'closed') setConvStatus('closed');
+      else setConvStatus('active');
+      setRawCategory(conv.category || 'outros');
+      setCategoria(categoryLabelPt[conv.category || ''] || conv.category || 'Outros');
+      setSolicitacaoShort(conv.id.replace(/-/g, '').slice(0, 8).toUpperCase());
+      setSubjectUserId(conv.client_id);
+      setCtxJson(conv.context || {});
+      const bid = conv.booking_id || (typeof conv.context?.booking_id === 'string' ? (conv.context.booking_id as string) : null);
+      if (conv.context?.complaint && typeof conv.context.complaint === 'string') {
+        setComplaintBody(conv.context.complaint as string);
+      } else if (conv.context?.message && typeof conv.context.message === 'string') {
+        setComplaintBody(conv.context.message as string);
+      } else {
+        setComplaintBody('');
+      }
+      const cp = await fetchProfileBasics(conv.client_id);
+      if (!cancelled) setNome(cp.full_name || conv.participant_name || '—');
+      if (conv.admin_id) {
+        const ap = await fetchProfileBasics(conv.admin_id);
+        if (!cancelled) setAtendenteNome(ap.full_name || 'Atendente');
+      } else {
+        setAtendenteNome('Não atribuído');
+      }
+      const hist = await fetchSupportHistoryForClient(conv.client_id, conv.id);
+      if (!cancelled) {
+        setHistoricoReal(hist.map((h) => ({
+          titulo: h.titulo,
+          atendente: h.atendente,
+          data: h.data,
+          desc: h.desc,
+          desc2: h.desc2,
+        })));
+      }
+      const now = Date.now();
+      const createdAt = new Date(conv.created_at).getTime();
+      const isOverSLA = conv.sla_deadline_at
+        ? now > new Date(conv.sla_deadline_at).getTime()
+        : now - createdAt > 24 * 60 * 60000;
+      if (conv.status !== 'active') {
+        setCurrentStatus('finalizada');
+      } else if (!conv.admin_id) {
+        setCurrentStatus('nao_atendida');
+      } else if (isOverSLA) {
+        setCurrentStatus('atrasada');
+      } else {
+        setCurrentStatus('em_atendimento');
+      }
+      if (bid) {
+        const det = await fetchBookingDetailForAdmin(bid);
+        if (det && !cancelled) {
+          setTrechoLinha(`${det.listItem.origem} → ${det.listItem.destino}`);
+          setPeriodoLinha(`${det.listItem.embarque} – ${det.listItem.chegada}`);
+          setViagemRefLinha(det.listItem.bookingId.slice(0, 8).toUpperCase());
+          setViagemStatusLinha(det.listItem.status);
+        }
+      } else if (!cancelled) {
+        setTrechoLinha('—');
+        setPeriodoLinha('—');
+        setViagemRefLinha('—');
+        setViagemStatusLinha('—');
+      }
+      if (conv.category === 'reembolso' && bid) {
+        setRefundEntityId(bid);
+        setRefundEntityType('booking');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [conversationId]);
 
   const statusOpts = [
     { key: 'nao_atendida', label: 'Não atendida', dot: '#b53838', bg: '#eeafaa', color: '#551611' },
@@ -142,7 +256,7 @@ export default function AtendimentoDetalheScreen() {
             style: { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' },
           }, arrowLeftSvg),
           React.createElement('h1', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Atendimento')),
-        React.createElement('span', { style: { fontSize: 13, color: '#767676', marginLeft: 28, ...font } }, 'Solicitação #10285')),
+        React.createElement('span', { style: { fontSize: 13, color: '#767676', marginLeft: 28, ...font } }, `Solicitação #${solicitacaoShort}`)),
       React.createElement('button', {
         type: 'button',
         onClick: () => setFinalizarOpen(true),
@@ -194,7 +308,7 @@ export default function AtendimentoDetalheScreen() {
         React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, isExcursao ? 'Solicitação de excursão' : categoria)),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
         React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Atendente responsável'),
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Não atribuído'))),
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, atendenteNome))),
 
     // Separator
     React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
@@ -203,10 +317,10 @@ export default function AtendimentoDetalheScreen() {
     React.createElement('div', { style: { display: 'flex', gap: 40 } },
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
         React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Trecho principal'),
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, isExcursao ? 'São Luís → Viana' : 'São Paulo → Santos')),
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, trechoLinha)),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
         React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, isExcursao ? 'Período da excursão' : 'Período da viagem'),
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, '15/03/2025 - 20/03/2025'))),
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, periodoLinha))),
 
     // Separator
     React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
@@ -215,10 +329,10 @@ export default function AtendimentoDetalheScreen() {
     React.createElement('div', { style: { display: 'flex', gap: 40 } },
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
         React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, isExcursao ? 'Excursão' : 'Viagem'),
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, isExcursao ? '03584' : '01258')),
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, viagemRefLinha)),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
         React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Status'),
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Solicitado'))),
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, viagemStatusLinha))),
 
     // Orçamento (only for excursão after elaborar)
     orcamentoCriado && isExcursao ? React.createElement(React.Fragment, null,
@@ -236,12 +350,37 @@ export default function AtendimentoDetalheScreen() {
           },
         }, pencilSvg, 'Editar orçamento'))) : null,
 
+    complaintBody
+      ? React.createElement('div', {
+        style: {
+          padding: 16, background: '#f6f6f6', borderRadius: 12, fontSize: 14, color: '#0d0d0d', lineHeight: 1.5, ...font,
+        },
+      },
+        React.createElement('span', { style: { fontWeight: 600, display: 'block', marginBottom: 8, ...font } }, 'Mensagem / reclamação'),
+        complaintBody)
+      : null,
+
     // Action chips
     React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const, marginTop: 4 } },
-      ...actionChips.map((label) =>
+      ...supportActionChipsForCategory(rawCategory).map((label: string) =>
         React.createElement('button', {
           key: label, type: 'button',
-          onClick: label === 'Dados cadastrais' ? () => setDadosCadastraisOpen(true) : label === 'Documentos' ? () => setDocumentosOpen(true) : label === 'Encomendas' ? () => setEncomendaOpen(true) : label === 'Viagens' ? () => setViagemOpen(true) : label === 'Pagamentos' ? () => setPagamentoOpen(true) : label === 'Solicitação' ? () => setSolicitacaoOpen(true) : label === 'Reembolso' ? () => setRefundOpen(true) : label === 'Veículo' ? () => { (supabase as any).from('vehicles').select('*').eq('status', 'pending').limit(1).single().then(({ data }: any) => { setVehicleData(data); setVehicleAuthOpen(true); }); } : label === 'Menores' ? () => { (supabase as any).from('dependents').select('*').eq('status', 'pending').limit(1).single().then(({ data }: any) => { setMinorData(data); setMinorAuthOpen(true); }); } : undefined,
+          onClick: label === 'Dados cadastrais' ? () => setDadosCadastraisOpen(true) : label === 'Documentos' ? () => setDocumentosOpen(true) : label === 'Encomendas' ? () => setEncomendaOpen(true) : label === 'Viagens' ? () => setViagemOpen(true) : label === 'Pagamentos' ? () => setPagamentoOpen(true) : label === 'Solicitação' ? () => setSolicitacaoOpen(true) : label === 'Reembolso' ? () => setRefundOpen(true) : label === 'Veículo' ? () => {
+            const wid = (ctxJson.worker_id as string) || subjectUserId;
+            if (!wid) return;
+            void (supabase as any).from('vehicles').select('*').eq('worker_id', wid).eq('status', 'pending').order('created_at', { ascending: false }).limit(1).maybeSingle()
+              .then(({ data }: any) => { setVehicleData(data); setVehicleAuthOpen(true); });
+          } : label === 'Menores' ? () => {
+            const depId = ctxJson.dependent_id as string | undefined;
+            const sb = supabase as any;
+            if (depId) {
+              void sb.from('dependents').select('*').eq('id', depId).maybeSingle()
+                .then(({ data }: any) => { setMinorData(data); setMinorAuthOpen(true); });
+            } else if (subjectUserId) {
+              void sb.from('dependents').select('*').eq('user_id', subjectUserId).eq('status', 'pending').order('created_at', { ascending: false }).limit(1).maybeSingle()
+                .then(({ data }: any) => { setMinorData(data); setMinorAuthOpen(true); });
+            }
+          } : undefined,
           style: {
             height: 40, padding: '0 20px', borderRadius: 999, border: '1px solid #e2e2e2',
             background: '#fff', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
@@ -283,7 +422,7 @@ export default function AtendimentoDetalheScreen() {
       },
     },
       React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: '0 0 16px 0', ...font } }, 'Histórico de atendimentos'),
-      ...historicoItems.map((item, idx) =>
+      ...(historicoReal.length ? historicoReal : []).map((item, idx) =>
         React.createElement('div', {
           key: idx,
           style: {
@@ -1199,11 +1338,36 @@ export default function AtendimentoDetalheScreen() {
           React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
       // Separator
       React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Observação de finalização (opcional)'),
+      React.createElement('textarea', {
+        value: finishNoteDraft,
+        onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => setFinishNoteDraft(e.target.value),
+        rows: 3,
+        placeholder: 'Ex.: reembolso autorizado, cadastro aprovado…',
+        style: {
+          width: '100%', boxSizing: 'border-box' as const, borderRadius: 8, border: '1px solid #e2e2e2',
+          padding: 12, fontSize: 14, fontFamily: 'Inter, sans-serif', resize: 'vertical' as const,
+        },
+      }),
       // Buttons
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
         React.createElement('button', {
           type: 'button',
-          onClick: () => { setCurrentStatus('finalizada'); setFinalizarOpen(false); showToast('Atendimento finalizado'); setTimeout(() => navigate('/atendimentos'), 1500); },
+          onClick: async () => {
+            if (isSupabaseConfigured && conversationId) {
+              await (supabase as any).from('conversations').update({
+                status: 'closed',
+                finish_note: finishNoteDraft.trim() || null,
+                finished_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              }).eq('id', conversationId);
+            }
+            setCurrentStatus('finalizada');
+            setConvStatus('closed');
+            setFinalizarOpen(false);
+            showToast('Atendimento finalizado');
+            setTimeout(() => navigate('/atendimentos'), 1500);
+          },
           style: {
             width: '100%', height: 48, borderRadius: 999, border: 'none',
             background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font,

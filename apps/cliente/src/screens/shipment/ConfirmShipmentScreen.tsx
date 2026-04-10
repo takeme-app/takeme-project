@@ -14,6 +14,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ShipmentStackParamList } from '../../navigation/types';
 import { PaymentMethodSection, type PaymentMethodType } from '../../components/PaymentMethodSection';
 import { supabase } from '../../lib/supabase';
+import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { resolveShipmentBaseId } from '../../lib/resolveShipmentBase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
@@ -156,6 +157,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         const shipmentId = row?.id;
         const orderId = shipmentId ? orderIdFromUuid(shipmentId) : '----';
         const isLargePackage = packageSize === 'grande';
+        if (isLargePackage && shipmentId) void tryOpenSupportTicket('encomendas', { shipment_id: shipmentId });
         const paymentProcessed =
           params.method === 'credito' || params.method === 'debito' || params.method === 'pix';
 

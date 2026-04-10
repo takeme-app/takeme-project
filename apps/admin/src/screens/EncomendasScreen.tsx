@@ -1,9 +1,10 @@
 /**
- * EncomendasScreen — Lista de encomendas conforme Figma 849-37135.
- * Uses React.createElement() calls (NOT JSX).
- * Counts calculados via useMemo sobre filteredEncomendasData (refletem filtros do modal).
+ * EncomendasScreen — Lista de encomendas conforme Figma 849-37135 (31 Encomendas entregas).
+ * Layout: busca + UF + filtros; grade 3×3 de KPIs com ícone arrow_outward; três colunas de barras
+ * (tipo de encomenda, top 10 destinos, top 10 origens); tabela Figma 849-37274.
+ * Uses React.createElement() (not JSX). Métricas derivadas de filteredEncomendasData.
  */
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
@@ -17,7 +18,6 @@ import {
 } from '../data/queries';
 import type { EncomendaListItem } from '../data/types';
 
-const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } = require('recharts');
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
 // ── SVG icons ──────────────────────────────────────────────────────────────
@@ -35,31 +35,41 @@ const chevronDownSvg = React.createElement('svg', { width: 14, height: 14, viewB
 const closeSmSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
   React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
 
+/** Ícone arrow_outward — cards KPI (Figma 849-37135) */
+const arrowOutwardSvg = React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', { d: 'M7 17L17 7M17 7h-6M17 7v6', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+
 // ── Types ──────────────────────────────────────────────────────────────────
 type EncomendaRow = {
   id: string;
-  tipo: EncomendaListItem['tipo'];
   destino: string;
   origem: string;
   remetente: string;
   data: string;
-  tamanho: string;
-  valor: string;
+  embarque: string;
+  chegada: string;
   status: 'Cancelado' | 'Concluído' | 'Agendado' | 'Em andamento';
   rawStatus: string;
 };
 
-// ── Constants ──────────────────────────────────────────────────────────────
-const tableCols = [
-  { label: 'Tipo', flex: '0 0 110px', minWidth: 110 },
-  { label: 'Destino', flex: '1 1 13%', minWidth: 120 },
-  { label: 'Origem', flex: '1 1 13%', minWidth: 120 },
-  { label: 'Remetente', flex: '1 1 11%', minWidth: 100 },
-  { label: 'Data', flex: '0 0 96px', minWidth: 96 },
-  { label: 'Tamanho', flex: '0 0 88px', minWidth: 88 },
-  { label: 'Valor', flex: '0 0 96px', minWidth: 96 },
-  { label: 'Status', flex: '0 0 120px', minWidth: 120 },
-  { label: 'Ações', flex: '0 0 96px', minWidth: 96 },
+type TableCol = {
+  label: string;
+  flex: string;
+  minWidth: number;
+  headAlign: 'flex-start' | 'center';
+  cellAlign: 'flex-start' | 'center';
+};
+
+// ── Constants — colunas conforme Figma 849-37274 (Todas as receitas / lista) ─
+const tableCols: TableCol[] = [
+  { label: 'Destino', flex: '1 1 14%', minWidth: 120, headAlign: 'flex-start', cellAlign: 'flex-start' },
+  { label: 'Origem', flex: '1 1 14%', minWidth: 120, headAlign: 'flex-start', cellAlign: 'flex-start' },
+  { label: 'Remetente', flex: '1 1 12%', minWidth: 100, headAlign: 'flex-start', cellAlign: 'flex-start' },
+  { label: 'Data', flex: '0 0 96px', minWidth: 96, headAlign: 'flex-start', cellAlign: 'flex-start' },
+  { label: 'Embarque', flex: '0 0 80px', minWidth: 80, headAlign: 'flex-start', cellAlign: 'flex-start' },
+  { label: 'Chegada', flex: '0 0 80px', minWidth: 80, headAlign: 'flex-start', cellAlign: 'flex-start' },
+  { label: 'Status', flex: '0 0 128px', minWidth: 128, headAlign: 'center', cellAlign: 'center' },
+  { label: 'Visualizar/Editar', flex: '0 0 140px', minWidth: 140, headAlign: 'center', cellAlign: 'center' },
 ];
 
 const statusStyles: Record<string, { bg: string; color: string }> = {
@@ -67,7 +77,14 @@ const statusStyles: Record<string, { bg: string; color: string }> = {
   'Concluído': { bg: '#b0e8d1', color: '#174f38' },
   'Agendado': { bg: '#a8c6ef', color: '#102d57' },
   'Em andamento': { bg: '#fee59a', color: '#654c01' },
+  'Pendente revisão': { bg: '#e8e0f5', color: '#3d2a5c' },
 };
+
+/** Texto do chip: `pending_review` não é viagem agendada, mas `mapEncomendaStatus` usa "Agendado". */
+function encomendaStatusBadgeLabel(row: EncomendaRow): string {
+  if (row.rawStatus === 'pending_review') return 'Pendente revisão';
+  return row.status;
+}
 
 const UF_NOMES = ['Todos os estados', 'Acre', 'Alagoas', 'Amapá', 'Amazonas', 'Bahia', 'Ceará', 'Distrito Federal', 'Espírito Santo', 'Goiás', 'Maranhão', 'Mato Grosso', 'Mato Grosso do Sul', 'Minas Gerais', 'Pará', 'Paraíba', 'Paraná', 'Pernambuco', 'Piauí', 'Rio de Janeiro', 'Rio Grande do Norte', 'Rio Grande do Sul', 'Rondônia', 'Roraima', 'Santa Catarina', 'São Paulo', 'Sergipe', 'Tocantins'];
 
@@ -80,21 +97,29 @@ const pkgLabel = (ps?: string) => {
   return ps || '—';
 };
 
+type PkgBucket = 'pequeno' | 'medio' | 'grande' | 'outro';
+function pkgBucket(ps?: string): PkgBucket {
+  const p = (ps || '').toLowerCase();
+  if (p === 'small' || p.includes('pequ')) return 'pequeno';
+  if (p === 'medium' || p.includes('medio') || p.includes('médio')) return 'medio';
+  if (p === 'large' || p === 'xl' || p.includes('grand')) return 'grande';
+  return 'outro';
+}
+
 const fmtBRL = (cents: number) =>
   cents > 0 ? `R$ ${(cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
 
 function toEncomendaRow(e: EncomendaListItem): EncomendaRow {
   return {
     id: e.id,
-    tipo: e.tipo,
     destino: e.destino,
     origem: e.origem,
     remetente: e.remetente,
     data: e.data,
-    tamanho: pkgLabel(e.packageSize),
-    valor: fmtBRL(e.amountCents),
+    embarque: e.embarque,
+    chegada: e.chegada,
     status: e.status,
-    rawStatus: String((e as { rawStatus?: string }).rawStatus ?? ''),
+    rawStatus: e.rawStatus,
   };
 }
 
@@ -108,24 +133,50 @@ function isoDatePartLocal(iso: string): string {
   return `${y}-${m}-${day}`;
 }
 
-// ── Local styles ───────────────────────────────────────────────────────────
-const s = {
-  progressCol: {
-    flex: '1 1 calc(50% - 12px)', minWidth: 260, background: '#f6f6f6', borderRadius: 16,
-    padding: 20, display: 'flex', flexDirection: 'column' as const, gap: 16,
-    boxSizing: 'border-box' as const,
+// ── Local styles (Figma 849-37135 — cards 332×205, colunas de barras) ─────
+const enc = {
+  kpiGrid: { display: 'flex', flexWrap: 'wrap' as const, gap: 24, width: '100%', boxSizing: 'border-box' as const } as React.CSSProperties,
+  kpiCell: {
+    flex: '1 1 calc((100% - 48px) / 3)', minWidth: 280, maxWidth: '100%', boxSizing: 'border-box' as const,
   } as React.CSSProperties,
-  progressItem: { display: 'flex', flexDirection: 'column' as const, gap: 6 } as React.CSSProperties,
-  progressLabelRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } as React.CSSProperties,
-  progressLabel: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } as React.CSSProperties,
-  progressCount: { fontSize: 12, fontWeight: 400, color: '#767676', ...font } as React.CSSProperties,
-  progressBarBg: { width: '100%', height: 8, background: '#e2e2e2', borderRadius: 4, overflow: 'hidden' as const } as React.CSSProperties,
-  progressPct: { fontSize: 12, fontWeight: 600, color: '#0d0d0d', marginTop: 2, ...font } as React.CSSProperties,
+  kpiCard: {
+    background: '#f6f6f6', borderRadius: 16, padding: '0 24px 24px', minHeight: 205, boxSizing: 'border-box' as const,
+    display: 'flex', flexDirection: 'column' as const, alignItems: 'stretch', width: '100%',
+  } as React.CSSProperties,
+  kpiHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', minHeight: 60, paddingTop: 16 } as React.CSSProperties,
+  kpiTitle: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font } as React.CSSProperties,
+  kpiArrowBtn: {
+    width: 44, height: 44, borderRadius: '50%', background: '#fff', border: 'none', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0,
+  } as React.CSSProperties,
+  kpiSub: { fontSize: 14, fontWeight: 600, color: '#0b6d39', margin: '0 0 8px', minHeight: 21, ...font } as React.CSSProperties,
+  kpiSubMuted: { fontSize: 14, fontWeight: 400, color: '#767676', margin: '0 0 8px', minHeight: 21, ...font } as React.CSSProperties,
+  kpiValue: { fontSize: 40, fontWeight: 700, color: '#0d0d0d', margin: 0, lineHeight: 1.1, ...font } as React.CSSProperties,
+  kpiValueRow: { display: 'flex', flexWrap: 'wrap' as const, alignItems: 'baseline', gap: 8 } as React.CSSProperties,
+  kpiValueHint: { fontSize: 14, fontWeight: 400, color: '#767676', maxWidth: 140, lineHeight: 1.2, ...font } as React.CSSProperties,
+  analyticsRow: { display: 'flex', flexWrap: 'wrap' as const, gap: 24, width: '100%', alignItems: 'stretch' as const, boxSizing: 'border-box' as const } as React.CSSProperties,
+  analyticsCol: {
+    flex: '1 1 calc((100% - 48px) / 3)', minWidth: 280, maxWidth: '100%', background: '#f6f6f6', borderRadius: 16,
+    padding: '32px 24px 24px', boxSizing: 'border-box' as const,
+  } as React.CSSProperties,
+  analyticsTitle: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: '0 0 24px', ...font } as React.CSSProperties,
+  barBlock: { marginBottom: 24 } as React.CSSProperties,
+  barLabelRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8, gap: 8 } as React.CSSProperties,
+  barLabel: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } as React.CSSProperties,
+  barCount: { fontSize: 14, fontWeight: 400, color: '#767676', whiteSpace: 'nowrap' as const, ...font } as React.CSSProperties,
+  barTrack: { width: '100%', height: 8, background: '#e2e2e2', borderRadius: 4, overflow: 'hidden' as const } as React.CSSProperties,
+  barPct: { fontSize: 12, fontWeight: 600, color: '#0d0d0d', marginTop: 6, textAlign: 'right' as const, ...font } as React.CSSProperties,
 };
 
 // ── Component ──────────────────────────────────────────────────────────────
 export default function EncomendasScreen() {
   const navigate = useNavigate();
+
+  const [toastMsg, setToastMsg] = useState('');
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 4000);
+  }, []);
 
   // ── Raw data ─────────────────────────────────────────────────────────────
   const [allEncomendasData, setAllEncomendasData] = useState<EncomendaListItem[]>([]);
@@ -176,9 +227,15 @@ export default function EncomendasScreen() {
         const day = isoDatePartLocal(e.createdAtIso);
         if (day && day > filtroDataFim) return false;
       }
+      if (estadoSel !== 'Todos os estados') {
+        const n = estadoSel.toLowerCase();
+        const o = e.origem.toLowerCase();
+        const d = e.destino.toLowerCase();
+        if (!o.includes(n) && !d.includes(n)) return false;
+      }
       return true;
     });
-  }, [allEncomendasData, filtroStatus, filtroCategoria, filtroDataIni, filtroDataFim]);
+  }, [allEncomendasData, filtroStatus, filtroCategoria, filtroDataIni, filtroDataFim, estadoSel]);
 
   // ── Counts (derivados de filteredEncomendasData) ─────────────────────────
   const counts = useMemo(() => ({
@@ -231,25 +288,75 @@ export default function EncomendasScreen() {
     }
     const total = filteredEncomendasData.length || 1;
     const td = Array.from(destMap.entries())
-      .sort((a, b) => b[1] - a[1]).slice(0, 5)
-      .map(([label, count]) => ({ label, pct: Math.round((count / total) * 100), count: `${count} entregas` }));
+      .sort((a, b) => b[1] - a[1]).slice(0, 10)
+      .map(([label, count]) => ({ label, pct: Math.round((count / total) * 100), entregasLabel: `${count} entregas` }));
     const to = Array.from(origMap.entries())
-      .sort((a, b) => b[1] - a[1]).slice(0, 5)
-      .map(([label, count]) => ({ label, pct: Math.round((count / total) * 100), count: `${count} entregas` }));
+      .sort((a, b) => b[1] - a[1]).slice(0, 10)
+      .map(([label, count]) => ({ label, pct: Math.round((count / total) * 100), entregasLabel: `${count} entregas` }));
     return { topDestinos: td, topOrigens: to };
   }, [filteredEncomendasData]);
 
-  // ── Pie chart data ────────────────────────────────────────────────────────
-  const pieData = useMemo(() => {
-    const raw = [
-      { name: 'Em andamento', value: counts.emAndamento, color: '#cba04b' },
-      { name: 'Agendadas', value: counts.agendadas, color: '#016df9' },
-      { name: 'Concluídas', value: counts.concluidas, color: '#0d8344' },
-      { name: 'Canceladas', value: counts.canceladas, color: '#d64545' },
-    ].filter((d) => d.value > 0);
-    if (raw.length === 0) return [{ name: 'Sem dados', value: 1, color: '#e2e2e2' }];
-    return raw;
-  }, [counts]);
+  const filtroPaginaAtivo = useMemo(() =>
+    filtroStatus !== 'todos' || filtroCategoria !== 'todos' || Boolean(filtroDataIni) || Boolean(filtroDataFim),
+  [filtroStatus, filtroCategoria, filtroDataIni, filtroDataFim]);
+
+  const kpiContextSub = filtroPaginaAtivo ? 'Conjunto filtrado' : 'Base completa';
+
+  const tipoEncomendaBars = useMemo(() => {
+    let peq = 0; let med = 0; let gra = 0; let out = 0;
+    for (const e of filteredEncomendasData) {
+      const b = pkgBucket(e.packageSize);
+      if (b === 'pequeno') peq++;
+      else if (b === 'medio') med++;
+      else if (b === 'grande') gra++;
+      else out++;
+    }
+    const total = filteredEncomendasData.length || 1;
+    const row = (label: string, count: number) => ({
+      label,
+      count,
+      entregasLabel: `${count} entregas`,
+      pct: Math.round((count / total) * 100),
+    });
+    const rows = [row('Pequena', peq), row('Média', med), row('Grande', gra)];
+    if (out > 0) rows.push(row('Sem tamanho / bagagem', out));
+    return rows;
+  }, [filteredEncomendasData]);
+
+  const avgPrecoPorTamanho = useMemo(() => {
+    type Acc = { sum: number; n: number };
+    const acc: Record<'pequeno' | 'medio' | 'grande', Acc> = {
+      pequeno: { sum: 0, n: 0 }, medio: { sum: 0, n: 0 }, grande: { sum: 0, n: 0 },
+    };
+    for (const e of filteredEncomendasData) {
+      if (e.amountCents <= 0) continue;
+      const b = pkgBucket(e.packageSize);
+      if (b === 'pequeno' || b === 'medio' || b === 'grande') {
+        acc[b].sum += e.amountCents;
+        acc[b].n += 1;
+      }
+    }
+    const one = (a: Acc) => (a.n === 0 ? '—' : fmtBRL(Math.round(a.sum / a.n)));
+    return { pequena: one(acc.pequeno), media: one(acc.medio), grande: one(acc.grande) };
+  }, [filteredEncomendasData]);
+
+  const mediaEntregasDia = useMemo(() => {
+    const list = filteredEncomendasData.filter((e) => e.createdAtIso);
+    if (list.length === 0) return { text: '—', sub: '' as string };
+    const ts = list
+      .map((e) => new Date(e.createdAtIso).getTime())
+      .filter((t) => !Number.isNaN(t));
+    if (ts.length === 0) return { text: '—', sub: '' };
+    const minT = Math.min(...ts);
+    const maxT = Math.max(...ts);
+    const dayMs = 86400000;
+    const spanDays = Math.max(1, Math.floor((maxT - minT) / dayMs) + 1);
+    const v = list.length / spanDays;
+    return {
+      text: v.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
+      sub: 'Até o momento',
+    };
+  }, [filteredEncomendasData]);
 
   // ── Refetch after action ──────────────────────────────────────────────────
   const refetch = async () => {
@@ -298,148 +405,139 @@ export default function EncomendasScreen() {
       React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando encomendas...'));
   }
 
-  // ── KPI cards ─────────────────────────────────────────────────────────────
-  const totalRegular = allEncomendasData.filter((e) => e.tipo === 'shipment').length;
-  const totalDependente = allEncomendasData.filter((e) => e.tipo === 'dependent_shipment').length;
+  const kpiCardEl = (
+    title: string,
+    value: React.ReactNode,
+    sub?: React.ReactNode,
+    subMuted?: boolean,
+    valueRowExtra?: React.ReactNode,
+  ) =>
+    React.createElement('div', { key: title, style: enc.kpiCell },
+      React.createElement('div', { style: enc.kpiCard },
+        React.createElement('div', { style: enc.kpiHead },
+          React.createElement('h2', { style: enc.kpiTitle }, title),
+          React.createElement('button', { type: 'button', style: enc.kpiArrowBtn, 'aria-label': 'Detalhe do indicador' }, arrowOutwardSvg)),
+        sub != null && sub !== ''
+          ? React.createElement('p', { style: subMuted ? enc.kpiSubMuted : enc.kpiSub }, sub)
+          : React.createElement('p', { style: enc.kpiSubMuted }, '\u00a0'),
+        React.createElement('div', { style: enc.kpiValueRow },
+          React.createElement('p', { style: enc.kpiValue }, value),
+          valueRowExtra ?? null)));
 
-  const kpiCards = [
-    { title: 'Total de Entregas', value: counts.total },
-    { title: '📦 Envios Regulares', value: totalRegular },
-    { title: '👤 Envios de Dependentes', value: totalDependente },
-    { title: 'Em Andamento', value: counts.emAndamento },
-    { title: 'Concluídas', value: counts.concluidas },
-    { title: 'Canceladas', value: counts.canceladas },
-  ].map(({ title, value }) =>
-    React.createElement('div', { key: title, style: webStyles.statCard },
-      React.createElement('div', { style: webStyles.statCardHeader },
-        React.createElement('span', { style: webStyles.statCardTitle }, title)),
-      React.createElement('span', { style: webStyles.statCardValue }, String(value))));
+  const kpiGrid = React.createElement('div', { style: enc.kpiGrid },
+    kpiCardEl('Total de Entregas', String(counts.total), kpiContextSub, true),
+    kpiCardEl('Entregas Concluídas', String(counts.concluidas), kpiContextSub, true),
+    kpiCardEl('Em Andamento', String(counts.emAndamento), 'Ativas', true),
+    kpiCardEl('Agendadas', String(counts.agendadas), kpiContextSub, true),
+    kpiCardEl('Canceladas', String(counts.canceladas), kpiContextSub, true),
+    kpiCardEl('Média de Entregas/Dia', mediaEntregasDia.text, '', true,
+      mediaEntregasDia.sub
+        ? React.createElement('span', { style: enc.kpiValueHint }, mediaEntregasDia.sub)
+        : undefined),
+    kpiCardEl('Média de preço - Pequena', avgPrecoPorTamanho.pequena, '', true,
+      React.createElement('span', { style: enc.kpiValueHint }, 'Por entrega')),
+    kpiCardEl('Média de preço - Médio', avgPrecoPorTamanho.media, '', true,
+      React.createElement('span', { style: enc.kpiValueHint }, 'Por entrega')),
+    kpiCardEl('Média de preço - Grande', avgPrecoPorTamanho.grande, '', true,
+      React.createElement('span', { style: enc.kpiValueHint }, 'Por entrega')));
 
-  const kpiRow = React.createElement('div', { style: webStyles.statCardsRow }, ...kpiCards);
+  const barRowEl = (item: { label: string; pct: number; entregasLabel: string }, fill: string) =>
+    React.createElement('div', { key: item.label, style: enc.barBlock },
+      React.createElement('div', { style: enc.barLabelRow },
+        React.createElement('span', { style: enc.barLabel }, item.label),
+        React.createElement('span', { style: enc.barCount }, item.entregasLabel)),
+      React.createElement('div', { style: enc.barTrack },
+        React.createElement('div', { style: { width: `${item.pct}%`, height: '100%', background: fill, borderRadius: 4, minWidth: item.pct > 0 ? 2 : 0 } })),
+      React.createElement('div', { style: enc.barPct }, `${item.pct}%`));
 
-  // ── PieChart section ──────────────────────────────────────────────────────
-  const totalForPct = counts.total || 1;
-  const dot = (bg: string): React.CSSProperties => ({ width: 16, height: 16, borderRadius: 999, background: bg, flexShrink: 0 });
-  const legendText: React.CSSProperties = { fontSize: 15, fontWeight: 400, color: '#0d0d0d', ...font };
+  const analyticsCol = (title: string, rows: { label: string; pct: number; entregasLabel: string }[], fill: string) =>
+    React.createElement('div', { style: enc.analyticsCol },
+      React.createElement('h3', { style: enc.analyticsTitle }, title),
+      ...rows.map((r) => barRowEl(r, fill)));
 
-  const customTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { name: string; value: number; color: string } }> }) => {
-    if (!active || !payload?.[0]) return null;
-    const d = payload[0].payload;
-    const pct = counts.total > 0 ? Math.round((d.value / counts.total) * 100) : 0;
-    return React.createElement('div', {
-      style: { background: '#0d0d0d', color: '#fff', padding: '10px 16px', borderRadius: 10, fontSize: 14, fontWeight: 600, ...font, boxShadow: '0 4px 16px rgba(0,0,0,0.25)' },
-    }, `${d.name}: ${pct}% (${d.value})`);
-  };
+  const tipoCol = React.createElement('div', { style: enc.analyticsCol },
+    React.createElement('h3', { style: enc.analyticsTitle }, 'Tipo de encomenda'),
+    ...tipoEncomendaBars.map((r) => barRowEl(
+      { label: r.label, pct: r.pct, entregasLabel: r.entregasLabel },
+      '#0d0d0d',
+    )));
 
-  const pieSection = React.createElement('div', {
-    style: { display: 'flex', flexDirection: 'column' as const, gap: 24, padding: 24, borderRadius: 16, background: '#f6f6f6', width: '100%', boxSizing: 'border-box' as const },
-  },
-    React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Distribuição por status'),
-    React.createElement('div', {
-      style: { display: 'flex', gap: 48, alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' as const },
-    },
-      // Chart
-      React.createElement('div', { style: { width: 280, height: 280, flexShrink: 0 } },
-        React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
-          React.createElement(PieChart, null,
-            React.createElement(Pie, {
-              data: pieData, cx: '50%', cy: '50%',
-              innerRadius: 0, outerRadius: 120,
-              dataKey: 'value',
-              stroke: '#f6f6f6', strokeWidth: 2,
-              animationBegin: 0, animationDuration: 800,
-            },
-              ...pieData.map((entry: { name: string; value: number; color: string }, idx: number) =>
-                React.createElement(Cell, { key: `cell-${idx}`, fill: entry.color }))),
-            React.createElement(Tooltip, { content: customTooltip })))),
-      // Legend
-      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 32 } },
-        React.createElement('p', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } },
-          `Total: ${counts.total} entregas`),
-        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, maxWidth: 300 } },
-          ...([
-            { name: 'Em andamento', value: counts.emAndamento, color: '#cba04b' },
-            { name: 'Agendadas', value: counts.agendadas, color: '#016df9' },
-            { name: 'Concluídas', value: counts.concluidas, color: '#0d8344' },
-            { name: 'Canceladas', value: counts.canceladas, color: '#d64545' },
-          ].map(({ name, value, color }) => {
-            const pct = Math.round((value / totalForPct) * 100);
-            return React.createElement('div', { key: name, style: { display: 'flex', gap: 10, alignItems: 'center' } },
-              React.createElement('div', { style: dot(color) }),
-              React.createElement('span', { style: legendText }, `${pct}% ${name} (${value})`));
-          }))))));
+  const destinosCol = analyticsCol('Principais destinos (top 10)', topDestinos, '#016df9');
+  const origensCol = analyticsCol('Principais origens (top 10)', topOrigens, '#cba04b');
 
-  // ── Progress bar section (Top destinos/origens) ───────────────────────────
-  const renderProgressCol = (title: string, items: { label: string; pct: number; count: string }[], barColor: string) =>
-    React.createElement('div', { style: s.progressCol },
-      React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, title),
-      ...items.map((item) =>
-        React.createElement('div', { key: item.label, style: s.progressItem },
-          React.createElement('div', { style: s.progressLabelRow },
-            React.createElement('span', { style: s.progressLabel }, item.label),
-            React.createElement('span', { style: s.progressCount }, item.count)),
-          React.createElement('div', { style: s.progressBarBg },
-            React.createElement('div', { style: { width: `${item.pct}%`, height: '100%', background: barColor, borderRadius: 4 } })),
-          React.createElement('span', { style: s.progressPct }, `${item.pct}%`))));
+  const analyticsSection = React.createElement('div', { style: enc.analyticsRow }, tipoCol, destinosCol, origensCol);
 
-  const topSection = React.createElement('div', {
-    style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
-  },
-    renderProgressCol('Top 5 destinos mais frequentes', topDestinos, '#0d0d0d'),
-    renderProgressCol('Top 5 locais de origem', topOrigens, '#cba04b'));
-
-  // ── Search row ────────────────────────────────────────────────────────────
-  const searchRow = React.createElement('div', {
-    style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, width: '100%', flexWrap: 'wrap' as const },
-  },
-    // Estado dropdown
-    React.createElement('div', { style: { position: 'relative' as const } },
+  // ── Search row (campo à esquerda — Figma 849-37140) ───────────────────────
+  const searchRow = React.createElement('div', { style: { ...webStyles.searchRow, alignItems: 'center' } },
+    React.createElement('div', { style: webStyles.searchInputWrap },
+      React.createElement('div', { style: webStyles.searchInputInner },
+        React.createElement('span', { style: webStyles.searchIcon }, searchIconSvg),
+        React.createElement('input', {
+          type: 'search',
+          value: search,
+          placeholder: 'Buscar por origem, destino ou remetente',
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value),
+          style: webStyles.searchInput,
+          'aria-label': 'Buscar encomendas',
+        }))),
+    React.createElement('div', { style: { ...webStyles.filterGroup, flexShrink: 0 } },
+      React.createElement('div', { style: { width: 1, height: 16, background: '#e2e2e2', flexShrink: 0 } }),
+      React.createElement('div', { style: { position: 'relative' as const } },
+        React.createElement('button', {
+          type: 'button',
+          onClick: () => setEstadosOpen(!estadosOpen),
+          style: {
+            display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
+            background: '#f1f1f1', border: 'none', borderRadius: 999,
+            fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const,
+          },
+        }, estadoSel, chevronDownSvg),
+        estadosOpen ? React.createElement('div', {
+          style: {
+            position: 'absolute' as const, top: 52, right: 0, background: '#fff', borderRadius: 12,
+            boxShadow: '0 8px 30px rgba(0,0,0,0.15)', minWidth: 240, maxHeight: 300,
+            overflowY: 'auto' as const, zIndex: 50,
+          },
+        },
+          ...UF_NOMES.map((uf, i, arr) =>
+            React.createElement('button', {
+              key: uf, type: 'button',
+              onClick: () => { setEstadoSel(uf); setEstadosOpen(false); },
+              style: {
+                display: 'block', width: '100%', padding: '14px 20px', background: 'none',
+                borderTop: 'none', borderRight: 'none', borderLeft: 'none',
+                borderBottom: i < arr.length - 1 ? '1px solid #f1f1f1' : 'none',
+                fontSize: 14, fontWeight: estadoSel === uf ? 600 : 400,
+                color: estadoSel === uf ? '#0d0d0d' : '#767676', cursor: 'pointer', textAlign: 'left' as const, ...font,
+              },
+            }, uf))) : null),
       React.createElement('button', {
         type: 'button',
-        onClick: () => setEstadosOpen(!estadosOpen),
-        style: {
-          display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 16px',
-          background: '#fff', border: '1px solid #e2e2e2', borderRadius: 999,
-          fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const,
-        },
-      }, estadoSel, chevronDownSvg),
-      estadosOpen ? React.createElement('div', {
-        style: {
-          position: 'absolute' as const, top: 52, left: 0, background: '#fff', borderRadius: 12,
-          boxShadow: '0 8px 30px rgba(0,0,0,0.15)', minWidth: 240, maxHeight: 300,
-          overflowY: 'auto' as const, zIndex: 50,
-        },
-      },
-        ...UF_NOMES.map((uf, i, arr) =>
-          React.createElement('button', {
-            key: uf, type: 'button',
-            onClick: () => { setEstadoSel(uf); setEstadosOpen(false); },
-            style: {
-              display: 'block', width: '100%', padding: '14px 20px', background: 'none',
-              borderTop: 'none', borderRight: 'none', borderLeft: 'none',
-              borderBottom: i < arr.length - 1 ? '1px solid #f1f1f1' : 'none',
-              fontSize: 14, fontWeight: estadoSel === uf ? 600 : 400,
-              color: estadoSel === uf ? '#0d0d0d' : '#767676', cursor: 'pointer', textAlign: 'left' as const, ...font,
-            },
-          }, uf))) : null),
-    // Filtro modal página
-    React.createElement('button', {
-      type: 'button',
-      onClick: () => setFiltroOpen(true),
-      style: {
-        display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
-        background: '#f1f1f1', border: 'none', borderRadius: 999,
-        fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const,
-      },
-    }, filterIconSvg, 'Filtros'));
+        onClick: () => setFiltroOpen(true),
+        style: webStyles.filterBtn,
+      }, filterIconSvg, 'Filtros')));
 
-  // ── Table section ─────────────────────────────────────────────────────────
-  const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 8px' };
+  // ── Table section (Figma 849-37274 — Lista de encomendas) ─────────────────
+  const tableCellBase = (col: TableCol, extra: React.CSSProperties = {}): React.CSSProperties => ({
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: col.cellAlign,
+    fontSize: 14,
+    fontWeight: 500,
+    color: '#0d0d0d',
+    ...font,
+    padding: '0 10px',
+    flex: col.flex,
+    minWidth: col.minWidth,
+    boxSizing: 'border-box' as const,
+    ...extra,
+  });
 
   const tableToolbar = React.createElement('div', {
     style: {
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      height: 80, padding: '20px 28px', background: '#f6f6f6', borderRadius: '16px 16px 0 0',
+      minHeight: 80, padding: '20px 28px', background: '#f6f6f6', borderRadius: '16px 16px 0 0',
+      boxSizing: 'border-box' as const,
     },
   },
     React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font } }, 'Lista de encomendas'),
@@ -451,58 +549,70 @@ export default function EncomendasScreen() {
         display: 'flex', alignItems: 'center', gap: 8, height: 40, padding: '8px 24px',
         background: '#fff', border: 'none', borderRadius: 999, cursor: 'pointer',
         fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font,
+        boxShadow: '0px 4px 20px 0px rgba(13,13,13,0.06)',
       },
     }, filterIconSvg, 'Filtro'));
 
   const tableHeader = React.createElement('div', {
     style: {
-      display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9',
-      padding: '0 16px', alignItems: 'center',
+      display: 'flex', minHeight: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9',
+      padding: '0 28px', alignItems: 'center', boxSizing: 'border-box' as const,
     },
   },
     ...tableCols.map((c) => React.createElement('div', {
       key: c.label,
-      style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 8px', display: 'flex', alignItems: 'center', height: '100%' },
+      style: {
+        flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font,
+        padding: '0 10px', display: 'flex', alignItems: 'center', justifyContent: c.headAlign,
+        minHeight: 53, boxSizing: 'border-box' as const,
+      },
     }, c.label)));
 
-  const tableRowEls = tableRows.map((row) => {
-    const st = statusStyles[row.status] ?? { bg: '#e2e2e2', color: '#555' };
+  const tableRowEls = tableRows.map((row, rowIdx) => {
+    const badgeLabel = encomendaStatusBadgeLabel(row);
+    const st = statusStyles[badgeLabel] ?? statusStyles[row.status] ?? { bg: '#e2e2e2', color: '#555' };
     const item = allEncomendasData.find((x) => x.id === row.id);
-    return React.createElement('div', {
-      key: row.id,
-      'data-testid': 'encomenda-table-row',
-      style: {
-        display: 'flex', height: 64, alignItems: 'center', padding: '0 16px',
-        borderBottom: '1px solid #d9d9d9', background: '#f6f6f6',
-      },
-    },
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth } },
-        React.createElement('span', {
-          style: { fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 999, whiteSpace: 'nowrap' as const, ...font,
-            ...(item?.tipo === 'dependent_shipment'
-              ? { background: '#f3e8ff', color: '#6b21a8' }
-              : { background: '#dbeafe', color: '#1e40af' }) },
-        }, item?.tipo === 'dependent_shipment' ? '👤 Dependente' : '📦 Regular')),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500 } }, row.destino),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth, fontWeight: 500 } }, row.origem),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth, fontWeight: 500 } }, row.remetente),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth } }, row.data),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth } }, row.tamanho),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[6].flex, minWidth: tableCols[6].minWidth } }, row.valor),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[7].flex, minWidth: tableCols[7].minWidth } },
+    const rowBg = rowIdx % 2 === 1 ? '#fafafa' : '#ffffff';
+    const cells: React.ReactNode[] = [
+      React.createElement('div', { key: 'd', style: tableCellBase(tableCols[0]) }, row.destino),
+      React.createElement('div', { key: 'o', style: tableCellBase(tableCols[1]) }, row.origem),
+      React.createElement('div', { key: 'r', style: tableCellBase(tableCols[2]) }, row.remetente),
+      React.createElement('div', { key: 'dt', style: tableCellBase(tableCols[3], { fontWeight: 400 }) }, row.data),
+      React.createElement('div', { key: 'emb', style: tableCellBase(tableCols[4], { fontWeight: 400 }) }, row.embarque),
+      React.createElement('div', { key: 'chg', style: tableCellBase(tableCols[5], { fontWeight: 400 }) }, row.chegada),
+      React.createElement('div', { key: 'st', style: tableCellBase(tableCols[6]) },
         React.createElement('span', {
           style: {
             display: 'inline-block', padding: '4px 12px', borderRadius: 999,
             fontSize: 13, fontWeight: 700, lineHeight: 1.5, whiteSpace: 'nowrap' as const,
             background: st.bg, color: st.color, ...font,
           },
-        }, row.status)),
+        }, badgeLabel)),
       React.createElement('div', {
-        style: { flex: tableCols[8].flex, minWidth: tableCols[8].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
+        key: 'act',
+        style: {
+          ...tableCellBase(tableCols[7]),
+          gap: 4,
+        },
       },
         React.createElement('button', {
-          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar',
-          onClick: () => { if (item) navigate(`/encomendas/${item.id}/editar`, { state: { from: 'encomendas' } }); },
+          type: 'button',
+          style: {
+            ...webStyles.viagensActionBtn,
+            opacity: item?.scheduledTripId ? 1 : 0.45,
+            cursor: 'pointer',
+          },
+          'aria-label': item?.scheduledTripId ? 'Visualizar viagem' : 'Visualizar viagem (sem viagem vinculada)',
+          'aria-disabled': !item?.scheduledTripId,
+          title: item?.scheduledTripId ? 'Abrir detalhe da viagem (mesma tela do menu Viagens)' : 'Esta encomenda não está vinculada a uma viagem agendada — clique para ver a mensagem',
+          onClick: () => {
+            if (!item) return;
+            if (!item.scheduledTripId) {
+              showToast('Sem viagem vinculada: associe esta encomenda a uma viagem na edição da viagem (menu Viagens) ou confirme a encomenda quando houver rota.');
+              return;
+            }
+            navigate(`/encomendas/${item.id}/viagem/${item.scheduledTripId}`);
+          },
         }, eyeActionSvg),
         React.createElement('button', {
           type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
@@ -518,14 +628,27 @@ export default function EncomendasScreen() {
             }
           },
         }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
-          React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#22c55e', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))) : null,
-        null));
+          React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#22c55e', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))) : null),
+    ];
+    return React.createElement('div', {
+      key: row.id,
+      'data-testid': 'encomenda-table-row',
+      style: {
+        display: 'flex', minHeight: 64, alignItems: 'center', padding: '0 28px',
+        borderBottom: '1px solid #e8e8e8', background: rowBg, boxSizing: 'border-box' as const,
+      },
+    }, ...cells);
   });
 
   const tableSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' },
   },
-    React.createElement('div', { style: { background: '#fff', borderRadius: 16, overflow: 'hidden', width: '100%' } },
+    React.createElement('div', {
+      style: {
+        background: '#fff', borderRadius: 16, overflow: 'hidden', width: '100%',
+        boxShadow: '0px 4px 20px 0px rgba(13,13,13,0.04)', border: '1px solid #efefef', boxSizing: 'border-box' as const,
+      },
+    },
       tableToolbar,
       React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } },
         tableHeader,
@@ -646,13 +769,24 @@ export default function EncomendasScreen() {
           style: { flex: 1, height: 44, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font },
         }, 'Resetar filtros')))) : null;
 
+  const toastEl = toastMsg
+    ? React.createElement('div', {
+      role: 'status',
+      style: {
+        position: 'fixed' as const, bottom: 24, right: 24, maxWidth: 360,
+        background: '#0d0d0d', color: '#fff', padding: '12px 20px', borderRadius: 12,
+        fontSize: 14, fontWeight: 500, zIndex: 2000, boxShadow: '0 8px 30px rgba(0,0,0,0.2)', ...font,
+      },
+    }, toastMsg)
+    : null;
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return React.createElement(React.Fragment, null,
+    toastEl,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Encomendas'),
     searchRow,
-    kpiRow,
-    pieSection,
-    topSection,
+    kpiGrid,
+    analyticsSection,
     tableSection,
     filtroModal,
     tblFiltroModal);

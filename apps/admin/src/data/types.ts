@@ -168,6 +168,16 @@ export type EncomendaEditDetail =
       id: string;
       originAddress: string;
       destinationAddress: string;
+      originLat: number | null;
+      originLng: number | null;
+      destinationLat: number | null;
+      destinationLng: number | null;
+      /** Viagem agendada à qual o envio está associado (mapa / roteiro). */
+      scheduledTripId: string | null;
+      tripDepartureAt: string | null;
+      tripArrivalAt: string | null;
+      senderName: string;
+      photoUrl: string | null;
       recipientName: string;
       recipientPhone: string;
       recipientEmail: string;
@@ -184,6 +194,10 @@ export type EncomendaEditDetail =
       id: string;
       originAddress: string;
       destinationAddress: string;
+      originLat: number | null;
+      originLng: number | null;
+      destinationLat: number | null;
+      destinationLng: number | null;
       fullName: string;
       contactPhone: string;
       receiverName: string | null;
@@ -221,6 +235,13 @@ export interface EncomendaListItem {
   packageSize?: string;
   /** ISO 8601 — filtros no Início */
   createdAtIso: string;
+  /** Horários da viagem agendada vinculada (lista admin Figma 849-37274), ou "—" */
+  embarque: string;
+  chegada: string;
+  /** Status bruto no banco (ex.: pending_review) */
+  rawStatus: string;
+  /** Viagem agendada vinculada (`shipments.scheduled_trip_id`) — detalhe em `/viagens/:id` */
+  scheduledTripId: string | null;
 }
 
 export interface MotoristaListItem {
@@ -483,4 +504,6 @@ export interface AdminUserListItem {
   dataCriacao: string;
   status: 'Ativo' | 'Inativo';
   permissions: Record<string, boolean>;
+  /** worker_profiles.subtype para staff (admin | suporte | financeiro) */
+  subtype?: string;
 }

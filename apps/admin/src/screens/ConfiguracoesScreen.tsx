@@ -8,6 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { fetchAdminUsers, createAdminUser, deleteAdminUser, invokeEdgeFunction } from '../data/queries';
 import type { AdminUserListItem } from '../data/types';
 import { usePlatformSettings } from '../hooks/usePlatformSettings';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -17,6 +18,8 @@ const editPencilWhiteSvg = React.createElement('svg', { width: 18, height: 18, v
 
 function mapNivelAcesso(role: string | undefined): string {
   if (role === 'admin') return 'Administrador';
+  if (role === 'suporte') return 'Suporte';
+  if (role === 'financeiro') return 'Financeiro';
   if (!role) return '—';
   return role.charAt(0).toUpperCase() + role.slice(1);
 }
@@ -53,9 +56,11 @@ export default function ConfiguracoesScreen() {
   const [novoUsuarioOpen, setNovoUsuarioOpen] = useState(false);
   const [nuNome, setNuNome] = useState('');
   const [nuEmail, setNuEmail] = useState('');
+  const [nuBackofficeTipo, setNuBackofficeTipo] = useState<'admin' | 'suporte' | 'financeiro'>('admin');
   const [nuPermissoes, setNuPermissoes] = useState<Record<string, boolean>>({ 'Início': true, 'Viagens': true });
   const [adminUsers, setAdminUsers] = useState<AdminUserListItem[]>([]);
   const [adminLoading, setAdminLoading] = useState(true);
+  const [meuSubtype, setMeuSubtype] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,10 +68,20 @@ export default function ConfiguracoesScreen() {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    if (!isSupabaseConfigured || !session?.user?.id) return;
+    let cancelled = false;
+    (supabase as any).from('worker_profiles').select('subtype').eq('id', session.user.id).maybeSingle()
+      .then(({ data }: { data: { subtype?: string } | null }) => {
+        if (!cancelled) setMeuSubtype(data?.subtype ?? null);
+      });
+    return () => { cancelled = true; };
+  }, [session?.user?.id]);
+
   const nome = session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || '—';
   const email = session?.user?.email || '—';
   const avatarLetter = (nome === '—' ? '?' : nome).charAt(0).toUpperCase();
-  const nivel = mapNivelAcesso(session?.user?.app_metadata?.role as string | undefined);
+  const nivel = mapNivelAcesso((meuSubtype || session?.user?.app_metadata?.role) as string | undefined);
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
     flex: '1 1 0',
@@ -206,7 +221,7 @@ export default function ConfiguracoesScreen() {
     React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Lista de administradores'),
     React.createElement('button', {
       type: 'button',
-      onClick: () => setNovoUsuarioOpen(true),
+      onClick: () => { setNuBackofficeTipo('admin'); setNovoUsuarioOpen(true); },
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999,
@@ -373,6 +388,22 @@ export default function ConfiguracoesScreen() {
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => setNuEmail(e.target.value),
           style: { height: 44, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', ...font },
         })),
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Tipo de acesso'),
+      React.createElement('p', { style: { fontSize: 12, color: '#767676', margin: 0, ...font } }, 'Suporte entra na fila automática de atendimentos; financeiro atua em reembolsos; administrador tem visão ampla.'),
+      React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 8 } },
+        ...(['admin', 'suporte', 'financeiro'] as const).map((t) =>
+          React.createElement('button', {
+            key: t,
+            type: 'button',
+            onClick: () => setNuBackofficeTipo(t),
+            style: {
+              height: 40, padding: '0 18px', borderRadius: 999,
+              border: nuBackofficeTipo === t ? 'none' : '1px solid #e2e2e2',
+              background: nuBackofficeTipo === t ? '#0d0d0d' : '#fff',
+              color: nuBackofficeTipo === t ? '#fff' : '#0d0d0d',
+              fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
+            },
+          }, t === 'admin' ? 'Administrador' : t === 'suporte' ? 'Suporte' : 'Financeiro'))),
       // Permissões
       React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Permissões por módulo'),
       React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 24px' } },
@@ -397,7 +428,12 @@ export default function ConfiguracoesScreen() {
               // Gerar senha aleatória
               const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
               const tempPassword = Array.from({ length: 10 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-              await createAdminUser({ full_name: nuNome, email: nuEmail, permissions: nuPermissoes });
+              await createAdminUser({
+                full_name: nuNome,
+                email: nuEmail,
+                permissions: nuPermissoes,
+                backoffice_subtype: nuBackofficeTipo,
+              });
               // Enviar credenciais por email
               try {
                 await invokeEdgeFunction('send-admin-credentials', 'POST', undefined, {

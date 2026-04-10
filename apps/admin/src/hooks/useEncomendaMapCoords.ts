@@ -1,41 +1,40 @@
-import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import type { BookingDetailForAdmin } from '../data/types';
 import { parseCoordPair } from '../lib/mapCoordUtils';
 import { geocodeAddress } from '../lib/googleGeocoding';
 import { getGoogleMapsApiKey } from '../lib/expoExtra';
+import type { TripMapCoords } from './useTripMapCoords';
 
-export type TripMapCoords = {
-  origin?: { lat: number; lng: number };
-  destination?: { lat: number; lng: number };
-  /** Partida da viagem agendada (`scheduled_trips.origin_*`) — costuma ser o ponto do motorista, distinto do embarque do passageiro. */
-  vehicleOrigin?: { lat: number; lng: number };
-  /** Sempre que existir linha em `scheduled_trips`: extremos da rota principal A→B (validação de encomendas). */
-  scheduledRouteOrigin?: { lat: number; lng: number };
-  scheduledRouteDestination?: { lat: number; lng: number };
+export type EncomendaMapCoordsInput = {
+  scheduledTripId: string | null;
+  originLat: number | null;
+  originLng: number | null;
+  destinationLat: number | null;
+  destinationLng: number | null;
+  originAddress: string;
+  destinationAddress: string;
 };
 
 /**
- * Coordenadas para o mapa: `bookings` → `scheduled_trips` → Geocoding Google (se chave configurada).
+ * Coordenadas para o mapa na edição de encomenda: linha da encomenda +, se houver viagem,
+ * enriquecimento com `scheduled_trips` e `trip_stops` (igual fluxo de `useTripMapCoords`).
  */
-export function useTripMapCoords(detail: BookingDetailForAdmin | null): [TripMapCoords, Dispatch<SetStateAction<TripMapCoords>>] {
+export function useEncomendaMapCoords(input: EncomendaMapCoordsInput | null): TripMapCoords {
   const [coords, setCoords] = useState<TripMapCoords>({});
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!detail) {
+      if (!input) {
         setCoords({});
         return;
       }
 
-      let origin = parseCoordPair(detail.originLat, detail.originLng);
-      let destination = parseCoordPair(detail.destinationLat, detail.destinationLng);
-      const tripId = detail.listItem.tripId;
+      let origin = parseCoordPair(input.originLat, input.originLng);
+      let destination = parseCoordPair(input.destinationLat, input.destinationLng);
+      const tripId = input.scheduledTripId;
 
       let vehicleOrigin: { lat: number; lng: number } | undefined;
-      let scheduledRouteOrigin: { lat: number; lng: number } | undefined;
-      let scheduledRouteDestination: { lat: number; lng: number } | undefined;
       if (tripId) {
         const { data } = await (supabase as any)
           .from('scheduled_trips')
@@ -44,13 +43,10 @@ export function useTripMapCoords(detail: BookingDetailForAdmin | null): [TripMap
           .maybeSingle();
         if (!cancelled && data) {
           vehicleOrigin = parseCoordPair(data.origin_lat, data.origin_lng) ?? undefined;
-          scheduledRouteOrigin = vehicleOrigin;
-          scheduledRouteDestination = parseCoordPair(data.destination_lat, data.destination_lng);
           if (!origin) origin = vehicleOrigin;
-          if (!destination) destination = scheduledRouteDestination;
+          if (!destination) destination = parseCoordPair(data.destination_lat, data.destination_lng);
         }
 
-        // Fallback a paradas persistidas (booking por vezes sem lat/lng; destino final na linha trip_destination).
         if (!cancelled && (!origin || !destination)) {
           const { data: stopRows } = await (supabase as any)
             .from('trip_stops')
@@ -74,20 +70,14 @@ export function useTripMapCoords(detail: BookingDetailForAdmin | null): [TripMap
         }
       }
 
-      let next: TripMapCoords = {
-        origin,
-        destination,
-        vehicleOrigin,
-        scheduledRouteOrigin,
-        scheduledRouteDestination,
-      };
+      let next: TripMapCoords = { origin, destination, vehicleOrigin };
       if (!cancelled) setCoords(next);
 
       const key = getGoogleMapsApiKey();
       if (!key || cancelled) return;
 
-      const oAddr = (detail.originFull || detail.listItem.origem || '').trim();
-      const dAddr = (detail.destinationFull || detail.listItem.destino || '').trim();
+      const oAddr = (input.originAddress || '').trim();
+      const dAddr = (input.destinationAddress || '').trim();
       const patch: TripMapCoords = {};
 
       if (!next.origin && oAddr) {
@@ -106,17 +96,14 @@ export function useTripMapCoords(detail: BookingDetailForAdmin | null): [TripMap
 
     return () => { cancelled = true; };
   }, [
-    detail?.listItem.bookingId,
-    detail?.listItem.tripId,
-    detail?.originLat,
-    detail?.originLng,
-    detail?.destinationLat,
-    detail?.destinationLng,
-    detail?.originFull,
-    detail?.destinationFull,
-    detail?.listItem.origem,
-    detail?.listItem.destino,
+    input?.scheduledTripId,
+    input?.originLat,
+    input?.originLng,
+    input?.destinationLat,
+    input?.destinationLng,
+    input?.originAddress,
+    input?.destinationAddress,
   ]);
 
-  return [coords, setCoords];
+  return coords;
 }

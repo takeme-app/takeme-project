@@ -82,13 +82,21 @@ Deno.serve(async (req) => {
       const permMap: Record<string, any> = {};
       (prefs || []).forEach((p: any) => { permMap[p.user_id] = p.value; });
 
+      const nivelOf = (sub: string | undefined) => {
+        if (sub === "admin") return "Administrador";
+        if (sub === "suporte") return "Suporte";
+        if (sub === "financeiro") return "Financeiro";
+        return sub || "—";
+      };
+
       const result = (admins || []).map((a: any) => ({
         id: a.id,
         full_name: profileMap[a.id]?.full_name || "Sem nome",
         email: emailMap[a.id] || "",
         phone: profileMap[a.id]?.phone || null,
         avatar_url: profileMap[a.id]?.avatar_url || null,
-        nivel: a.subtype === "admin" ? "Administrador" : a.subtype,
+        nivel: nivelOf(a.subtype),
+        subtype: a.subtype,
         status: a.status,
         permissions: permMap[a.id] || {},
         created_at: a.created_at,
@@ -104,11 +112,18 @@ Deno.serve(async (req) => {
         password?: string;
         full_name: string;
         permissions?: Record<string, boolean>;
+        /** Perfil no backoffice: admin (pleno), suporte (fila), financeiro (reembolsos). */
+        backoffice_subtype?: string;
       };
 
       if (!body.email?.trim() || !body.full_name?.trim()) {
         return jsonRes({ error: "email e full_name são obrigatórios" }, 400);
       }
+
+      const rawSub = (body.backoffice_subtype || "admin").toLowerCase().trim();
+      const backofficeSubtype = ["admin", "suporte", "financeiro"].includes(rawSub)
+        ? rawSub
+        : "admin";
 
       // Create auth user with admin role
       const password = body.password || Math.random().toString(36).slice(2) + "Aa1!";
@@ -131,7 +146,7 @@ Deno.serve(async (req) => {
         .insert({
           id: newUser.user.id,
           role: "admin",
-          subtype: "admin",
+          subtype: backofficeSubtype,
           status: "approved",
           cpf: "",
         });
@@ -161,6 +176,7 @@ Deno.serve(async (req) => {
       const body = await req.json() as {
         permissions?: Record<string, boolean>;
         status?: string;
+        backoffice_subtype?: string;
       };
 
       if (body.permissions) {
@@ -177,6 +193,17 @@ Deno.serve(async (req) => {
           .update({ status: body.status })
           .eq("id", adminId)
           .eq("role", "admin");
+      }
+
+      if (body.backoffice_subtype) {
+        const raw = body.backoffice_subtype.toLowerCase().trim();
+        if (["admin", "suporte", "financeiro"].includes(raw)) {
+          await admin
+            .from("worker_profiles")
+            .update({ subtype: raw })
+            .eq("id", adminId)
+            .eq("role", "admin");
+        }
       }
 
       return jsonRes({ ok: true });

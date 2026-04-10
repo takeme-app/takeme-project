@@ -31,6 +31,7 @@ import PlacesAddressInput, { type PlaceResolved } from '../components/PlacesAddr
 import { supabase } from '../lib/supabase';
 import { useTripMapCoords } from '../hooks/useTripMapCoords';
 import { geocodeAddress } from '../lib/googleGeocoding';
+import { validateShipmentStopsAlongTripRoute } from '../lib/mapCoordUtils';
 
 // ── Inline SVG icons ────────────────────────────────────────────────────
 const closeXSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
@@ -231,6 +232,23 @@ export default function ViagemEditScreen() {
     if (tripCoords.vehicleOrigin) return tripCoords.vehicleOrigin;
     return undefined;
   }, [tripStops, tripCoords.vehicleOrigin]);
+
+  /** Extremos da rota principal A→B (paradas ou `scheduled_trips`) — alinhamento de encomendas. */
+  const motoristaRotaEnds = useMemo(() => {
+    const da = tripStops.find((s) => s.stop_type === 'driver_origin' && s.lat != null && s.lng != null);
+    const db = tripStops.find((s) => s.stop_type === 'trip_destination' && s.lat != null && s.lng != null);
+    const a =
+      (da ? { lat: da.lat!, lng: da.lng! } : undefined) ??
+      tripCoords.scheduledRouteOrigin ??
+      tripCoords.vehicleOrigin;
+    const b = (db ? { lat: db.lat!, lng: db.lng! } : undefined) ?? tripCoords.scheduledRouteDestination;
+    return { a, b };
+  }, [
+    tripStops,
+    tripCoords.scheduledRouteOrigin,
+    tripCoords.scheduledRouteDestination,
+    tripCoords.vehicleOrigin,
+  ]);
   const [vehicleInfo, setVehicleInfo] = useState<{ model: string; plate: string; year: number | null } | null>(null);
 
   // ── Image zoom modal (Figma 1170-26615) ──────────────────────────────
@@ -1104,7 +1122,14 @@ export default function ViagemEditScreen() {
   const encomendasAddBtn = React.createElement('button', {
     type: 'button',
     onClick: () => {
-      showToast('Em breve vamos ativar esta funcionalidade.');
+      setAddEncomendaOpen(true);
+      setAddEncomendaData({ recolha: '', entrega: '', destinatario: '', contato: '', valor: '', observacoes: '' });
+      setAddEncPlaceOrigin(null);
+      setAddEncPlaceDest(null);
+      setAddEncomendaRemetenteUserId(null);
+      setAddEncomendaRemetenteLabel('');
+      setRemetenteSearch('');
+      setRemetenteResults([]);
     },
     style: {
       display: 'flex',
@@ -1365,6 +1390,16 @@ export default function ViagemEditScreen() {
                   showToast('Selecione recolha e entrega na lista do Google.');
                   return;
                 }
+                const rotaCheckEdit = validateShipmentStopsAlongTripRoute(
+                  motoristaRotaEnds.a,
+                  motoristaRotaEnds.b,
+                  { lat: editEncPlaceOrigin.lat, lng: editEncPlaceOrigin.lng },
+                  { lat: editEncPlaceDest.lat, lng: editEncPlaceDest.lng },
+                );
+                if (!rotaCheckEdit.ok) {
+                  showToast(rotaCheckEdit.message);
+                  return;
+                }
                 const dest =
                   editEncomendaData.destinatario.trim() || editEncomendaData.nome.trim() || s.recipientName;
                 let phone = editEncomendaData.telefone.trim();
@@ -1481,6 +1516,11 @@ export default function ViagemEditScreen() {
             React.createElement('p', {
               style: { ...grayText, margin: 0, fontSize: 12, lineHeight: 1.45 },
             }, 'Digite para buscar e escolha sempre um endereço da lista do Google — texto sem seleção não é aceite.'),
+            motoristaRotaEnds.a && motoristaRotaEnds.b
+              ? React.createElement('p', {
+                style: { ...grayText, margin: 0, fontSize: 12, lineHeight: 1.45, color: '#5c5c5c' },
+              }, `Recolha e entrega precisam acompanhar a rota principal desta viagem (${rotaLinha}). Endereços muito fora do percurso ou na ordem invertida não são aceitos.`)
+              : null,
             React.createElement('div', { style: fieldWrap },
               React.createElement('label', { style: labelStyle }, 'Local de recolha'),
               React.createElement(PlacesAddressInput, {
@@ -1546,6 +1586,16 @@ export default function ViagemEditScreen() {
                 }
                 if (!addEncPlaceOrigin || !addEncPlaceDest) {
                   showToast('Selecione local de recolha e local de entrega na lista do Google.');
+                  return;
+                }
+                const rotaCheck = validateShipmentStopsAlongTripRoute(
+                  motoristaRotaEnds.a,
+                  motoristaRotaEnds.b,
+                  { lat: addEncPlaceOrigin.lat, lng: addEncPlaceOrigin.lng },
+                  { lat: addEncPlaceDest.lat, lng: addEncPlaceDest.lng },
+                );
+                if (!rotaCheck.ok) {
+                  showToast(rotaCheck.message);
                   return;
                 }
                 const phone = addEncomendaData.contato.trim() || '-';

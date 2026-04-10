@@ -17,6 +17,7 @@ import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '../../lib/supabase';
+import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
 
@@ -141,6 +142,7 @@ export function AddDependentScreen({ navigation }: Props) {
     }
 
     setSaving(false);
+    void tryOpenSupportTicket('autorizar_menores', { dependent_id: dependentId });
     navigation.navigate('DependentSuccess');
   };
 

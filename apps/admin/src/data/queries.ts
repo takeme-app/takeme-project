@@ -131,11 +131,16 @@ export async function createAdminUser(body: {
   password?: string;
   full_name: string;
   permissions?: Record<string, boolean>;
+  /** admin | suporte | financeiro */
+  backoffice_subtype?: string;
 }) {
   return invokeEdgeFunction('manage-admin-users', 'POST', undefined, body);
 }
 
-export async function updateAdminUser(id: string, updates: { permissions?: Record<string, boolean>; status?: string }) {
+export async function updateAdminUser(
+  id: string,
+  updates: { permissions?: Record<string, boolean>; status?: string; backoffice_subtype?: string },
+) {
   return invokeEdgeFunction('manage-admin-users', 'PUT', { id }, updates);
 }
 
@@ -649,16 +654,45 @@ export async function updateScheduledTripFields(
   return { error: error ? (error as Error).message : null };
 }
 
+function numOrNull(v: unknown): number | null {
+  if (v == null) return null;
+  const n = typeof v === 'number' ? v : parseFloat(String(v));
+  return Number.isFinite(n) ? n : null;
+}
+
 export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEditDetail | null> {
   if (!isSupabaseConfigured) return null;
-  const { data: s, error } = await supabase.from('shipments').select('*').eq('id', id).maybeSingle();
+  const { data: s, error } = await supabase
+    .from('shipments')
+    .select(`
+      *,
+      scheduled_trips ( departure_at, arrival_at )
+    `)
+    .eq('id', id)
+    .maybeSingle();
   if (!error && s) {
     const r = s as any;
+    const trip = r.scheduled_trips;
+    const uid = r.user_id as string | undefined;
+    let senderName = '—';
+    if (uid) {
+      const { data: prof } = await supabase.from('profiles').select('full_name').eq('id', uid).maybeSingle();
+      senderName = ((prof as any)?.full_name as string | undefined)?.trim() || '—';
+    }
     return {
       kind: 'shipment',
       id: r.id,
       originAddress: r.origin_address ?? '',
       destinationAddress: r.destination_address ?? '',
+      originLat: numOrNull(r.origin_lat),
+      originLng: numOrNull(r.origin_lng),
+      destinationLat: numOrNull(r.destination_lat),
+      destinationLng: numOrNull(r.destination_lng),
+      scheduledTripId: r.scheduled_trip_id ?? null,
+      tripDepartureAt: trip?.departure_at ?? null,
+      tripArrivalAt: trip?.arrival_at ?? null,
+      senderName,
+      photoUrl: r.photo_url ?? null,
       recipientName: r.recipient_name ?? '',
       recipientPhone: r.recipient_phone ?? '',
       recipientEmail: r.recipient_email ?? '',
@@ -679,6 +713,10 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
     id: r.id,
     originAddress: r.origin_address ?? '',
     destinationAddress: r.destination_address ?? '',
+    originLat: numOrNull(r.origin_lat),
+    originLng: numOrNull(r.origin_lng),
+    destinationLat: numOrNull(r.destination_lat),
+    destinationLng: numOrNull(r.destination_lng),
     fullName: r.full_name ?? '',
     contactPhone: r.contact_phone ?? '',
     receiverName: r.receiver_name ?? null,
@@ -919,6 +957,7 @@ export interface ApprovedDriverCandidate {
   rating: number | null;
   totalViagens: number;
   isPartner: boolean;
+  avatarUrl: string | null;
 }
 
 export async function fetchApprovedDriversForEncomendaUI(): Promise<ApprovedDriverCandidate[]> {
@@ -938,6 +977,7 @@ export async function fetchApprovedDriversForEncomendaUI(): Promise<ApprovedDriv
         rating: m.rating,
         totalViagens: m.totalViagens,
         isPartner: w?.subtype === 'partner',
+        avatarUrl: m.avatarUrl ?? null,
       };
     });
 }
@@ -1196,7 +1236,11 @@ export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
   const [shipRes, depRes] = await Promise.all([
     supabase
       .from('shipments')
-      .select('id, origin_address, destination_address, recipient_name, status, amount_cents, package_size, created_at')
+      .select(`
+        id, origin_address, destination_address, recipient_name, status, amount_cents, package_size, created_at,
+        scheduled_trip_id,
+        scheduled_trips ( departure_at, arrival_at )
+      `)
       .order('created_at', { ascending: false })
       .limit(200),
     supabase
@@ -1206,18 +1250,27 @@ export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
       .limit(200),
   ]);
 
-  const shipments: EncomendaListItem[] = (shipRes.data ?? []).map((s: any) => ({
-    id: s.id,
-    tipo: 'shipment' as const,
-    destino: shortAddr(s.destination_address),
-    origem: shortAddr(s.origin_address),
-    remetente: s.recipient_name,
-    data: fmtDate(s.created_at),
-    status: mapEncomendaStatus(s.status),
-    amountCents: s.amount_cents,
-    packageSize: s.package_size,
-    createdAtIso: s.created_at ? new Date(s.created_at).toISOString() : '',
-  }));
+  const shipments: EncomendaListItem[] = (shipRes.data ?? []).map((s: any) => {
+    const trip = s.scheduled_trips as { departure_at?: string; arrival_at?: string } | null | undefined;
+    const depAt = trip?.departure_at;
+    const arrAt = trip?.arrival_at;
+    return {
+      id: s.id,
+      tipo: 'shipment' as const,
+      destino: shortAddr(s.destination_address),
+      origem: shortAddr(s.origin_address),
+      remetente: s.recipient_name,
+      data: fmtDate(s.created_at),
+      status: mapEncomendaStatus(s.status),
+      amountCents: s.amount_cents,
+      packageSize: s.package_size,
+      createdAtIso: s.created_at ? new Date(s.created_at).toISOString() : '',
+      embarque: depAt ? fmtTime(depAt) : '—',
+      chegada: arrAt ? fmtTime(arrAt) : '—',
+      rawStatus: String(s.status ?? ''),
+      scheduledTripId: s.scheduled_trip_id ? String(s.scheduled_trip_id) : null,
+    };
+  });
 
   const depShipments: EncomendaListItem[] = (depRes.data ?? []).map((d: any) => ({
     id: d.id,
@@ -1229,6 +1282,10 @@ export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
     status: mapEncomendaStatus(d.status),
     amountCents: d.amount_cents,
     createdAtIso: d.created_at ? new Date(d.created_at).toISOString() : '',
+    embarque: '—',
+    chegada: '—',
+    rawStatus: String(d.status ?? ''),
+    scheduledTripId: null,
   }));
 
   return [...shipments, ...depShipments].sort(
@@ -2237,7 +2294,111 @@ export async function fetchPassageiroBookings(userId: string): Promise<ViagemLis
   return fetchBookingsForPassengerUser(userId);
 }
 
-// ── Admin Users ─────────────────────────────────────────────────────
+// ── Atendimento / conversas de suporte ───────────────────────────────
+
+export interface SupportConversationDetail {
+  id: string;
+  client_id: string;
+  status: string;
+  category: string | null;
+  admin_id: string | null;
+  booking_id: string | null;
+  shipment_id: string | null;
+  context: Record<string, unknown>;
+  conversation_kind: string | null;
+  participant_name: string | null;
+  created_at: string;
+  sla_deadline_at: string | null;
+  finish_note: string | null;
+}
+
+export async function fetchSupportConversationDetail(conversationId: string): Promise<SupportConversationDetail | null> {
+  const { data, error } = await sb
+    .from('conversations')
+    .select(
+      'id, client_id, status, category, admin_id, booking_id, shipment_id, context, conversation_kind, participant_name, created_at, sla_deadline_at, finish_note',
+    )
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const row = data as any;
+  return {
+    id: String(row.id),
+    client_id: String(row.client_id),
+    status: String(row.status),
+    category: row.category ?? null,
+    admin_id: row.admin_id ? String(row.admin_id) : null,
+    booking_id: row.booking_id ? String(row.booking_id) : null,
+    shipment_id: row.shipment_id ? String(row.shipment_id) : null,
+    context: (row.context && typeof row.context === 'object' ? row.context : {}) as Record<string, unknown>,
+    conversation_kind: row.conversation_kind ?? null,
+    participant_name: row.participant_name ?? null,
+    created_at: row.created_at,
+    sla_deadline_at: row.sla_deadline_at ?? null,
+    finish_note: row.finish_note ?? null,
+  };
+}
+
+export interface SupportHistoryItem {
+  id: string;
+  titulo: string;
+  data: string;
+  atendente: string;
+  desc: string;
+  desc2: string;
+}
+
+export async function fetchSupportHistoryForClient(
+  clientId: string,
+  excludeConversationId: string,
+): Promise<SupportHistoryItem[]> {
+  const since = new Date();
+  since.setMonth(since.getMonth() - 6);
+  const { data, error } = await sb
+    .from('conversations')
+    .select('id, category, created_at, updated_at, status, finish_note, admin_id')
+    .eq('conversation_kind', 'support_backoffice')
+    .eq('client_id', clientId)
+    .neq('id', excludeConversationId)
+    .eq('status', 'closed')
+    .gte('created_at', since.toISOString())
+    .order('updated_at', { ascending: false })
+    .limit(30);
+  if (error || !data?.length) return [];
+
+  const adminIds = [...new Set((data as any[]).map((r) => r.admin_id).filter(Boolean))] as string[];
+  let adminNames: Record<string, string> = {};
+  if (adminIds.length) {
+    const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', adminIds);
+    (profs || []).forEach((p: any) => { adminNames[p.id] = p.full_name || '—'; });
+  }
+
+  const catLabel: Record<string, string> = {
+    excursao: 'Excursão',
+    encomendas: 'Encomendas',
+    reembolso: 'Reembolso',
+    cadastro_transporte: 'Cadastro de transporte',
+    autorizar_menores: 'Autorizar menores',
+    denuncia: 'Denúncia',
+    ouvidoria: 'Ouvidoria',
+    outros: 'Outros',
+  };
+
+  return (data as any[]).map((r) => ({
+    id: String(r.id),
+    titulo: `${catLabel[r.category] || r.category || 'Atendimento'} • ${fmtDate(r.updated_at || r.created_at)}`,
+    data: fmtDate(r.updated_at || r.created_at),
+    atendente: r.admin_id ? (adminNames[r.admin_id] || '—') : '—',
+    desc: r.finish_note || 'Finalizado.',
+    desc2: '',
+  }));
+}
+
+export async function fetchProfileBasics(userId: string): Promise<{ full_name: string | null; email_hint: string | null }> {
+  const { data } = await sb.from('profiles').select('full_name').eq('id', userId).maybeSingle();
+  return { full_name: (data as any)?.full_name ?? null, email_hint: null };
+}
+
 
 export async function fetchAdminUsers(): Promise<AdminUserListItem[]> {
   const { data, error } = await sb
@@ -2269,14 +2430,22 @@ export async function fetchAdminUsers(): Promise<AdminUserListItem[]> {
   const permMap: Record<string, Record<string, boolean>> = {};
   (prefs || []).forEach((p: any) => { permMap[p.user_id] = p.value || {}; });
 
+  const nivelLabel = (sub: string | undefined) => {
+    if (sub === 'admin') return 'Administrador';
+    if (sub === 'suporte') return 'Suporte';
+    if (sub === 'financeiro') return 'Financeiro';
+    return sub ? sub.charAt(0).toUpperCase() + sub.slice(1) : '—';
+  };
+
   return data.map((a: any) => ({
     id: a.id,
     nome: nameMap[a.id] || 'Sem nome',
     email: '', // email is in auth.users, not accessible via client
-    nivel: a.subtype === 'admin' ? 'Administrador' : a.subtype,
+    nivel: nivelLabel(a.subtype),
     dataCriacao: fmtDate(a.created_at),
     status: a.status === 'approved' ? 'Ativo' as const : 'Inativo' as const,
     permissions: permMap[a.id] || {},
+    subtype: a.subtype as string | undefined,
   }));
 }
 
