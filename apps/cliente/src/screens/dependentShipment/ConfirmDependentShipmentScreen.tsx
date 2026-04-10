@@ -108,6 +108,33 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         }
         const shipmentId = row?.id;
         const orderId = shipmentId ? orderIdFromUuid(shipmentId) : '----';
+
+        if (shipmentId && (params.method === 'credito' || params.method === 'debito') && params.paymentMethodId) {
+          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke('charge-shipment', {
+            body: {
+              dependent_shipment_id: shipmentId,
+              stripe_payment_method_id: params.paymentMethodId,
+            },
+          });
+          const chargeErrMsg =
+            chargeFnError?.message ??
+            (chargeData && typeof chargeData === 'object' && 'error' in chargeData
+              ? String((chargeData as { error?: string }).error ?? '')
+              : '');
+          if (chargeErrMsg) {
+            await supabase
+              .from('dependent_shipments')
+              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+              .eq('id', shipmentId);
+            showAlert(
+              'Pagamento',
+              chargeErrMsg || 'Não foi possível confirmar o pagamento; o pedido foi cancelado.',
+            );
+            setSubmitting(false);
+            return;
+          }
+        }
+
         navigation.replace('DependentShipmentSuccess', {
           orderId,
           shipmentId: shipmentId ?? undefined,

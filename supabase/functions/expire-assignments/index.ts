@@ -105,7 +105,7 @@ Deno.serve(async (req) => {
             .update({
               status: "cancelled",
               updated_at: nowIso,
-            })
+            } as never)
             .eq("id", assignment.entity_id);
         }
 
@@ -122,7 +122,7 @@ Deno.serve(async (req) => {
             message:
               "O motorista não respondeu a tempo. Sua solicitação foi cancelada e o valor será estornado.",
             category: assignment.entity_type,
-          });
+          } as never);
         }
 
         // Notificar motorista
@@ -132,7 +132,7 @@ Deno.serve(async (req) => {
           message:
             "Você não respondeu a tempo e a solicitação foi cancelada.",
           category: assignment.entity_type,
-        });
+        } as never);
 
         // Disparar estorno via process-refund Edge Function
         try {
