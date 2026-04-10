@@ -111,6 +111,40 @@ function groupByDate(messages: Message[]): Array<Message | { type: 'separator'; 
   return result;
 }
 
+/** Android pode destruir a Activity ao fechar o picker — recupera o resultado pendente. */
+async function mergePendingAndroidGalleryResult(
+  result: ImagePicker.ImagePickerResult,
+): Promise<ImagePicker.ImagePickerResult> {
+  if (Platform.OS !== 'android' || !result.canceled) return result;
+  try {
+    const pending = await ImagePicker.getPendingResultAsync();
+    if (pending == null) return result;
+    if ('code' in pending && typeof (pending as { code?: string }).code === 'string') return result;
+    if ('assets' in pending && pending.assets && pending.assets.length > 0) {
+      return { canceled: false, assets: pending.assets };
+    }
+  } catch {
+    /* ignore */
+  }
+  return result;
+}
+
+const galleryPickerOptions: ImagePicker.ImagePickerOptions = {
+  mediaTypes: ['images'],
+  quality: 0.85,
+  ...(Platform.OS === 'ios'
+    ? { preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible }
+    : {}),
+};
+
+const cameraPickerOptions: ImagePicker.ImagePickerOptions = {
+  mediaTypes: ['images'],
+  quality: 0.85,
+  ...(Platform.OS === 'ios'
+    ? { preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible }
+    : {}),
+};
+
 export function ChatScreen({ navigation, route }: Props) {
   const { conversationId, participantName, participantAvatar } = route.params;
   const { showAlert } = useAppAlert();
@@ -250,6 +284,10 @@ export function ChatScreen({ navigation, route }: Props) {
         onPress: () => { void pickFromGallery(); },
       },
       {
+        text: 'Tirar foto',
+        onPress: () => { void openCamera(); },
+      },
+      {
         text: 'Arquivo',
         onPress: () => { void pickDocument(); },
       },
@@ -260,14 +298,15 @@ export function ChatScreen({ navigation, route }: Props) {
   const pickFromGallery = async () => {
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (perm.status !== 'granted') {
-        showAlert('Permissão', 'Precisamos de acesso à galeria para enviar fotos.');
+      if (!perm.granted) {
+        showAlert(
+          'Permissão',
+          'Precisamos de acesso às fotos para enviar imagens. Ative em Ajustes > Take Me Motorista > Fotos.',
+        );
         return;
       }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        quality: 0.85,
-      });
+      let result = await ImagePicker.launchImageLibraryAsync(galleryPickerOptions);
+      result = await mergePendingAndroidGalleryResult(result);
       if (result.canceled || !result.assets[0]) return;
       const asset = result.assets[0];
       const { mime, ext } = mimeAndExtFromImageAsset(asset);
@@ -289,14 +328,15 @@ export function ChatScreen({ navigation, route }: Props) {
   const openCamera = async () => {
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
-      if (perm.status !== 'granted') {
-        showAlert('Permissão', 'Precisamos da câmera para tirar uma foto.');
+      if (!perm.granted) {
+        showAlert(
+          'Permissão',
+          'Precisamos da câmera para tirar uma foto. Ative em Ajustes > Take Me Motorista > Câmera.',
+        );
         return;
       }
-      const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ['images'],
-        quality: 0.85,
-      });
+      let result = await ImagePicker.launchCameraAsync(cameraPickerOptions);
+      result = await mergePendingAndroidGalleryResult(result);
       if (result.canceled || !result.assets[0]) return;
       const asset = result.assets[0];
       const { mime, ext } = mimeAndExtFromImageAsset(asset);
@@ -366,8 +406,8 @@ export function ChatScreen({ navigation, route }: Props) {
       const av = await loadExpoAv();
       if (!av) {
         showAlert(
-          'Gravação indisponível',
-          'Este build do app ainda não inclui o suporte nativo a áudio. Rode um build novo do iOS (ex.: npx expo run:ios após pod install) ou envie um arquivo de áudio pelo botão +.',
+          'Gravação de voz indisponível',
+          'Neste dispositivo o áudio do chat não está disponível (falta o módulo nativo no app instalado). Peça uma versão nova do app ao time ou reinstale com build que inclua expo-av. Por enquanto, use o botão + para enviar foto ou arquivo.',
         );
         return;
       }
