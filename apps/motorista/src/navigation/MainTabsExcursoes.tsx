@@ -1,5 +1,6 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import type { NavigatorScreenParams } from '@react-navigation/native';
+import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ProfileStackParamList, ChatExcStackParamList } from './types';
@@ -29,6 +30,15 @@ export function MainTabsExcursoes() {
   const insets = useSafeAreaInsets();
   const bottomPadding = Math.max(insets.bottom, MIN_BOTTOM_INSET);
 
+  const tabBarVisibleStyle = {
+    backgroundColor: '#FFFFFF' as const,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    height: TAB_BAR_CONTENT_HEIGHT + bottomPadding,
+    paddingBottom: bottomPadding,
+    paddingTop: 6,
+  };
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -37,14 +47,7 @@ export function MainTabsExcursoes() {
         tabBarActiveTintColor: TAB_ACTIVE,
         tabBarInactiveTintColor: TAB_INACTIVE,
         tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
-        tabBarStyle: {
-          backgroundColor: '#FFFFFF',
-          borderTopWidth: 1,
-          borderTopColor: '#E5E7EB',
-          height: TAB_BAR_CONTENT_HEIGHT + bottomPadding,
-          paddingBottom: bottomPadding,
-          paddingTop: 6,
-        },
+        tabBarStyle: tabBarVisibleStyle,
         tabBarItemStyle: { paddingVertical: 4 },
       }}
     >
@@ -69,9 +72,16 @@ export function MainTabsExcursoes() {
       <Tab.Screen
         name="ChatExc"
         component={ChatExcursoesStack}
-        options={{
-          title: 'Chat',
-          tabBarIcon: ({ color }) => <MaterialIcons name="message" size={24} color={color} />,
+        options={({ route }) => {
+          const focused = getFocusedRouteNameFromRoute(route) ?? 'ChatExcList';
+          const hideTabOnChatThread = focused === 'ChatExcThread';
+          return {
+            title: 'Chat',
+            tabBarIcon: ({ color }: { color: string }) => (
+              <MaterialIcons name="message" size={24} color={color} />
+            ),
+            tabBarStyle: hideTabOnChatThread ? { display: 'none' as const } : tabBarVisibleStyle,
+          };
         }}
       />
       <Tab.Screen

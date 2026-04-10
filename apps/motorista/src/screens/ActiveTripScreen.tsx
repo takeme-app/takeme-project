@@ -38,6 +38,7 @@ import { Text } from '../components/Text';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getRouteWithDuration, getMultiPointRoute, formatEta } from '../lib/route';
 import { getGoogleMapsApiKey, getMapboxAccessToken } from '../lib/googleMapsConfig';
+import { getUserErrorMessage } from '../utils/errorMessage';
 // expo-location — defensive import (needs native rebuild if just added)
 let Location: any = null;
 try { Location = require('expo-location'); } catch { /* not available yet */ }
@@ -311,6 +312,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // Animations
   const detailSlide = useRef(new Animated.Value(600)).current;
   const finalizeSlide = useRef(new Animated.Value(600)).current;
+  /** Coleta/entrega: só um sheet de código visível por vez — um único translateY. */
+  const confirmSheetSlide = useRef(new Animated.Value(600)).current;
+  const completedSlide = useRef(new Animated.Value(600)).current;
 
   // ---------------------------------------------------------------------------
   // Location tracking
@@ -438,6 +442,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     const cents = tripDisplayEarningsCents(trip.bookings, trip.amount_cents);
     return cents > 0 ? `R$ ${(cents / 100).toFixed(2).replace('.', ',')}` : '—';
   }, [trip]);
+
+  /** Mesma heurística do sheet “Finalizar viagem” (polyline em pontos). */
+  const tripDistanceApproxLabel = useMemo(
+    () => (stopsRouteCoords.length >= 2 ? `~${Math.round(stopsRouteCoords.length * 0.02)} km` : '—'),
+    [stopsRouteCoords.length],
+  );
 
   /** Último ponto válido do roteiro (entrega final / última parada) ou destino da viagem. */
   const finalDestination = useMemo((): LatLng | null => {
@@ -704,6 +714,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     );
   };
 
+  /** Fecha o sheet sem animar — use quando o modal de detalhe já está invisível (ex.: fluxo só com modal de confirmação). Animar `detailSlide` com Modal desmontado trava no iOS. */
+  const syncCloseDetailOnly = () => {
+    detailSlide.setValue(600);
+    setDetailVisible(false);
+  };
+
   const openFinalize = () => {
     finalizeSlide.setValue(600);
     setFinalizeVisible(true);
@@ -716,6 +732,61 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     );
   };
 
+  /**
+   * Dois Modais transparentes abertos ao mesmo tempo no iOS costumam roubar toques:
+   * o sheet de detalhes ficava “por cima” do de confirmação → “Iniciar embarque” parecia morto.
+   * Fechamos o sheet e abrimos só o modal de confirmação; ao voltar, reabrimos o sheet.
+   */
+  const hideDetailAndOpenConfirmPickup = () => {
+    setConfirmCode('');
+    setConfirmError('');
+    detailSlide.setValue(600);
+    setDetailVisible(false);
+    confirmSheetSlide.setValue(600);
+    setConfirmPickupVisible(true);
+    requestAnimationFrame(() => {
+      Animated.spring(confirmSheetSlide, {
+        toValue: 0,
+        useNativeDriver: true,
+        bounciness: 0,
+      }).start();
+    });
+  };
+
+  const hideDetailAndOpenConfirmDelivery = () => {
+    setConfirmCode('');
+    setConfirmError('');
+    detailSlide.setValue(600);
+    setDetailVisible(false);
+    confirmSheetSlide.setValue(600);
+    setConfirmDeliveryVisible(true);
+    requestAnimationFrame(() => {
+      Animated.spring(confirmSheetSlide, {
+        toValue: 0,
+        useNativeDriver: true,
+        bounciness: 0,
+      }).start();
+    });
+  };
+
+  const dismissConfirmPickupBackToDetail = () => {
+    setConfirmCode('');
+    setConfirmError('');
+    Animated.timing(confirmSheetSlide, { toValue: 600, duration: 250, useNativeDriver: true }).start(() => {
+      setConfirmPickupVisible(false);
+      setTimeout(() => openDetail(), 320);
+    });
+  };
+
+  const dismissConfirmDeliveryBackToDetail = () => {
+    setConfirmCode('');
+    setConfirmError('');
+    Animated.timing(confirmSheetSlide, { toValue: 600, duration: 250, useNativeDriver: true }).start(() => {
+      setConfirmDeliveryVisible(false);
+      setTimeout(() => openDetail(), 320);
+    });
+  };
+
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
@@ -723,68 +794,109 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const handleConfirmStop = async () => {
     if (!currentStop) return;
 
-    if (isPackage(currentStop)) {
-      if (confirmCode.trim().length !== 4) {
-        setConfirmError('O código deve ter 4 dígitos.');
-        return;
+    try {
+      if (isPackage(currentStop)) {
+        if (confirmCode.trim().length !== 4) {
+          setConfirmError('O código deve ter 4 dígitos.');
+          return;
+        }
+        if (currentStop.code && confirmCode.trim() !== currentStop.code) {
+          setConfirmError('Código incorreto. Verifique com o cliente.');
+          return;
+        }
+        const now = new Date().toISOString();
+        if (isPickup(currentStop)) {
+          const { error } = await supabase
+            .from('shipments')
+            .update({ picked_up_at: now } as never)
+            .eq('id', currentStop.entityId);
+          if (error) throw error;
+        } else {
+          const { error } = await supabase
+            .from('shipments')
+            .update({ delivered_at: now } as never)
+            .eq('id', currentStop.entityId);
+          if (error) throw error;
+        }
       }
-      if (currentStop.code && confirmCode.trim() !== currentStop.code) {
-        setConfirmError('Código incorreto. Verifique com o cliente.');
-        return;
-      }
-      const now = new Date().toISOString();
-      if (isPickup(currentStop)) {
-        await supabase.from('shipments').update({ picked_up_at: now } as never).eq('id', currentStop.entityId);
-      } else {
-        await supabase.from('shipments').update({ delivered_at: now } as never).eq('id', currentStop.entityId);
-      }
+
+    } catch (e: unknown) {
+      showAlert('Erro', getUserErrorMessage(e));
+      return;
     }
 
-    // Mark stop as completed in trip_stops (best-effort — table may not exist yet)
+    // Best-effort em background — await aqui pode deixar o botão “morto” se a rede travar ou RLS demorar.
     if (!currentStop.id.startsWith('booking-') && !currentStop.id.startsWith('shipment-')) {
-      await supabase
+      void supabase
         .from('trip_stops')
         .update({ status: 'completed' } as never)
         .eq('id', currentStop.id)
+        .then(() => {})
         .catch(() => {});
     }
 
     setConfirmError('');
     setConfirmCode('');
+    confirmSheetSlide.setValue(600);
     setConfirmPickupVisible(false);
     setConfirmDeliveryVisible(false);
-    closeDetail();
+    syncCloseDetailOnly();
     const next = currentStopIndex + 1;
     setCurrentStopIndex(next);
-    if (next >= totalStops) openFinalize();
+    if (next >= totalStops) {
+      setTimeout(() => openFinalize(), 120);
+    }
   };
 
   const handleFinalizeTrip = async () => {
     setFinalizingTrip(true);
     try {
-      await supabase.from('scheduled_trips').update({ status: 'completed' } as never).eq('id', tripId);
+      const { error } = await supabase
+        .from('scheduled_trips')
+        .update({ status: 'completed' } as never)
+        .eq('id', tripId);
+      if (error) throw error;
       await closeConversationsForScheduledTrip(tripId);
-      closeFinalize();
-      setCompletedVisible(true);
+    } catch (e: unknown) {
+      showAlert('Erro', getUserErrorMessage(e));
+      return;
     } finally {
       setFinalizingTrip(false);
     }
+    // Não animar finalize com o modal a desmontar ao abrir o próximo — iOS pode travar toques.
+    finalizeSlide.setValue(600);
+    setFinalizeVisible(false);
+    completedSlide.setValue(600);
+    setCompletedVisible(true);
+    requestAnimationFrame(() => {
+      Animated.spring(completedSlide, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+    });
   };
 
   const handleSubmitRating = async () => {
     setSubmittingRating(true);
     try {
       if (rating > 0) {
-        await supabase.from('trip_ratings' as never).insert({
+        const { error } = await supabase.from('trip_ratings' as never).insert({
           trip_id: tripId,
           rating,
           comment: ratingComment.trim() || null,
         } as never);
+        if (error) throw error;
       }
+    } catch (e: unknown) {
+      showAlert('Erro', getUserErrorMessage(e));
+      return;
     } finally {
       setSubmittingRating(false);
-      navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Main' }] }));
     }
+    Animated.timing(completedSlide, { toValue: 600, duration: 280, useNativeDriver: true }).start(() => {
+      setCompletedVisible(false);
+      completedSlide.setValue(600);
+      requestAnimationFrame(() => {
+        navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Main' }] }));
+      });
+    });
   };
 
   // ---------------------------------------------------------------------------
@@ -1010,8 +1122,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
       {/* ── Detail bottom sheet ─────────────────────────────── */}
       <Modal visible={detailVisible} transparent animationType="none" onRequestClose={closeDetail}>
-        <Pressable style={styles.overlay} onPress={closeDetail} />
-        <Animated.View style={[styles.detailSheet, { transform: [{ translateY: detailSlide }] }]}>
+        <View style={styles.modalRoot}>
+          <Pressable style={styles.overlayBackdrop} onPress={closeDetail} />
+          <Animated.View
+            style={[styles.detailSheet, styles.sheetAboveBackdrop, { transform: [{ translateY: detailSlide }] }]}
+          >
           <View style={styles.handle} />
 
           <View style={styles.detailTopRow}>
@@ -1049,7 +1164,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 ) : null}
                 <TouchableOpacity
                   style={styles.actionBtn}
-                  onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmPickupVisible(true); }}
+                  onPress={hideDetailAndOpenConfirmPickup}
                   activeOpacity={0.85}
                 >
                   <Text style={styles.actionBtnText}>
@@ -1080,7 +1195,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 ) : null}
                 <TouchableOpacity
                   style={styles.actionBtn}
-                  onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmPickupVisible(true); }}
+                  onPress={hideDetailAndOpenConfirmPickup}
                   activeOpacity={0.85}
                 >
                   <Text style={styles.actionBtnText}>Confirmar desembarque</Text>
@@ -1113,7 +1228,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 ) : null}
                 <TouchableOpacity
                   style={styles.actionBtn}
-                  onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmPickupVisible(true); }}
+                  onPress={hideDetailAndOpenConfirmPickup}
                   activeOpacity={0.85}
                 >
                   <Text style={styles.actionBtnText}>
@@ -1144,7 +1259,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 ) : null}
                 <TouchableOpacity
                   style={styles.actionBtn}
-                  onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmDeliveryVisible(true); }}
+                  onPress={hideDetailAndOpenConfirmDelivery}
                   activeOpacity={0.85}
                 >
                   <Text style={styles.actionBtnText}>Confirmar entrega</Text>
@@ -1153,94 +1268,147 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             )}
           </ScrollView>
         </Animated.View>
+        </View>
       </Modal>
 
-      {/* ── Confirm Pickup ──────────────────────────────────── */}
+      {/* ── Confirmar coleta / entrega (um bottom sheet, um translateY) ─ */}
       <Modal
-        visible={confirmPickupVisible}
+        visible={confirmPickupVisible || confirmDeliveryVisible}
         transparent
-        animationType="fade"
-        onRequestClose={() => setConfirmPickupVisible(false)}
+        animationType="none"
+        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+        statusBarTranslucent={Platform.OS === 'android'}
+        onRequestClose={
+          confirmDeliveryVisible ? dismissConfirmDeliveryBackToDetail : dismissConfirmPickupBackToDetail
+        }
       >
-        <View style={styles.centeredModalOverlay}>
-          <View style={styles.centeredModal}>
-            <Text style={styles.centeredModalTitle}>{confirmPickupTitle(currentStop)}</Text>
-            <Text style={styles.centeredModalSubtitle}>{confirmPickupSubtitle(currentStop)}</Text>
-            {currentStop && isPackage(currentStop) && (
+        <View style={styles.modalRoot}>
+          <Pressable
+            style={styles.overlayBackdrop}
+            onPress={
+              confirmDeliveryVisible ? dismissConfirmDeliveryBackToDetail : dismissConfirmPickupBackToDetail
+            }
+          />
+          <Animated.View
+            style={[
+              styles.detailSheet,
+              styles.sheetAboveBackdrop,
+              { transform: [{ translateY: confirmSheetSlide }] },
+            ]}
+          >
+            <View style={styles.handle} />
+            {confirmDeliveryVisible ? (
               <>
-                <Text style={styles.fieldLabel}>Código de coleta</Text>
+                <View style={styles.confirmSheetHeaderRow}>
+                  <Text style={styles.confirmSheetTitle} numberOfLines={2}>
+                    Confirmar entrega
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.iconCircleBtn}
+                    onPress={dismissConfirmDeliveryBackToDetail}
+                    activeOpacity={0.7}
+                  >
+                    <MaterialIcons name="close" size={20} color={DARK} />
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.confirmSheetSubtitle}>
+                  Insira o código informado pelo cliente para confirmar a entrega.
+                </Text>
+                <View style={styles.confirmSheetDivider} />
+                <Text style={styles.fieldLabel}>Código de entrega</Text>
                 <TextInput
                   style={styles.codeInput}
                   value={confirmCode}
-                  onChangeText={(v) => { setConfirmCode(v.replace(/\D/g, '').slice(0, 4)); setConfirmError(''); }}
+                  onChangeText={(v) => {
+                    setConfirmCode(v.replace(/\D/g, '').slice(0, 4));
+                    setConfirmError('');
+                  }}
                   keyboardType="numeric"
                   maxLength={4}
                   placeholder="Ex: 1234"
                   placeholderTextColor="#9CA3AF"
                   textAlign="center"
                 />
+                {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
+                <TouchableOpacity style={styles.actionBtn} onPress={handleConfirmStop} activeOpacity={0.85}>
+                  <Text style={styles.actionBtnText}>Confirmar entrega</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.sheetBackBtn}
+                  onPress={dismissConfirmDeliveryBackToDetail}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.cancelBtnText}>Voltar</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <View style={styles.confirmSheetHeaderRow}>
+                  <Text style={styles.confirmSheetTitle} numberOfLines={2}>
+                    {confirmPickupTitle(currentStop)}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.iconCircleBtn}
+                    onPress={dismissConfirmPickupBackToDetail}
+                    activeOpacity={0.7}
+                  >
+                    <MaterialIcons name="close" size={20} color={DARK} />
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.confirmSheetSubtitle}>{confirmPickupSubtitle(currentStop)}</Text>
+                <View style={styles.confirmSheetDivider} />
+                {currentStop && isPackage(currentStop) ? (
+                  <>
+                    <Text style={styles.fieldLabel}>
+                      {currentStop.stopType === 'package_pickup' ? 'Código de coleta' : 'Código'}
+                    </Text>
+                    <TextInput
+                      style={styles.codeInput}
+                      value={confirmCode}
+                      onChangeText={(v) => {
+                        setConfirmCode(v.replace(/\D/g, '').slice(0, 4));
+                        setConfirmError('');
+                      }}
+                      keyboardType="numeric"
+                      maxLength={4}
+                      placeholder="Ex: 1234"
+                      placeholderTextColor="#9CA3AF"
+                      textAlign="center"
+                    />
+                  </>
+                ) : null}
+                {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
+                <TouchableOpacity style={styles.actionBtn} onPress={handleConfirmStop} activeOpacity={0.85}>
+                  <Text style={styles.actionBtnText}>{confirmPickupButtonLabel(currentStop)}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.sheetBackBtn}
+                  onPress={dismissConfirmPickupBackToDetail}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.cancelBtnText}>Voltar</Text>
+                </TouchableOpacity>
               </>
             )}
-            {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
-            <TouchableOpacity style={styles.actionBtn} onPress={handleConfirmStop} activeOpacity={0.85}>
-              <Text style={styles.actionBtnText}>{confirmPickupButtonLabel(currentStop)}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.cancelBtn}
-              onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmPickupVisible(false); }}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.cancelBtnText}>Voltar</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ── Confirm Delivery ────────────────────────────────── */}
-      <Modal
-        visible={confirmDeliveryVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setConfirmDeliveryVisible(false)}
-      >
-        <View style={styles.centeredModalOverlay}>
-          <View style={styles.centeredModal}>
-            <Text style={styles.centeredModalTitle}>Confirmar entrega</Text>
-            <Text style={styles.centeredModalSubtitle}>
-              Insira o código informado pelo cliente para confirmar a entrega.
-            </Text>
-            <Text style={styles.fieldLabel}>Código de entrega</Text>
-            <TextInput
-              style={styles.codeInput}
-              value={confirmCode}
-              onChangeText={(v) => { setConfirmCode(v.replace(/\D/g, '').slice(0, 4)); setConfirmError(''); }}
-              keyboardType="numeric"
-              maxLength={4}
-              placeholder="Ex: 1234"
-              placeholderTextColor="#9CA3AF"
-              textAlign="center"
-            />
-            {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
-            <TouchableOpacity style={styles.actionBtn} onPress={handleConfirmStop} activeOpacity={0.85}>
-              <Text style={styles.actionBtnText}>Confirmar entrega</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.cancelBtn}
-              onPress={() => { setConfirmCode(''); setConfirmError(''); setConfirmDeliveryVisible(false); }}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.cancelBtnText}>Voltar</Text>
-            </TouchableOpacity>
-          </View>
+          </Animated.View>
         </View>
       </Modal>
 
       {/* ── Finalize Trip sheet ─────────────────────────────── */}
       <Modal visible={finalizeVisible} transparent animationType="none" onRequestClose={closeFinalize}>
-        <Pressable style={styles.overlay} onPress={closeFinalize} />
-        <Animated.View style={[styles.detailSheet, { transform: [{ translateY: finalizeSlide }] }]}>
+        <View style={styles.modalRoot}>
+          <Pressable style={styles.overlayBackdrop} onPress={closeFinalize} />
+          <Animated.View
+            style={[styles.detailSheet, styles.sheetAboveBackdrop, { transform: [{ translateY: finalizeSlide }] }]}
+          >
           <View style={styles.handle} />
-          <Text style={styles.detailTitle}>Finalizar viagem</Text>
+          <View style={styles.finalizeTopRow}>
+            <TouchableOpacity style={styles.iconCircleBtn} onPress={closeFinalize} activeOpacity={0.7}>
+              <MaterialIcons name="close" size={20} color={DARK} />
+            </TouchableOpacity>
+            <Text style={styles.detailTitle}>Finalizar viagem</Text>
+            <View style={styles.iconCircleBtn} />
+          </View>
 
           <View style={styles.finalizeSummaryCard}>
             <View style={styles.finalizeSummaryRow}>
@@ -1252,9 +1420,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             <View style={styles.finalizeDivider} />
             <View style={styles.finalizeSummaryRow}>
               <Text style={styles.finalizeSummaryLabel}>Distância</Text>
-              <Text style={styles.finalizeSummaryValue}>
-                {stopsRouteCoords.length >= 2 ? `~${Math.round(stopsRouteCoords.length * 0.02)} km` : '—'}
-              </Text>
+              <Text style={styles.finalizeSummaryValue}>{tripDistanceApproxLabel}</Text>
             </View>
             <View style={styles.finalizeDivider} />
             <View style={styles.finalizeSummaryRow}>
@@ -1266,6 +1432,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             </View>
           </View>
 
+          <Text style={styles.expenseOptional}>Anexar despesas (opcional)</Text>
           <TouchableOpacity
             style={[styles.expenseBox, expenseAttached && styles.expenseBoxAttached]}
             onPress={() => setExpenseAttached(!expenseAttached)}
@@ -1276,7 +1443,6 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               {expenseAttached ? 'Despesa anexada' : 'Clique para anexar'}
             </Text>
           </TouchableOpacity>
-          <Text style={styles.expenseOptional}>Anexar despesas (opcional)</Text>
 
           <TouchableOpacity
             style={[styles.actionBtn, finalizingTrip && { opacity: 0.6 }]}
@@ -1291,78 +1457,105 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             )}
           </TouchableOpacity>
         </Animated.View>
+        </View>
       </Modal>
 
-      {/* ── Trip Completed overlay ──────────────────────────── */}
-      <Modal visible={completedVisible} transparent={false} animationType="fade" onRequestClose={() => {}}>
-        <SafeAreaView style={styles.completedContainer} edges={[]}>
-          <StatusBar style="dark" />
-          <ScrollView contentContainerStyle={styles.completedScroll} showsVerticalScrollIndicator={false}>
-            <View style={styles.completedIconCircle}>
-              <MaterialIcons name="check" size={40} color="#fff" />
-            </View>
-            <Text style={styles.completedTitle}>Viagem Concluída!</Text>
-            <Text style={styles.completedSubtitle}>Todas as entregas foram realizadas com sucesso</Text>
-
-            <View style={styles.completedStatsRow}>
-              <View style={styles.completedStatItem}>
-                <Text style={styles.completedStatValue}>
-                  {trip?.departure_at ? formatDuration(trip.departure_at, new Date()) : '—'}
-                </Text>
-                <Text style={styles.completedStatLabel}>Tempo total</Text>
-              </View>
-              <View style={styles.completedStatDivider} />
-              <View style={styles.completedStatItem}>
-                <Text style={styles.completedStatValue}>{totalStops}</Text>
-                <Text style={styles.completedStatLabel}>Paradas</Text>
-              </View>
-              <View style={styles.completedStatDivider} />
-              <View style={styles.completedStatItem}>
-                <Text style={styles.completedStatValue}>{completedTripEarningsLabel}</Text>
-                <Text style={styles.completedStatLabel}>Total recebido</Text>
-              </View>
-            </View>
-
-            <Text style={styles.ratingQuestion}>Como foi a viagem?</Text>
-            <View style={styles.starsRow}>
-              {[1, 2, 3, 4, 5].map((star) => (
-                <TouchableOpacity key={star} onPress={() => setRating(star)} activeOpacity={0.7}>
-                  <MaterialIcons
-                    name={star <= rating ? 'star' : 'star-border'}
-                    size={36}
-                    color={star <= rating ? GOLD : '#D1D5DB'}
-                  />
-                </TouchableOpacity>
-              ))}
-            </View>
-            <Text style={styles.ratingHint}>(1 = muito insatisfeito, 5 = muito satisfeito)</Text>
-
-            <Text style={styles.fieldLabel}>Comentário</Text>
-            <TextInput
-              style={styles.commentInput}
-              value={ratingComment}
-              onChangeText={setRatingComment}
-              placeholder="Opcional"
-              placeholderTextColor="#9CA3AF"
-              multiline
-              numberOfLines={4}
-              textAlignVertical="top"
-            />
-
-            <TouchableOpacity
-              style={[styles.actionBtn, submittingRating && { opacity: 0.6 }]}
-              onPress={handleSubmitRating}
-              disabled={submittingRating}
-              activeOpacity={0.85}
+      {/* ── Viagem concluída + avaliação (bottom sheet sobre o mapa) ─ */}
+      <Modal
+        visible={completedVisible}
+        transparent
+        animationType="none"
+        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+        statusBarTranslucent={Platform.OS === 'android'}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.modalRoot}>
+          <View style={styles.overlayBackdrop} />
+          <Animated.View
+            style={[
+              styles.completedBottomSheet,
+              styles.sheetAboveBackdrop,
+              {
+                transform: [{ translateY: completedSlide }],
+                paddingBottom: Math.max(insets.bottom, 16) + 16,
+              },
+            ]}
+          >
+            <View style={styles.handle} />
+            <ScrollView
+              contentContainerStyle={styles.completedScroll}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
             >
-              {submittingRating ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={styles.actionBtnText}>Enviar avaliação</Text>
-              )}
-            </TouchableOpacity>
-          </ScrollView>
-        </SafeAreaView>
+              <View style={styles.completedIconCircle}>
+                <MaterialIcons name="check" size={40} color="#fff" />
+              </View>
+              <Text style={styles.completedTitle}>Viagem Concluída!</Text>
+              <Text style={styles.completedSubtitle}>Todas as entregas foram realizadas com sucesso</Text>
+
+              <View style={styles.completedStatsRow}>
+                <View style={styles.completedStatItem}>
+                  <Text style={styles.completedStatValue}>
+                    {trip?.departure_at ? formatDuration(trip.departure_at, new Date()) : '—'}
+                  </Text>
+                  <Text style={styles.completedStatLabel}>Tempo total</Text>
+                </View>
+                <View style={styles.completedStatDivider} />
+                <View style={styles.completedStatItem}>
+                  <Text style={styles.completedStatValue}>{tripDistanceApproxLabel}</Text>
+                  <Text style={styles.completedStatLabel}>Distância percorrida</Text>
+                </View>
+                <View style={styles.completedStatDivider} />
+                <View style={styles.completedStatItem}>
+                  <Text style={styles.completedStatValue}>{completedTripEarningsLabel}</Text>
+                  <Text style={styles.completedStatLabel}>Total recebido</Text>
+                </View>
+              </View>
+
+              <Text style={styles.ratingQuestion}>Como foi a viagem?</Text>
+              <View style={styles.starsRow}>
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <TouchableOpacity key={star} onPress={() => setRating(star)} activeOpacity={0.7}>
+                    <MaterialIcons
+                      name={star <= rating ? 'star' : 'star-border'}
+                      size={36}
+                      color={star <= rating ? GOLD : '#D1D5DB'}
+                    />
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={styles.ratingHint}>(1 = muito insatisfeito, 5 = muito satisfeito)</Text>
+
+              <View style={styles.commentLabelRow}>
+                <Text style={[styles.fieldLabel, styles.commentFieldLabel]}>Comentário</Text>
+                <Text style={styles.commentOptionalTag}>Opcional</Text>
+              </View>
+              <TextInput
+                style={styles.commentInput}
+                value={ratingComment}
+                onChangeText={setRatingComment}
+                placeholder="Descreva algum comentário sobre a entrega..."
+                placeholderTextColor="#9CA3AF"
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+              />
+
+              <TouchableOpacity
+                style={[styles.actionBtn, submittingRating && { opacity: 0.6 }]}
+                onPress={handleSubmitRating}
+                disabled={submittingRating}
+                activeOpacity={0.85}
+              >
+                {submittingRating ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.actionBtnText}>Enviar avaliação</Text>
+                )}
+              </TouchableOpacity>
+            </ScrollView>
+          </Animated.View>
+        </View>
       </Modal>
     </View>
   );
@@ -1615,10 +1808,18 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // ── Overlay ───────────────────────────────────────────────
-  overlay: {
+  // ── Modal root (evita hit-test errado entre overlay e sheet no iOS) ──
+  modalRoot: {
+    flex: 1,
+  },
+  overlayBackdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.5)',
+    zIndex: 0,
+  },
+  sheetAboveBackdrop: {
+    zIndex: 1,
+    elevation: 40,
   },
 
   // ── Detail / Finalize sheet ───────────────────────────────
@@ -1695,23 +1896,30 @@ const styles = StyleSheet.create({
   },
   cancelBtnText: { color: '#EF4444', fontSize: 15, fontWeight: '600' },
 
-  // ── Centered modal ────────────────────────────────────────
-  centeredModalOverlay: {
+  confirmSheetHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 10,
+  },
+  confirmSheetTitle: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
+    fontSize: 18,
+    fontWeight: '700',
+    color: DARK,
+    lineHeight: 24,
+  },
+  confirmSheetSubtitle: { fontSize: 14, color: '#6B7280', lineHeight: 20, marginBottom: 16 },
+  confirmSheetDivider: { height: 1, backgroundColor: '#F3F4F6', marginBottom: 16 },
+  sheetBackBtn: {
+    borderRadius: 14,
+    paddingVertical: 14,
     alignItems: 'center',
-    padding: 24,
+    marginTop: 8,
+    backgroundColor: '#F3F4F6',
   },
-  centeredModal: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 24,
-    width: '100%',
-    maxWidth: 360,
-  },
-  centeredModalTitle: { fontSize: 18, fontWeight: '700', color: DARK, marginBottom: 8 },
-  centeredModalSubtitle: { fontSize: 14, color: '#6B7280', lineHeight: 20, marginBottom: 16 },
+
   fieldLabel: { fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 8, marginTop: 4 },
   codeInput: {
     borderWidth: 1.5,
@@ -1763,11 +1971,35 @@ const styles = StyleSheet.create({
   },
   expenseBoxAttached: { borderColor: GOLD },
   expenseText: { fontSize: 14, color: '#9CA3AF', fontWeight: '500' },
-  expenseOptional: { fontSize: 12, color: '#9CA3AF', textAlign: 'center', marginBottom: 20 },
+  expenseOptional: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+    marginTop: 4,
+  },
 
-  // ── Completed screen ─────────────────────────────────────
-  completedContainer: { flex: 1, backgroundColor: '#fff' },
-  completedScroll: { paddingHorizontal: 24, paddingBottom: 48, paddingTop: 40, alignItems: 'center' },
+  finalizeTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+
+  // ── Viagem concluída (bottom sheet) ───────────────────────
+  completedBottomSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    maxHeight: '88%',
+  },
+  completedScroll: { paddingBottom: 24, paddingTop: 16, alignItems: 'center' },
   completedIconCircle: {
     width: 80,
     height: 80,
@@ -1795,6 +2027,16 @@ const styles = StyleSheet.create({
   ratingQuestion: { fontSize: 17, fontWeight: '700', color: DARK, marginBottom: 12, textAlign: 'center' },
   starsRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
   ratingHint: { fontSize: 12, color: '#9CA3AF', marginBottom: 20, textAlign: 'center' },
+  commentLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 6,
+    marginTop: 4,
+  },
+  commentFieldLabel: { marginTop: 0, marginBottom: 0 },
+  commentOptionalTag: { fontSize: 12, color: '#9CA3AF', fontWeight: '500' },
   commentInput: {
     width: '100%',
     borderWidth: 1,

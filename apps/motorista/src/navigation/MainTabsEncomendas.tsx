@@ -78,9 +78,16 @@ export function MainTabsEncomendas() {
       <Tab.Screen
         name="ChatEnc"
         component={ChatEncomendasStack}
-        options={{
-          title: 'Chat',
-          tabBarIcon: ({ color }) => <MaterialIcons name="message" size={24} color={color} />,
+        options={({ route }) => {
+          const focused = getFocusedRouteNameFromRoute(route) ?? 'ChatEncList';
+          const hideTabOnChatThread = focused === 'ChatEncThread';
+          return {
+            title: 'Chat',
+            tabBarIcon: ({ color }: { color: string }) => (
+              <MaterialIcons name="message" size={24} color={color} />
+            ),
+            tabBarStyle: hideTabOnChatThread ? { display: 'none' as const } : tabBarVisibleStyle,
+          };
         }}
       />
       <Tab.Screen

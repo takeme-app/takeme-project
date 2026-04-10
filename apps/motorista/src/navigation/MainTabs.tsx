@@ -1,4 +1,5 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { MainTabParamList } from './types';
@@ -19,6 +20,15 @@ export function MainTabs() {
   const bottomPadding = Math.max(insets.bottom, MIN_BOTTOM_INSET);
   const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + bottomPadding;
 
+  const tabBarVisibleStyle = {
+    backgroundColor: '#FFFFFF' as const,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    height: tabBarHeight,
+    paddingBottom: bottomPadding,
+    paddingTop: 6,
+  };
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -27,14 +37,7 @@ export function MainTabs() {
         tabBarActiveTintColor: TAB_ACTIVE,
         tabBarInactiveTintColor: TAB_INACTIVE,
         tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
-        tabBarStyle: {
-          backgroundColor: '#FFFFFF',
-          borderTopWidth: 1,
-          borderTopColor: '#E5E7EB',
-          height: tabBarHeight,
-          paddingBottom: bottomPadding,
-          paddingTop: 6,
-        },
+        tabBarStyle: tabBarVisibleStyle,
         tabBarItemStyle: { paddingVertical: 4 },
       }}
     >
@@ -67,11 +70,16 @@ export function MainTabs() {
       <Tab.Screen
         name="Profile"
         component={ProfileStack}
-        options={{
-          title: 'Perfil',
-          tabBarIcon: ({ color, focused }) => (
-            <MaterialIcons name={focused ? 'person' : 'person-outline'} size={24} color={color} />
-          ),
+        options={({ route }) => {
+          const focused = getFocusedRouteNameFromRoute(route) ?? 'Settings';
+          const hideTabOnChat = focused === 'Chat';
+          return {
+            title: 'Perfil',
+            tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
+              <MaterialIcons name={focused ? 'person' : 'person-outline'} size={24} color={color} />
+            ),
+            tabBarStyle: hideTabOnChat ? { display: 'none' as const } : tabBarVisibleStyle,
+          };
         }}
         listeners={({ navigation }) => ({
           tabPress: (e) => {
