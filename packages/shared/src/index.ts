@@ -16,3 +16,4 @@ export type {
   GoogleGeocodeResult,
   GoogleGeocodeSuggestOptions,
 } from './googleMapsGeocode';
+export { getOrCreateActiveSupportConversationId } from './supportConversation';

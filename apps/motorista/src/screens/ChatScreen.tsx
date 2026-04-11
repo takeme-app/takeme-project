@@ -194,6 +194,7 @@ export function ChatScreen({ navigation, route }: Props) {
   }, [conversationId]);
 
   useEffect(() => {
+    void supabase.from('conversations').update({ unread_driver: 0 }).eq('id', conversationId);
     loadMessages();
     loadConversation();
 

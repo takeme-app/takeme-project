@@ -39,6 +39,7 @@ type ConversationRow = {
   last_message_at: string | null;
   unread_driver: number;
   status: string;
+  conversation_kind?: string | null;
 };
 
 function formatTime(iso: string | null): string {
@@ -83,7 +84,9 @@ export function ConversationsScreen({ navigation }: Props) {
     if (user?.id) {
       const { data } = await sb
         .from('conversations')
-        .select('id, participant_name, participant_avatar, last_message, last_message_at, unread_driver, status')
+        .select(
+          'id, participant_name, participant_avatar, last_message, last_message_at, unread_driver, status, conversation_kind',
+        )
         .eq('driver_id', user.id)
         .order('last_message_at', { ascending: false });
 
@@ -152,11 +155,15 @@ export function ConversationsScreen({ navigation }: Props) {
               style={styles.row}
               activeOpacity={0.75}
               onPress={() => {
+                const displayName =
+                  item.conversation_kind === 'support_backoffice'
+                    ? 'Suporte Take Me'
+                    : (item.participant_name ?? 'Usuário');
                 (navigation as { navigate: (n: string, p: Record<string, unknown>) => void }).navigate(
                   chatScreenName,
                   {
                     conversationId: item.id,
-                    participantName: item.participant_name ?? undefined,
+                    participantName: displayName,
                     participantAvatar: item.participant_avatar ?? undefined,
                   },
                 );
@@ -165,7 +172,11 @@ export function ConversationsScreen({ navigation }: Props) {
                 {renderAvatar(item)}
                 <View style={styles.rowContent}>
                   <View style={styles.rowTop}>
-                    <Text style={styles.name} numberOfLines={1}>{item.participant_name ?? 'Usuário'}</Text>
+                    <Text style={styles.name} numberOfLines={1}>
+                      {item.conversation_kind === 'support_backoffice'
+                        ? 'Suporte Take Me'
+                        : (item.participant_name ?? 'Usuário')}
+                    </Text>
                     <Text style={[styles.time, item.unread_driver > 0 && styles.timeActive]}>
                       {formatTime(item.last_message_at)}
                     </Text>

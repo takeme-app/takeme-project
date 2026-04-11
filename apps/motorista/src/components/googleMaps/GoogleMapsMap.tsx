@@ -39,12 +39,30 @@ function applyCameraStop(camera: MapboxCamera | null, config: MapCameraStop): vo
   });
 }
 
+export type NavigationCameraUpdate = {
+  centerCoordinate: [number, number];
+  heading: number;
+  pitch: number;
+  zoomLevel: number;
+  padding: {
+    paddingTop: number;
+    paddingBottom: number;
+    paddingLeft: number;
+    paddingRight: number;
+  };
+  animationDuration: number;
+};
+
 export type GoogleMapsMapRef = {
   animateToRegion: (region: MapRegion, duration?: number) => void;
   zoomIn: () => void;
   zoomOut: () => void;
   resetCamera: () => void;
   setMapCamera: (config: MapCameraSetConfig) => void;
+  /** Heading-up / Waze: centro, bearing, pitch, zoom e padding assimétrico. */
+  setNavigationCamera: (config: NavigationCameraUpdate) => void;
+  /** Volta a norte no topo, pitch 0 (ex.: ao soltar o “seguir GPS”). */
+  easeToRegionNorthUp: (region: MapRegion, duration?: number) => void;
 };
 
 type GoogleMapsMapProps = {
@@ -84,6 +102,8 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
 
   const cameraRef = useRef<MapboxCamera>(null);
   const currentZoom = useRef(10);
+  /** Evita recentralizar o mapa sempre que o pai recalcula `initialRegion` (ex.: paradas carregadas na viagem ativa). */
+  const didApplyInitialCameraFromProps = useRef(false);
 
   const safeRegion = useMemo(
     () => sanitizeMapRegion(initialRegion),
@@ -104,6 +124,8 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
   const zoomLevel = useMemo(() => regionToZoomLevel(safeRegion), [safeRegion]);
 
   useEffect(() => {
+    if (didApplyInitialCameraFromProps.current) return;
+    didApplyInitialCameraFromProps.current = true;
     currentZoom.current = zoomLevel;
     cameraRef.current?.setCamera({
       centerCoordinate: center,
@@ -119,7 +141,39 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
     cameraRef.current?.setCamera({
       centerCoordinate: [r.longitude, r.latitude],
       zoomLevel: z,
+      heading: 0,
+      pitch: 0,
+      padding: { paddingTop: 0, paddingBottom: 0, paddingLeft: 0, paddingRight: 0 },
       animationDuration: duration,
+      animationMode: 'easeTo',
+    });
+  }, []);
+
+  const setNavigationCamera = useCallback((config: NavigationCameraUpdate) => {
+    currentZoom.current = config.zoomLevel;
+    cameraRef.current?.setCamera({
+      centerCoordinate: config.centerCoordinate,
+      zoomLevel: config.zoomLevel,
+      heading: config.heading,
+      pitch: config.pitch,
+      padding: config.padding,
+      animationDuration: config.animationDuration,
+      animationMode: 'easeTo',
+    });
+  }, []);
+
+  const easeToRegionNorthUp = useCallback((region: MapRegion, duration = 450) => {
+    const r = sanitizeMapRegion(region);
+    const z = regionToZoomLevel(r);
+    currentZoom.current = z;
+    cameraRef.current?.setCamera({
+      centerCoordinate: [r.longitude, r.latitude],
+      zoomLevel: z,
+      heading: 0,
+      pitch: 0,
+      padding: { paddingTop: 0, paddingBottom: 0, paddingLeft: 0, paddingRight: 0 },
+      animationDuration: duration,
+      animationMode: 'easeTo',
     });
   }, []);
 
@@ -140,7 +194,11 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
     cameraRef.current?.setCamera({
       centerCoordinate: center,
       zoomLevel,
+      heading: 0,
+      pitch: 0,
+      padding: { paddingTop: 0, paddingBottom: 0, paddingLeft: 0, paddingRight: 0 },
       animationDuration: 400,
+      animationMode: 'easeTo',
     });
   }, [center, zoomLevel]);
 
@@ -156,8 +214,24 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
 
   useImperativeHandle(
     ref,
-    () => ({ animateToRegion, zoomIn, zoomOut, resetCamera, setMapCamera }),
-    [animateToRegion, zoomIn, zoomOut, resetCamera, setMapCamera],
+    () => ({
+      animateToRegion,
+      zoomIn,
+      zoomOut,
+      resetCamera,
+      setMapCamera,
+      setNavigationCamera,
+      easeToRegionNorthUp,
+    }),
+    [
+      animateToRegion,
+      zoomIn,
+      zoomOut,
+      resetCamera,
+      setMapCamera,
+      setNavigationCamera,
+      easeToRegionNorthUp,
+    ],
   );
 
   const onMapReady = useCallback(() => {

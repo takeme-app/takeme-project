@@ -19,6 +19,7 @@ import type { CompositeScreenProps } from '@react-navigation/native';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
+import { getOrCreateActiveSupportConversationId } from '@take-me/shared';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { useAppAlert } from '../contexts/AppAlertContext';
@@ -327,6 +328,7 @@ export function ActivitiesScreen({ navigation }: Props) {
   const [filterDateStartDisplay, setFilterDateStartDisplay] = useState('');
   const [filterDateEndDisplay, setFilterDateEndDisplay] = useState('');
   const [supportModalVisible, setSupportModalVisible] = useState(false);
+  const [supportBannerVisible, setSupportBannerVisible] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -405,6 +407,31 @@ export function ActivitiesScreen({ navigation }: Props) {
     useCallback(() => {
       load();
     }, [load]),
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void (async () => {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user?.id || cancelled) return;
+        const { data, error } = await supabase
+          .from('conversations')
+          .select('unread_driver')
+          .eq('driver_id', user.id)
+          .eq('conversation_kind', 'support_backoffice')
+          .eq('status', 'active');
+        if (cancelled || error) return;
+        const rows = (data ?? []) as { unread_driver?: number }[];
+        const total = rows.reduce((s, r) => s + (r.unread_driver ?? 0), 0);
+        setSupportBannerVisible(total > 0);
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, []),
   );
 
   const openFilter = () => {
@@ -494,6 +521,19 @@ export function ActivitiesScreen({ navigation }: Props) {
       >
         {/* Large title + history chip */}
         <Text style={styles.screenTitle}>Atividades</Text>
+        {supportBannerVisible ? (
+          <TouchableOpacity
+            style={styles.supportBanner}
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate('Profile', { screen: 'Conversations' })}
+          >
+            <MaterialIcons name="support-agent" size={22} color="#92400E" style={{ marginRight: 10 }} />
+            <Text style={styles.supportBannerText}>
+              Há mensagem do suporte. Toque para abrir Perfil → Conversas.
+            </Text>
+            <MaterialIcons name="chevron-right" size={22} color="#92400E" />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity
           onPress={goTripHistory}
           activeOpacity={0.7}
@@ -600,7 +640,23 @@ export function ActivitiesScreen({ navigation }: Props) {
           <TouchableOpacity
             style={styles.supportItem}
             activeOpacity={0.8}
-            onPress={() => { setSupportModalVisible(false); }}
+            onPress={() => {
+              void (async () => {
+                setSupportModalVisible(false);
+                const { conversationId, error } = await getOrCreateActiveSupportConversationId(supabase);
+                if (error || !conversationId) {
+                  showAlert('Suporte', error ?? 'Não foi possível abrir o chat.');
+                  return;
+                }
+                navigation.navigate('Profile', {
+                  screen: 'Chat',
+                  params: {
+                    conversationId,
+                    participantName: 'Suporte Take Me',
+                  },
+                });
+              })();
+            }}
           >
             <View style={styles.supportIconWrap}>
               <MaterialIcons name="headset-mic" size={22} color="#92400E" />
@@ -764,6 +820,24 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111827',
     marginBottom: 14,
+  },
+  supportBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 14,
+  },
+  supportBannerText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#78350F',
+    lineHeight: 19,
   },
   historyChip: {
     alignSelf: 'flex-start',

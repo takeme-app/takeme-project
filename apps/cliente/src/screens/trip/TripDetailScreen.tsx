@@ -500,7 +500,8 @@ export function TripDetailScreen({ navigation, route }: Props) {
           }
           navigation.navigate('Chat', { contactName: detail?.driver_name ?? 'Motorista' });
         }}
-        onOpenSupportChat={() => navigation.navigate('Chat', { contactName: 'Suporte Take Me' })}
+        onOpenSupportChat={() =>
+          navigation.navigate('Chat', { contactName: 'Suporte Take Me', supportBackoffice: true })}
       />
     </SafeAreaView>
   );

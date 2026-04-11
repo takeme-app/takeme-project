@@ -2,7 +2,7 @@
  * DestinosScreen — Lista de destinos conforme Figma 849-21654.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   webStyles,
@@ -10,7 +10,15 @@ import {
   filterIconSvg,
   calendarIconSvg,
 } from '../styles/webStyles';
-import { fetchDestinos, fetchTakemeRoutes, createTakemeRoute, updateTakemeRoute } from '../data/queries';
+import {
+  fetchDestinos,
+  fetchTakemeRoutes,
+  createTakemeRoute,
+  updateTakemeRoute,
+  shortAddr,
+} from '../data/queries';
+import PlacesAddressInput from '../components/PlacesAddressInput';
+import { getGoogleMapsApiKey } from '../lib/expoExtra';
 import type { DestinoListItem } from '../data/types';
 
 const { BarChart, Bar, XAxis, YAxis, Tooltip: RechTooltip, ResponsiveContainer } = require('recharts');
@@ -57,6 +65,7 @@ type DestinoRow = {
   totalAtividades: number;
   dataCriacao: string;
   status: 'Ativo' | 'Inativo';
+  sourceTakemeOnly?: boolean;
 };
 
 type FiltroDatasIncluidas = 'passadas' | 'ambas' | 'futuras' | null;
@@ -105,25 +114,28 @@ export default function DestinosScreen() {
 
   // Criar rota modal
   const [criarRotaOpen, setCriarRotaOpen] = useState(false);
-  const [crEstadoOrigem, setCrEstadoOrigem] = useState('');
-  const [crCidadeOrigem, setCrCidadeOrigem] = useState('');
-  const [crEstadoDestino, setCrEstadoDestino] = useState('');
-  const [crCidadeDestino, setCrCidadeDestino] = useState('');
+  const [crOriginText, setCrOriginText] = useState('');
+  const [crDestText, setCrDestText] = useState('');
+  const [crOriginCoords, setCrOriginCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [crDestCoords, setCrDestCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [crGeoError, setCrGeoError] = useState<string | null>(null);
+  const [crSaving, setCrSaving] = useState(false);
   const [crRotaAtiva, setCrRotaAtiva] = useState(true);
 
   // Visualizar destino modal
   const [vizDestinoOpen, setVizDestinoOpen] = useState(false);
   const [vizDestino, setVizDestino] = useState<DestinoRow | null>(null);
 
-  // Editar rota modal — inclui edRotaOrigem/edRotaDestino para identificar a rota
+  // Editar rota modal — id da linha em takeme_routes (resolvido por shortAddr)
   const [editarRotaOpen, setEditarRotaOpen] = useState(false);
-  const [edEstadoOrigem, setEdEstadoOrigem] = useState('');
-  const [edCidadeOrigem, setEdCidadeOrigem] = useState('');
-  const [edEstadoDestino, setEdEstadoDestino] = useState('');
-  const [edCidadeDestino, setEdCidadeDestino] = useState('');
+  const [edTakemeRouteId, setEdTakemeRouteId] = useState<string | null>(null);
+  const [edOriginText, setEdOriginText] = useState('');
+  const [edDestText, setEdDestText] = useState('');
+  const [edOriginCoords, setEdOriginCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [edDestCoords, setEdDestCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [edRotaAtiva, setEdRotaAtiva] = useState(true);
-  const [edRotaOrigemOriginal, setEdRotaOrigemOriginal] = useState('');
-  const [edRotaDestinoOriginal, setEdRotaDestinoOriginal] = useState('');
+  const [edGeoError, setEdGeoError] = useState<string | null>(null);
+  const [edSaving, setEdSaving] = useState(false);
 
   // Filtro da página
   const [filtroPaginaOpen, setFiltroPaginaOpen] = useState(false);
@@ -147,6 +159,45 @@ export default function DestinosScreen() {
   const [destinosData, setDestinosData] = useState<DestinoListItem[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
 
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg);
+  }, []);
+  useEffect(() => {
+    if (!toastMsg) return;
+    const t = setTimeout(() => setToastMsg(null), 4000);
+    return () => clearTimeout(t);
+  }, [toastMsg]);
+
+  const mapsKeyConfigured = Boolean(getGoogleMapsApiKey());
+  const destinosPlaceInputStyle: React.CSSProperties = {
+    height: 44,
+    borderRadius: 8,
+    background: '#f1f1f1',
+    border: 'none',
+    outline: 'none',
+    padding: '0 16px',
+    fontSize: 14,
+    width: '100%',
+    boxSizing: 'border-box',
+    ...font,
+  };
+
+  const openCriarRotaModal = () => {
+    setCrOriginText('');
+    setCrDestText('');
+    setCrOriginCoords(null);
+    setCrDestCoords(null);
+    setCrGeoError(null);
+    setCrRotaAtiva(true);
+    setCriarRotaOpen(true);
+  };
+
+  const closeCriarRotaModal = () => {
+    setCriarRotaOpen(false);
+    setCrGeoError(null);
+  };
+
   useEffect(() => {
     let cancelled = false;
     fetchDestinos().then((items) => {
@@ -165,17 +216,17 @@ export default function DestinosScreen() {
         const u = estadoSelected.toLowerCase();
         if (!d.origem.toLowerCase().includes(u) && !d.destino.toLowerCase().includes(u)) return false;
       }
-      // Status: só filtra se não for 'todos'
-      if (filtroStatusViagem !== 'todos' && d.tripStatusCounts[filtroStatusViagem] === 0) return false;
-      if (tabelaFiltroStatusViagem !== 'todos' && d.tripStatusCounts[tabelaFiltroStatusViagem] === 0) return false;
+      // Status: só filtra se não for 'todos' (rotas só Take Me não têm contagem de viagem)
+      if (filtroStatusViagem !== 'todos' && !d.sourceTakemeOnly && d.tripStatusCounts[filtroStatusViagem] === 0) return false;
+      if (tabelaFiltroStatusViagem !== 'todos' && !d.sourceTakemeOnly && d.tripStatusCounts[tabelaFiltroStatusViagem] === 0) return false;
       // Categoria
       if (filtroCategoria === 'take_me' && d.takeMeCount === 0) return false;
       if (filtroCategoria === 'motorista_parceiro' && d.partnerCount === 0) return false;
       if (tabelaFiltroCategoria === 'take_me' && d.takeMeCount === 0) return false;
       if (tabelaFiltroCategoria === 'motorista_parceiro' && d.partnerCount === 0) return false;
-      // Datas incluídas
-      if (filtroDatasIncluidas === 'passadas' && !d.hasPastDeparture) return false;
-      if (filtroDatasIncluidas === 'futuras' && !d.hasFutureDeparture) return false;
+      // Datas incluídas (rotas só em takeme_routes não têm embarques — mantêm-se visíveis nos filtros de data)
+      if (filtroDatasIncluidas === 'passadas' && !d.hasPastDeparture && !d.sourceTakemeOnly) return false;
+      if (filtroDatasIncluidas === 'futuras' && !d.hasFutureDeparture && !d.sourceTakemeOnly) return false;
       // Tabela origem/destino
       const o = tabelaFiltroOrigem.trim().toLowerCase();
       if (o && !d.origem.toLowerCase().includes(o)) return false;
@@ -203,6 +254,7 @@ export default function DestinosScreen() {
     totalAtividades: d.totalAtividades,
     dataCriacao: d.primeiraData,
     status: d.ativo ? 'Ativo' as const : 'Inativo' as const,
+    sourceTakemeOnly: d.sourceTakemeOnly,
   }));
 
   // ── KPI cards ─────────────────────────────────────────────────────────────
@@ -234,40 +286,48 @@ export default function DestinosScreen() {
   // ── Editar rota — salvar ──────────────────────────────────────────────────
 
   const handleSalvarEditar = async () => {
-    const newOrigin = `${edCidadeOrigem}${edEstadoOrigem ? ' - ' + edEstadoOrigem : ''}`.trim();
-    const newDest = `${edCidadeDestino}${edEstadoDestino ? ' - ' + edEstadoDestino : ''}`.trim();
-    // Buscar a rota correspondente em takeme_routes pelo par original origem/destino
-    const routes = await fetchTakemeRoutes();
-    const match = routes.find(
-      (r: any) =>
-        r.origin_address === edRotaOrigemOriginal &&
-        r.destination_address === edRotaDestinoOriginal,
-    );
-    if (match) {
-      await updateTakemeRoute(match.id, {
-        origin_address: newOrigin || edRotaOrigemOriginal,
-        destination_address: newDest || edRotaDestinoOriginal,
-        is_active: edRotaAtiva,
-      });
+    setEdGeoError(null);
+    if (!edTakemeRouteId) {
+      setEdGeoError(
+        'Não foi encontrada uma rota Take Me para este par origem/destino. Cadastre a rota em Nova rota ou verifique se o endereço na viagem coincide com a rota padrão.',
+      );
+      return;
+    }
+    if (!edOriginText.trim() || !edDestText.trim()) {
+      setEdGeoError('Preencha origem e destino.');
+      return;
+    }
+    const mapsKeyConfigured = Boolean(getGoogleMapsApiKey());
+    if (mapsKeyConfigured && (!edOriginCoords || !edDestCoords)) {
+      setEdGeoError('Selecione origem e destino nas sugestões do Google para salvar latitude e longitude.');
+      return;
+    }
+    setEdSaving(true);
+    const fields: Parameters<typeof updateTakemeRoute>[1] = {
+      origin_address: edOriginText.trim(),
+      destination_address: edDestText.trim(),
+      is_active: edRotaAtiva,
+    };
+    if (edOriginCoords) {
+      fields.origin_lat = edOriginCoords.lat;
+      fields.origin_lng = edOriginCoords.lng;
+    }
+    if (edDestCoords) {
+      fields.destination_lat = edDestCoords.lat;
+      fields.destination_lng = edDestCoords.lng;
+    }
+    const { error } = await updateTakemeRoute(edTakemeRouteId, fields);
+    setEdSaving(false);
+    if (error) {
+      setEdGeoError(error);
+      return;
     }
     setEditarRotaOpen(false);
     fetchDestinos().then(setDestinosData);
+    showToast('Rota Take Me atualizada com sucesso.');
   };
 
   // ── Helpers ───────────────────────────────────────────────────────────────
-
-  const selectField = (label: string, placeholder: string, value: string, onChange: (v: string) => void) =>
-    React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column' as const, gap: 4, minWidth: 180 } },
-      React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
-      React.createElement('div', {
-        style: {
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', cursor: 'pointer',
-        },
-      },
-        React.createElement('span', { style: { fontSize: 14, color: value ? '#0d0d0d' : '#999', ...font } }, value || placeholder),
-        React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-          React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))));
 
   const filtroRadioCircle = (selected: boolean) =>
     React.createElement('div', {
@@ -370,7 +430,7 @@ export default function DestinosScreen() {
     style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, width: '100%', flexWrap: 'wrap' as const },
   },
     React.createElement('button', {
-      type: 'button', onClick: () => setCriarRotaOpen(true),
+      type: 'button', onClick: openCriarRotaModal,
       style: {
         display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
         background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999,
@@ -497,6 +557,9 @@ export default function DestinosScreen() {
     return React.createElement('div', {
       key: rowKey,
       'data-testid': 'destino-table-row',
+      title: row.sourceTakemeOnly
+        ? 'Rota cadastrada no catálogo Take Me; ainda sem viagens neste trecho. O total de atividades aumenta quando houver viagens.'
+        : undefined,
       style: {
         display: 'flex', height: 64, alignItems: 'center', padding: '0 16px',
         borderBottom: '1px solid #d9d9d9', background: '#f6f6f6',
@@ -524,16 +587,38 @@ export default function DestinosScreen() {
         React.createElement('button', {
           type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
           onClick: () => {
-            const origemParts = row.origem.split(' - ');
-            const destParts = row.destino.split(' - ');
-            setEdCidadeOrigem(origemParts[0] ?? row.origem);
-            setEdEstadoOrigem(origemParts[1] ?? '');
-            setEdCidadeDestino(destParts[0] ?? row.destino);
-            setEdEstadoDestino(destParts[1] ?? '');
-            setEdRotaAtiva(row.status === 'Ativo');
-            setEdRotaOrigemOriginal(row.origem);
-            setEdRotaDestinoOriginal(row.destino);
-            setEditarRotaOpen(true);
+            void (async () => {
+              setEdGeoError(null);
+              const routes = await fetchTakemeRoutes();
+              const match = (routes as any[]).find(
+                (r) =>
+                  shortAddr(String(r.origin_address ?? '')) === row.origem &&
+                  shortAddr(String(r.destination_address ?? '')) === row.destino,
+              );
+              if (match) {
+                setEdTakemeRouteId(match.id);
+                setEdOriginText(String(match.origin_address ?? ''));
+                setEdDestText(String(match.destination_address ?? ''));
+                const olat = match.origin_lat;
+                const olng = match.origin_lng;
+                const dlat = match.destination_lat;
+                const dlng = match.destination_lng;
+                setEdOriginCoords(
+                  olat != null && olng != null ? { lat: Number(olat), lng: Number(olng) } : null,
+                );
+                setEdDestCoords(
+                  dlat != null && dlng != null ? { lat: Number(dlat), lng: Number(dlng) } : null,
+                );
+              } else {
+                setEdTakemeRouteId(null);
+                setEdOriginText(row.origem);
+                setEdDestText(row.destino);
+                setEdOriginCoords(null);
+                setEdDestCoords(null);
+              }
+              setEdRotaAtiva(row.status === 'Ativo');
+              setEditarRotaOpen(true);
+            })();
           },
         }, pencilActionSvg)));
   });
@@ -551,7 +636,7 @@ export default function DestinosScreen() {
 
   const criarRotaModal = criarRotaOpen ? React.createElement('div', {
     style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
-    onClick: () => setCriarRotaOpen(false),
+    onClick: closeCriarRotaModal,
   },
     React.createElement('div', {
       style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 540, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)' },
@@ -560,16 +645,51 @@ export default function DestinosScreen() {
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
         React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Criar rota'),
         React.createElement('button', {
-          type: 'button', onClick: () => setCriarRotaOpen(false),
+          type: 'button', onClick: closeCriarRotaModal,
           style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
         }, closeSvg)),
       React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
-      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-        selectField('Estado da origem', 'Selecione um estado', crEstadoOrigem, setCrEstadoOrigem),
-        selectField('Cidade de origem', 'Selecione uma cidade', crCidadeOrigem, setCrCidadeOrigem)),
-      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-        selectField('Estado do destino', 'Selecione um estado', crEstadoDestino, setCrEstadoDestino),
-        selectField('Cidade de destino', 'Selecione uma cidade', crCidadeDestino, setCrCidadeDestino)),
+      mapsKeyConfigured
+        ? React.createElement('p', { style: { fontSize: 12, color: '#767676', margin: 0, lineHeight: 1.45, ...font } },
+          'Escolha origem e destino na lista de sugestões do Google para gravar endereço e coordenadas.')
+        : null,
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+        React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Origem'),
+        React.createElement(PlacesAddressInput, {
+          value: crOriginText,
+          onChange: (v: string) => {
+            setCrOriginText(v);
+            setCrOriginCoords(null);
+            setCrGeoError(null);
+          },
+          onPlaceResolved: (p) => {
+            setCrOriginText(p.formattedAddress);
+            setCrOriginCoords({ lat: p.lat, lng: p.lng });
+            setCrGeoError(null);
+          },
+          inputStyle: destinosPlaceInputStyle,
+          placeholder: mapsKeyConfigured ? 'Buscar cidade ou endereço…' : 'ex: São Paulo, SP',
+        })),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+        React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Destino'),
+        React.createElement(PlacesAddressInput, {
+          value: crDestText,
+          onChange: (v: string) => {
+            setCrDestText(v);
+            setCrDestCoords(null);
+            setCrGeoError(null);
+          },
+          onPlaceResolved: (p) => {
+            setCrDestText(p.formattedAddress);
+            setCrDestCoords({ lat: p.lat, lng: p.lng });
+            setCrGeoError(null);
+          },
+          inputStyle: destinosPlaceInputStyle,
+          placeholder: mapsKeyConfigured ? 'Buscar cidade ou endereço…' : 'ex: Rio de Janeiro, RJ',
+        })),
+      crGeoError
+        ? React.createElement('div', { role: 'alert', style: { fontSize: 13, color: '#b53838', ...font } }, crGeoError)
+        : null,
       React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 } },
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
           React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Manter rota ativa'),
@@ -577,28 +697,71 @@ export default function DestinosScreen() {
         toggleSwitchEl(crRotaAtiva, () => setCrRotaAtiva(!crRotaAtiva))),
       React.createElement('button', {
         type: 'button',
+        disabled: crSaving || !crOriginText.trim() || !crDestText.trim(),
         onClick: async () => {
-          const origin = `${crCidadeOrigem}${crEstadoOrigem ? ' - ' + crEstadoOrigem : ''}`.trim();
-          const dest = `${crCidadeDestino}${crEstadoDestino ? ' - ' + crEstadoDestino : ''}`.trim();
-          if (origin && dest) {
-            await createTakemeRoute({ origin_address: origin, destination_address: dest, price_per_person_cents: 0 });
-            const items = await fetchDestinos();
-            setDestinosData(items);
+          setCrGeoError(null);
+          if (!crOriginText.trim() || !crDestText.trim()) {
+            setCrGeoError('Preencha origem e destino.');
+            return;
           }
-          setCriarRotaOpen(false);
+          if (mapsKeyConfigured && (!crOriginCoords || !crDestCoords)) {
+            setCrGeoError('Selecione origem e destino nas sugestões do Google para salvar latitude e longitude.');
+            return;
+          }
+          setCrSaving(true);
+          const insert: Parameters<typeof createTakemeRoute>[0] = {
+            origin_address: crOriginText.trim(),
+            destination_address: crDestText.trim(),
+            price_per_person_cents: 0,
+            is_active: crRotaAtiva,
+          };
+          if (crOriginCoords) {
+            insert.origin_lat = crOriginCoords.lat;
+            insert.origin_lng = crOriginCoords.lng;
+          }
+          if (crDestCoords) {
+            insert.destination_lat = crDestCoords.lat;
+            insert.destination_lng = crDestCoords.lng;
+          }
+          const { error } = await createTakemeRoute(insert);
+          setCrSaving(false);
+          if (error) {
+            setCrGeoError(error);
+            return;
+          }
+          const items = await fetchDestinos();
+          setDestinosData(items);
+          closeCriarRotaModal();
+          showToast('Rota Take Me criada com sucesso.');
         },
-        style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
-      }, 'Salvar'),
+        style: {
+          height: 48,
+          borderRadius: 999,
+          border: 'none',
+          background: '#0d0d0d',
+          color: '#fff',
+          fontSize: 16,
+          fontWeight: 600,
+          cursor: crSaving ? 'wait' : 'pointer',
+          opacity: (crSaving || !crOriginText.trim() || !crDestText.trim()) ? 0.5 : 1,
+          ...font,
+        },
+      }, crSaving ? 'Salvando…' : 'Salvar'),
       React.createElement('button', {
-        type: 'button', onClick: () => setCriarRotaOpen(false),
+        type: 'button', onClick: closeCriarRotaModal,
         style: { height: 40, background: 'none', border: 'none', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
       }, 'Cancelar'))) : null;
 
   // ── Editar rota modal ─────────────────────────────────────────────────────
 
+  const closeEditarRotaModal = () => {
+    setEditarRotaOpen(false);
+    setEdGeoError(null);
+  };
+
   const editarRotaModal = editarRotaOpen ? React.createElement('div', {
     style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
-    onClick: () => setEditarRotaOpen(false),
+    onClick: closeEditarRotaModal,
   },
     React.createElement('div', {
       style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 540, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)' },
@@ -607,27 +770,75 @@ export default function DestinosScreen() {
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
         React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Editar rota'),
         React.createElement('button', {
-          type: 'button', onClick: () => setEditarRotaOpen(false),
+          type: 'button', onClick: closeEditarRotaModal,
           style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
         }, closeSvg)),
       React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
-      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-        selectField('Estado da origem', 'Selecione', edEstadoOrigem, setEdEstadoOrigem),
-        selectField('Cidade de origem', 'Selecione', edCidadeOrigem, setEdCidadeOrigem)),
-      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-        selectField('Estado do destino', 'Selecione', edEstadoDestino, setEdEstadoDestino),
-        selectField('Cidade de destino', 'Selecione', edCidadeDestino, setEdCidadeDestino)),
+      mapsKeyConfigured
+        ? React.createElement('p', { style: { fontSize: 12, color: '#767676', margin: 0, lineHeight: 1.45, ...font } },
+          'Escolha origem e destino na lista de sugestões do Google para gravar endereço e coordenadas.')
+        : null,
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+        React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Origem'),
+        React.createElement(PlacesAddressInput, {
+          value: edOriginText,
+          onChange: (v: string) => {
+            setEdOriginText(v);
+            setEdOriginCoords(null);
+            setEdGeoError(null);
+          },
+          onPlaceResolved: (p) => {
+            setEdOriginText(p.formattedAddress);
+            setEdOriginCoords({ lat: p.lat, lng: p.lng });
+            setEdGeoError(null);
+          },
+          inputStyle: destinosPlaceInputStyle,
+          placeholder: mapsKeyConfigured ? 'Buscar cidade ou endereço…' : 'Origem',
+        })),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+        React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Destino'),
+        React.createElement(PlacesAddressInput, {
+          value: edDestText,
+          onChange: (v: string) => {
+            setEdDestText(v);
+            setEdDestCoords(null);
+            setEdGeoError(null);
+          },
+          onPlaceResolved: (p) => {
+            setEdDestText(p.formattedAddress);
+            setEdDestCoords({ lat: p.lat, lng: p.lng });
+            setEdGeoError(null);
+          },
+          inputStyle: destinosPlaceInputStyle,
+          placeholder: mapsKeyConfigured ? 'Buscar cidade ou endereço…' : 'Destino',
+        })),
+      edGeoError
+        ? React.createElement('div', { role: 'alert', style: { fontSize: 13, color: '#b53838', ...font } }, edGeoError)
+        : null,
       React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 } },
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
           React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Manter rota ativa'),
           React.createElement('span', { style: { fontSize: 12, color: '#767676', lineHeight: 1.5, ...font } }, 'Ao manter a rota ativa, você garante que ela seja exibida e possa ser utilizada por todos os usuários da plataforma.')),
         toggleSwitchEl(edRotaAtiva, () => setEdRotaAtiva(!edRotaAtiva))),
       React.createElement('button', {
-        type: 'button', onClick: handleSalvarEditar,
-        style: { height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
-      }, 'Salvar'),
+        type: 'button',
+        disabled: edSaving || !edOriginText.trim() || !edDestText.trim(),
+        onClick: () => { void handleSalvarEditar(); },
+        style: {
+          height: 48,
+          borderRadius: 999,
+          border: 'none',
+          background: '#0d0d0d',
+          color: '#fff',
+          fontSize: 16,
+          fontWeight: 600,
+          cursor: edSaving ? 'wait' : 'pointer',
+          opacity: (edSaving || !edOriginText.trim() || !edDestText.trim()) ? 0.5 : 1,
+          ...font,
+        },
+      }, edSaving ? 'Salvando…' : 'Salvar'),
       React.createElement('button', {
-        type: 'button', onClick: () => setEditarRotaOpen(false),
+        type: 'button', onClick: closeEditarRotaModal,
         style: { height: 40, background: 'none', border: 'none', fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
       }, 'Cancelar'))) : null;
 
@@ -831,6 +1042,35 @@ export default function DestinosScreen() {
       React.createElement('span', { style: { fontSize: 16, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Carregando destinos...'));
   }
 
+  const toastCheckSvg = React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
+    React.createElement('circle', { cx: 12, cy: 12, r: 11, fill: '#fff' }),
+    React.createElement('path', { d: 'M9 12l2 2 4-4', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+  const toastEl = toastMsg
+    ? React.createElement('div', {
+        key: toastMsg,
+        role: 'status',
+        'aria-live': 'polite',
+        style: {
+          position: 'fixed' as const,
+          bottom: 40,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: '#0d0d0d',
+          borderRadius: 12,
+          padding: '16px 24px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          zIndex: 10000,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+          maxWidth: 'min(92vw, 480px)',
+          whiteSpace: 'normal' as const,
+        },
+      },
+        toastCheckSvg,
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#fff', ...font } }, toastMsg))
+    : null;
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return React.createElement(React.Fragment, null,
@@ -843,5 +1083,6 @@ export default function DestinosScreen() {
     editarRotaModal,
     vizDestinoModal,
     filtroModal,
-    filtroTabelaModal);
+    filtroTabelaModal,
+    toastEl);
 }
