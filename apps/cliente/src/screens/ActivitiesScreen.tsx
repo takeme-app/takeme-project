@@ -355,7 +355,10 @@ export function ActivitiesScreen({ navigation }: Props) {
         visible={supportSheetVisible}
         onClose={() => setSupportSheetVisible(false)}
         onOpenSupportChat={() => {
-          navigation.navigate('Chat', { contactName: 'Suporte Take Me' });
+          navigation.navigate('Chat', {
+            contactName: 'Suporte Take Me',
+            supportBackoffice: true,
+          });
         }}
       />
 

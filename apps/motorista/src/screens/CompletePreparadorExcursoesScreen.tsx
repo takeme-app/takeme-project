@@ -191,6 +191,13 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
       });
       if (workerErr) throw new Error(workerErr.message || 'Falha ao salvar perfil.');
 
+      try {
+        const { tryOpenSupportTicket } = await import('../lib/supportTickets');
+        void tryOpenSupportTicket('cadastro_transporte', { worker_id: userId });
+      } catch {
+        /* ignore */
+      }
+
       navigation.reset({ index: 0, routes: [{ name: 'RegistrationSuccess' }] });
     } catch (err: unknown) {
       showAlert('Erro', err instanceof Error ? err.message : 'Erro ao enviar cadastro.');

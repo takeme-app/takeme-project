@@ -19,6 +19,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../navigation/ActivitiesStackTypes';
+import { getOrCreateActiveSupportConversationId } from '@take-me/shared';
 import { supabase } from '../lib/supabase';
 import { ensureDriverClientConversation, markConversationReadByClient } from '../lib/chatConversations';
 import { storageUrl } from '../utils/storageUrl';
@@ -94,12 +95,13 @@ export function ChatScreen({ navigation, route }: Props) {
   const driverId = route.params?.driverId;
   const bookingId = route.params?.bookingId ?? null;
   const participantAvatarKey = route.params?.participantAvatarKey ?? null;
+  const supportBackoffice = route.params?.supportBackoffice === true;
 
   const [resolvedConversationId, setResolvedConversationId] = useState<string | null>(null);
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(
-    () => !!(routeConversationId || driverId)
+    () => !!(routeConversationId || driverId || supportBackoffice)
   );
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
@@ -161,6 +163,26 @@ export function ChatScreen({ navigation, route }: Props) {
     return () => { cancelled = true; };
   }, [routeConversationId, driverId, bookingId]);
 
+  useEffect(() => {
+    if (routeConversationId || driverId || !supportBackoffice) return;
+    let cancelled = false;
+    (async () => {
+      setResolveError(null);
+      setLoading(true);
+      const { conversationId: cid, error } = await getOrCreateActiveSupportConversationId(supabase);
+      if (cancelled) return;
+      if (error || !cid) {
+        setResolveError(error ?? 'Não foi possível abrir o atendimento.');
+        setLoading(false);
+        return;
+      }
+      setResolvedConversationId(cid);
+      await markConversationReadByClient(cid);
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [routeConversationId, driverId, supportBackoffice]);
+
   const loadMessages = useCallback(async () => {
     if (!conversationId) return;
     const { data } = await sb
@@ -184,7 +206,7 @@ export function ChatScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     if (!conversationId) {
-      if (!driverId && !routeConversationId) setLoading(false);
+      if (!driverId && !routeConversationId && !supportBackoffice) setLoading(false);
       return;
     }
     setLoading(true);
@@ -208,7 +230,7 @@ export function ChatScreen({ navigation, route }: Props) {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [conversationId, driverId, routeConversationId, loadMessages, loadConversation]);
+  }, [conversationId, driverId, routeConversationId, supportBackoffice, loadMessages, loadConversation]);
 
   const sendMessage = async () => {
     const text = inputText.trim();
@@ -519,7 +541,11 @@ export function ChatScreen({ navigation, route }: Props) {
             ListEmptyComponent={
               !conversationId ? (
                 <Text style={styles.hintText}>
-                  {driverId ? 'Abrindo conversa…' : 'Selecione uma conversa ou fale com o motorista a partir de uma viagem com motorista atribuído.'}
+                  {driverId
+                    ? 'Abrindo conversa…'
+                    : supportBackoffice
+                      ? 'Abrindo atendimento…'
+                      : 'Selecione uma conversa ou fale com o motorista a partir de uma viagem com motorista atribuído.'}
                 </Text>
               ) : undefined
             }

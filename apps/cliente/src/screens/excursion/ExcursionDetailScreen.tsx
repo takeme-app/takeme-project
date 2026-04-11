@@ -437,7 +437,8 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
             participantAvatarKey: p?.avatar_url ?? null,
           });
         }}
-        onOpenSupportChat={() => navigation.navigate('Chat', { contactName: 'Suporte Take Me' })}
+        onOpenSupportChat={() =>
+          navigation.navigate('Chat', { contactName: 'Suporte Take Me', supportBackoffice: true })}
       />
     </SafeAreaView>
   );

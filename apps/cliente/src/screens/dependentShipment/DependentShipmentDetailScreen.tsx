@@ -358,7 +358,7 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
   };
 
   const openSupportChat = () => {
-    navigation.navigate('Chat', { contactName: 'Suporte Take Me' });
+    navigation.navigate('Chat', { contactName: 'Suporte Take Me', supportBackoffice: true });
   };
 
   const renderHeader = () => (

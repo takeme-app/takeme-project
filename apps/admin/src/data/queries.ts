@@ -160,7 +160,7 @@ function fmtTime(iso: string): string {
   return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
 }
 
-function shortAddr(addr: string): string {
+export function shortAddr(addr: string): string {
   const parts = addr.split(',').map((s) => s.trim());
   if (parts.length >= 2) return `${parts[0]} - ${parts[parts.length - 1]}`;
   return addr;
@@ -666,7 +666,7 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
     .from('shipments')
     .select(`
       *,
-      scheduled_trips ( departure_at, arrival_at )
+      scheduled_trips ( departure_at, arrival_at, driver_id )
     `)
     .eq('id', id)
     .maybeSingle();
@@ -689,6 +689,7 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
       destinationLat: numOrNull(r.destination_lat),
       destinationLng: numOrNull(r.destination_lng),
       scheduledTripId: r.scheduled_trip_id ?? null,
+      tripDriverId: (trip?.driver_id as string | undefined) ?? null,
       tripDepartureAt: trip?.departure_at ?? null,
       tripArrivalAt: trip?.arrival_at ?? null,
       senderName,
@@ -761,7 +762,11 @@ export async function updateDependentShipmentFields(
     instructions?: string | null;
     status?: string;
     origin_address?: string;
+    origin_lat?: number | null;
+    origin_lng?: number | null;
     destination_address?: string;
+    destination_lat?: number | null;
+    destination_lng?: number | null;
     full_name?: string;
     contact_phone?: string;
     receiver_name?: string | null;
@@ -1568,7 +1573,7 @@ export async function fetchDestinos(): Promise<DestinoListItem[]> {
     routeMap.set(key, entry);
   }
 
-  return Array.from(routeMap.entries()).map(([key, val]) => {
+  const fromTrips = Array.from(routeMap.entries()).map(([key, val]) => {
     const [origem, destino] = key.split('|||');
     const primeiraDataIso = localYmdFromIso(val.firstDate);
     return {
@@ -1584,7 +1589,39 @@ export async function fetchDestinos(): Promise<DestinoListItem[]> {
       hasPastDeparture: val.hasPastDeparture,
       hasFutureDeparture: val.hasFutureDeparture,
     };
-  }).sort((a, b) => b.totalAtividades - a.totalAtividades);
+  });
+
+  const seenKeys = new Set(fromTrips.map((d) => `${d.origem}|||${d.destino}`));
+  const { data: takemeRows } = await supabase
+    .from('takeme_routes')
+    .select('origin_address, destination_address, is_active, created_at')
+    .order('created_at', { ascending: false });
+
+  const fromTakeme: DestinoListItem[] = [];
+  for (const r of (takemeRows || []) as any[]) {
+    const origem = shortAddr(String(r.origin_address ?? ''));
+    const destino = shortAddr(String(r.destination_address ?? ''));
+    const k = `${origem}|||${destino}`;
+    if (seenKeys.has(k)) continue;
+    seenKeys.add(k);
+    const created = r.created_at as string;
+    fromTakeme.push({
+      origem,
+      destino,
+      totalAtividades: 0,
+      primeiraData: fmtDate(created),
+      primeiraDataIso: localYmdFromIso(created),
+      ativo: Boolean(r.is_active),
+      tripStatusCounts: emptyDestinoTripCounts(),
+      takeMeCount: 1,
+      partnerCount: 0,
+      hasPastDeparture: false,
+      hasFutureDeparture: false,
+      sourceTakemeOnly: true,
+    });
+  }
+
+  return [...fromTrips, ...fromTakeme].sort((a, b) => b.totalAtividades - a.totalAtividades);
 }
 
 // ── Preparadores ────────────────────────────────────────────────────────
@@ -2012,6 +2049,11 @@ export async function createTakemeRoute(route: {
   origin_address: string;
   destination_address: string;
   price_per_person_cents: number;
+  is_active?: boolean;
+  origin_lat?: number | null;
+  origin_lng?: number | null;
+  destination_lat?: number | null;
+  destination_lng?: number | null;
 }): Promise<{ error: string | null }> {
   if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
   const { error } = await sb.from('takeme_routes').insert(route);
@@ -2020,7 +2062,16 @@ export async function createTakemeRoute(route: {
 
 export async function updateTakemeRoute(
   id: string,
-  fields: { origin_address?: string; destination_address?: string; price_per_person_cents?: number; is_active?: boolean },
+  fields: {
+    origin_address?: string;
+    destination_address?: string;
+    price_per_person_cents?: number;
+    is_active?: boolean;
+    origin_lat?: number | null;
+    origin_lng?: number | null;
+    destination_lat?: number | null;
+    destination_lng?: number | null;
+  },
 ): Promise<{ error: string | null }> {
   if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
   const { error } = await sb.from('takeme_routes').update({ ...fields, updated_at: new Date().toISOString() }).eq('id', id);
@@ -2356,11 +2407,10 @@ export async function fetchSupportHistoryForClient(
   since.setMonth(since.getMonth() - 6);
   const { data, error } = await sb
     .from('conversations')
-    .select('id, category, created_at, updated_at, status, finish_note, admin_id')
+    .select('id, category, created_at, updated_at, status, finish_note, admin_id, last_message, participant_name')
     .eq('conversation_kind', 'support_backoffice')
     .eq('client_id', clientId)
     .neq('id', excludeConversationId)
-    .eq('status', 'closed')
     .gte('created_at', since.toISOString())
     .order('updated_at', { ascending: false })
     .limit(30);
@@ -2384,14 +2434,26 @@ export async function fetchSupportHistoryForClient(
     outros: 'Outros',
   };
 
-  return (data as any[]).map((r) => ({
-    id: String(r.id),
-    titulo: `${catLabel[r.category] || r.category || 'Atendimento'} • ${fmtDate(r.updated_at || r.created_at)}`,
-    data: fmtDate(r.updated_at || r.created_at),
-    atendente: r.admin_id ? (adminNames[r.admin_id] || '—') : '—',
-    desc: r.finish_note || 'Finalizado.',
-    desc2: '',
-  }));
+  return (data as any[]).map((r) => {
+    const shortId = String(r.id).replace(/-/g, '').slice(0, 8).toUpperCase();
+    const cat = catLabel[r.category] || r.category || 'Atendimento';
+    const closed = String(r.status) === 'closed';
+    const preview = typeof r.finish_note === 'string' && r.finish_note.trim()
+      ? r.finish_note.trim()
+      : typeof r.last_message === 'string' && r.last_message.trim()
+        ? r.last_message.trim()
+        : closed
+          ? 'Atendimento encerrado.'
+          : 'Solicitação em andamento.';
+    return {
+      id: String(r.id),
+      titulo: `${cat} · #${shortId}`,
+      data: fmtDate(r.updated_at || r.created_at),
+      atendente: r.admin_id ? (adminNames[r.admin_id] || '—') : '—',
+      desc: preview.length > 220 ? `${preview.slice(0, 220)}…` : preview,
+      desc2: closed ? 'Encerrado' : 'Em aberto',
+    };
+  });
 }
 
 export async function fetchProfileBasics(userId: string): Promise<{ full_name: string | null; email_hint: string | null }> {

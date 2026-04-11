@@ -577,7 +577,8 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         onClose={() => setSupportSheetVisible(false)}
         showDriverChat={canCancel}
         onOpenDriverChat={() => navigation.navigate('Chat', { contactName: 'Motorista' })}
-        onOpenSupportChat={() => navigation.navigate('Chat', { contactName: 'Suporte Take Me' })}
+        onOpenSupportChat={() =>
+          navigation.navigate('Chat', { contactName: 'Suporte Take Me', supportBackoffice: true })}
       />
 
       <Modal visible={showCancelModal} transparent animationType="fade">

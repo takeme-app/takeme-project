@@ -174,6 +174,8 @@ export type EncomendaEditDetail =
       destinationLng: number | null;
       /** Viagem agendada à qual o envio está associado (mapa / roteiro). */
       scheduledTripId: string | null;
+      /** Motorista atual da viagem agendada (`scheduled_trips.driver_id`). */
+      tripDriverId: string | null;
       tripDepartureAt: string | null;
       tripArrivalAt: string | null;
       senderName: string;
@@ -291,6 +293,8 @@ export interface DestinoListItem {
   partnerCount: number;
   hasPastDeparture: boolean;
   hasFutureDeparture: boolean;
+  /** Linha vem só de `takeme_routes` (sem viagens agregadas com esta chave shortAddr). */
+  sourceTakemeOnly?: boolean;
 }
 
 export interface PreparadorListItem {

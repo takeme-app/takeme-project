@@ -8,6 +8,8 @@ export type ActivitiesStackParamList = {
   Chat: {
     contactName?: string;
     conversationId?: string;
+    /** Quando true, abre a fila `support_backoffice` (ticket existente ou `open_support_ticket`). */
+    supportBackoffice?: boolean;
     /** Abre/cria conversa passageiro–motorista (RLS exige driver_id + client_id). */
     driverId?: string;
     bookingId?: string | null;

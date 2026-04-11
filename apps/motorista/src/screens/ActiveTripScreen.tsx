@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -10,6 +10,7 @@ import {
   Animated,
   Pressable,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -39,9 +40,24 @@ import { useAppAlert } from '../contexts/AppAlertContext';
 import { getRouteWithDuration, getMultiPointRoute, formatEta } from '../lib/route';
 import { getGoogleMapsApiKey, getMapboxAccessToken } from '../lib/googleMapsConfig';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import {
+  buildNavigationPadding,
+  computeNextNavigationCamera,
+  createInitialBearingState,
+  type DriverFix,
+  type NavigationBearingState,
+} from '../lib/navigationCamera';
+import { snapToRoutePolyline, trimPolylineFromSnap } from '../lib/routeSnap';
 // expo-location — defensive import (needs native rebuild if just added)
 let Location: any = null;
 try { Location = require('expo-location'); } catch { /* not available yet */ }
+
+/** Distância máxima para projetar o GPS na polyline (map matching simples). */
+const NAV_ROUTE_SNAP_MAX_M = 52;
+/** Abaixo disso, o bearing da câmera prioriza o segmento da rota (alinha com a linha). */
+const NAV_ROAD_BEARING_SNAP_M = 40;
+const NAV_LOOK_AHEAD_M = 56;
+const NAV_CAMERA_ANIMATION_MS = 320;
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ActiveTrip'>;
 
@@ -264,6 +280,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const { tripId } = route.params;
   const { showAlert } = useAppAlert();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
 
   // Data
   const [trip, setTrip] = useState<TripRow | null>(null);
@@ -285,9 +302,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const mapRef = useRef<GoogleMapsMapRef>(null);
   const hasFramedDriverOnMap = useRef(false);
   const [followMyLocation, setFollowMyLocation] = useState(false);
-  const followFirstAnimDoneRef = useRef(false);
   const locationPermissionWarned = useRef(false);
   const locationModuleWarned = useRef(false);
+
+  /** Seguir GPS em modo navegação (heading-up); ref lida com callbacks antes do paint. */
+  const followNavRef = useRef(false);
+  const latestDriverFixRef = useRef<DriverFix | null>(null);
+  const compassHeadingRef = useRef<number | null>(null);
+  const navBearingStateRef = useRef<NavigationBearingState | null>(null);
+  const navRafRef = useRef<number | null>(null);
+  /** Polyline usada para snap + bearing da via (prioridade: rota dourada, senão trecho escuro). */
+  const routeForSnapRef = useRef<LatLng[]>([]);
 
   // UI state
   const [detailVisible, setDetailVisible] = useState(false);
@@ -315,6 +340,90 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   /** Coleta/entrega: só um sheet de código visível por vez — um único translateY. */
   const confirmSheetSlide = useRef(new Animated.Value(600)).current;
   const completedSlide = useRef(new Animated.Value(600)).current;
+
+  // ---------------------------------------------------------------------------
+  // Câmera heading-up (navegação tipo Waze)
+  // ---------------------------------------------------------------------------
+
+  const applyHeadingUpCamera = useCallback(() => {
+    if (!followNavRef.current || !mapRef.current) return;
+    const raw = latestDriverFixRef.current;
+    if (!raw || !isValidGlobeCoordinate(raw.latitude, raw.longitude)) return;
+    if (!navBearingStateRef.current) {
+      navBearingStateRef.current = createInitialBearingState(0);
+    }
+    const guide = routeForSnapRef.current;
+    let fix: DriverFix = raw;
+    let roadCourseDeg: number | null = null;
+    if (guide.length >= 2) {
+      const snap = snapToRoutePolyline(
+        { latitude: raw.latitude, longitude: raw.longitude },
+        guide,
+        NAV_ROUTE_SNAP_MAX_M,
+      );
+      if (snap.distanceM <= NAV_ROUTE_SNAP_MAX_M) {
+        fix = {
+          ...raw,
+          latitude: snap.snapped.latitude,
+          longitude: snap.snapped.longitude,
+        };
+        if (snap.distanceM <= NAV_ROAD_BEARING_SNAP_M) {
+          roadCourseDeg = snap.segmentBearingDeg;
+        }
+      }
+    }
+    const padding = buildNavigationPadding({
+      windowHeight,
+      safeTop: insets.top,
+      safeBottom: insets.bottom,
+    });
+    const out = computeNextNavigationCamera({
+      fix,
+      compassHeadingDeg: compassHeadingRef.current,
+      state: navBearingStateRef.current,
+      lookAheadMeters: NAV_LOOK_AHEAD_M,
+      roadCourseDeg,
+    });
+    navBearingStateRef.current = out.state;
+    mapRef.current.setNavigationCamera({
+      centerCoordinate: [out.center.longitude, out.center.latitude],
+      heading: out.heading,
+      pitch: out.pitch,
+      zoomLevel: out.zoomLevel,
+      padding,
+      animationDuration: NAV_CAMERA_ANIMATION_MS,
+    });
+  }, [windowHeight, insets.top, insets.bottom]);
+
+  const scheduleNavFrame = useCallback(() => {
+    if (!followNavRef.current) return;
+    if (navRafRef.current != null) return;
+    navRafRef.current = requestAnimationFrame(() => {
+      navRafRef.current = null;
+      applyHeadingUpCamera();
+    });
+  }, [applyHeadingUpCamera]);
+
+  useLayoutEffect(() => {
+    followNavRef.current = followMyLocation;
+    if (followMyLocation) {
+      navBearingStateRef.current = createInitialBearingState(0);
+      requestAnimationFrame(() => scheduleNavFrame());
+    } else if (navRafRef.current != null) {
+      cancelAnimationFrame(navRafRef.current);
+      navRafRef.current = null;
+    }
+  }, [followMyLocation, scheduleNavFrame]);
+
+  useEffect(
+    () => () => {
+      if (navRafRef.current != null) {
+        cancelAnimationFrame(navRafRef.current);
+        navRafRef.current = null;
+      }
+    },
+    [],
+  );
 
   // ---------------------------------------------------------------------------
   // Location tracking
@@ -349,18 +458,44 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           accuracy: Location.Accuracy?.High ?? Location.Accuracy.Balanced,
         });
         if (active) {
-          setDriverPosition({ latitude: current.coords.latitude, longitude: current.coords.longitude });
+          const la = current.coords.latitude;
+          const lo = current.coords.longitude;
+          setDriverPosition({ latitude: la, longitude: lo });
+          latestDriverFixRef.current = {
+            latitude: la,
+            longitude: lo,
+            speedMps:
+              typeof current.coords.speed === 'number' && current.coords.speed >= 0
+                ? current.coords.speed
+                : null,
+            headingDeg:
+              typeof current.coords.heading === 'number' && current.coords.heading >= 0
+                ? current.coords.heading
+                : null,
+            timestamp: Date.now(),
+          };
         }
         locationSub.current = await Location.watchPositionAsync(
           {
-            accuracy: Location.Accuracy.Balanced,
-            distanceInterval: 8,
-            timeInterval: 5000,
+            accuracy: Location.Accuracy?.High ?? Location.Accuracy.Balanced,
+            distanceInterval: 4,
+            timeInterval: 1000,
           },
           (loc: any) => {
-            if (active) {
-              setDriverPosition({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
-            }
+            if (!active) return;
+            const la = loc.coords.latitude;
+            const lo = loc.coords.longitude;
+            setDriverPosition({ latitude: la, longitude: lo });
+            latestDriverFixRef.current = {
+              latitude: la,
+              longitude: lo,
+              speedMps:
+                typeof loc.coords.speed === 'number' && loc.coords.speed >= 0 ? loc.coords.speed : null,
+              headingDeg:
+                typeof loc.coords.heading === 'number' && loc.coords.heading >= 0 ? loc.coords.heading : null,
+              timestamp: Date.now(),
+            };
+            if (followNavRef.current) scheduleNavFrame();
           },
         );
       } catch {
@@ -378,7 +513,40 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       active = false;
       locationSub.current?.remove?.();
     };
-  }, [showAlert]);
+  }, [showAlert, scheduleNavFrame]);
+
+  /** Bússola em baixa velocidade (< ~5 km/h); fallback quando o curso do GPS é fraco. */
+  useEffect(() => {
+    if (!followMyLocation || !Location?.watchHeadingAsync) return;
+    let cancelled = false;
+    let sub: { remove: () => void } | undefined;
+    (async () => {
+      try {
+        const s = await Location.watchHeadingAsync((h: {
+          trueHeading?: number;
+          magHeading?: number;
+        }) => {
+          const th = h.trueHeading;
+          const mh = h.magHeading;
+          const v =
+            typeof th === 'number' && th >= 0
+              ? th
+              : typeof mh === 'number' && mh >= 0
+                ? mh
+                : null;
+          if (v != null) compassHeadingRef.current = v;
+          if (followNavRef.current) scheduleNavFrame();
+        });
+        if (!cancelled) sub = s;
+      } catch {
+        /* Android / permissão / hardware */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      sub?.remove?.();
+    };
+  }, [followMyLocation, scheduleNavFrame]);
 
   // ---------------------------------------------------------------------------
   // Load data
@@ -586,6 +754,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       .catch(() => {});
   }, [driverPosition, currentStopIndex, stops, finalDestination]);
 
+  useEffect(() => {
+    if (stopsRouteCoords.length >= 2) routeForSnapRef.current = stopsRouteCoords;
+    else if (driverRouteCoords.length >= 2) routeForSnapRef.current = driverRouteCoords;
+    else routeForSnapRef.current = [];
+  }, [stopsRouteCoords, driverRouteCoords]);
+
   // Região inicial: paradas relevantes + destino (sem priorizar origem cadastrada da viagem).
   const mapInitialRegion = useMemo((): MapRegion => {
     const pts = collectRemainingStopPoints(stops, 0);
@@ -608,6 +782,70 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   }, [trip?.id, tripDestLL, stops]);
 
   const overlayTop = insets.top + 56;
+
+  /**
+   * Modo seguir: apara a polyline a partir do ponto colado na via (linha começa no “carro”).
+   * Fora do modo seguir: mantém as polylines completas.
+   */
+  const navRoutePresentation = useMemo(() => {
+    const goldBase = stopsRouteCoords;
+    const darkBase = driverRouteCoords;
+    const guide =
+      goldBase.length >= 2 ? goldBase : darkBase.length >= 2 ? darkBase : [];
+
+    if (
+      !followMyLocation ||
+      !driverPosition ||
+      !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
+    ) {
+      return {
+        goldLine: goldBase,
+        darkLine: darkBase,
+        showGold: goldBase.length >= 2,
+        showDark: darkBase.length >= 2,
+        snappedForFallback: null as LatLng | null,
+      };
+    }
+    if (guide.length < 2) {
+      return {
+        goldLine: goldBase,
+        darkLine: darkBase,
+        showGold: goldBase.length >= 2,
+        showDark: darkBase.length >= 2,
+        snappedForFallback: null,
+      };
+    }
+    const snap = snapToRoutePolyline(driverPosition, guide, NAV_ROUTE_SNAP_MAX_M);
+    if (snap.distanceM > NAV_ROUTE_SNAP_MAX_M) {
+      return {
+        goldLine: goldBase,
+        darkLine: darkBase,
+        showGold: goldBase.length >= 2,
+        showDark: darkBase.length >= 2,
+        snappedForFallback: null,
+      };
+    }
+    let trimmed = trimPolylineFromSnap(guide, snap.segmentIndex, snap.snapped);
+    if (trimmed.length < 2 && guide.length >= 2) {
+      trimmed = [snap.snapped, guide[guide.length - 1]];
+    }
+    if (goldBase.length >= 2) {
+      return {
+        goldLine: trimmed.length >= 2 ? trimmed : goldBase,
+        darkLine: [] as LatLng[],
+        showGold: trimmed.length >= 2,
+        showDark: false,
+        snappedForFallback: snap.snapped,
+      };
+    }
+    return {
+      goldLine: goldBase,
+      darkLine: trimmed.length >= 2 ? trimmed : darkBase,
+      showGold: false,
+      showDark: trimmed.length >= 2,
+      snappedForFallback: snap.snapped,
+    };
+  }, [followMyLocation, driverPosition, stopsRouteCoords, driverRouteCoords]);
 
   const focusStopOnMap = useCallback(
     (idx: number) => {
@@ -678,25 +916,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     return () => cancelAnimationFrame(id);
   }, [loading, driverPosition]);
 
-  /** Toque em “minha localização”: zoom alto e câmera segue o GPS até gesto no mapa. */
-  useEffect(() => {
-    if (!followMyLocation) {
-      followFirstAnimDoneRef.current = false;
-      return;
-    }
-    if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) return;
-    const dur = followFirstAnimDoneRef.current ? 0 : 350;
-    followFirstAnimDoneRef.current = true;
-    mapRef.current?.animateToRegion(
-      {
-        latitude: driverPosition.latitude,
-        longitude: driverPosition.longitude,
-        latitudeDelta: MY_LOCATION_NAV_DELTA,
-        longitudeDelta: MY_LOCATION_NAV_DELTA,
-      },
-      dur,
-    );
-  }, [driverPosition, followMyLocation]);
+  /** Posição vertical do “puck” fixo na tela (~68% da altura) em modo navegação. */
+  const navPuckTopPx = useMemo(() => Math.round(windowHeight * 0.68 - 24), [windowHeight]);
 
   // ---------------------------------------------------------------------------
   // Detail sheet animation
@@ -924,16 +1145,34 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
         initialRegion={mapInitialRegion}
-        onUserAdjustedMap={() => setFollowMyLocation(false)}
+        onUserAdjustedMap={() => {
+          setFollowMyLocation(false);
+          const fix = latestDriverFixRef.current;
+          if (
+            fix &&
+            mapRef.current &&
+            isValidGlobeCoordinate(fix.latitude, fix.longitude)
+          ) {
+            mapRef.current.easeToRegionNorthUp(
+              {
+                latitude: fix.latitude,
+                longitude: fix.longitude,
+                latitudeDelta: MY_LOCATION_NAV_DELTA,
+                longitudeDelta: MY_LOCATION_NAV_DELTA,
+              },
+              400,
+            );
+          }
+        }}
       >
-        {/* Route from driver to current stop (dark) */}
-        {driverRouteCoords.length >= 2 && (
-          <MapPolyline id="driver" coordinates={driverRouteCoords} strokeColor={DARK} strokeWidth={3} />
+        {/* Route from driver to current stop (dark) — oculto no seguir se a rota dourada cobre o trajeto. */}
+        {navRoutePresentation.showDark && navRoutePresentation.darkLine.length >= 2 && (
+          <MapPolyline id="driver" coordinates={navRoutePresentation.darkLine} strokeColor={DARK} strokeWidth={3} />
         )}
 
-        {/* Full route between stops (gold) */}
-        {stopsRouteCoords.length >= 2 && (
-          <MapPolyline id="stops" coordinates={stopsRouteCoords} strokeColor={GOLD} strokeWidth={5} />
+        {/* Rota dourada: no modo seguir, aparada a partir do snap na via. */}
+        {navRoutePresentation.showGold && navRoutePresentation.goldLine.length >= 2 && (
+          <MapPolyline id="stops" coordinates={navRoutePresentation.goldLine} strokeColor={GOLD} strokeWidth={5} />
         )}
 
         {/* Fallback: linha reta só entre pontos válidos (nunca 0,0) se Directions/OSRM falharem */}
@@ -943,7 +1182,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           fallbackNavDest && (
           <MapPolyline
             id="fallback"
-            coordinates={[driverPosition, fallbackNavDest]}
+            coordinates={[
+              navRoutePresentation.snappedForFallback ?? driverPosition,
+              fallbackNavDest,
+            ]}
             strokeColor={GOLD}
             strokeWidth={4}
           />
@@ -975,8 +1217,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           );
         })}
 
-        {/* Driver position marker */}
-        {driverPosition && (
+        {/* Pin no mapa só fora do modo navegação (no modo seguir, o puck é fixo na overlay). */}
+        {driverPosition && !followMyLocation && (
           <MapMarker
             id="driver"
             coordinate={driverPosition}
@@ -990,6 +1232,20 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           </MapMarker>
         )}
       </GoogleMapsMap>
+
+      {followMyLocation &&
+        driverPosition &&
+        isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) && (
+          <View style={styles.navPuckOverlay} pointerEvents="none">
+            <View style={[styles.navPuckAnchor, { top: navPuckTopPx }]}>
+              <View style={styles.driverPulse}>
+                <View style={styles.driverMarker}>
+                  <MaterialIcons name="navigation" size={18} color="#fff" />
+                </View>
+              </View>
+            </View>
+          </View>
+        )}
 
       {!activeTripMapReady && (
         <View style={styles.mapCoordsLoading} pointerEvents="none">
@@ -1024,7 +1280,25 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           <MapZoomControls
             mapRef={mapRef}
             floating={false}
-            onBeforeZoom={() => setFollowMyLocation(false)}
+            onBeforeZoom={() => {
+              setFollowMyLocation(false);
+              const fix = latestDriverFixRef.current;
+              if (
+                fix &&
+                mapRef.current &&
+                isValidGlobeCoordinate(fix.latitude, fix.longitude)
+              ) {
+                mapRef.current.easeToRegionNorthUp(
+                  {
+                    latitude: fix.latitude,
+                    longitude: fix.longitude,
+                    latitudeDelta: MY_LOCATION_NAV_DELTA,
+                    longitudeDelta: MY_LOCATION_NAV_DELTA,
+                  },
+                  280,
+                );
+              }
+            }}
           />
         </View>
 
@@ -1576,6 +1850,16 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   mapCoordsLoadingText: { fontSize: 14, color: '#6B7280' },
+  navPuckOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 4,
+  },
+  navPuckAnchor: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
 
   // ── Map markers ──────────────────────────────────────────
   mapMarker: {

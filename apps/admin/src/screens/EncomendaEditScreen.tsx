@@ -4,22 +4,40 @@
  * Mapa e dados alinhados ao detalhe da viagem (roteiro, coords reais, perfis).
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   fetchApprovedDriversForEncomendaUI,
   fetchEncomendaEditDetail,
   formatCurrencyBRL,
   updateDependentShipmentFields,
+  updateScheduledTripFields,
   updateShipmentFields,
 } from '../data/queries';
 import type { EncomendaEditDetail } from '../data/types';
 import MapView from '../components/MapView';
+import PlacesAddressInput from '../components/PlacesAddressInput';
 import { DETAIL_TRIP_MAP_HEIGHT, webStyles } from '../styles/webStyles';
 import { useTripStops } from '../hooks/useTripStops';
 import { useEncomendaMapCoords } from '../hooks/useEncomendaMapCoords';
+import { geocodeAddress } from '../lib/googleGeocoding';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
+const encomendaPlacesInputStyle: React.CSSProperties = {
+  width: '100%',
+  height: 44,
+  background: '#f1f1f1',
+  border: 'none',
+  borderRadius: 8,
+  paddingLeft: 16,
+  fontSize: 14,
+  color: '#0d0d0d',
+  outline: 'none',
+  boxSizing: 'border-box',
+  ...font,
+};
+const encomendaFieldWrap: React.CSSProperties = { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' };
+const encomendaLabelStyle: React.CSSProperties = { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font };
 
 const driverWaitingAsset = require('../../assets/driver-waiting.png');
 const logoTakeMeBadge = require('../../assets/motoristas/logo-takeme.png');
@@ -81,9 +99,6 @@ const calendarSvgLg = React.createElement('svg', { width: 20, height: 20, viewBo
   React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' }));
 const starSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: '#cba04b', style: { display: 'block', flexShrink: 0 } },
   React.createElement('path', { d: 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z' }));
-const checkOutlineSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
-  React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
-
 const motoristaLinha = (rotulo: string, valor: string) =>
   React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, width: '100%', minWidth: 0 } },
     React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', flexShrink: 0, lineHeight: 1.5, ...font } }, rotulo),
@@ -264,6 +279,10 @@ export default function EncomendaEditScreen() {
 
   const [origem, setOrigem] = useState('');
   const [destino, setDestino] = useState('');
+  const [originCoord, setOriginCoord] = useState<{ lat: number; lng: number } | null>(null);
+  const [destinationCoord, setDestinationCoord] = useState<{ lat: number; lng: number } | null>(null);
+  const [lastResolvedOrigin, setLastResolvedOrigin] = useState('');
+  const [lastResolvedDestination, setLastResolvedDestination] = useState('');
   const [instructions, setInstructions] = useState('');
   const [recipientName, setRecipientName] = useState('');
   const [recipientPhone, setRecipientPhone] = useState('');
@@ -278,9 +297,10 @@ export default function EncomendaEditScreen() {
 
   const [motoristas, setMotoristas] = useState<MotoristaDisponivel[]>([]);
   const [motoristaSelecionado, setMotoristaSelecionado] = useState('');
+  const motoristaTripSyncKeyRef = useRef<string>('');
 
   const scheduledTripId = detail?.kind === 'shipment' ? detail.scheduledTripId : null;
-  const { waypoints: tripWaypoints, stops: tripStops } = useTripStops(scheduledTripId);
+  const { waypoints: tripWaypoints, stops: tripStops, regenerate: regenerateStops } = useTripStops(scheduledTripId);
 
   const coordsMatchSavedAddresses =
     !!detail
@@ -289,10 +309,10 @@ export default function EncomendaEditScreen() {
 
   const mapCoordsInput = useMemo(() => {
     if (!detail) return null;
-    const oLat = coordsMatchSavedAddresses ? detail.originLat : null;
-    const oLng = coordsMatchSavedAddresses ? detail.originLng : null;
-    const dLat = coordsMatchSavedAddresses ? detail.destinationLat : null;
-    const dLng = coordsMatchSavedAddresses ? detail.destinationLng : null;
+    const oLat = originCoord?.lat ?? (coordsMatchSavedAddresses ? detail.originLat : null);
+    const oLng = originCoord?.lng ?? (coordsMatchSavedAddresses ? detail.originLng : null);
+    const dLat = destinationCoord?.lat ?? (coordsMatchSavedAddresses ? detail.destinationLat : null);
+    const dLng = destinationCoord?.lng ?? (coordsMatchSavedAddresses ? detail.destinationLng : null);
     return {
       scheduledTripId: detail.kind === 'shipment' ? detail.scheduledTripId : null,
       originLat: oLat,
@@ -302,7 +322,7 @@ export default function EncomendaEditScreen() {
       originAddress: origem,
       destinationAddress: destino,
     };
-  }, [detail, coordsMatchSavedAddresses, origem, destino]);
+  }, [detail, coordsMatchSavedAddresses, origem, destino, originCoord, destinationCoord]);
 
   const encomendaMapCoords = useEncomendaMapCoords(mapCoordsInput);
 
@@ -331,6 +351,7 @@ export default function EncomendaEditScreen() {
     }
     setLoading(true);
     setLoadErr(null);
+    motoristaTripSyncKeyRef.current = '';
     fetchEncomendaEditDetail(routeId).then((d) => {
       if (!d) {
         setDetail(null);
@@ -341,6 +362,16 @@ export default function EncomendaEditScreen() {
       setDetail(d);
       setOrigem(d.originAddress);
       setDestino(d.destinationAddress);
+      setLastResolvedOrigin(d.originAddress);
+      setLastResolvedDestination(d.destinationAddress);
+      setOriginCoord(
+        d.originLat != null && d.originLng != null ? { lat: d.originLat, lng: d.originLng } : null,
+      );
+      setDestinationCoord(
+        d.destinationLat != null && d.destinationLng != null
+          ? { lat: d.destinationLat, lng: d.destinationLng }
+          : null,
+      );
       setInstructions(d.instructions ?? '');
       setWhenOption(d.whenOption);
       setScheduledLocal(toDatetimeLocalValue(d.scheduledAt));
@@ -377,19 +408,89 @@ export default function EncomendaEditScreen() {
         bagageiro: '—',
       }));
       setMotoristas(ui);
-      setMotoristaSelecionado((prev) => prev || ui[0]?.id || '');
     });
   }, []);
 
+  useEffect(() => {
+    if (motoristas.length === 0) {
+      setMotoristaSelecionado('');
+      return;
+    }
+    if (!detail) return;
+    const tripKey =
+      detail.kind === 'shipment'
+        ? `${detail.id}:${detail.tripDriverId ?? ''}:${detail.scheduledTripId ?? ''}`
+        : `${detail.id}:dependent`;
+    const tripDriverChanged = motoristaTripSyncKeyRef.current !== tripKey;
+    motoristaTripSyncKeyRef.current = tripKey;
+
+    if (
+      tripDriverChanged
+      && detail.kind === 'shipment'
+      && detail.tripDriverId
+      && motoristas.some((m) => m.id === detail.tripDriverId)
+    ) {
+      setMotoristaSelecionado(detail.tripDriverId);
+      return;
+    }
+    if (tripDriverChanged) {
+      setMotoristaSelecionado((prev) => (
+        prev && motoristas.some((m) => m.id === prev) ? prev : (motoristas[0]?.id ?? '')
+      ));
+    }
+  }, [detail, motoristas]);
+
   const save = useCallback(async () => {
     if (!detail) return;
+    if (tripPainelEncerrado) {
+      setToast('Encomenda encerrada — não é possível alterar.');
+      return;
+    }
     const schedIso = scheduledLocal ? new Date(scheduledLocal).toISOString() : null;
+
+    let oLat = originCoord?.lat ?? null;
+    let oLng = originCoord?.lng ?? null;
+    let dLat = destinationCoord?.lat ?? null;
+    let dLng = destinationCoord?.lng ?? null;
+    if ((oLat == null || oLng == null) && origem.trim() === detail.originAddress.trim()) {
+      oLat = detail.originLat;
+      oLng = detail.originLng;
+    }
+    if ((dLat == null || dLng == null) && destino.trim() === detail.destinationAddress.trim()) {
+      dLat = detail.destinationLat;
+      dLng = detail.destinationLng;
+    }
+    if (oLat == null || oLng == null) {
+      const g = await geocodeAddress(origem);
+      if (g) {
+        oLat = g.lat;
+        oLng = g.lng;
+      }
+    }
+    if (dLat == null || dLng == null) {
+      const g = await geocodeAddress(destino);
+      if (g) {
+        dLat = g.lat;
+        dLng = g.lng;
+      }
+    }
+    if (oLat == null || oLng == null || dLat == null || dLng == null) {
+      setToast(
+        'Não foi possível obter coordenadas de origem e destino. Escolha um endereço nas sugestões do Google ou configure EXPO_PUBLIC_GOOGLE_MAPS_API_KEY.',
+      );
+      return;
+    }
+
     setSaving(true);
     let res: { error: string | null };
     if (detail.kind === 'shipment') {
       res = await updateShipmentFields(detail.id, {
         origin_address: origem,
+        origin_lat: oLat,
+        origin_lng: oLng,
         destination_address: destino,
+        destination_lat: dLat,
+        destination_lng: dLng,
         recipient_name: recipientName,
         recipient_phone: recipientPhone,
         recipient_email: recipientEmail,
@@ -401,7 +502,11 @@ export default function EncomendaEditScreen() {
     } else {
       res = await updateDependentShipmentFields(detail.id, {
         origin_address: origem,
+        origin_lat: oLat,
+        origin_lng: oLng,
         destination_address: destino,
+        destination_lat: dLat,
+        destination_lng: dLng,
         full_name: fullName,
         contact_phone: contactPhone,
         receiver_name: receiverName || null,
@@ -411,14 +516,77 @@ export default function EncomendaEditScreen() {
         scheduled_at: schedIso,
       });
     }
-    setSaving(false);
-    if (res.error) setToast(res.error);
-    else {
-      setToast('Alterações guardadas.');
-      const d2 = await fetchEncomendaEditDetail(detail.id);
-      if (d2) setDetail(d2);
+    if (res.error) {
+      setSaving(false);
+      setToast(res.error);
+      return;
     }
-  }, [detail, origem, destino, instructions, recipientName, recipientPhone, recipientEmail, packageSize, whenOption, scheduledLocal, fullName, contactPhone, receiverName, bagsCount]);
+
+    const tripId = detail.kind === 'shipment' ? detail.scheduledTripId : null;
+    let tripErr: string | null = null;
+    if (tripId && motoristaSelecionado) {
+      const t = await updateScheduledTripFields(tripId, { driver_id: motoristaSelecionado });
+      tripErr = t.error;
+    }
+    if (tripErr) {
+      setSaving(false);
+      setToast(tripErr);
+      return;
+    }
+
+    let recalcFailed = false;
+    if (tripId) {
+      try {
+        await regenerateStops();
+      } catch (e) {
+        console.error(e);
+        recalcFailed = true;
+      }
+    }
+
+    const d2 = await fetchEncomendaEditDetail(detail.id);
+    if (d2) {
+      setDetail(d2);
+      setLastResolvedOrigin(d2.originAddress);
+      setLastResolvedDestination(d2.destinationAddress);
+      setOriginCoord(
+        d2.originLat != null && d2.originLng != null ? { lat: d2.originLat, lng: d2.originLng } : null,
+      );
+      setDestinationCoord(
+        d2.destinationLat != null && d2.destinationLng != null
+          ? { lat: d2.destinationLat, lng: d2.destinationLng }
+          : null,
+      );
+    }
+    setSaving(false);
+    if (recalcFailed) {
+      setToast('Alterações guardadas, mas falha ao recalcular a rota. Tente salvar de novo.');
+    } else if (tripId) {
+      setToast('Alterações guardadas. Rota recalculada.');
+    } else {
+      setToast('Alterações guardadas.');
+    }
+  }, [
+    detail,
+    origem,
+    destino,
+    originCoord,
+    destinationCoord,
+    instructions,
+    recipientName,
+    recipientPhone,
+    recipientEmail,
+    packageSize,
+    whenOption,
+    scheduledLocal,
+    fullName,
+    contactPhone,
+    receiverName,
+    bagsCount,
+    motoristaSelecionado,
+    regenerateStops,
+    tripPainelEncerrado,
+  ]);
 
   if (loading) {
     return React.createElement('div', { style: { padding: 40, ...font } }, 'Carregando…');
@@ -505,9 +673,15 @@ export default function EncomendaEditScreen() {
         instructions || '—',
       );
 
+  const motoristaNoteCopy =
+    detail.kind === 'shipment' && detail.scheduledTripId
+      ? 'Motorista, endereços e horário são aplicados ao clicar em Salvar alteração no topo; a rota da viagem vinculada é recalculada automaticamente.'
+      : detail.kind === 'shipment'
+        ? 'Sem viagem agendada vinculada: ao salvar, só os dados da encomenda são gravados.'
+        : 'Motoristas aprovados são referência; envio dependente sem viagem agendada neste ecrã. Use Salvar alteração no topo para gravar.';
   const motoristaNote = React.createElement('p', {
     style: { fontSize: 12, color: '#767676', margin: '0 0 8px', ...font },
-  }, 'Motoristas aprovados (referência). Não há coluna de motorista atribuído em shipments: use «Salvar alteração» para gravar os dados da encomenda.');
+  }, motoristaNoteCopy);
 
   return React.createElement(React.Fragment, null,
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%', maxWidth: 1044, margin: '0 auto', boxSizing: 'border-box' as const } },
@@ -523,11 +697,12 @@ export default function EncomendaEditScreen() {
         React.createElement('button', { type: 'button', onClick: () => navigate(-1), style: { display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px', borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font } }, xSvg, 'Cancelar'),
         React.createElement('button', {
           type: 'button',
-          disabled: saving,
+          disabled: saving || tripPainelEncerrado,
+          title: tripPainelEncerrado ? 'Encomenda encerrada — somente visualização' : undefined,
           onClick: () => { void save(); },
           style: {
             display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px', borderRadius: 999, border: 'none',
-            background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, ...font,
+            background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: (saving || tripPainelEncerrado) ? 'not-allowed' : 'pointer', opacity: (saving || tripPainelEncerrado) ? 0.7 : 1, ...font,
           },
         }, checkSvg, saving ? 'A guardar…' : 'Salvar alteração'))),
     // Warning banner
@@ -591,8 +766,40 @@ export default function EncomendaEditScreen() {
     // Trajeto
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
       React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#767676', ...font } }, 'Trajeto de origem e destino'),
-      editField('Origem', origem, setOrigem),
-      editField('Destino', destino, setDestino),
+      React.createElement('div', { style: encomendaFieldWrap },
+        React.createElement('label', { style: encomendaLabelStyle }, 'Origem'),
+        React.createElement(PlacesAddressInput, {
+          value: origem,
+          onChange: (v: string) => {
+            setOrigem(v);
+            if (v.trim() !== lastResolvedOrigin.trim()) setOriginCoord(null);
+          },
+          onPlaceResolved: (p) => {
+            setOrigem(p.formattedAddress);
+            setOriginCoord({ lat: p.lat, lng: p.lng });
+            setLastResolvedOrigin(p.formattedAddress);
+          },
+          inputStyle: encomendaPlacesInputStyle,
+          placeholder: 'Buscar endereço de origem…',
+          readOnly: tripPainelEncerrado,
+        })),
+      React.createElement('div', { style: encomendaFieldWrap },
+        React.createElement('label', { style: encomendaLabelStyle }, 'Destino'),
+        React.createElement(PlacesAddressInput, {
+          value: destino,
+          onChange: (v: string) => {
+            setDestino(v);
+            if (v.trim() !== lastResolvedDestination.trim()) setDestinationCoord(null);
+          },
+          onPlaceResolved: (p) => {
+            setDestino(p.formattedAddress);
+            setDestinationCoord({ lat: p.lat, lng: p.lng });
+            setLastResolvedDestination(p.formattedAddress);
+          },
+          inputStyle: encomendaPlacesInputStyle,
+          placeholder: 'Buscar endereço de destino…',
+          readOnly: tripPainelEncerrado,
+        })),
       detail.kind === 'shipment'
         ? React.createElement(React.Fragment, null,
           editField('Destinatário', recipientName, setRecipientName),
@@ -655,27 +862,7 @@ export default function EncomendaEditScreen() {
               React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
                 motoristasComRota.slice(0, 2).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id)))),
               React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
-                motoristasComRota.slice(2, 4).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id)))))),
-          React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', width: '100%', marginTop: 0 } },
-            React.createElement('button', {
-              type: 'button',
-              onClick: () => setToast('A escolha do motorista não é gravada nesta versão (sem coluna no banco).'),
-              style: {
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                height: 44,
-                padding: '0 24px',
-                borderRadius: 999,
-                border: '1px solid #0d0d0d',
-                background: '#fff',
-                cursor: 'pointer',
-                fontSize: 14,
-                fontWeight: 600,
-                color: '#0d0d0d',
-                ...font,
-              },
-            }, checkOutlineSvg, 'Confirmar substituição')))),
+                motoristasComRota.slice(2, 4).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id))))))),
     // Encomendas
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
       React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Encomendas'),

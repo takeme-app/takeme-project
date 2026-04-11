@@ -120,19 +120,27 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
         if (!user?.id) throw new Error('Não autenticado.');
         const { data: tmRoutes } = await supabase
           .from('takeme_routes')
-          .select('origin_address, destination_address, price_per_person_cents')
+          .select(
+            'origin_address, destination_address, price_per_person_cents, origin_lat, origin_lng, destination_lat, destination_lng',
+          )
           .eq('is_active', true);
         if (!tmRoutes?.length) {
           showAlert('Aviso', 'Nenhuma rota TakeMe disponível no momento.');
           setSaving(false);
           return;
         }
-        const inserts = tmRoutes.map((r) => ({
+        const inserts = tmRoutes.map((r: any) => ({
           worker_id: user.id,
           origin_address: r.origin_address,
           destination_address: r.destination_address,
           price_per_person_cents: r.price_per_person_cents,
           is_active: true,
+          ...(r.origin_lat != null && r.origin_lng != null
+            ? { origin_lat: r.origin_lat, origin_lng: r.origin_lng }
+            : {}),
+          ...(r.destination_lat != null && r.destination_lng != null
+            ? { destination_lat: r.destination_lat, destination_lng: r.destination_lng }
+            : {}),
         }));
         const { error } = await supabase.from('worker_routes').insert(inserts);
         if (error) throw error;
