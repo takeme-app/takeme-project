@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -18,6 +18,11 @@ import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { resolveShipmentBaseId } from '../../lib/resolveShipmentBase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
+import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
+import {
+  shipmentPricingSnapshotFromParams,
+  shipmentOrderInsertFromQuoteParams,
+} from '../../lib/orderPricingSnapshot';
 
 type Props = NativeStackScreenProps<ShipmentStackParamList, 'ConfirmShipment'>;
 
@@ -51,23 +56,42 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
     packageSizeLabel,
     recipient,
     amountCents,
-    subtotalCents,
-    feeCents,
+    pricingSubtotalCents,
+    platformFeeCents,
+    priceRouteBaseCents,
+    pricingRouteId,
+    adminPctApplied,
   } = route.params;
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const refreshCheckout = useCallback(() => {
-    // Quando houver API de status de pagamento ou preço dinâmico, buscar aqui e atualizar estado (ex.: setAmountCents, status de pagamento).
-  }, []);
-
-  useEffect(() => {
-    const interval = setInterval(refreshCheckout, 5000);
-    return () => clearInterval(interval);
-  }, [refreshCheckout]);
-
-  const showFeeBreakdown = subtotalCents != null && feeCents != null;
-  const amountFormatted = `R$ ${(amountCents / 100).toFixed(2).replace('.', ',')}`;
+  const showFeeBreakdown = true;
+  const pricingSnapshot = shipmentPricingSnapshotFromParams({
+    amountCents,
+    subtotalCents: pricingSubtotalCents,
+    feeCents: platformFeeCents,
+    priceRouteBaseCents,
+  });
+  const pricingInsertRow = useMemo(
+    () =>
+      shipmentOrderInsertFromQuoteParams({
+        pricingRouteId,
+        priceRouteBaseCents,
+        pricingSubtotalCents,
+        platformFeeCents,
+        amountCents,
+        adminPctApplied,
+      }),
+    [
+      pricingRouteId,
+      priceRouteBaseCents,
+      pricingSubtotalCents,
+      platformFeeCents,
+      amountCents,
+      adminPctApplied,
+    ]
+  );
+  const amountFormatted = `R$ ${(pricingSnapshot.amount_cents / 100).toFixed(2).replace('.', ',')}`;
   const formatBRL = (cents: number) => `R$ ${(cents / 100).toFixed(2).replace('.', ',')}`;
   const cancellationVariant =
     selectedPaymentMethod === 'credito'
@@ -144,7 +168,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
             instructions: recipient.instructions ?? null,
             photo_url: photoUrl,
             payment_method: paymentMethodDb,
-            amount_cents: amountCents,
+            ...pricingInsertRow,
             status,
             ...(baseId ? { base_id: baseId } : {}),
           })
@@ -168,12 +192,9 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
               stripe_payment_method_id: params.paymentMethodId,
             },
           });
-          const chargeErrMsg =
-            chargeFnError?.message ??
-            (chargeData && typeof chargeData === 'object' && 'error' in chargeData
-              ? String((chargeData as { error?: string }).error ?? '')
-              : '');
-          if (chargeErrMsg) {
+          if (chargeFnError) {
+            const raw = await describeInvokeFailure(chargeData, chargeFnError);
+            const chargeErrMsg = getUserErrorMessage({ message: raw }, raw);
             await supabase
               .from('shipments')
               .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
@@ -205,6 +226,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
       packageSize,
       recipient,
       amountCents,
+      pricingInsertRow,
       navigation,
       showAlert,
       uploadPhotoAndGetPath,
@@ -236,11 +258,11 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
             <>
               <View style={styles.summaryFeeRow}>
                 <Text style={styles.summaryMeta}>Subtotal</Text>
-                <Text style={styles.summaryMeta}>{formatBRL(subtotalCents!)}</Text>
+                <Text style={styles.summaryMeta}>{formatBRL(pricingSubtotalCents)}</Text>
               </View>
               <View style={styles.summaryFeeRow}>
                 <Text style={styles.summaryMeta}>Taxa administrativa</Text>
-                <Text style={styles.summaryMeta}>{formatBRL(feeCents!)}</Text>
+                <Text style={styles.summaryMeta}>{formatBRL(platformFeeCents)}</Text>
               </View>
               <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>Total</Text>
@@ -277,7 +299,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         </View>
 
         <PaymentMethodSection
-          amountCents={amountCents}
+          amountCents={pricingSnapshot.amount_cents}
           selectedMethod={selectedPaymentMethod}
           onSelectMethod={setSelectedPaymentMethod}
           onConfirmPayment={handleConfirmPayment}

@@ -1,14 +1,17 @@
-import { View, TouchableOpacity, StyleSheet, ScrollView, Platform } from 'react-native';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { View, TouchableOpacity, StyleSheet, ScrollView, Platform, ActivityIndicator } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MapboxMap, sanitizeMapRegion } from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { TripStackParamList } from '../../navigation/types';
+import type { TripFollowStackParamList } from '../../navigation/types';
 import { formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
+import { loadBookingTripLiveContext, parsePassengerData } from '../../lib/clientBookingTripLive';
+import { onlyDigits } from '../../utils/formatCpf';
 
-type Props = NativeStackScreenProps<TripStackParamList, 'DriverOnTheWay'>;
+type Props = NativeStackScreenProps<TripFollowStackParamList, 'DriverOnTheWay'>;
 
 const COLORS = {
   background: '#FFFFFF',
@@ -19,13 +22,11 @@ const COLORS = {
   orange: '#EA580C',
 };
 
-/** Placeholder até haver API com posição real; centro SP (válido, nunca 0,0). */
-const DEFAULT_REGION = sanitizeMapRegion({
-  latitude: -23.5505,
-  longitude: -46.6333,
-  latitudeDelta: 0.02,
-  longitudeDelta: 0.02,
-});
+function formatCpfDisplay(digits: string): string {
+  const d = onlyDigits(digits);
+  if (d.length !== 11) return digits;
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+}
 
 export function DriverOnTheWayScreen({ navigation, route }: Props) {
   const live = route.params;
@@ -35,17 +36,103 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
   const fareFormatted =
     live?.amountCents != null ? `R$ ${(live.amountCents / 100).toFixed(2).replace('.', ',')}` : 'R$ —';
 
+  const [loading, setLoading] = useState(Boolean(live?.bookingId));
+  const [pickupCode, setPickupCode] = useState<string | null>(null);
+  const [passengerLines, setPassengerLines] = useState<{ label: string }[]>([]);
+  const [bagsCount, setBagsCount] = useState<number | null>(null);
+
+  const mapRegion = useMemo(() => {
+    const o = live?.origin;
+    const d = live?.destination;
+    if (
+      o &&
+      d &&
+      Number.isFinite(o.latitude) &&
+      Number.isFinite(o.longitude) &&
+      Number.isFinite(d.latitude) &&
+      Number.isFinite(d.longitude)
+    ) {
+      const latMin = Math.min(o.latitude, d.latitude);
+      const latMax = Math.max(o.latitude, d.latitude);
+      const lngMin = Math.min(o.longitude, d.longitude);
+      const lngMax = Math.max(o.longitude, d.longitude);
+      const pad = 0.006;
+      return sanitizeMapRegion({
+        latitude: (latMin + latMax) / 2,
+        longitude: (lngMin + lngMax) / 2,
+        latitudeDelta: Math.max(0.02, latMax - latMin + pad * 2),
+        longitudeDelta: Math.max(0.02, lngMax - lngMin + pad * 2),
+      });
+    }
+    if (o && Number.isFinite(o.latitude) && Number.isFinite(o.longitude)) {
+      return sanitizeMapRegion({
+        latitude: o.latitude,
+        longitude: o.longitude,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      });
+    }
+    return sanitizeMapRegion({
+      latitude: -7.3289,
+      longitude: -35.3328,
+      latitudeDelta: 0.02,
+      longitudeDelta: 0.02,
+    });
+  }, [live?.origin, live?.destination]);
+
+  const load = useCallback(async () => {
+    const bid = live?.bookingId;
+    if (!bid) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const { data, error } = await loadBookingTripLiveContext(bid);
+    if (error || !data) {
+      setPickupCode(null);
+      setPassengerLines([]);
+      setBagsCount(null);
+      setLoading(false);
+      return;
+    }
+    const { booking, trip } = data;
+    setPickupCode(trip?.pickup_code?.trim() || null);
+    setBagsCount(booking.bags_count);
+    const passengers = parsePassengerData(booking.passenger_data);
+    const lines =
+      passengers.length > 0
+        ? passengers.map((p, i) => {
+            const name = (p.name ?? '').trim() || `Passageiro ${i + 1}`;
+            const cpf = onlyDigits(p.cpf ?? '');
+            const cpfPart = cpf.length >= 11 ? ` · CPF: ${formatCpfDisplay(cpf)}` : '';
+            return { label: `${name}${cpfPart}` };
+          })
+        : [{ label: `${booking.passenger_count} passageiro(es)` }];
+    setPassengerLines(lines);
+    setLoading(false);
+  }, [live?.bookingId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const codeDisplay = pickupCode
+    ? `${pickupCode} ✓`
+    : loading
+      ? '…'
+      : '—';
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
       <View style={styles.mapWrap}>
-        <MapboxMap style={styles.map} initialRegion={DEFAULT_REGION} scrollEnabled={false} />
+        <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled={false} />
       </View>
       <View style={styles.banner}>
         <MaterialIcons name="check-circle" size={24} color="#FFFFFF" />
-        <Text style={styles.bannerText}>Seu motorista chega em 4 minutos</Text>
+        <Text style={styles.bannerText}>Motorista a caminho</Text>
       </View>
-      <TouchableOpacity style={styles.backButton} onPress={() => navigation.getParent()?.goBack()}>
+      <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
         <Text style={styles.backArrow}>←</Text>
       </TouchableOpacity>
 
@@ -54,7 +141,7 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.sectionTitle}>Chega em 4 minutos</Text>
+        <Text style={styles.sectionTitle}>Acompanhe sua viagem</Text>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Motorista</Text>
@@ -72,29 +159,43 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Código de confirmação</Text>
           <View style={styles.codeWrap}>
-            <View style={styles.codeBadge}>
-              <Text style={styles.codeText}>1234 ✓</Text>
+            <View style={[styles.codeBadge, !pickupCode && styles.codeBadgeMuted]}>
+              {loading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.codeText}>{codeDisplay}</Text>
+              )}
             </View>
           </View>
-          <Text style={styles.codeHint}>Informe este código ao motorista para confirmar a viagem.</Text>
+          <Text style={styles.codeHint}>
+            {pickupCode
+              ? 'Informe este código ao motorista para confirmar o embarque.'
+              : 'O código aparece aqui quando estiver disponível na viagem. Enquanto isso, use os dados em Atividades ou aguarde o motorista.'}
+          </Text>
         </View>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Passageiros</Text>
-          <View style={styles.passengerRow}>
-            <MaterialIcons name="person-outline" size={20} color={COLORS.neutral700} />
-            <Text style={styles.passengerText}>João Silva · CPF: 123.456.789-00</Text>
-          </View>
-          <View style={styles.passengerRow}>
-            <MaterialIcons name="person-outline" size={20} color={COLORS.neutral700} />
-            <Text style={styles.passengerText}>Maria Santos · CPF: 987.654.321-00</Text>
-          </View>
-          <Text style={styles.bagsNote}>2 malas adicionadas</Text>
+          {passengerLines.length === 0 ? (
+            <Text style={styles.passengerText}>{loading ? 'Carregando…' : 'Dados não informados.'}</Text>
+          ) : (
+            passengerLines.map((row, i) => (
+              <View key={i} style={styles.passengerRow}>
+                <MaterialIcons name="person-outline" size={20} color={COLORS.neutral700} />
+                <Text style={styles.passengerText}>{row.label}</Text>
+              </View>
+            ))
+          )}
+          {bagsCount != null ? (
+            <Text style={styles.bagsNote}>
+              {bagsCount} {bagsCount === 1 ? 'mala' : 'malas'}
+            </Text>
+          ) : null}
         </View>
 
         <TouchableOpacity
           style={styles.primaryButton}
-          onPress={() => navigation.navigate('TripInProgress', route.params)}
+          onPress={() => navigation.navigate('TripInProgress', live)}
           activeOpacity={0.8}
         >
           <Text style={styles.primaryButtonText}>Acompanhar viagem</Text>
@@ -154,7 +255,8 @@ const styles = StyleSheet.create({
   carText: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
   fare: { fontSize: 18, fontWeight: '700', color: COLORS.orange },
   codeWrap: { alignItems: 'center', marginVertical: 12 },
-  codeBadge: { backgroundColor: '#22C55E', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 },
+  codeBadge: { backgroundColor: '#22C55E', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8, minWidth: 120, alignItems: 'center' },
+  codeBadgeMuted: { backgroundColor: COLORS.neutral700 },
   codeText: { fontSize: 18, fontWeight: '700', color: '#FFFFFF' },
   codeHint: { fontSize: 13, color: COLORS.neutral700, textAlign: 'center' },
   passengerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },

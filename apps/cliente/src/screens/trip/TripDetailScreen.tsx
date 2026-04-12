@@ -31,6 +31,10 @@ import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib
 import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
 import { getAvailableTimeSlots, ALL_TIME_SLOTS, toISODate } from '../../lib/dateTimeSlots';
 import { StatusBadge, clientViagemStatusBadge } from '../../components/StatusBadge';
+import type { TripLiveDriverDisplay } from '../../navigation/types';
+import { parsePassengerData } from '../../lib/clientBookingTripLive';
+import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
+import { onlyDigits } from '../../utils/formatCpf';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'TripDetail'>;
 
@@ -49,6 +53,12 @@ function getInitials(name: string): string {
   if (parts.length === 0) return '?';
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function formatCpfDisplay(digits: string): string {
+  const d = onlyDigits(digits);
+  if (d.length !== 11) return digits;
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
 }
 
 function formatDetailDate(iso: string): string {
@@ -79,6 +89,14 @@ type BookingDetail = {
   driver_id: string | null;
   /** `scheduled_trips.status` — active | completed | cancelled */
   trip_status: string | null;
+  scheduled_trip_id: string | null;
+  passenger_count: number;
+  bags_count: number;
+  passenger_data: unknown;
+  driver_rating: number;
+  vehicle_model: string | null;
+  vehicle_year: number | null;
+  vehicle_plate: string | null;
 };
 
 export function TripDetailScreen({ navigation, route }: Props) {
@@ -123,7 +141,9 @@ export function TripDetailScreen({ navigation, route }: Props) {
       }
       const { data: booking, error: bookErr } = await supabase
         .from('bookings')
-        .select('id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, scheduled_trip_id')
+        .select(
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, scheduled_trip_id, passenger_count, bags_count, passenger_data'
+        )
         .eq('id', bookingId)
         .eq('user_id', user.id)
         .single();
@@ -138,17 +158,41 @@ export function TripDetailScreen({ navigation, route }: Props) {
         .single();
       let driverName = 'Motorista';
       let driverAvatarUrl: string | null = null;
+      let driverRating = 0;
+      let vehicleModel: string | null = null;
+      let vehicleYear: number | null = null;
+      let vehiclePlate: string | null = null;
       if (trip?.driver_id) {
         const { data: profile } = await supabase
           .from('profiles')
-          .select('full_name, avatar_url')
+          .select('full_name, avatar_url, rating')
           .eq('id', trip.driver_id)
           .single();
         driverName = profile?.full_name ?? driverName;
         driverAvatarUrl = profile?.avatar_url ?? null;
+        driverRating = Number(profile?.rating ?? 0);
+        const sb = supabase as { from: (table: string) => any };
+        const { data: vehicleRow } = await sb
+          .from('vehicles')
+          .select('model, year, plate')
+          .eq('worker_id', trip.driver_id)
+          .eq('is_active', true)
+          .eq('status', 'approved')
+          .limit(1)
+          .maybeSingle();
+        const v = vehicleRow as { model?: string | null; year?: number | null; plate?: string | null } | null;
+        vehicleModel = v?.model?.trim() ? v.model : null;
+        vehicleYear = v?.year != null ? Number(v.year) : null;
+        vehiclePlate = v?.plate?.trim() ? v.plate : null;
       }
       const depTime = trip?.departure_at ? new Date(trip.departure_at).toTimeString().slice(0, 5) : '—';
       const arrTime = trip?.arrival_at ? new Date(trip.arrival_at).toTimeString().slice(0, 5) : '—';
+      const b = booking as {
+        passenger_count?: number;
+        bags_count?: number;
+        passenger_data?: unknown;
+        scheduled_trip_id?: string | null;
+      };
       setDetail({
         id: booking.id,
         origin_address: booking.origin_address,
@@ -166,6 +210,14 @@ export function TripDetailScreen({ navigation, route }: Props) {
         driver_avatar_url: driverAvatarUrl,
         driver_id: trip?.driver_id ?? null,
         trip_status: (trip as { status?: string } | null)?.status ?? null,
+        scheduled_trip_id: b.scheduled_trip_id ?? null,
+        passenger_count: Number(b.passenger_count ?? 0),
+        bags_count: Number(b.bags_count ?? 0),
+        passenger_data: b.passenger_data ?? [],
+        driver_rating: driverRating,
+        vehicle_model: vehicleModel,
+        vehicle_year: vehicleYear,
+        vehicle_plate: vehiclePlate,
       });
       setLoading(false);
     })();
@@ -227,6 +279,49 @@ export function TripDetailScreen({ navigation, route }: Props) {
     t === 'active' &&
     ['confirmed', 'in_progress'].includes(b);
 
+  const tripLiveParams = useMemo((): TripLiveDriverDisplay | null => {
+    if (!detail) return null;
+    return {
+      driverName: detail.driver_name,
+      rating: detail.driver_rating,
+      vehicleLabel: formatVehicleDescription(detail.vehicle_model, detail.vehicle_year, detail.vehicle_plate),
+      amountCents: detail.amount_cents,
+      bookingId: detail.id,
+      scheduledTripId: detail.scheduled_trip_id ?? undefined,
+      origin: isValidTripCoordinate(detail.origin_lat, detail.origin_lng)
+        ? { latitude: detail.origin_lat, longitude: detail.origin_lng, address: detail.origin_address }
+        : undefined,
+      destination: isValidTripCoordinate(detail.destination_lat, detail.destination_lng)
+        ? { latitude: detail.destination_lat, longitude: detail.destination_lng, address: detail.destination_address }
+        : undefined,
+      mapFocused: true,
+    };
+  }, [detail]);
+
+  const canOpenTripLive =
+    Boolean(tripLiveParams) &&
+    Boolean(detail?.driver_id) &&
+    hasValidMapCoords &&
+    !isBookingCancelled &&
+    !isTripCancelled &&
+    !isTripCompleted;
+
+  const passengerRows = useMemo(() => {
+    if (!detail) return [];
+    const parsed = parsePassengerData(detail.passenger_data);
+    if (parsed.length > 0) {
+      return parsed.map((p, i) => {
+        const name = (p.name ?? '').trim() || `Passageiro ${i + 1}`;
+        const cpf = onlyDigits(p.cpf ?? '');
+        const cpfPart = cpf.length >= 11 ? ` · CPF: ${formatCpfDisplay(cpf)}` : '';
+        return { key: `p-${i}`, label: `${name}${cpfPart}` };
+      });
+    }
+    const n = detail.passenger_count;
+    if (n >= 1) return [{ key: 'count', label: `${n} passageiro${n === 1 ? '' : 'es'}` }];
+    return [];
+  }, [detail]);
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
@@ -283,42 +378,55 @@ export function TripDetailScreen({ navigation, route }: Props) {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.mapWrap}>
           {!hasValidMapCoords ? (
-            <View style={styles.mapLoading}>
-              <ActivityIndicator size="large" color={COLORS.black} />
-              <Text style={styles.mapLoadingText}>Carregando mapa…</Text>
+            <View style={styles.mapClip}>
+              <View style={styles.mapLoading}>
+                <ActivityIndicator size="large" color={COLORS.black} />
+                <Text style={styles.mapLoadingText}>Carregando mapa…</Text>
+              </View>
             </View>
           ) : (
             <>
-              <MapboxMap style={styles.map} initialRegion={mapRegion!} scrollEnabled={false} showControls>
-                {routeCoords && routeCoords.length > 0 && (
-                  <MapboxPolyline coordinates={routeCoords} strokeColor={COLORS.black} strokeWidth={4} />
-                )}
-                {driverOnWay ? (
+              <View style={styles.mapClip}>
+                <MapboxMap style={styles.map} initialRegion={mapRegion!} scrollEnabled={false} showControls={false}>
+                  {routeCoords && routeCoords.length > 0 && (
+                    <MapboxPolyline coordinates={routeCoords} strokeColor={COLORS.black} strokeWidth={4} />
+                  )}
+                  {driverOnWay ? (
+                    <MapboxMarker
+                      id="origin"
+                      coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }}
+                      anchor={{ x: 0.5, y: 0.5 }}
+                    >
+                      <DriverEtaMarkerIcon eta={routeDuration ?? undefined} />
+                    </MapboxMarker>
+                  ) : (
+                    <MapboxMarker
+                      id="origin"
+                      coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }}
+                      anchor={{ x: 0.5, y: 0.5 }}
+                      icon={require('../../../assets/icons/icon-partida.png')}
+                      iconSize={17}
+                    />
+                  )}
                   <MapboxMarker
-                    id="origin"
-                    coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }}
+                    id="destination"
+                    coordinate={{ latitude: detail.destination_lat, longitude: detail.destination_lng }}
                     anchor={{ x: 0.5, y: 0.5 }}
-                  >
-                    <DriverEtaMarkerIcon eta={routeDuration ?? undefined} />
-                  </MapboxMarker>
-                ) : (
-                  <MapboxMarker
-                    id="origin"
-                    coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }}
-                    anchor={{ x: 0.5, y: 0.5 }}
-                    icon={require('../../../assets/icons/icon-partida.png')}
-                    iconSize={17}
+                    icon={require('../../../assets/icons/icon-destino.png')}
+                    iconSize={14}
                   />
-                )}
-                <MapboxMarker
-                  id="destination"
-                  coordinate={{ latitude: detail.destination_lat, longitude: detail.destination_lng }}
-                  anchor={{ x: 0.5, y: 0.5 }}
-                  icon={require('../../../assets/icons/icon-destino.png')}
-                  iconSize={14}
-                />
-              </MapboxMap>
-              <TouchableOpacity style={styles.trackButton} activeOpacity={0.8}>
+                </MapboxMap>
+              </View>
+              <TouchableOpacity
+                style={[styles.trackButton, !canOpenTripLive && styles.trackButtonDisabled]}
+                activeOpacity={0.8}
+                disabled={!canOpenTripLive}
+                onPress={() => {
+                  if (tripLiveParams && canOpenTripLive) {
+                    navigation.navigate('TripInProgress', tripLiveParams);
+                  }
+                }}
+              >
                 <MaterialIcons name="explore" size={20} color={COLORS.neutral700} />
                 <Text style={styles.trackButtonText}>Acompanhar em tempo real</Text>
               </TouchableOpacity>
@@ -332,8 +440,15 @@ export function TripDetailScreen({ navigation, route }: Props) {
           </View>
           <Text style={styles.tripId}>VG{detail.id.slice(-6).toUpperCase()}</Text>
           <Text style={styles.cardDate}>{formatDetailDate(detail.created_at)}</Text>
-          <Text style={styles.cardSummary}>1 passageiro • 0 encomenda</Text>
-          <Text style={styles.cardSummary}>Ocupação do bagageiro: —</Text>
+          <Text style={styles.cardSummary}>
+            {detail.passenger_count} {detail.passenger_count === 1 ? 'passageiro' : 'passageiros'} · 0 encomenda
+          </Text>
+          <Text style={styles.cardSummary}>
+            Ocupação do bagageiro:{' '}
+            {detail.bags_count > 0
+              ? `${detail.bags_count} ${detail.bags_count === 1 ? 'mala' : 'malas'}`
+              : '—'}
+          </Text>
           <View style={styles.cardTitleRow}>
             <View style={styles.cardTitleWrap}>
               <Text style={styles.cardTitle}>Corrida TakeMe</Text>
@@ -369,12 +484,21 @@ export function TripDetailScreen({ navigation, route }: Props) {
           </View>
         </View>
 
+        <Text style={styles.sectionHeading}>Passageiros</Text>
+        <View style={styles.placeholderSection}>
+          {passengerRows.length === 0 ? (
+            <Text style={styles.placeholderSectionText}>Nenhum passageiro listado</Text>
+          ) : (
+            passengerRows.map((row) => (
+              <View key={row.key} style={styles.passengerRow}>
+                <MaterialIcons name="person-outline" size={20} color={COLORS.neutral700} />
+                <Text style={styles.passengerRowText}>{row.label}</Text>
+              </View>
+            ))
+          )}
+        </View>
         {!isCompleted && (
           <>
-            <Text style={styles.sectionHeading}>Passageiros</Text>
-            <View style={styles.placeholderSection}>
-              <Text style={styles.placeholderSectionText}>Nenhum passageiro listado</Text>
-            </View>
             <Text style={styles.sectionHeading}>Encomenda</Text>
             <View style={styles.placeholderSection}>
               <Text style={styles.placeholderSectionText}>Nenhuma encomenda</Text>
@@ -419,9 +543,6 @@ export function TripDetailScreen({ navigation, route }: Props) {
 
         {isInProgress && (
           <>
-            <TouchableOpacity style={styles.primaryActionButton} activeOpacity={0.8}>
-              <Text style={styles.primaryActionButtonText}>Iniciar Viagem</Text>
-            </TouchableOpacity>
             <TouchableOpacity style={styles.secondaryActionButton} activeOpacity={0.8} onPress={() => setShowRescheduleSheet(true)}>
               <Text style={styles.secondaryActionButtonText}>Reagendar viagem</Text>
             </TouchableOpacity>
@@ -540,13 +661,16 @@ const styles = StyleSheet.create({
   placeholder: { fontSize: 15, color: COLORS.neutral700 },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 40 },
-  mapWrap: { height: 200, paddingHorizontal: 24, paddingTop: 16 },
-  map: { width: '100%', height: '100%', borderRadius: 12 },
-  mapLoading: {
-    width: '100%',
-    height: '100%',
+  mapWrap: { paddingHorizontal: 24, paddingTop: 16 },
+  mapClip: {
+    height: 200,
     borderRadius: 12,
+    overflow: 'hidden',
     backgroundColor: COLORS.neutral300,
+  },
+  map: { flex: 1, width: '100%' },
+  mapLoading: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
@@ -563,6 +687,14 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   trackButtonText: { fontSize: 14, fontWeight: '500', color: COLORS.neutral700 },
+  trackButtonDisabled: { opacity: 0.45 },
+  passengerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 8,
+  },
+  passengerRowText: { flex: 1, fontSize: 14, color: COLORS.black },
   card: {
     marginHorizontal: 24,
     marginTop: 20,
@@ -656,18 +788,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   actionButtonText: { fontSize: 14, fontWeight: '500', color: COLORS.black },
-  primaryActionButton: {
-    marginHorizontal: 24,
-    marginTop: 24,
-    paddingVertical: 16,
-    alignItems: 'center',
-    borderRadius: 12,
-    backgroundColor: COLORS.black,
-  },
-  primaryActionButtonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
   secondaryActionButton: {
     marginHorizontal: 24,
-    marginTop: 12,
+    marginTop: 24,
     paddingVertical: 14,
     alignItems: 'center',
   },

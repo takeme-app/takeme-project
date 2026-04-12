@@ -18,6 +18,7 @@ const ERROR_PT: Array<[RegExp, string]> = [
   [/bucket.*not found|storage.*not found/i, 'Serviço de armazenamento indisponível. Tente mais tarde.'],
   [/row-level security|policy/i, 'Você não tem permissão para esta ação.'],
   [/jwt expired/i, 'Sessão expirada. Faça login novamente.'],
+  [/invalid jwt|jwt could not be verified|jwt.*not.*valid/i, 'Sessão inválida ou expirada. Faça login novamente.'],
   [/edge function|non-2xx/i, 'Serviço temporariamente indisponível. Tente novamente.'],
 
   // ── Stripe ──

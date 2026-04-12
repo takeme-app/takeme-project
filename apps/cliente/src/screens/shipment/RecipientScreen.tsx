@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   TextInput,
@@ -17,6 +17,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ShipmentStackParamList } from '../../navigation/types';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import * as ImagePicker from 'expo-image-picker';
+import { quoteShipmentForClient, type ShipmentQuoteOk } from '../../lib/shipmentQuote';
 
 type Props = NativeStackScreenProps<ShipmentStackParamList, 'Recipient'>;
 
@@ -36,9 +37,6 @@ function formatPhone(value: string): string {
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
 }
 
-/** Valor padrão em centavos para exibir no checkout (ex.: R$ 24,00). Pode ser substituído por cálculo real depois. */
-const DEFAULT_AMOUNT_CENTS = 2400;
-
 export function RecipientScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
@@ -49,6 +47,46 @@ export function RecipientScreen({ navigation, route }: Props) {
   const [instructions, setInstructions] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [quote, setQuote] = useState<ShipmentQuoteOk | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(true);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setQuoteLoading(true);
+    setQuoteError(null);
+    setQuote(null);
+    (async () => {
+      const res = await quoteShipmentForClient({
+        originAddress: origin.address,
+        destinationAddress: destination.address,
+        originLat: origin.latitude,
+        originLng: origin.longitude,
+        destinationLat: destination.latitude,
+        destinationLng: destination.longitude,
+        packageSize,
+      });
+      if (cancelled) return;
+      if (!res.ok) {
+        setQuoteError(res.error);
+        setQuote(null);
+      } else {
+        setQuote(res.quote);
+      }
+      setQuoteLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    origin.address,
+    origin.latitude,
+    origin.longitude,
+    destination.address,
+    destination.latitude,
+    destination.longitude,
+    packageSize,
+  ]);
 
   const handlePhoneChange = (text: string) => setPhone(formatPhone(text));
 
@@ -85,6 +123,10 @@ export function RecipientScreen({ navigation, route }: Props) {
       showAlert('Atenção', 'Preencha o telefone do destinatário com DDD e número.');
       return;
     }
+    if (!quote) {
+      showAlert('Valor', quoteError ?? 'Não foi possível calcular o valor do envio.');
+      return;
+    }
     navigation.navigate('ConfirmShipment', {
       origin,
       destination,
@@ -99,7 +141,12 @@ export function RecipientScreen({ navigation, route }: Props) {
         instructions: instructions.trim() || undefined,
         photoUri: photoUri ?? undefined,
       },
-      amountCents: DEFAULT_AMOUNT_CENTS,
+      amountCents: quote.amountCents,
+      pricingSubtotalCents: quote.pricingSubtotalCents,
+      platformFeeCents: quote.platformFeeCents,
+      priceRouteBaseCents: quote.priceRouteBaseCents,
+      pricingRouteId: quote.pricingRouteId,
+      adminPctApplied: quote.adminPctApplied,
     });
   };
 
@@ -178,10 +225,26 @@ export function RecipientScreen({ navigation, route }: Props) {
           )}
         </TouchableOpacity>
 
+        {quoteLoading ? (
+          <View style={styles.quoteRow}>
+            <ActivityIndicator size="small" color={COLORS.black} />
+            <Text style={styles.quoteHint}>Calculando valor do envio…</Text>
+          </View>
+        ) : quoteError ? (
+          <Text style={styles.quoteError}>{quoteError}</Text>
+        ) : quote ? (
+          <Text style={styles.quoteHint}>
+            Valor estimado: R$ {(quote.amountCents / 100).toFixed(2).replace('.', ',')} (subtotal + taxa da plataforma)
+          </Text>
+        ) : null}
+
         <TouchableOpacity
-          style={[styles.primaryButton, loading && styles.primaryButtonDisabled]}
+          style={[
+            styles.primaryButton,
+            (loading || quoteLoading || quoteError || !quote) && styles.primaryButtonDisabled,
+          ]}
           onPress={handleFazerPedido}
-          disabled={loading}
+          disabled={loading || quoteLoading || !!quoteError || !quote}
           activeOpacity={0.8}
         >
           {loading ? (
@@ -225,6 +288,9 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   photoPlaceholderText: { fontSize: 14, color: COLORS.neutral700, marginTop: 8 },
+  quoteRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
+  quoteHint: { fontSize: 13, color: COLORS.neutral700, marginBottom: 16 },
+  quoteError: { fontSize: 13, color: '#b53838', marginBottom: 16 },
   primaryButton: {
     backgroundColor: COLORS.black,
     paddingVertical: 16,

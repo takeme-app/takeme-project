@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,6 +7,19 @@ const corsHeaders = {
 };
 
 const STRIPE_API = "https://api.stripe.com/v1";
+
+type DraftBookingBody = {
+  scheduled_trip_id?: string;
+  origin_address?: string;
+  origin_lat?: number;
+  origin_lng?: number;
+  destination_address?: string;
+  destination_lat?: number;
+  destination_lng?: number;
+  passenger_count?: number;
+  bags_count?: number;
+  passenger_data?: unknown;
+};
 
 async function stripeFetch(
   secretKey: string,
@@ -30,6 +43,97 @@ async function stripeFetch(
     throw new Error(err);
   }
   return data;
+}
+
+async function stripeRefundPaymentIntent(secretKey: string, paymentIntentId: string): Promise<void> {
+  const params = new URLSearchParams({ payment_intent: paymentIntentId });
+  await stripeFetch(secretKey, "POST", "/refunds", params);
+}
+
+function resolveTripPriceCents(
+  trip: {
+    route_id?: string | null;
+    price_per_person_cents?: number | null;
+    amount_cents?: number | null;
+  },
+  routePriceById: Map<string, number | null>
+): number | null {
+  const routeId = trip.route_id;
+  if (routeId && routePriceById.has(routeId)) {
+    const fromRoute = routePriceById.get(routeId);
+    if (fromRoute != null && fromRoute >= 0) return fromRoute;
+  }
+  const tripPpp = trip.price_per_person_cents;
+  if (tripPpp != null && tripPpp >= 0) return tripPpp;
+  const legacy = trip.amount_cents;
+  if (legacy != null && legacy >= 0) return legacy;
+  return null;
+}
+
+async function resolvePriceCentsForScheduledTrip(
+  admin: SupabaseClient,
+  scheduledTripId: string
+): Promise<{ cents: number | null; error: string | null }> {
+  const { data: trip, error: tripErr } = await admin
+    .from("scheduled_trips")
+    .select("route_id, price_per_person_cents, amount_cents")
+    .eq("id", scheduledTripId)
+    .maybeSingle();
+  if (tripErr) {
+    return { cents: null, error: "Não foi possível obter os dados da viagem." };
+  }
+  if (!trip) {
+    return { cents: null, error: "Viagem não encontrada." };
+  }
+  const routeId = trip.route_id as string | null | undefined;
+  const routePriceById = new Map<string, number | null>();
+  if (routeId) {
+    const { data: route, error: routeErr } = await admin
+      .from("worker_routes")
+      .select("id, price_per_person_cents")
+      .eq("id", routeId)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (routeErr) {
+      return { cents: null, error: "Não foi possível obter o preço da rota." };
+    }
+    if (route) {
+      routePriceById.set(route.id as string, (route.price_per_person_cents as number | null) ?? null);
+    }
+  }
+  const cents = resolveTripPriceCents(
+    {
+      route_id: trip.route_id as string | null | undefined,
+      price_per_person_cents: trip.price_per_person_cents as number | null | undefined,
+      amount_cents: trip.amount_cents as number | null | undefined,
+    },
+    routePriceById
+  );
+  return { cents, error: null };
+}
+
+async function resolveStripePaymentMethodId(
+  admin: SupabaseClient,
+  userId: string,
+  paymentMethodIdSupabase: string | undefined,
+  stripePaymentMethodIdFromClient: string | undefined
+): Promise<{ pm: string } | { error: string; status: number }> {
+  if (stripePaymentMethodIdFromClient) {
+    return { pm: stripePaymentMethodIdFromClient };
+  }
+  if (paymentMethodIdSupabase) {
+    const { data: pmRow, error: pmErr } = await admin
+      .from("payment_methods")
+      .select("id, user_id, provider_id")
+      .eq("id", paymentMethodIdSupabase)
+      .eq("user_id", userId)
+      .single();
+    if (pmErr || !pmRow?.provider_id) {
+      return { error: "Método de pagamento não encontrado", status: 404 };
+    }
+    return { pm: pmRow.provider_id as string };
+  }
+  return { error: "Informe stripe_payment_method_id ou payment_method_id", status: 400 };
 }
 
 Deno.serve(async (req) => {
@@ -74,18 +178,27 @@ Deno.serve(async (req) => {
 
     const body = (await req.json().catch(() => ({}))) as {
       booking_id?: string;
-      /** UUID em `payment_methods.id` (cartão salvo na carteira) */
+      draft_booking?: DraftBookingBody;
       payment_method_id?: string;
-      /** ID Stripe `pm_...` retornado pelo PaymentSheet / Stripe RN no checkout */
       stripe_payment_method_id?: string;
     };
     const bookingId = body.booking_id?.trim();
     const paymentMethodIdSupabase = body.payment_method_id?.trim();
     const stripePaymentMethodIdFromClient = body.stripe_payment_method_id?.trim();
-    if (!bookingId || (!paymentMethodIdSupabase && !stripePaymentMethodIdFromClient)) {
+    const draft = body.draft_booking;
+    const hasDraft = Boolean(draft?.scheduled_trip_id?.trim());
+    const hasLegacyBooking = Boolean(bookingId);
+
+    if (hasDraft && hasLegacyBooking) {
+      return new Response(
+        JSON.stringify({ error: "Envie apenas draft_booking ou apenas booking_id, não os dois." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (!hasDraft && !hasLegacyBooking) {
       return new Response(
         JSON.stringify({
-          error: "Envie booking_id e payment_method_id (cartão salvo) ou stripe_payment_method_id (pm_… do checkout).",
+          error: "Envie booking_id (reserva já criada) ou draft_booking (checkout com cartão).",
         }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -93,6 +206,244 @@ Deno.serve(async (req) => {
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
 
+    const pmRes = await resolveStripePaymentMethodId(
+      admin,
+      userId,
+      paymentMethodIdSupabase,
+      stripePaymentMethodIdFromClient
+    );
+    if ("error" in pmRes) {
+      return new Response(JSON.stringify({ error: pmRes.error }), {
+        status: pmRes.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const stripePaymentMethodId = pmRes.pm;
+
+    const { data: profile } = await admin.from("profiles").select("stripe_customer_id").eq("id", userId).single();
+    const customerId = profile?.stripe_customer_id as string | null | undefined;
+    if (!customerId) {
+      return new Response(
+        JSON.stringify({ error: "Cliente Stripe não encontrado; adicione um método de pagamento primeiro" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ── Modo: nova reserva (cartão) — cobrar antes de inserir ──
+    if (hasDraft && draft) {
+      const sid = draft.scheduled_trip_id!.trim();
+      const pax = Math.max(1, Math.floor(Number(draft.passenger_count ?? 0)));
+      const bags = Math.max(0, Math.floor(Number(draft.bags_count ?? 0)));
+      if (!draft.origin_address?.trim() || !draft.destination_address?.trim()) {
+        return new Response(JSON.stringify({ error: "Endereços de origem e destino são obrigatórios." }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (
+        !Number.isFinite(draft.origin_lat) ||
+        !Number.isFinite(draft.origin_lng) ||
+        !Number.isFinite(draft.destination_lat) ||
+        !Number.isFinite(draft.destination_lng)
+      ) {
+        return new Response(JSON.stringify({ error: "Coordenadas inválidas." }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const { data: tripRow, error: tripLoadErr } = await admin
+        .from("scheduled_trips")
+        .select("id, status, seats_available, driver_id")
+        .eq("id", sid)
+        .maybeSingle();
+      if (tripLoadErr || !tripRow) {
+        return new Response(JSON.stringify({ error: "Viagem não encontrada." }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if ((tripRow.status as string) !== "active") {
+        return new Response(JSON.stringify({ error: "Esta viagem não está disponível para reserva." }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const seatsAvail = Number(tripRow.seats_available ?? 0);
+      if (!Number.isFinite(seatsAvail) || seatsAvail < pax) {
+        return new Response(JSON.stringify({ error: "Capacidade insuficiente para esta viagem." }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const { cents: amountCentsResolved, error: priceErr } = await resolvePriceCentsForScheduledTrip(admin, sid);
+      if (priceErr) {
+        return new Response(JSON.stringify({ error: priceErr }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const amountCents = amountCentsResolved != null ? Number(amountCentsResolved) : NaN;
+      if (!Number.isInteger(amountCents) || amountCents < 1) {
+        return new Response(JSON.stringify({ error: "Valor da viagem inválido" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const driverId = (tripRow.driver_id as string | undefined)?.trim() ?? "";
+      let connectAccountId: string | null = null;
+      let applicationFeeCents: number | null = null;
+      if (driverId) {
+        const { data: wp } = await admin
+          .from("worker_profiles")
+          .select("stripe_connect_account_id")
+          .eq("id", driverId)
+          .maybeSingle();
+        connectAccountId = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? null;
+        const workerPayoutPreview = amountCents - 0;
+        const payout = Number.isFinite(workerPayoutPreview) ? Math.max(0, Math.floor(workerPayoutPreview)) : null;
+        if (connectAccountId && payout != null) {
+          if (payout > amountCents) {
+            return new Response(
+              JSON.stringify({ error: "Inconsistência de valores da reserva (repasse > total)" }),
+              { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          applicationFeeCents = amountCents - payout;
+          if (applicationFeeCents < 0) {
+            return new Response(
+              JSON.stringify({ error: "Taxa de aplicação inválida para Stripe Connect" }),
+              { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+        }
+      }
+
+      const piParams = new URLSearchParams({
+        amount: String(amountCents),
+        currency: "brl",
+        customer: customerId,
+        "payment_method": stripePaymentMethodId,
+        confirm: "true",
+        // Dashboard pode habilitar Link/PIX etc.; sem return_url a Stripe exige desativar redirects.
+        "automatic_payment_methods[enabled]": "true",
+        "automatic_payment_methods[allow_redirects]": "never",
+        "metadata[scheduled_trip_id]": sid,
+        "metadata[user_id]": userId,
+      });
+      if (connectAccountId && applicationFeeCents != null) {
+        piParams.set("application_fee_amount", String(applicationFeeCents));
+        piParams.set("transfer_data[destination]", connectAccountId);
+        piParams.set("metadata[stripe_connect_destination]", connectAccountId);
+      }
+
+      let pi: { id?: string; status?: string; last_payment_error?: { message?: string } };
+      try {
+        pi = await stripeFetch(stripeSecret, "POST", "/payment_intents", piParams) as typeof pi;
+      } catch (e) {
+        return new Response(
+          JSON.stringify({ error: e instanceof Error ? e.message : "Falha ao cobrar no Stripe" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (pi.status !== "succeeded" && pi.status !== "requires_capture") {
+        const errMsg = pi.last_payment_error?.message ?? "Pagamento não foi aprovado";
+        return new Response(JSON.stringify({ error: errMsg }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const passengerDataJson = draft.passenger_data ?? [];
+      const insertRow = {
+        user_id: userId,
+        scheduled_trip_id: sid,
+        origin_address: draft.origin_address!.trim(),
+        origin_lat: draft.origin_lat!,
+        origin_lng: draft.origin_lng!,
+        destination_address: draft.destination_address!.trim(),
+        destination_lat: draft.destination_lat!,
+        destination_lng: draft.destination_lng!,
+        passenger_count: pax,
+        bags_count: bags,
+        passenger_data: passengerDataJson,
+        price_route_base_cents: amountCents,
+        pricing_subtotal_cents: amountCents,
+        platform_fee_cents: 0,
+        pricing_surcharges_cents: 0,
+        promo_discount_cents: 0,
+        amount_cents: amountCents,
+        status: "paid",
+        paid_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        stripe_payment_intent_id: pi.id ?? null,
+      };
+
+      const { data: inserted, error: insErr } = await admin
+        .from("bookings")
+        .insert(insertRow as never)
+        .select("id, worker_payout_cents")
+        .single();
+
+      if (insErr || !inserted?.id) {
+        console.error("[charge-booking] insert após cobrança:", insErr);
+        if (pi.id) {
+          try {
+            await stripeRefundPaymentIntent(stripeSecret, pi.id);
+          } catch (re) {
+            console.error("[charge-booking] estorno após falha no insert:", re);
+          }
+        }
+        return new Response(
+          JSON.stringify({
+            error:
+              "Pagamento autorizado, mas não foi possível registrar a reserva (capacidade ou dados). O valor será estornado automaticamente; se não refletir em até 5 dias úteis, contate o suporte.",
+          }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const newBookingId = inserted.id as string;
+
+      const workerPayoutCents =
+        inserted.worker_payout_cents != null && Number.isFinite(Number(inserted.worker_payout_cents))
+          ? Math.max(0, Math.floor(Number(inserted.worker_payout_cents)))
+          : null;
+      if (driverId && workerPayoutCents != null) {
+        const { data: existingPayout } = await admin
+          .from("payouts")
+          .select("id")
+          .eq("entity_type", "booking")
+          .eq("entity_id", newBookingId)
+          .maybeSingle();
+        if (!existingPayout) {
+          const adminCents = Math.max(0, amountCents - workerPayoutCents);
+          const { error: payoutErr } = await admin.from("payouts").insert({
+            worker_id: driverId,
+            entity_type: "booking",
+            entity_id: newBookingId,
+            gross_amount_cents: amountCents,
+            worker_amount_cents: workerPayoutCents,
+            admin_amount_cents: adminCents,
+            status: "pending",
+            payout_method: "pix",
+          } as never);
+          if (payoutErr) {
+            console.error("[charge-booking] payout insert:", payoutErr);
+          }
+        }
+      }
+
+      return new Response(
+        JSON.stringify({ ok: true, booking_id: newBookingId, amount_cents: amountCents }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ── Modo legado: reserva pending já criada ──
     const { data: booking, error: bookingErr } = await admin
       .from("bookings")
       .select("id, user_id, amount_cents, status, worker_payout_cents, scheduled_trips(driver_id)")
@@ -108,34 +459,6 @@ Deno.serve(async (req) => {
     if (booking.status !== "pending") {
       return new Response(
         JSON.stringify({ error: "Reserva já foi paga ou cancelada" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    let stripePaymentMethodId: string;
-    if (stripePaymentMethodIdFromClient) {
-      stripePaymentMethodId = stripePaymentMethodIdFromClient;
-    } else {
-      const { data: pmRow, error: pmErr } = await admin
-        .from("payment_methods")
-        .select("id, user_id, provider_id")
-        .eq("id", paymentMethodIdSupabase!)
-        .eq("user_id", userId)
-        .single();
-      if (pmErr || !pmRow?.provider_id) {
-        return new Response(
-          JSON.stringify({ error: "Método de pagamento não encontrado" }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      stripePaymentMethodId = pmRow.provider_id as string;
-    }
-
-    const { data: profile } = await admin.from("profiles").select("stripe_customer_id").eq("id", userId).single();
-    const customerId = profile?.stripe_customer_id as string | null | undefined;
-    if (!customerId) {
-      return new Response(
-        JSON.stringify({ error: "Cliente Stripe não encontrado; adicione um método de pagamento primeiro" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -191,6 +514,8 @@ Deno.serve(async (req) => {
       customer: customerId,
       "payment_method": stripePaymentMethodId,
       confirm: "true",
+      "automatic_payment_methods[enabled]": "true",
+      "automatic_payment_methods[allow_redirects]": "never",
       "metadata[booking_id]": bookingId,
     });
     if (connectAccountId && applicationFeeCents != null) {
@@ -261,7 +586,7 @@ Deno.serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ ok: true, booking_id: bookingId }),
+      JSON.stringify({ ok: true, booking_id: bookingId, amount_cents: amountCents }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {

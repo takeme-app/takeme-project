@@ -18,13 +18,22 @@ import { getRecentDestinations, addRecentDestination, formatRecentDestinationDis
 import { getRoutePolyline, type RoutePoint } from '../../lib/route';
 import { supabase } from '../../lib/supabase';
 import { getUserErrorMessage } from '../../utils/errorMessage';
-import { loadClientScheduledTrips, type ClientScheduledTripItem } from '../../lib/clientScheduledTrips';
+import {
+  loadClientScheduledTrips,
+  compareTripsByDepartureAndBadge,
+  tripFitsPassengersAndBags,
+  type ClientScheduledTripItem,
+} from '../../lib/clientScheduledTrips';
 import { formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
 
 type Place = { address: string; latitude: number; longitude: number };
 
 /** Raio em graus para considerar origem/destino "próximos" (~15 km) */
 const ROUTE_MATCH_DEGREES = 0.15;
+
+/** Filtro de capacidade na lista (ajuste quando houver seletor de passageiros/malas na busca). */
+const LIST_PASSENGERS = 1;
+const LIST_BAGS = 0;
 
 /** Item de viagem agendada no formato da lista (motorista, horários, assentos, malas) */
 export type ScheduledTripItem = ClientScheduledTripItem;
@@ -130,7 +139,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
   const [planWhenModalVisible, setPlanWhenModalVisible] = useState(false);
   const [tripCallout, setTripCallout] = useState<ScheduledTripItem | null>(null);
 
-  /** Lista filtrada por origem/destino; Take Me primeiro na ordem. Só exibe viagens quando há rota definida. */
+  /** Lista filtrada por origem/destino (raio), capacidade e ordenada por saída + Take Me. Só exibe viagens quando há rota definida. */
   const scheduledTrips = useMemo(() => {
     if (!origin?.latitude || !destination?.latitude) return [];
     const oLat = origin.latitude;
@@ -142,9 +151,10 @@ export function SearchTripScreen({ navigation, route }: Props) {
         Math.abs(t.origin_lat - oLat) <= ROUTE_MATCH_DEGREES &&
         Math.abs(t.origin_lng - oLng) <= ROUTE_MATCH_DEGREES &&
         Math.abs(t.latitude - dLat) <= ROUTE_MATCH_DEGREES &&
-        Math.abs(t.longitude - dLng) <= ROUTE_MATCH_DEGREES
+        Math.abs(t.longitude - dLng) <= ROUTE_MATCH_DEGREES &&
+        tripFitsPassengersAndBags(t, LIST_PASSENGERS, LIST_BAGS)
     );
-    return [...filtered].sort((a, b) => (a.badge === 'Take Me' ? 0 : 1) - (b.badge === 'Take Me' ? 0 : 1));
+    return [...filtered].sort(compareTripsByDepartureAndBadge);
   }, [allScheduledTrips, origin?.latitude, origin?.longitude, destination?.latitude, destination?.longitude]);
 
   /** Endereços recentes ordenados pela menor distância da origem (para a página Planeje sua corrida). */
@@ -578,16 +588,9 @@ export function SearchTripScreen({ navigation, route }: Props) {
         initialRegion={initialMapRegion}
         scrollEnabled={true}
       >
-        {destination && (
+        {destination && routeCoords != null && routeCoords.length >= 2 && (
           <MapboxPolyline
-            coordinates={
-              routeCoords && routeCoords.length > 0
-                ? routeCoords
-                : [
-                    { latitude: origin.latitude, longitude: origin.longitude },
-                    { latitude: destination.latitude, longitude: destination.longitude },
-                  ]
-            }
+            coordinates={routeCoords}
             strokeColor={COLORS.black}
             strokeWidth={4}
           />

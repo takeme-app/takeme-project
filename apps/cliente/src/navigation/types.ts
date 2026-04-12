@@ -66,11 +66,14 @@ export type ShipmentStackParamList = {
     packageSize: 'pequeno' | 'medio' | 'grande';
     packageSizeLabel: string;
     recipient: ShipmentRecipientParam;
-    /** Valor total final (já com taxa administrativa quando vier do backend). */
+    /** Total = pricing_subtotal_cents + platform_fee_cents (catálogo preparer_shipments + taxa admin). */
     amountCents: number;
-    /** Opcional: quando o backend enviar breakdown, exibir Subtotal + Taxa = Total */
-    subtotalCents?: number;
-    feeCents?: number;
+    pricingSubtotalCents: number;
+    platformFeeCents: number;
+    /** Base do trecho (catálogo, antes do multiplicador de tamanho). */
+    priceRouteBaseCents: number;
+    pricingRouteId: string;
+    adminPctApplied: number;
     orderId?: string;
     shipmentId?: string;
   };
@@ -162,6 +165,12 @@ export type TripLiveDriverDisplay = {
   vehicleLabel: string;
   amountCents: number;
   bookingId?: string;
+  /** Permite buscar códigos e paradas sem depender só do refetch */
+  scheduledTripId?: string;
+  origin?: { latitude: number; longitude: number; address?: string };
+  destination?: { latitude: number; longitude: number; address?: string };
+  /** Mapa em ecrã completo (ex.: «Acompanhar em tempo real» nos detalhes). */
+  mapFocused?: boolean;
 };
 
 export type TripStackParamList = {
@@ -181,3 +190,9 @@ export type TripStackParamList = {
   TripInProgress: TripLiveDriverDisplay | undefined;
   RateTrip: { bookingId?: string };
 };
+
+/** Telas de acompanhamento reutilizadas no stack de Atividades e no fluxo TripStack. */
+export type TripFollowStackParamList = Pick<
+  TripStackParamList,
+  'DriverOnTheWay' | 'TripInProgress' | 'RateTrip'
+>;

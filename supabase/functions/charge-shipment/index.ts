@@ -191,6 +191,8 @@ Deno.serve(async (req) => {
       customer: customerId,
       "payment_method": stripePaymentMethodId,
       confirm: "true",
+      "automatic_payment_methods[enabled]": "true",
+      "automatic_payment_methods[allow_redirects]": "never",
       [`metadata[${metaKey}]`]: id,
     });
 

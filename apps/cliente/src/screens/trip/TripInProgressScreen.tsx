@@ -1,25 +1,57 @@
-import { useState, useEffect } from 'react';
-import {
-  View,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  Platform,
-  TextInput,
-} from 'react-native';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { View, TouchableOpacity, StyleSheet, ScrollView, Platform } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { MapboxMap, MapboxMarker, MapboxPolyline, sanitizeMapRegion } from '../../components/mapbox';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  MapboxMap,
+  MapboxMarker,
+  MapboxPolyline,
+  sanitizeMapRegion,
+  regionFromOriginDestination,
+  isValidTripCoordinate,
+} from '../../components/mapbox';
+import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { TripStackParamList } from '../../navigation/types';
+import type { TripFollowStackParamList, TripLiveDriverDisplay } from '../../navigation/types';
 import { formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { CodeConfirmModal } from '../../components/CodeConfirmModal';
 import { AnimatedBottomSheet } from '../../components/AnimatedBottomSheet';
+import {
+  loadBookingTripLiveContext,
+  parsePassengerData,
+  type BookingTripLiveBooking,
+} from '../../lib/clientBookingTripLive';
+import { getRouteWithDuration, formatDuration, formatDistanceKmLabel } from '../../lib/route';
+import { useAppAlert } from '../../contexts/AppAlertContext';
+import { onlyDigits } from '../../utils/formatCpf';
+import { getMainTabBarStyleFromInsets } from '../../navigation/mainTabBarStyle';
 
-type Props = NativeStackScreenProps<TripStackParamList, 'TripInProgress'>;
+type Props = NativeStackScreenProps<TripFollowStackParamList, 'TripInProgress'>;
+
+type NavLike = {
+  getParent?: () => NavLike | undefined;
+  getState?: () => { type?: string };
+  setOptions?: (o: { tabBarStyle?: object }) => void;
+};
+
+function isMainTabState(state: { type?: string; routeNames?: string[] } | undefined): boolean {
+  if (!state?.routeNames?.length) return false;
+  if (state.type === 'tab') return true;
+  return state.routeNames.includes('Activities') && state.routeNames.includes('Home');
+}
+
+function findTabNavigator(nav: NavLike | undefined): NavLike | undefined {
+  let p = nav?.getParent?.();
+  for (let i = 0; i < 8 && p; i++) {
+    const st = p.getState?.() as { type?: string; routeNames?: string[] } | undefined;
+    if (p.setOptions && isMainTabState(st)) return p;
+    p = p.getParent?.();
+  }
+  return undefined;
+}
 
 const COLORS = {
   background: '#FFFFFF',
@@ -45,51 +77,98 @@ type Step = {
   completed: boolean;
 };
 
-const MOCK_STEPS: Step[] = [
-  {
-    id: '1',
-    type: 'coleta',
-    name: 'Maria Carla',
-    address: 'Rua das Flores, 100 - São Paulo',
-    latitude: -23.551,
-    longitude: -46.634,
-    observations: 'Portão azul',
-    completed: false,
-  },
-  {
-    id: '2',
-    type: 'entrega',
-    name: 'Maria Joaquina',
-    address: 'Av. Paulista, 500 - São Paulo',
-    latitude: -23.552,
-    longitude: -46.658,
-    observations: 'Receber na portaria',
-    completed: false,
-  },
-];
+function buildStepsFromBooking(booking: BookingTripLiveBooking): Step[] {
+  const passengers = parsePassengerData(booking.passenger_data);
+  const firstName = (passengers[0]?.name ?? '').trim();
+  const coletaLabel = firstName || 'Embarque';
+  return [
+    {
+      id: 'coleta',
+      type: 'coleta',
+      name: coletaLabel,
+      address: booking.origin_address,
+      latitude: booking.origin_lat,
+      longitude: booking.origin_lng,
+      observations: undefined,
+      completed: false,
+    },
+    {
+      id: 'entrega',
+      type: 'entrega',
+      name: 'Destino',
+      address: booking.destination_address,
+      latitude: booking.destination_lat,
+      longitude: booking.destination_lng,
+      observations: undefined,
+      completed: false,
+    },
+  ];
+}
 
-const ROUTE_COORDS = [
-  { latitude: -23.551, longitude: -46.634 },
-  { latitude: -23.5515, longitude: -46.64 },
-  { latitude: -23.552, longitude: -46.658 },
-];
-
-const DEFAULT_REGION = {
-  latitude: -23.5515,
-  longitude: -46.646,
-  latitudeDelta: 0.03,
-  longitudeDelta: 0.03,
-};
+function buildStepsFromLiveParams(live: TripLiveDriverDisplay): Step[] | null {
+  const o = live.origin;
+  const d = live.destination;
+  if (
+    !o ||
+    !d ||
+    !isValidTripCoordinate(o.latitude, o.longitude) ||
+    !isValidTripCoordinate(d.latitude, d.longitude)
+  ) {
+    return null;
+  }
+  return [
+    {
+      id: 'coleta',
+      type: 'coleta',
+      name: 'Embarque',
+      address: o.address?.trim() || 'Origem',
+      latitude: o.latitude,
+      longitude: o.longitude,
+      completed: false,
+    },
+    {
+      id: 'entrega',
+      type: 'entrega',
+      name: 'Destino',
+      address: d.address?.trim() || 'Destino',
+      latitude: d.latitude,
+      longitude: d.longitude,
+      completed: false,
+    },
+  ];
+}
 
 export function TripInProgressScreen({ navigation, route }: Props) {
   const live = route.params;
+  const mapFocused = Boolean(live?.mapFocused);
+  const insets = useSafeAreaInsets();
+  const { showAlert } = useAppAlert();
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!mapFocused) return undefined;
+      const tabNav = findTabNavigator(navigation as unknown as NavLike);
+      if (!tabNav?.setOptions) return undefined;
+      tabNav.setOptions({ tabBarStyle: { display: 'none' } });
+      return () => {
+        tabNav.setOptions({ tabBarStyle: getMainTabBarStyleFromInsets(insets) });
+      };
+    }, [navigation, mapFocused, insets]),
+  );
   const driverName = live?.driverName ?? 'Motorista';
   const ratingLabel = formatDriverRatingLabel(live?.rating ?? 0);
   const vehicleLabel = live?.vehicleLabel ?? 'Veículo a confirmar';
   const fareFormatted =
     live?.amountCents != null ? `R$ ${(live.amountCents / 100).toFixed(2).replace('.', ',')}` : 'R$ —';
 
-  const [steps, setSteps] = useState<Step[]>(MOCK_STEPS);
+  const [steps, setSteps] = useState<Step[]>([]);
+  const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[] | null>(null);
+  const [etaText, setEtaText] = useState<string>('—');
+  const [durationLabel, setDurationLabel] = useState<string>('—');
+  const [distanceLabel, setDistanceLabel] = useState<string>('—');
+  const [pickupCode, setPickupCode] = useState<string | null>(null);
+  const [deliveryCode, setDeliveryCode] = useState<string | null>(null);
+  const [bagsNote, setBagsNote] = useState<string | null>(null);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [showColetaSheet, setShowColetaSheet] = useState(false);
   const [showEntregaSheet, setShowEntregaSheet] = useState(false);
@@ -101,9 +180,103 @@ export function TripInProgressScreen({ navigation, route }: Props) {
   const currentStep = steps[currentStepIndex];
   const totalSteps = steps.length;
   const isLastStep = currentStepIndex === totalSteps - 1;
-  const allCompleted = steps.every((s) => s.completed);
+  const allCompleted = steps.length > 0 && steps.every((s) => s.completed);
+
+  const mapRegion = useMemo(() => {
+    if (steps.length >= 2) {
+      const r = regionFromOriginDestination(
+        steps[0].latitude,
+        steps[0].longitude,
+        steps[1].latitude,
+        steps[1].longitude
+      );
+      if (r) return sanitizeMapRegion(r);
+    }
+    if (steps.length >= 1) {
+      return sanitizeMapRegion({
+        latitude: steps[0].latitude,
+        longitude: steps[0].longitude,
+        latitudeDelta: 0.06,
+        longitudeDelta: 0.06,
+      });
+    }
+    return sanitizeMapRegion({
+      latitude: -7.3289,
+      longitude: -35.3328,
+      latitudeDelta: 0.06,
+      longitudeDelta: 0.06,
+    });
+  }, [steps]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function run() {
+      const bid = live?.bookingId;
+      if (bid) {
+        const { data, error } = await loadBookingTripLiveContext(bid);
+        if (cancelled) return;
+        if (error || !data) {
+          const fallback = live ? buildStepsFromLiveParams(live) : null;
+          setSteps(fallback ?? []);
+          setPickupCode(null);
+          setDeliveryCode(null);
+          setBagsNote(null);
+          return;
+        }
+        const { booking, trip } = data;
+        setSteps(buildStepsFromBooking(booking));
+        setPickupCode(trip?.pickup_code?.trim() || null);
+        setDeliveryCode(trip?.delivery_code?.trim() || null);
+        setBagsNote(
+          booking.bags_count != null
+            ? `${booking.bags_count} ${booking.bags_count === 1 ? 'mala' : 'malas'}`
+            : null
+        );
+        const o = { latitude: booking.origin_lat, longitude: booking.origin_lng };
+        const d = { latitude: booking.destination_lat, longitude: booking.destination_lng };
+        const rt = await getRouteWithDuration(o, d);
+        if (cancelled) return;
+        if (rt) {
+          setRouteCoords(rt.coordinates.length ? rt.coordinates : null);
+          if (rt.durationSeconds > 0) {
+            const label = formatDuration(rt.durationSeconds);
+            setEtaText(label);
+            setDurationLabel(label);
+          }
+          setDistanceLabel(formatDistanceKmLabel(rt.distanceMeters));
+        }
+        return;
+      }
+      const fallback = live ? buildStepsFromLiveParams(live) : null;
+      if (cancelled) return;
+      setSteps(fallback ?? []);
+      setPickupCode(null);
+      setDeliveryCode(null);
+      setBagsNote(null);
+      if (fallback && fallback.length >= 2) {
+        const o = { latitude: fallback[0].latitude, longitude: fallback[0].longitude };
+        const d = { latitude: fallback[1].latitude, longitude: fallback[1].longitude };
+        const rt = await getRouteWithDuration(o, d);
+        if (cancelled) return;
+        if (rt) {
+          setRouteCoords(rt.coordinates.length ? rt.coordinates : null);
+          if (rt.durationSeconds > 0) {
+            const label = formatDuration(rt.durationSeconds);
+            setEtaText(label);
+            setDurationLabel(label);
+          }
+          setDistanceLabel(formatDistanceKmLabel(rt.distanceMeters));
+        }
+      }
+    }
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [live]);
 
   const openCurrentSheet = () => {
+    if (!currentStep) return;
     if (allCompleted) {
       setShowFinalizarSheet(true);
       return;
@@ -117,11 +290,19 @@ export function TripInProgressScreen({ navigation, route }: Props) {
     setShowCodeColetaModal(true);
   };
 
-  const handleConfirmColetaCode = (_code: string) => {
+  const handleConfirmColetaCode = (code: string) => {
+    const expected = pickupCode?.trim();
+    if (expected && onlyDigits(code) !== onlyDigits(expected)) {
+      showAlert('Código', 'Código de coleta incorreto. Verifique com o motorista.');
+      return false;
+    }
     setSteps((prev) =>
       prev.map((s, i) => (i === currentStepIndex ? { ...s, completed: true } : s))
     );
-    setCurrentStepIndex((i) => Math.min(i + 1, totalSteps - 1));
+    setCurrentStepIndex((i) => {
+      const maxIdx = Math.max(steps.length - 1, 0);
+      return Math.min(i + 1, maxIdx);
+    });
   };
 
   const handleCancelColeta = () => setShowCancelColetaModal(true);
@@ -136,7 +317,12 @@ export function TripInProgressScreen({ navigation, route }: Props) {
     setShowCodeEntregaModal(true);
   };
 
-  const handleConfirmEntregaCode = (_code: string) => {
+  const handleConfirmEntregaCode = (code: string) => {
+    const expected = deliveryCode?.trim();
+    if (expected && onlyDigits(code) !== onlyDigits(expected)) {
+      showAlert('Código', 'Código de entrega incorreto. Verifique com o motorista.');
+      return false;
+    }
     setSteps((prev) =>
       prev.map((s, i) => (i === currentStepIndex ? { ...s, completed: true } : s))
     );
@@ -149,43 +335,69 @@ export function TripInProgressScreen({ navigation, route }: Props) {
     navigation.navigate('RateTrip', { bookingId: live?.bookingId });
   };
 
-  return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar style="dark" />
+  const polylineCoords = useMemo(() => {
+    if (routeCoords?.length) return routeCoords;
+    if (steps.length >= 2) {
+      return [
+        { latitude: steps[0].latitude, longitude: steps[0].longitude },
+        { latitude: steps[1].latitude, longitude: steps[1].longitude },
+      ];
+    }
+    return [];
+  }, [routeCoords, steps]);
 
-      <View style={styles.mapWrap}>
-        <MapboxMap style={styles.map} initialRegion={sanitizeMapRegion(DEFAULT_REGION)} scrollEnabled={true}>
-          <MapboxPolyline coordinates={ROUTE_COORDS} strokeColor={COLORS.black} strokeWidth={4} />
-          {steps.map((step, i) => (
-            <MapboxMarker
-              key={step.id}
-              id={`step-${step.id}`}
-              coordinate={{ latitude: step.latitude, longitude: step.longitude }}
-              title={step.name}
-              description={step.address}
-              anchor={{ x: 0.5, y: 0.5 }}
-            >
-              <View style={styles.markerWrap}>
-                {step.completed ? (
-                  <MaterialIcons name="check-circle" size={32} color={COLORS.green} />
-                ) : i === currentStepIndex ? (
-                  <MaterialIcons name="play-circle-filled" size={32} color={COLORS.amber} />
-                ) : step.type === 'coleta' ? (
-                  <MaterialIcons name="person" size={28} color={COLORS.black} />
-                ) : (
-                  <MaterialIcons name="inventory-2" size={28} color={COLORS.black} />
-                )}
-              </View>
-            </MapboxMarker>
-          ))}
-        </MapboxMap>
-        <View style={styles.timeBadge}>
-          <Text style={styles.timeBadgeText}>20 min</Text>
-        </View>
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Text style={styles.backArrow}>←</Text>
-        </TouchableOpacity>
+  const mapBlock = (
+    <View style={[styles.mapWrap, mapFocused && styles.mapWrapFocused]}>
+      <MapboxMap
+        style={styles.map}
+        initialRegion={mapRegion}
+        scrollEnabled
+        showControls={mapFocused}
+        controlsTopInset={mapFocused ? insets.top + 56 : undefined}
+        controlsRightInset={mapFocused ? Math.max(insets.right, 12) + 4 : undefined}
+      >
+        {polylineCoords.length >= 2 ? (
+          <MapboxPolyline coordinates={polylineCoords} strokeColor={COLORS.black} strokeWidth={4} />
+        ) : null}
+        {steps.map((step, i) => (
+          <MapboxMarker
+            key={step.id}
+            id={`step-${step.id}`}
+            coordinate={{ latitude: step.latitude, longitude: step.longitude }}
+            title={step.name}
+            description={step.address}
+            anchor={{ x: 0.5, y: 0.5 }}
+          >
+            <View style={styles.markerWrap}>
+              {step.completed ? (
+                <MaterialIcons name="check-circle" size={32} color={COLORS.green} />
+              ) : i === currentStepIndex ? (
+                <MaterialIcons name="play-circle-filled" size={32} color={COLORS.amber} />
+              ) : step.type === 'coleta' ? (
+                <MaterialIcons name="person" size={28} color={COLORS.black} />
+              ) : (
+                <MaterialIcons name="inventory-2" size={28} color={COLORS.black} />
+              )}
+            </View>
+          </MapboxMarker>
+        ))}
+      </MapboxMap>
+      <View
+        style={[
+          styles.timeBadge,
+          mapFocused ? { top: insets.top + 56, left: 16 } : styles.timeBadgeDefaultPos,
+        ]}
+      >
+        <Text style={styles.timeBadgeText}>{etaText}</Text>
+      </View>
+      <TouchableOpacity
+        style={[styles.backButton, mapFocused && { top: insets.top + 8 }]}
+        onPress={() => navigation.goBack()}
+      >
+        <Text style={styles.backArrow}>←</Text>
+      </TouchableOpacity>
 
+      {!mapFocused ? (
         <View style={styles.stepsSidebar}>
           {steps.map((step, i) => (
             <View key={step.id} style={styles.stepIconWrap}>
@@ -204,56 +416,94 @@ export function TripInProgressScreen({ navigation, route }: Props) {
             </View>
           ))}
         </View>
-      </View>
+      ) : null}
+    </View>
+  );
 
-      <TouchableOpacity style={styles.currentStepCard} onPress={openCurrentSheet} activeOpacity={0.9}>
-        <View style={styles.currentStepHeader}>
-          <View style={[styles.stepBadge, currentStep?.type === 'entrega' && styles.stepBadgeEntrega]}>
-            <Text style={styles.stepBadgeText}>
-              {currentStep?.type === 'coleta' ? 'Coleta' : 'Entrega'}
-            </Text>
-          </View>
-          <Text style={styles.progressText}>{currentStepIndex + 1}/{totalSteps}</Text>
+  const stepCardEl = (
+    <TouchableOpacity style={styles.currentStepCard} onPress={openCurrentSheet} activeOpacity={0.9}>
+      <View style={styles.currentStepHeader}>
+        <View style={[styles.stepBadge, currentStep?.type === 'entrega' && styles.stepBadgeEntrega]}>
+          <Text style={styles.stepBadgeText}>
+            {!currentStep ? '…' : currentStep.type === 'coleta' ? 'Coleta' : 'Entrega'}
+          </Text>
         </View>
-        {currentStep && (
-          <>
-            <Text style={styles.currentStepName}>{currentStep.name}</Text>
-            <Text style={styles.currentStepAddress} numberOfLines={2}>{currentStep.address}</Text>
-            <View style={styles.etaRow}>
-              <MaterialIcons name="schedule" size={16} color={COLORS.neutral700} />
-              <Text style={styles.etaText}>20 min</Text>
-            </View>
-            <View style={styles.progressBar}>
-              <View
-                style={[styles.progressFill, { width: `${((currentStepIndex + (currentStep.completed ? 1 : 0)) / totalSteps) * 100}%` }]}
-              />
-            </View>
-          </>
-        )}
-      </TouchableOpacity>
-
-      <View style={styles.sheet}>
-        <Text style={styles.sheetTitle}>Chegada prevista em 20 minutos</Text>
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Motorista</Text>
-            <View style={styles.driverRow}>
-              <View style={styles.driverAvatar} />
-              <View style={styles.driverInfo}>
-                <Text style={styles.driverName}>{driverName}</Text>
-                <Text style={styles.driverRating}>★ {ratingLabel}</Text>
-                <Text style={styles.carText}>{vehicleLabel}</Text>
-              </View>
-              <Text style={styles.fare}>{fareFormatted}</Text>
-            </View>
-          </View>
-          <TouchableOpacity style={styles.primaryButton} onPress={openCurrentSheet} activeOpacity={0.8}>
-            <Text style={styles.primaryButtonText}>
-              {allCompleted ? 'Finalizar viagem' : currentStep?.type === 'coleta' ? 'Detalhes da coleta' : 'Detalhes da entrega'}
-            </Text>
-          </TouchableOpacity>
-        </ScrollView>
+        <Text style={styles.progressText}>
+          {totalSteps === 0 ? '—' : `${currentStepIndex + 1}/${totalSteps}`}
+        </Text>
       </View>
+      {currentStep && (
+        <>
+          <Text style={styles.currentStepName}>{currentStep.name}</Text>
+          <Text style={styles.currentStepAddress} numberOfLines={2}>{currentStep.address}</Text>
+          <View style={styles.etaRow}>
+            <MaterialIcons name="schedule" size={16} color={COLORS.neutral700} />
+            <Text style={styles.etaText}>{etaText}</Text>
+          </View>
+          <View style={styles.progressBar}>
+            <View
+              style={[
+                styles.progressFill,
+                {
+                  width: `${
+                    totalSteps > 0
+                      ? ((currentStepIndex + (currentStep.completed ? 1 : 0)) / totalSteps) * 100
+                      : 0
+                  }%`,
+                },
+              ]}
+            />
+          </View>
+        </>
+      )}
+    </TouchableOpacity>
+  );
+
+  const sheetTitleText =
+    etaText !== '—' ? `Chegada prevista em ${etaText}` : 'Acompanhe as etapas da viagem';
+
+  const sheetTitleEl = <Text style={styles.sheetTitle}>{sheetTitleText}</Text>;
+
+  const driverAndActionsEl = (
+    <>
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Motorista</Text>
+        <View style={styles.driverRow}>
+          <View style={styles.driverAvatar} />
+          <View style={styles.driverInfo}>
+            <Text style={styles.driverName}>{driverName}</Text>
+            <Text style={styles.driverRating}>★ {ratingLabel}</Text>
+            <Text style={styles.carText}>{vehicleLabel}</Text>
+          </View>
+          <Text style={styles.fare}>{fareFormatted}</Text>
+        </View>
+      </View>
+      <TouchableOpacity style={styles.primaryButton} onPress={openCurrentSheet} activeOpacity={0.8}>
+        <Text style={styles.primaryButtonText}>
+          {allCompleted ? 'Finalizar viagem' : currentStep?.type === 'coleta' ? 'Detalhes da coleta' : 'Detalhes da entrega'}
+        </Text>
+      </TouchableOpacity>
+    </>
+  );
+
+  return (
+    <SafeAreaView style={styles.container} edges={mapFocused ? ['bottom'] : ['top']}>
+      <StatusBar style="dark" />
+
+      {mapFocused ? (
+        <View style={styles.mapFocusedRoot}>{mapBlock}</View>
+      ) : (
+        <>
+          {mapBlock}
+          {stepCardEl}
+          <View style={styles.sheet}>
+            {sheetTitleEl}
+            <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+              {driverAndActionsEl}
+            </ScrollView>
+          </View>
+        </>
+      )}
 
       {/* Sheet: Detalhes da coleta */}
       <AnimatedBottomSheet visible={showColetaSheet} onClose={() => setShowColetaSheet(false)}>
@@ -267,8 +517,8 @@ export function TripInProgressScreen({ navigation, route }: Props) {
               <View style={styles.detailAvatar} />
               <View style={styles.detailUserInfo}>
                 <Text style={styles.detailUserName}>{currentStep.name}</Text>
-                <Text style={styles.detailRating}>★ 4.8</Text>
-                <Text style={styles.detailBag}>Mala pequena</Text>
+                <Text style={styles.detailRating}>★ {ratingLabel}</Text>
+                {bagsNote ? <Text style={styles.detailBag}>{bagsNote}</Text> : null}
               </View>
             </View>
             <Text style={styles.detailLabel}>Endereço da coleta</Text>
@@ -318,11 +568,11 @@ export function TripInProgressScreen({ navigation, route }: Props) {
         <Text style={styles.detailSheetTitle}>Finalizar viagem</Text>
         <View style={styles.finalizarRow}>
           <Text style={styles.finalizarLabel}>Tempo total</Text>
-          <Text style={styles.finalizarValue}>45 min</Text>
+          <Text style={styles.finalizarValue}>{durationLabel}</Text>
         </View>
         <View style={styles.finalizarRow}>
           <Text style={styles.finalizarLabel}>Distância</Text>
-          <Text style={styles.finalizarValue}>12 km</Text>
+          <Text style={styles.finalizarValue}>{distanceLabel}</Text>
         </View>
         <View style={styles.statusConcluidoWrap}>
           <MaterialIcons name="check-circle" size={24} color={COLORS.green} />
@@ -376,18 +626,19 @@ export function TripInProgressScreen({ navigation, route }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
+  mapFocusedRoot: { flex: 1, minHeight: 0 },
   mapWrap: { height: 280, width: '100%' },
+  mapWrapFocused: { flex: 1, minHeight: 0, width: '100%', overflow: 'hidden' },
   map: { width: '100%', height: '100%' },
   markerWrap: { alignItems: 'center', justifyContent: 'center' },
   timeBadge: {
     position: 'absolute',
-    bottom: 12,
-    left: 24,
     backgroundColor: '#2563EB',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
   },
+  timeBadgeDefaultPos: { bottom: 12, left: 24 },
   timeBadgeText: { fontSize: 14, fontWeight: '600', color: '#FFFFFF' },
   backButton: {
     position: 'absolute',

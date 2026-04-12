@@ -13,6 +13,7 @@ const ERROR_PT: Array<[RegExp, string]> = [
   [/rate limit|rate_limit|too many requests|429|email.*hour|password reset.*period/i, 'Aguarde alguns minutos para solicitar um novo e-mail de recuperação.'],
   [/session.*expired|refresh token/i, 'Sessão expirada. Faça login novamente.'],
   [/jwt expired/i, 'Sessão expirada. Faça login novamente.'],
+  [/invalid jwt|jwt could not be verified|jwt.*not.*valid/i, 'Sessão inválida ou expirada. Faça login novamente.'],
   [/edge function|non-2xx/i, 'Serviço temporariamente indisponível. Tente novamente.'],
   // Storage / anexos (Supabase)
   [

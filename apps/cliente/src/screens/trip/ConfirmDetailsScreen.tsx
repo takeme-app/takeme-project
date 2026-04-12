@@ -34,15 +34,15 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
   const destination = route.params?.destination;
   const [bags, setBags] = useState(2);
   const [passengers, setPassengers] = useState(2);
-  const [passengerData, setPassengerData] = useState<Record<number, { name: string; cpf: string; bags: string }>>({
-    0: { name: '', cpf: '', bags: '' },
-    1: { name: '', cpf: '', bags: '' },
+  const [passengerData, setPassengerData] = useState<Record<number, { name: string; cpf: string }>>({
+    0: { name: '', cpf: '' },
+    1: { name: '', cpf: '' },
   });
 
-  const updatePassenger = (index: number, field: 'name' | 'cpf' | 'bags', value: string) => {
+  const updatePassenger = (index: number, field: 'name' | 'cpf', value: string) => {
     setPassengerData((prev) => ({
       ...prev,
-      [index]: { ...(prev[index] ?? { name: '', cpf: '', bags: '' }), [field]: value },
+      [index]: { ...(prev[index] ?? { name: '', cpf: '' }), [field]: value },
     }));
   };
 
@@ -125,14 +125,6 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
               keyboardType="number-pad"
               maxLength={14}
             />
-            <TextInput
-              style={styles.input}
-              placeholder="Quantidade de malas?"
-              placeholderTextColor={COLORS.neutral700}
-              value={passengerData[i]?.bags ?? ''}
-              onChangeText={(v) => updatePassenger(i, 'bags', v)}
-              keyboardType="number-pad"
-            />
           </View>
         ))}
 
@@ -150,7 +142,7 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
             const passengerList: TripPassengerParam[] = Array.from({ length: passengers }, (_, i) => ({
               name: passengerData[i]?.name ?? '',
               cpf: passengerData[i]?.cpf ?? '',
-              bags: passengerData[i]?.bags ?? '',
+              bags: '',
             }));
             navigation.navigate('Checkout', {
               driver,
