@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -9,6 +9,7 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -27,8 +28,17 @@ import {
   isValidGlobeCoordinate,
   MY_LOCATION_NAV_DELTA,
   type GoogleMapsMapRef,
+  type LatLng,
 } from '../../components/googleMaps';
 import { getGoogleMapsApiKey, getMapboxAccessToken } from '../../lib/googleMapsConfig';
+import {
+  buildNavigationPadding,
+  computeNextNavigationCamera,
+  createInitialBearingState,
+  type DriverFix,
+  type NavigationBearingState,
+} from '../../lib/navigationCamera';
+import { snapToRoutePolyline, trimPolylineFromSnap } from '../../lib/routeSnap';
 import { getRouteWithDuration, formatEta } from '../../lib/route';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { coletaLetterFromShipmentId, shipmentCodesMatch } from '../../lib/preparerEncomendasBase';
@@ -36,6 +46,12 @@ import { closeShipmentConversation } from '../../lib/shipmentConversation';
 
 let Location: any = null;
 try { Location = require('expo-location'); } catch { /* not linked yet */ }
+
+/** Map matching / bearing da via (igual ActiveTrip). */
+const NAV_ROUTE_SNAP_MAX_M = 52;
+const NAV_ROAD_BEARING_SNAP_M = 40;
+const NAV_LOOK_AHEAD_M = 56;
+const NAV_CAMERA_ANIMATION_MS = 320;
 
 const GOLD = '#C9A227';
 const DARK = '#111827';
@@ -54,8 +70,18 @@ type Shipment = {
   baseName: string;
   originCoord: Coord;
   baseCoord: Coord;
-  /** Se false, `baseCoord` é só fallback para o mapa (ex.: base sem lat/lng) — não usar proximidade para abrir modal de entrega. */
+  destinationCoord: Coord;
+  /** Com base preparadora: coleta na base; sem base: coleta na origem (cliente). */
+  pickupCoord: Coord;
+  /** Sempre o destino da encomenda (entrega ao cliente). */
+  deliveryCoord: Coord;
+  hasPreparerBase: boolean;
+  /** Coleta com coordenadas confiáveis (modal por proximidade na 1ª etapa). */
+  pickupHasMapCoords: boolean;
+  /** Se false, `baseCoord` é só fallback para o mapa (ex.: base sem lat/lng). */
   baseHasMapCoords: boolean;
+  /** Destino com coordenadas válidas (modal de entrega por proximidade). */
+  deliveryHasMapCoords: boolean;
   amountCents: number;
   confirmedAt: string;
   pickupCodeExpected: string;
@@ -88,6 +114,7 @@ const NEARBY_KM = 0.15;
 
 export function ActiveShipmentScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const { showAlert } = useAppAlert();
   const { shipmentId } = route.params;
   const [shipment, setShipment] = useState<Shipment | null>(null);
@@ -122,39 +149,126 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
   const autoModalRef = useRef({ pickup: false, delivery: false });
   const startTimeRef = useRef(Date.now());
   const [followMyLocation, setFollowMyLocation] = useState(false);
-  const followFirstAnimDoneRef = useRef(false);
+  const followNavRef = useRef(false);
+  const latestDriverFixRef = useRef<DriverFix | null>(null);
+  const compassHeadingRef = useRef<number | null>(null);
+  const navBearingStateRef = useRef<NavigationBearingState | null>(null);
+  const navRafRef = useRef<number | null>(null);
+  const routeForSnapRef = useRef<LatLng[]>([]);
+
+  const navPuckTopPx = useMemo(() => Math.round(windowHeight * 0.68 - 24), [windowHeight]);
 
   const mapInitialRegion = useMemo(() => {
     if (!shipment) return regionFromLatLngPoints([]);
     if (step === 'to_pickup') {
-      const pts: Coord[] = [shipment.originCoord];
+      const pts: Coord[] = [shipment.pickupCoord];
       if (driverPos) pts.push(driverPos);
       return regionFromLatLngPoints(pts);
     }
     const pts: Coord[] = [];
     if (driverPos) pts.push(driverPos);
-    pts.push(shipment.originCoord, shipment.baseCoord);
+    pts.push(shipment.pickupCoord, shipment.deliveryCoord);
     return regionFromLatLngPoints(pts);
   }, [shipment, driverPos, step]);
 
-  /** Ao mudar etapa: coleta → zoom na origem; entrega → rota completa. */
+  const applyHeadingUpCamera = useCallback(() => {
+    if (!followNavRef.current || !mapRef.current) return;
+    const raw = latestDriverFixRef.current;
+    if (!raw || !isValidGlobeCoordinate(raw.latitude, raw.longitude)) return;
+    if (!navBearingStateRef.current) {
+      navBearingStateRef.current = createInitialBearingState(0);
+    }
+    const guide = routeForSnapRef.current;
+    let fix: DriverFix = raw;
+    let roadCourseDeg: number | null = null;
+    if (guide.length >= 2) {
+      const snap = snapToRoutePolyline(
+        { latitude: raw.latitude, longitude: raw.longitude },
+        guide,
+        NAV_ROUTE_SNAP_MAX_M,
+      );
+      if (snap.distanceM <= NAV_ROUTE_SNAP_MAX_M) {
+        fix = {
+          ...raw,
+          latitude: snap.snapped.latitude,
+          longitude: snap.snapped.longitude,
+        };
+        if (snap.distanceM <= NAV_ROAD_BEARING_SNAP_M) {
+          roadCourseDeg = snap.segmentBearingDeg;
+        }
+      }
+    }
+    const padding = buildNavigationPadding({
+      windowHeight,
+      safeTop: insets.top,
+      safeBottom: insets.bottom,
+    });
+    const out = computeNextNavigationCamera({
+      fix,
+      compassHeadingDeg: compassHeadingRef.current,
+      state: navBearingStateRef.current,
+      lookAheadMeters: NAV_LOOK_AHEAD_M,
+      roadCourseDeg,
+    });
+    navBearingStateRef.current = out.state;
+    mapRef.current.setNavigationCamera({
+      centerCoordinate: [out.center.longitude, out.center.latitude],
+      heading: out.heading,
+      pitch: out.pitch,
+      zoomLevel: out.zoomLevel,
+      padding,
+      animationDuration: NAV_CAMERA_ANIMATION_MS,
+    });
+  }, [windowHeight, insets.top, insets.bottom]);
+
+  const scheduleNavFrame = useCallback(() => {
+    if (!followNavRef.current) return;
+    if (navRafRef.current != null) return;
+    navRafRef.current = requestAnimationFrame(() => {
+      navRafRef.current = null;
+      applyHeadingUpCamera();
+    });
+  }, [applyHeadingUpCamera]);
+
+  useLayoutEffect(() => {
+    followNavRef.current = followMyLocation;
+    if (followMyLocation) {
+      navBearingStateRef.current = createInitialBearingState(0);
+      requestAnimationFrame(() => scheduleNavFrame());
+    } else if (navRafRef.current != null) {
+      cancelAnimationFrame(navRafRef.current);
+      navRafRef.current = null;
+    }
+  }, [followMyLocation, scheduleNavFrame]);
+
+  useEffect(
+    () => () => {
+      if (navRafRef.current != null) {
+        cancelAnimationFrame(navRafRef.current);
+        navRafRef.current = null;
+      }
+    },
+    [],
+  );
+
+  /** Ao mudar etapa: coleta → zoom no ponto de coleta; entrega → rota entre coleta e destino. */
   useEffect(() => {
     if (!shipment || loading) return;
     setFollowMyLocation(false);
     const region =
       step === 'to_pickup'
         ? {
-            latitude: shipment.originCoord.latitude,
-            longitude: shipment.originCoord.longitude,
+            latitude: shipment.pickupCoord.latitude,
+            longitude: shipment.pickupCoord.longitude,
             latitudeDelta: 0.052,
             longitudeDelta: 0.052,
           }
-        : regionFromLatLngPoints([shipment.originCoord, shipment.baseCoord]);
+        : regionFromLatLngPoints([shipment.pickupCoord, shipment.deliveryCoord]);
     const t = setTimeout(() => mapRef.current?.animateToRegion(region, 450), 100);
     return () => clearTimeout(t);
   }, [step, shipment, loading]);
 
-  // Load shipment + base (devolução na base, não no destino final)
+  // Load shipment: com base → coleta na base e entrega no destino; sem base → coleta na origem (cliente).
   useEffect(() => {
     autoModalRef.current = { pickup: false, delivery: false };
     setLoadError(null);
@@ -193,9 +307,66 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         picked_up_at: string | null;
       };
 
-      if (!row.base_id) {
+      const { data: prof } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', row.user_id)
+        .maybeSingle();
+      const p = prof as { full_name?: string | null } | null;
+
+      const oLL = latLngFromDbColumns(row.origin_lat, row.origin_lng);
+      const dLL = latLngFromDbColumns(row.destination_lat, row.destination_lng);
+      const originCoord = oLL ?? { latitude: -23.5, longitude: -46.6 };
+      const destinationCoord = dLL ?? originCoord;
+      const deliveryHasMapCoords = Boolean(
+        dLL && isValidGlobeCoordinate(dLL.latitude, dLL.longitude),
+      );
+      const hasPreparerBase = Boolean(row.base_id);
+
+      const routeOpts = {
+        mapboxToken: getMapboxAccessToken(),
+        googleMapsApiKey: getGoogleMapsApiKey(),
+      };
+
+      if (!hasPreparerBase) {
+        const pickupHasMapCoords = Boolean(
+          oLL && isValidGlobeCoordinate(oLL.latitude, oLL.longitude),
+        );
+        const s: Shipment = {
+          id: row.id,
+          clientName: p?.full_name ?? 'Cliente',
+          originAddress: row.origin_address ?? '',
+          finalDestinationAddress: row.destination_address ?? '',
+          baseAddress: row.destination_address ?? '',
+          baseName: 'Destino',
+          originCoord,
+          baseCoord: destinationCoord,
+          destinationCoord,
+          pickupCoord: originCoord,
+          deliveryCoord: destinationCoord,
+          hasPreparerBase: false,
+          pickupHasMapCoords,
+          baseHasMapCoords: deliveryHasMapCoords,
+          deliveryHasMapCoords,
+          amountCents: row.amount_cents ?? 0,
+          confirmedAt: row.created_at,
+          pickupCodeExpected: String(row.pickup_code ?? ''),
+          deliveryCodeExpected: String(row.delivery_code ?? ''),
+          coletaLetter: coletaLetterFromShipmentId(row.id),
+        };
+        setShipment(s);
+        if (row.status === 'in_progress' || row.picked_up_at) setStep('to_delivery');
+
+        const fullRoute = await getRouteWithDuration(s.pickupCoord, s.deliveryCoord, routeOpts);
+        if (fullRoute) setFullRouteCoords(fullRoute.coordinates);
+        else if (
+          isValidGlobeCoordinate(s.pickupCoord.latitude, s.pickupCoord.longitude) &&
+          isValidGlobeCoordinate(s.deliveryCoord.latitude, s.deliveryCoord.longitude)
+        ) {
+          setFullRouteCoords([s.pickupCoord, s.deliveryCoord]);
+        }
+
         setLoading(false);
-        setLoadError('Esta encomenda não está vinculada a uma base. A coleta não pode ser feita pelo app.');
         return;
       }
 
@@ -221,17 +392,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         lng: number | null;
       };
 
-      const { data: prof } = await supabase
-        .from('profiles')
-        .select('full_name')
-        .eq('id', row.user_id)
-        .maybeSingle();
-      const p = prof as { full_name?: string | null } | null;
-
-      const oLL = latLngFromDbColumns(row.origin_lat, row.origin_lng);
       const baseLL = latLngFromDbColumns(b.lat, b.lng);
-      const originCoord = oLL ?? { latitude: -23.5, longitude: -46.6 };
-      const baseHasMapCoords = Boolean(baseLL);
+      const baseHasMapCoords = Boolean(
+        baseLL && isValidGlobeCoordinate(baseLL.latitude, baseLL.longitude),
+      );
       const baseCoord = baseLL ?? originCoord;
 
       const s: Shipment = {
@@ -243,7 +407,13 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         baseName: b.name,
         originCoord,
         baseCoord,
+        destinationCoord,
+        pickupCoord: baseCoord,
+        deliveryCoord: destinationCoord,
+        hasPreparerBase: true,
+        pickupHasMapCoords: baseHasMapCoords,
         baseHasMapCoords,
+        deliveryHasMapCoords,
         amountCents: row.amount_cents ?? 0,
         confirmedAt: row.created_at,
         pickupCodeExpected: String(row.pickup_code ?? ''),
@@ -254,14 +424,13 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
 
       if (row.status === 'in_progress' || row.picked_up_at) setStep('to_delivery');
 
-      const routeOpts = { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() };
-      const fullRoute = await getRouteWithDuration(s.originCoord, s.baseCoord, routeOpts);
+      const fullRoute = await getRouteWithDuration(s.pickupCoord, s.deliveryCoord, routeOpts);
       if (fullRoute) setFullRouteCoords(fullRoute.coordinates);
       else if (
-        isValidGlobeCoordinate(s.originCoord.latitude, s.originCoord.longitude) &&
-        isValidGlobeCoordinate(s.baseCoord.latitude, s.baseCoord.longitude)
+        isValidGlobeCoordinate(s.pickupCoord.latitude, s.pickupCoord.longitude) &&
+        isValidGlobeCoordinate(s.deliveryCoord.latitude, s.deliveryCoord.longitude)
       ) {
-        setFullRouteCoords([s.originCoord, s.baseCoord]);
+        setFullRouteCoords([s.pickupCoord, s.deliveryCoord]);
       }
 
       setLoading(false);
@@ -275,12 +444,42 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted' || !mounted) return;
-      const pos = await Location.getCurrentPositionAsync({});
-      if (mounted) setDriverPos({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy?.High ?? Location.Accuracy.Balanced,
+      });
+      if (mounted) {
+        const la = pos.coords.latitude;
+        const lo = pos.coords.longitude;
+        setDriverPos({ latitude: la, longitude: lo });
+        latestDriverFixRef.current = {
+          latitude: la,
+          longitude: lo,
+          speedMps:
+            typeof pos.coords.speed === 'number' && pos.coords.speed >= 0 ? pos.coords.speed : null,
+          headingDeg:
+            typeof pos.coords.heading === 'number' && pos.coords.heading >= 0 ? pos.coords.heading : null,
+          timestamp: Date.now(),
+        };
+      }
       locationSubRef.current = await Location.watchPositionAsync(
-        { accuracy: Location.Accuracy?.High ?? 5, distanceInterval: 15 },
+        {
+          accuracy: Location.Accuracy?.High ?? Location.Accuracy.Balanced,
+          distanceInterval: 4,
+          timeInterval: 1000,
+        },
         (p: any) => {
-          if (mounted) setDriverPos({ latitude: p.coords.latitude, longitude: p.coords.longitude });
+          if (!mounted) return;
+          const la = p.coords.latitude;
+          const lo = p.coords.longitude;
+          setDriverPos({ latitude: la, longitude: lo });
+          latestDriverFixRef.current = {
+            latitude: la,
+            longitude: lo,
+            speedMps: typeof p.coords.speed === 'number' && p.coords.speed >= 0 ? p.coords.speed : null,
+            headingDeg: typeof p.coords.heading === 'number' && p.coords.heading >= 0 ? p.coords.heading : null,
+            timestamp: Date.now(),
+          };
+          if (followNavRef.current) scheduleNavFrame();
         },
       );
     })();
@@ -288,32 +487,37 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       mounted = false;
       locationSubRef.current?.remove();
     };
-  }, []);
+  }, [scheduleNavFrame]);
 
-  /** Depois de tocar em “minha localização”, a câmera acompanha o GPS até você mover o mapa. */
   useEffect(() => {
-    if (!followMyLocation) {
-      followFirstAnimDoneRef.current = false;
-      return;
-    }
-    if (!driverPos || !isValidGlobeCoordinate(driverPos.latitude, driverPos.longitude)) return;
-    const dur = followFirstAnimDoneRef.current ? 0 : 350;
-    followFirstAnimDoneRef.current = true;
-    mapRef.current?.animateToRegion(
-      {
-        latitude: driverPos.latitude,
-        longitude: driverPos.longitude,
-        latitudeDelta: MY_LOCATION_NAV_DELTA,
-        longitudeDelta: MY_LOCATION_NAV_DELTA,
-      },
-      dur,
-    );
-  }, [driverPos, followMyLocation]);
+    if (!followMyLocation || !Location?.watchHeadingAsync) return;
+    let cancelled = false;
+    let sub: { remove: () => void } | undefined;
+    (async () => {
+      try {
+        const s = await Location.watchHeadingAsync((h: { trueHeading?: number; magHeading?: number }) => {
+          const th = h.trueHeading;
+          const mh = h.magHeading;
+          const v =
+            typeof th === 'number' && th >= 0 ? th : typeof mh === 'number' && mh >= 0 ? mh : null;
+          if (v != null) compassHeadingRef.current = v;
+          if (followNavRef.current) scheduleNavFrame();
+        });
+        if (!cancelled) sub = s;
+      } catch {
+        /* Android / permissão / hardware */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      sub?.remove?.();
+    };
+  }, [followMyLocation, scheduleNavFrame]);
 
   // Driver → current stop route
   useEffect(() => {
     if (!driverPos || !shipment) return;
-    const target = step === 'to_pickup' ? shipment.originCoord : shipment.baseCoord;
+    const target = step === 'to_pickup' ? shipment.pickupCoord : shipment.deliveryCoord;
     getRouteWithDuration(driverPos, target, { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() }).then((r) => {
       if (r) {
         setDriverRouteCoords(r.coordinates);
@@ -326,19 +530,88 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     });
   }, [driverPos, step, shipment]);
 
-  /** Ao chegar perto da coleta ou da base, abre o modal de código (uma vez por etapa). */
+  useEffect(() => {
+    if (driverRouteCoords.length >= 2) routeForSnapRef.current = driverRouteCoords;
+    else if (fullRouteCoords.length >= 2) routeForSnapRef.current = fullRouteCoords;
+    else routeForSnapRef.current = [];
+  }, [driverRouteCoords, fullRouteCoords]);
+
+  const navRoutePresentation = useMemo(() => {
+    const goldBase = fullRouteCoords;
+    const darkBase = driverRouteCoords;
+    const guide =
+      darkBase.length >= 2 ? darkBase : goldBase.length >= 2 ? goldBase : [];
+
+    if (
+      !followMyLocation ||
+      !driverPos ||
+      !isValidGlobeCoordinate(driverPos.latitude, driverPos.longitude)
+    ) {
+      return {
+        goldLine: goldBase,
+        darkLine: darkBase,
+        showGold: goldBase.length >= 2,
+        showDark: darkBase.length >= 2,
+        snappedForFallback: null as LatLng | null,
+      };
+    }
+    if (guide.length < 2) {
+      return {
+        goldLine: goldBase,
+        darkLine: darkBase,
+        showGold: goldBase.length >= 2,
+        showDark: darkBase.length >= 2,
+        snappedForFallback: null,
+      };
+    }
+    const snap = snapToRoutePolyline(driverPos, guide, NAV_ROUTE_SNAP_MAX_M);
+    if (snap.distanceM > NAV_ROUTE_SNAP_MAX_M) {
+      return {
+        goldLine: goldBase,
+        darkLine: darkBase,
+        showGold: goldBase.length >= 2,
+        showDark: darkBase.length >= 2,
+        snappedForFallback: null,
+      };
+    }
+    let trimmed = trimPolylineFromSnap(guide, snap.segmentIndex, snap.snapped);
+    if (trimmed.length < 2 && guide.length >= 2) {
+      trimmed = [snap.snapped, guide[guide.length - 1]!];
+    }
+    if (darkBase.length >= 2) {
+      return {
+        goldLine: [],
+        darkLine: trimmed.length >= 2 ? trimmed : darkBase,
+        showGold: false,
+        showDark: trimmed.length >= 2,
+        snappedForFallback: snap.snapped,
+      };
+    }
+    return {
+      goldLine: trimmed.length >= 2 ? trimmed : goldBase,
+      darkLine: [],
+      showGold: trimmed.length >= 2,
+      showDark: false,
+      snappedForFallback: snap.snapped,
+    };
+  }, [followMyLocation, driverPos, fullRouteCoords, driverRouteCoords]);
+
+  /** Ao chegar perto da coleta ou do destino de entrega, abre o modal de código (uma vez por etapa). */
   useEffect(() => {
     if (!driverPos || !shipment || loading) return;
     if (step === 'to_pickup' && !pickupVisible && !autoModalRef.current.pickup) {
-      if (haversineKm(driverPos, shipment.originCoord) <= NEARBY_KM) {
+      if (
+        shipment.pickupHasMapCoords &&
+        haversineKm(driverPos, shipment.pickupCoord) <= NEARBY_KM
+      ) {
         autoModalRef.current.pickup = true;
         setPickupVisible(true);
       }
     }
     if (step === 'to_delivery' && !deliveryVisible && !autoModalRef.current.delivery) {
       if (
-        shipment.baseHasMapCoords &&
-        haversineKm(driverPos, shipment.baseCoord) <= NEARBY_KM
+        shipment.deliveryHasMapCoords &&
+        haversineKm(driverPos, shipment.deliveryCoord) <= NEARBY_KM
       ) {
         autoModalRef.current.delivery = true;
         setDeliveryVisible(true);
@@ -351,8 +624,8 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     setFollowMyLocation(false);
     mapRef.current?.animateToRegion(
       {
-        latitude: shipment.originCoord.latitude,
-        longitude: shipment.originCoord.longitude,
+        latitude: shipment.pickupCoord.latitude,
+        longitude: shipment.pickupCoord.longitude,
         latitudeDelta: 0.045,
         longitudeDelta: 0.045,
       },
@@ -360,13 +633,13 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     );
   }, [shipment]);
 
-  const focusBase = useCallback(() => {
+  const focusEntrega = useCallback(() => {
     if (!shipment) return;
     setFollowMyLocation(false);
     mapRef.current?.animateToRegion(
       {
-        latitude: shipment.baseCoord.latitude,
-        longitude: shipment.baseCoord.longitude,
+        latitude: shipment.deliveryCoord.latitude,
+        longitude: shipment.deliveryCoord.longitude,
         latitudeDelta: 0.045,
         longitudeDelta: 0.045,
       },
@@ -405,7 +678,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       setPickupCode('');
       setPickupObs('');
       mapRef.current?.animateToRegion(
-        { ...shipment.baseCoord, latitudeDelta: 0.02, longitudeDelta: 0.02 },
+        { ...shipment.deliveryCoord, latitudeDelta: 0.02, longitudeDelta: 0.02 },
         600,
       );
     } finally {
@@ -417,7 +690,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     if (!deliveryCode.trim() || !shipment) return;
     const exp = shipment.deliveryCodeExpected.trim();
     if (exp && !shipmentCodesMatch(exp, deliveryCode)) {
-      showAlert('Código incorreto', 'Confira o código informado pela base.');
+      showAlert('Código incorreto', 'Confira o código de confirmação da entrega.');
       return;
     }
     if (!exp && deliveryCode.trim().length < 4) {
@@ -485,14 +758,18 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     );
   }
 
-  const currentAddress = step === 'to_pickup' ? shipment.originAddress : shipment.baseAddress;
+  const currentAddress =
+    step === 'to_pickup'
+      ? (shipment.hasPreparerBase ? shipment.baseAddress : shipment.originAddress)
+      : shipment.finalDestinationAddress;
   const elapsedSec = Math.round((Date.now() - startTimeRef.current) / 1000);
   const totalKm = routeDistanceKm(
-    fullRouteCoords.length > 1 ? fullRouteCoords : [shipment.originCoord, shipment.baseCoord],
+    fullRouteCoords.length > 1 ? fullRouteCoords : [shipment.pickupCoord, shipment.deliveryCoord],
   );
 
   const pickupDone = step === 'to_delivery';
   const overlayTop = insets.top + 56;
+  const fallbackNavTarget = step === 'to_pickup' ? shipment.pickupCoord : shipment.deliveryCoord;
 
   return (
     <View style={styles.root}>
@@ -503,40 +780,62 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
         initialRegion={mapInitialRegion}
-        onUserAdjustedMap={() => setFollowMyLocation(false)}
+        onUserAdjustedMap={() => {
+          setFollowMyLocation(false);
+          const fix = latestDriverFixRef.current;
+          if (fix && mapRef.current && isValidGlobeCoordinate(fix.latitude, fix.longitude)) {
+            mapRef.current.easeToRegionNorthUp(
+              {
+                latitude: fix.latitude,
+                longitude: fix.longitude,
+                latitudeDelta: MY_LOCATION_NAV_DELTA,
+                longitudeDelta: MY_LOCATION_NAV_DELTA,
+              },
+              400,
+            );
+          }
+        }}
       >
-        {driverRouteCoords.length >= 2 && (
-          <MapPolyline id="driver" coordinates={driverRouteCoords} strokeColor={DARK} strokeWidth={3} />
+        {navRoutePresentation.showDark && navRoutePresentation.darkLine.length >= 2 && (
+          <MapPolyline id="driver" coordinates={navRoutePresentation.darkLine} strokeColor={DARK} strokeWidth={3} />
         )}
-        {fullRouteCoords.length >= 2 ? (
-          <MapPolyline id="full" coordinates={fullRouteCoords} strokeColor={GOLD} strokeWidth={5} />
-        ) : isValidGlobeCoordinate(shipment.originCoord.latitude, shipment.originCoord.longitude) &&
-          isValidGlobeCoordinate(shipment.baseCoord.latitude, shipment.baseCoord.longitude) ? (
-          <MapPolyline
-            id="fallback"
-            coordinates={[shipment.originCoord, shipment.baseCoord]}
-            strokeColor={GOLD}
-            strokeWidth={4}
-          />
-        ) : null}
+        {navRoutePresentation.showGold && navRoutePresentation.goldLine.length >= 2 && (
+          <MapPolyline id="full" coordinates={navRoutePresentation.goldLine} strokeColor={GOLD} strokeWidth={5} />
+        )}
+        {fullRouteCoords.length < 2 &&
+          driverRouteCoords.length < 2 &&
+          driverPos &&
+          isValidGlobeCoordinate(driverPos.latitude, driverPos.longitude) &&
+          isValidGlobeCoordinate(fallbackNavTarget.latitude, fallbackNavTarget.longitude) && (
+            <MapPolyline
+              id="fallback"
+              coordinates={[navRoutePresentation.snappedForFallback ?? driverPos, fallbackNavTarget]}
+              strokeColor={GOLD}
+              strokeWidth={4}
+            />
+          )}
 
-        <MapMarker id="stop-pickup" coordinate={shipment.originCoord} anchor={{ x: 0.5, y: 0.5 }}>
+        <MapMarker id="stop-pickup" coordinate={shipment.pickupCoord} anchor={{ x: 0.5, y: 0.5 }}>
           <View style={[styles.mapStopMarker, pickupDone ? styles.mapStopMarkerDone : { backgroundColor: GOLD }]}>
-            <MaterialIcons name={pickupDone ? 'check' : 'inventory-2'} size={18} color="#fff" />
+            <MaterialIcons
+              name={pickupDone ? 'check' : shipment.hasPreparerBase ? 'store' : 'inventory-2'}
+              size={18}
+              color="#fff"
+            />
           </View>
         </MapMarker>
-        <MapMarker id="stop-base" coordinate={shipment.baseCoord} anchor={{ x: 0.5, y: 0.5 }}>
+        <MapMarker id="stop-delivery" coordinate={shipment.deliveryCoord} anchor={{ x: 0.5, y: 0.5 }}>
           <View
             style={[
               styles.mapStopMarker,
               pickupDone ? { backgroundColor: GOLD } : styles.mapStopMarkerPending,
             ]}
           >
-            <MaterialIcons name="store" size={18} color={pickupDone ? '#fff' : '#6B7280'} />
+            <MaterialIcons name="place" size={18} color={pickupDone ? '#fff' : '#6B7280'} />
           </View>
         </MapMarker>
 
-        {driverPos && (
+        {driverPos && !followMyLocation && (
           <MapMarker id="driver-pos" coordinate={driverPos} anchor={{ x: 0.5, y: 0.5 }}>
             <View style={styles.driverPulse}>
               <View style={styles.driverMarker}>
@@ -546,6 +845,20 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
           </MapMarker>
         )}
       </GoogleMapsMap>
+
+      {followMyLocation &&
+        driverPos &&
+        isValidGlobeCoordinate(driverPos.latitude, driverPos.longitude) && (
+          <View style={styles.navPuckOverlay} pointerEvents="none">
+            <View style={[styles.navPuckAnchor, { top: navPuckTopPx }]}>
+              <View style={styles.driverPulse}>
+                <View style={styles.driverMarker}>
+                  <MaterialIcons name="navigation" size={18} color="#fff" />
+                </View>
+              </View>
+            </View>
+          </View>
+        )}
 
       {/* Overlay alinhado ao ActiveTrip: safe area + controles */}
       <SafeAreaView edges={['top', 'bottom']} style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
@@ -572,7 +885,21 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
           <MapZoomControls
             mapRef={mapRef}
             floating={false}
-            onBeforeZoom={() => setFollowMyLocation(false)}
+            onBeforeZoom={() => {
+              setFollowMyLocation(false);
+              const fix = latestDriverFixRef.current;
+              if (fix && mapRef.current && isValidGlobeCoordinate(fix.latitude, fix.longitude)) {
+                mapRef.current.easeToRegionNorthUp(
+                  {
+                    latitude: fix.latitude,
+                    longitude: fix.longitude,
+                    latitudeDelta: MY_LOCATION_NAV_DELTA,
+                    longitudeDelta: MY_LOCATION_NAV_DELTA,
+                  },
+                  280,
+                );
+              }
+            }}
           />
         </View>
 
@@ -594,10 +921,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
               styles.sidebarBtn,
               pickupDone ? styles.sidebarDestBtn : { backgroundColor: '#E5E7EB' },
             ]}
-            onPress={focusBase}
+            onPress={focusEntrega}
             activeOpacity={0.85}
           >
-            <MaterialIcons name="store" size={18} color={pickupDone ? DARK : '#6B7280'} />
+            <MaterialIcons name="place" size={18} color={pickupDone ? DARK : '#6B7280'} />
           </TouchableOpacity>
         </View>
 
@@ -622,7 +949,9 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
           </View>
 
           <Text style={styles.miniSheetName} numberOfLines={1}>
-            {step === 'to_pickup' ? `Coleta — ${shipment.clientName}` : 'Entrega na base'}
+            {step === 'to_pickup'
+              ? (shipment.hasPreparerBase ? `Coleta na base — ${shipment.baseName}` : `Coleta — ${shipment.clientName}`)
+              : 'Entrega ao destino'}
           </Text>
           <View style={styles.miniAddressRow}>
             <MaterialIcons name="location-on" size={14} color="#6B7280" />
@@ -728,8 +1057,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
               <View style={styles.handle} />
               <View style={styles.sheetHeader}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.sheetTitle}>Confirmar entrega na base</Text>
-                  <Text style={styles.sheetSub}>Insira o código informado pela base{'\n'}para confirmar que o item foi entregue.</Text>
+                  <Text style={styles.sheetTitle}>Confirmar entrega</Text>
+                  <Text style={styles.sheetSub}>
+                    Insira o código de confirmação da entrega{'\n'}para registrar a conclusão.
+                  </Text>
                 </View>
                 <TouchableOpacity style={styles.closeBtn} onPress={() => setDeliveryVisible(false)} activeOpacity={0.7}>
                   <MaterialIcons name="close" size={18} color="#374151" />
@@ -913,6 +1244,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 5,
+  },
+
+  navPuckOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 4,
+  },
+  navPuckAnchor: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
   },
 
   sidebar: {

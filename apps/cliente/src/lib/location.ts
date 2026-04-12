@@ -57,6 +57,8 @@ export type AddressSuggestion = {
   address: string;
   latitude: number;
   longitude: number;
+  /** Cidade (Nominatim) quando disponível — usada em envios para fila de motoristas. */
+  city?: string;
 };
 
 /** Siglas dos estados brasileiros (Nominatim devolve nome completo). */
@@ -122,10 +124,18 @@ export async function searchAddress(query: string): Promise<AddressSuggestion[]>
   }>;
   const mapped = data.map((item) => {
     const short = formatShortAddress(item.address, item.display_name ?? '');
+    const addr = item.address;
+    const cityRaw =
+      addr?.city?.trim() ??
+      addr?.town?.trim() ??
+      addr?.village?.trim() ??
+      addr?.municipality?.trim() ??
+      '';
     return {
       address: short,
       latitude: parseFloat(item.lat ?? '0'),
       longitude: parseFloat(item.lon ?? '0'),
+      ...(cityRaw ? { city: cityRaw } : {}),
     };
   }).filter((s) => s.address.length > 0);
 

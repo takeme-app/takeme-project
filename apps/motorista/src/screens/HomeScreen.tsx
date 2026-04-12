@@ -6,7 +6,6 @@ import {
   ScrollView,
   ActivityIndicator,
   Switch,
-  Modal,
   Platform,
 } from 'react-native';
 import { Text } from '../components/Text';
@@ -117,7 +116,6 @@ export function HomeScreen({ navigation }: Props) {
   const [toggleLoading, setToggleLoading] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [activeTrip, setActiveTrip] = useState<ActiveTrip | null>(null);
-  const [showEndTripModal, setShowEndTripModal] = useState(false);
   const [mapUserLL, setMapUserLL] = useState<LatLng | null>(null);
   const homeMapRef = useRef<GoogleMapsMapRef>(null);
 
@@ -341,15 +339,6 @@ export function HomeScreen({ navigation }: Props) {
     setToggleLoading(false);
   };
 
-  const endTrip = async () => {
-    if (!activeTrip) return;
-    await supabase
-      .from('scheduled_trips')
-      .update({ status: 'completed', updated_at: new Date().toISOString() } as never)
-      .eq('id', activeTrip.id);
-    setActiveTrip(null);
-  };
-
   const updateTrunk = async (delta: number) => {
     if (!activeTrip || !userId) return;
     const newPct = Math.max(0, Math.min(100, activeTrip.trunkPct + delta));
@@ -544,10 +533,6 @@ export function HomeScreen({ navigation }: Props) {
             <TouchableOpacity style={styles.mapBtn} activeOpacity={0.85} onPress={() => activeTrip && navigation.navigate('ActiveTrip', { tripId: activeTrip.id })}>
               <Text style={styles.mapBtnText}>Ver rota no mapa</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity style={styles.endTripBtn} onPress={() => setShowEndTripModal(true)} activeOpacity={0.85}>
-              <Text style={styles.endTripBtnText}>Encerrar viagem</Text>
-            </TouchableOpacity>
           </View>
         )}
 
@@ -586,43 +571,6 @@ export function HomeScreen({ navigation }: Props) {
         </View>
         <View style={styles.divider} />
       </ScrollView>
-
-      {/* Modal: Encerrar viagem */}
-      <Modal
-        visible={showEndTripModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowEndTripModal(false)}
-      >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowEndTripModal(false)}
-        />
-        <View style={styles.modalCard}>
-          <View style={styles.modalIconWrap}>
-            <MaterialIcons name="flag" size={32} color="#111827" />
-          </View>
-          <Text style={styles.modalTitle}>Encerrar viagem?</Text>
-          <Text style={styles.modalBody}>
-            Ao confirmar, a viagem será marcada como concluída e não poderá ser reaberta.
-          </Text>
-          <TouchableOpacity
-            style={styles.modalBtnConfirm}
-            onPress={() => { setShowEndTripModal(false); endTrip(); }}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.modalBtnConfirmText}>Confirmar conclusão</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.modalBtnCancel}
-            onPress={() => setShowEndTripModal(false)}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.modalBtnCancelText}>Cancelar</Text>
-          </TouchableOpacity>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -706,14 +654,9 @@ const styles = StyleSheet.create({
   mapPreviewLoadingText: { fontSize: 13, color: '#6B7280' },
   mapBtn: {
     borderWidth: 1.5, borderColor: '#D1D5DB', borderRadius: 12,
-    paddingVertical: 14, alignItems: 'center', marginBottom: 10,
+    paddingVertical: 14, alignItems: 'center', marginBottom: 0,
   },
   mapBtnText: { fontSize: 15, fontWeight: '600', color: '#111827' },
-  endTripBtn: {
-    backgroundColor: '#F3F4F6', borderRadius: 12,
-    paddingVertical: 14, alignItems: 'center',
-  },
-  endTripBtnText: { fontSize: 15, fontWeight: '600', color: '#EF4444' },
 
   // Quick access
   sectionTitle: { fontSize: 17, fontWeight: '700', color: '#111827', marginBottom: 14 },
@@ -742,38 +685,6 @@ const styles = StyleSheet.create({
   },
   availLabel: { fontSize: 16, fontWeight: '600', color: '#111827' },
   divider: { height: 1, backgroundColor: '#E5E7EB', marginTop: 12 },
-
-  modalOverlay: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-  },
-  modalCard: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingHorizontal: 24, paddingTop: 28, paddingBottom: 40,
-    alignItems: 'center',
-  },
-  modalIconWrap: {
-    width: 64, height: 64, borderRadius: 32,
-    backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
-    marginBottom: 16,
-  },
-  modalTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 10 },
-  modalBody: {
-    fontSize: 14, color: '#6B7280', lineHeight: 21,
-    textAlign: 'center', marginBottom: 28,
-  },
-  modalBtnConfirm: {
-    width: '100%', backgroundColor: '#111827',
-    borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginBottom: 12,
-  },
-  modalBtnConfirmText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
-  modalBtnCancel: {
-    width: '100%', backgroundColor: '#F3F4F6',
-    borderRadius: 14, paddingVertical: 16, alignItems: 'center',
-  },
-  modalBtnCancelText: { fontSize: 16, fontWeight: '600', color: '#374151' },
 
   trunkRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

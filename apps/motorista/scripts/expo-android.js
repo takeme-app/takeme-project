@@ -1,5 +1,5 @@
 /**
- * expo run:android com adb reverse na porta do Metro (8081 por padrão).
+ * expo run:android com adb reverse na porta do Metro (8082 no app motorista; cliente usa 8081).
  * Device físico via USB: sem reverse, "Unable to load script".
  *
  * Uso:
@@ -14,7 +14,7 @@ const { findAdb, resolveAdbSerial } = require('./adb-reverse');
 const appDir = path.resolve(__dirname, '..');
 const noBundler = process.argv.includes('--no-bundler');
 
-process.env.REACT_NATIVE_PACKAGER_PORT = process.env.REACT_NATIVE_PACKAGER_PORT || '8081';
+process.env.REACT_NATIVE_PACKAGER_PORT = process.env.REACT_NATIVE_PACKAGER_PORT || '8082';
 
 console.log(
   '\n[Android] O JavaScript só carrega com o Metro rodando (na raiz: npm run motorista, porta ' +

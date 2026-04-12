@@ -16,7 +16,7 @@
     "android:reverse": "node scripts/adb-reverse.js",
     "android:release": "node scripts/build-release-apk.js",
     "ios": "expo run:ios",
-    "web": "expo start --web",
+    "web": "expo start --web --port 8081",
     "lint": "expo lint"
   },
   "dependencies": {

@@ -20,6 +20,10 @@ const ERROR_PT: Array<[RegExp, string]> = [
   [/jwt expired/i, 'Sessão expirada. Faça login novamente.'],
   [/invalid jwt|jwt could not be verified|jwt.*not.*valid/i, 'Sessão inválida ou expirada. Faça login novamente.'],
   [/edge function|non-2xx/i, 'Serviço temporariamente indisponível. Tente novamente.'],
+  [
+    /\[NOT_FOUND\]|requested function was not found|function was not found/i,
+    'Cobrança de envio indisponível: a edge function chamada pelo app não existe neste projeto (nome/slug diferente do deploy). Use PIX ou peça ao suporte para alinhar o slug (ex.: charge-shipment vs charge-shipments).',
+  ],
 
   // ── Stripe ──
   [/card was declined|card_declined/i, 'Cartão recusado. Verifique os dados ou use outro cartão.'],

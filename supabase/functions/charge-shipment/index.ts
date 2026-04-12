@@ -209,17 +209,17 @@ Deno.serve(async (req) => {
       });
     }
 
-    const now = new Date().toISOString();
+    // Só `stripe_payment_intent_id`: ambientes sem migração `20260411150000_*` não têm `updated_at` em shipments.
     const { error: updateErr } = await admin
       .from(table)
       .update({
         stripe_payment_intent_id: pi.id ?? null,
-        updated_at: now,
       } as never)
       .eq("id", id)
       .eq("user_id", userId);
 
     if (updateErr) {
+      console.error("charge-shipment: update after PI succeeded", updateErr);
       return new Response(
         JSON.stringify({ error: "Pagamento aprovado mas falha ao gravar envio; contate o suporte" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

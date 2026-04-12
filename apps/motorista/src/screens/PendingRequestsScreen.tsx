@@ -26,7 +26,7 @@ const GOLD = '#C9A227';
 
 type RequestItem = {
   id: string;
-  kind: 'booking' | 'shipment';
+  kind: 'booking' | 'shipment' | 'shipment_offer';
   /** scheduledTripId — para navegar para TripDetail após aceitar */
   scheduledTripId: string;
   origin: string;
@@ -126,6 +126,60 @@ export function PendingRequestsScreen({ navigation }: Props) {
     });
 
     const all: RequestItem[] = [];
+
+    await supabase.rpc('shipment_process_expired_driver_offers');
+
+    // Ofertas já vêm filtradas por current_offer_driver_id; não exigir cidade do perfil
+    // (motorista sem city / origem com grafia diferente ocultava a solicitação indevidamente).
+    const { data: offerRows } = await supabase
+      .from('shipments')
+      .select(
+        'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, current_offer_expires_at, scheduled_trip_id',
+      )
+      .eq('current_offer_driver_id', user.id)
+      .eq('status', 'confirmed')
+      .is('driver_id', null)
+      .limit(20);
+
+    for (const s of (offerRows ?? []) as {
+      id: string;
+      origin_address: string;
+      destination_address: string;
+      amount_cents: number;
+      created_at: string;
+      user_id: string;
+      package_size: string;
+      current_offer_expires_at: string | null;
+      scheduled_trip_id: string | null;
+    }[]) {
+      const expIso = s.current_offer_expires_at;
+      if (!expIso) continue;
+      const expiresAt = new Date(expIso);
+      const { data: prof } = await supabase
+        .from('profiles')
+        .select('full_name, avatar_url, rating')
+        .eq('id', s.user_id)
+        .maybeSingle();
+      const p = prof as { full_name?: string; avatar_url?: string; rating?: number } | null;
+      all.push({
+        id: `shipment_offer_${s.id}`,
+        kind: 'shipment_offer',
+        rawId: s.id,
+        scheduledTripId: s.scheduled_trip_id ?? '',
+        origin: s.origin_address,
+        destination: s.destination_address,
+        departureAt: expIso,
+        timeLabel: formatTime(expIso),
+        priceCents: s.amount_cents,
+        userName: p?.full_name ?? 'Cliente',
+        userAvatar: p?.avatar_url ?? null,
+        userRating: p?.rating != null ? Number(p.rating) : null,
+        minutesAgo: minutesAgoFn(s.created_at),
+        passengerCount: 0,
+        packageSizeLabel: packageSizeLabelDb(s.package_size),
+        expiresAt,
+      });
+    }
 
     for (const b of filtered) {
       const row = b as {
@@ -233,7 +287,48 @@ export function PendingRequestsScreen({ navigation }: Props) {
     setActioning(item.id);
     const now = new Date().toISOString();
     try {
-      if (item.kind === 'shipment') {
+      if (item.kind === 'shipment_offer') {
+        if (accept) {
+          const { data: accData, error: accErr } = await supabase.rpc('shipment_driver_accept_offer', {
+            p_shipment_id: item.rawId,
+          });
+          const acc = accData as { ok?: boolean; error?: string; scheduled_trip_id?: string } | null;
+          if (accErr || acc?.ok !== true) {
+            showAlert(
+              'Encomenda',
+              acc?.error === 'offer_expired'
+                ? 'Esta oferta expirou.'
+                : acc?.error === 'no_matching_trip'
+                  ? 'Não encontramos uma viagem sua nesta rota para vincular o envio.'
+                  : 'Não foi possível aceitar. Tente novamente.',
+            );
+            await load();
+            return;
+          }
+          const tripId = acc?.scheduled_trip_id;
+          setItems((prev) => prev.filter((i) => i.id !== item.id));
+          const conv = await createOrGetShipmentConversation(item.rawId, userId);
+          if (conv.error) showAlert('Chat', conv.error);
+          if (conv.conversationId) {
+            navigation.navigate('DriverClientChat', {
+              conversationId: conv.conversationId,
+              participantName: item.userName,
+              participantAvatar: item.userAvatar ?? undefined,
+            });
+          } else if (tripId) {
+            navigation.navigate('TripDetail', { tripId });
+          }
+          return;
+        }
+        const { data: passData, error: passErr } = await supabase.rpc('shipment_driver_pass_offer', {
+          p_shipment_id: item.rawId,
+        });
+        if (passErr || (passData as { ok?: boolean } | null)?.ok !== true) {
+          showAlert('Encomenda', 'Não foi possível recusar. Tente novamente.');
+          await load();
+          return;
+        }
+      } else if (item.kind === 'shipment') {
         await supabase
           .from('shipments')
           .update(
@@ -293,7 +388,9 @@ export function PendingRequestsScreen({ navigation }: Props) {
         const conv =
           item.kind === 'booking'
             ? await createOrGetBookingConversation(item.rawId, userId)
-            : await createOrGetShipmentConversation(item.rawId, userId);
+            : item.kind === 'shipment'
+              ? await createOrGetShipmentConversation(item.rawId, userId)
+              : { conversationId: null as string | null, error: null as string | null };
         if (conv.error) {
           showAlert('Chat', conv.error);
         }
@@ -336,19 +433,24 @@ export function PendingRequestsScreen({ navigation }: Props) {
           {items.map((item) => {
             const isActioning = actioning === item.id;
             const countdown = formatCountdown(item.expiresAt);
+            const isShipmentKind = item.kind === 'shipment' || item.kind === 'shipment_offer';
 
             return (
               <View key={item.id} style={styles.card}>
                 {/* Header: badge Viagem + countdown */}
                 <View style={styles.badgeRow}>
-                  <View style={item.kind === 'shipment' ? styles.badgeShipment : styles.badge}>
+                  <View style={isShipmentKind ? styles.badgeShipment : styles.badge}>
                     <MaterialIcons
-                      name={item.kind === 'shipment' ? 'inventory-2' : 'directions-car'}
+                      name={isShipmentKind ? 'inventory-2' : 'directions-car'}
                       size={13}
-                      color={item.kind === 'shipment' ? '#B45309' : '#1D4ED8'}
+                      color={isShipmentKind ? '#B45309' : '#1D4ED8'}
                     />
-                    <Text style={item.kind === 'shipment' ? styles.badgeShipmentText : styles.badgeText}>
-                      {item.kind === 'shipment' ? 'Encomenda' : 'Viagem'}
+                    <Text style={isShipmentKind ? styles.badgeShipmentText : styles.badgeText}>
+                      {isShipmentKind
+                        ? item.kind === 'shipment_offer'
+                          ? 'Encomenda · convite'
+                          : 'Encomenda'
+                        : 'Viagem'}
                     </Text>
                   </View>
                   {countdown ? (
@@ -386,12 +488,12 @@ export function PendingRequestsScreen({ navigation }: Props) {
                   </View>
                   <View style={styles.metaItem}>
                     <MaterialIcons
-                      name={item.kind === 'shipment' ? 'local-shipping' : 'people'}
+                      name={isShipmentKind ? 'local-shipping' : 'people'}
                       size={14}
                       color="#6B7280"
                     />
                     <Text style={styles.metaText}>
-                      {item.kind === 'shipment'
+                      {isShipmentKind
                         ? `Pacote ${item.packageSizeLabel}`
                         : `${item.passengerCount} ${item.passengerCount === 1 ? 'passageiro' : 'passageiros'}`}
                     </Text>

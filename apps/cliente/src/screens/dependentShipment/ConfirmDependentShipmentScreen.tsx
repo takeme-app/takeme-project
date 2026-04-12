@@ -17,6 +17,8 @@ import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
 import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
 import { flatPricingSnapshot } from '../../lib/orderPricingSnapshot';
+import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
+import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'ConfirmDependentShipment'>;
 
@@ -113,7 +115,18 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         const orderId = shipmentId ? orderIdFromUuid(shipmentId) : '----';
 
         if (shipmentId && (params.method === 'credito' || params.method === 'debito') && params.paymentMethodId) {
-          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke('charge-shipment', {
+          const stripeCtx = await ensureAccessTokenForStripeFunctions();
+          if (!stripeCtx.ok) {
+            await supabase
+              .from('dependent_shipments')
+              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+              .eq('id', shipmentId);
+            showAlert('Pagamento', stripeCtx.message);
+            setSubmitting(false);
+            return;
+          }
+          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke(EDGE_CHARGE_SHIPMENT_SLUG, {
+            headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
             body: {
               dependent_shipment_id: shipmentId,
               stripe_payment_method_id: params.paymentMethodId,

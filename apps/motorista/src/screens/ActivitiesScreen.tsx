@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -152,13 +152,18 @@ function TripCard({
   onPress,
   onTrunkChange,
   onStartTrip,
+  onContinueTrip,
   startTripLoading,
+  ongoingTripId,
 }: {
   trip: TripRow;
   onPress: () => void;
   onTrunkChange?: (newPct: number) => void;
   onStartTrip?: () => void;
+  onContinueTrip?: () => void;
   startTripLoading?: boolean;
+  /** Se definido e diferente deste card, não permitir iniciar outra viagem. */
+  ongoingTripId: string | null;
 }) {
   const isConfirmed = trip.isConfirmed;
   const isPlannedNoPassengers = !isConfirmed;
@@ -166,29 +171,31 @@ function TripCard({
   const hasPassengers = trip.passengerCount > 0;
   const hasLuggage = trip.bagsUsed > 0;
   const hasShipments = trip.shipmentCount > 0;
+  const anotherTripInProgress =
+    ongoingTripId != null && ongoingTripId !== trip.id;
 
   const trunkColor =
     trip.trunkPct >= 80 ? '#EF4444' : trip.trunkPct >= 50 ? GOLD : '#22C55E';
+
+  const badgeStyle = journeyStarted
+    ? styles.badgeInProgress
+    : isConfirmed
+      ? styles.badgeConfirmed
+      : styles.badgePlanned;
+  const badgeTextStyle = journeyStarted
+    ? styles.badgeTextInProgress
+    : isConfirmed
+      ? styles.badgeTextConfirmed
+      : styles.badgeTextPlanned;
+  const badgeLabel = journeyStarted ? 'Em andamento' : isConfirmed ? 'Confirmada' : 'Planejada';
 
   return (
     <View style={styles.card}>
       {/* Row 1: code + badge */}
       <View style={styles.cardRow}>
         <Text style={styles.tripCode}>{formatTripCode(trip.id)}</Text>
-        <View
-          style={[
-            styles.badge,
-            isConfirmed ? styles.badgeConfirmed : styles.badgePlanned,
-          ]}
-        >
-          <Text
-            style={[
-              styles.badgeText,
-              isConfirmed ? styles.badgeTextConfirmed : styles.badgeTextPlanned,
-            ]}
-          >
-            {isConfirmed ? 'Confirmada' : 'Planejada'}
-          </Text>
+        <View style={[styles.badge, badgeStyle]}>
+          <Text style={[styles.badgeText, badgeTextStyle]}>{badgeLabel}</Text>
         </View>
       </View>
 
@@ -283,11 +290,12 @@ function TripCard({
         )}
       </View>
 
-      {!journeyStarted
-      && onStartTrip
-      && !trip.offerPaused
-      && trip.status !== 'cancelled'
-      && trip.status !== 'completed' ? (
+      {!journeyStarted &&
+      onStartTrip &&
+      !trip.offerPaused &&
+      trip.status !== 'cancelled' &&
+      trip.status !== 'completed' &&
+      !anotherTripInProgress ? (
         <TouchableOpacity
           onPress={onStartTrip}
           activeOpacity={0.85}
@@ -302,10 +310,40 @@ function TripCard({
         </TouchableOpacity>
       ) : null}
 
+      {!journeyStarted &&
+      anotherTripInProgress &&
+      !trip.offerPaused &&
+      trip.status !== 'cancelled' &&
+      trip.status !== 'completed' ? (
+        <Text style={styles.blockedStartHint}>
+          Já existe uma viagem em andamento. Finalize-a antes de iniciar esta.
+        </Text>
+      ) : null}
+
+      {journeyStarted && trip.status !== 'completed' && onContinueTrip ? (
+        <TouchableOpacity
+          onPress={onContinueTrip}
+          activeOpacity={0.85}
+          style={styles.btnContinueTrip}
+        >
+          <Text style={styles.btnContinueTripText}>Continuar no mapa</Text>
+        </TouchableOpacity>
+      ) : null}
+
       {/* Bottom link */}
-      <TouchableOpacity onPress={onPress} activeOpacity={0.7} style={styles.linkBtn}>
+      <TouchableOpacity
+        onPress={() => {
+          if (journeyStarted && onContinueTrip) {
+            onContinueTrip();
+          } else {
+            onPress();
+          }
+        }}
+        activeOpacity={0.7}
+        style={styles.linkBtn}
+      >
         <Text style={styles.linkText}>
-          {isPlannedNoPassengers ? 'Editar rota' : 'Ver detalhes'}
+          {journeyStarted ? 'Abrir mapa da viagem' : isPlannedNoPassengers ? 'Editar rota' : 'Ver detalhes'}
         </Text>
       </TouchableOpacity>
     </View>
@@ -461,6 +499,31 @@ export function ActivitiesScreen({ navigation }: Props) {
   const startTripJourney = useCallback(
     async (tripId: string) => {
       setStartingTripId(tripId);
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user?.id) {
+        setStartingTripId(null);
+        showAlert('Erro', 'Sessão inválida. Faça login novamente.');
+        return;
+      }
+      const { data: otherInProgress } = await supabase
+        .from('scheduled_trips')
+        .select('id')
+        .eq('driver_id', user.id)
+        .not('driver_journey_started_at', 'is', null)
+        .in('status', ['active', 'scheduled'])
+        .neq('id', tripId)
+        .limit(1)
+        .maybeSingle();
+      if (otherInProgress?.id) {
+        setStartingTripId(null);
+        showAlert(
+          'Viagem em andamento',
+          'Já existe uma viagem iniciada. Finalize-a antes de iniciar outra.',
+        );
+        return;
+      }
       const now = new Date().toISOString();
       const { error } = await supabase
         .from('scheduled_trips')
@@ -495,6 +558,12 @@ export function ActivitiesScreen({ navigation }: Props) {
   }, []);
 
   const categories: FilterCategory[] = ['Todas', 'Viagens', 'Envios', 'Dependentes'];
+
+  const ongoingTripId = useMemo(() => {
+    const all = [...confirmedTrips, ...plannedTrips];
+    const found = all.find((t) => Boolean(t.driverJourneyStartedAt));
+    return found?.id ?? null;
+  }, [confirmedTrips, plannedTrips]);
 
   const isEmpty = !loading && confirmedTrips.length === 0 && plannedTrips.length === 0;
 
@@ -559,11 +628,13 @@ export function ActivitiesScreen({ navigation }: Props) {
                   <TripCard
                     key={trip.id}
                     trip={trip}
+                    ongoingTripId={ongoingTripId}
                     onPress={() => goTripDetail(trip.id)}
                     onTrunkChange={(pct) => updateTrunk(trip.id, pct)}
                     onStartTrip={() => {
                       void startTripJourney(trip.id);
                     }}
+                    onContinueTrip={() => navigation.navigate('ActiveTrip', { tripId: trip.id })}
                     startTripLoading={startingTripId === trip.id}
                   />
                 ))}
@@ -577,11 +648,13 @@ export function ActivitiesScreen({ navigation }: Props) {
                   <TripCard
                     key={trip.id}
                     trip={trip}
+                    ongoingTripId={ongoingTripId}
                     onPress={() => goTripDetail(trip.id)}
                     onTrunkChange={(pct) => updateTrunk(trip.id, pct)}
                     onStartTrip={() => {
                       void startTripJourney(trip.id);
                     }}
+                    onContinueTrip={() => navigation.navigate('ActiveTrip', { tripId: trip.id })}
                     startTripLoading={startingTripId === trip.id}
                   />
                 ))}
@@ -895,9 +968,18 @@ const styles = StyleSheet.create({
   },
   badgeConfirmed: { backgroundColor: '#D1FAE5' },
   badgePlanned: { backgroundColor: '#F3F4F6' },
+  badgeInProgress: { backgroundColor: '#FEF3C7' },
   badgeText: { fontSize: 12, fontWeight: '600' },
   badgeTextConfirmed: { color: '#065F46' },
   badgeTextPlanned: { color: '#374151' },
+  badgeTextInProgress: { color: '#92400E' },
+  blockedStartHint: {
+    marginTop: 12,
+    fontSize: 13,
+    color: '#6B7280',
+    lineHeight: 18,
+    textAlign: 'center',
+  },
 
   routeRow: {
     flexDirection: 'row',
@@ -1007,6 +1089,15 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   btnStartTripText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  btnContinueTrip: {
+    backgroundColor: '#C9A227',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 14,
+  },
+  btnContinueTripText: { fontSize: 15, fontWeight: '700', color: '#111827' },
   linkBtn: { alignItems: 'center', paddingTop: 4 },
   linkText: {
     fontSize: 14,

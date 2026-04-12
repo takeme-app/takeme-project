@@ -9,6 +9,7 @@ import {
   Pressable,
   Animated,
   Platform,
+  Alert,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -435,21 +436,49 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const handleStartTrip = async () => {
     if (!trip) return;
     setStartLoading(true);
-    const now = new Date().toISOString();
-    const { error } = await supabase
-      .from('scheduled_trips')
-      .update(
-        {
-          status: 'active',
-          driver_journey_started_at: now,
-          updated_at: now,
-        } as never,
-      )
-      .eq('id', trip.id);
-    setStartLoading(false);
-    if (!error) {
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user?.id) {
+        Alert.alert('Erro', 'Sessão inválida. Faça login novamente.');
+        return;
+      }
+      const { data: otherInProgress } = await supabase
+        .from('scheduled_trips')
+        .select('id')
+        .eq('driver_id', user.id)
+        .not('driver_journey_started_at', 'is', null)
+        .in('status', ['active', 'scheduled'])
+        .neq('id', trip.id)
+        .limit(1)
+        .maybeSingle();
+      if (otherInProgress?.id) {
+        Alert.alert(
+          'Viagem em andamento',
+          'Já existe uma viagem iniciada. Finalize-a antes de iniciar outra.',
+        );
+        return;
+      }
+      const now = new Date().toISOString();
+      const { error } = await supabase
+        .from('scheduled_trips')
+        .update(
+          {
+            status: 'active',
+            driver_journey_started_at: now,
+            updated_at: now,
+          } as never,
+        )
+        .eq('id', trip.id);
+      if (error) {
+        Alert.alert('Erro', 'Não foi possível iniciar a viagem. Tente novamente.');
+        return;
+      }
       setTrip((prev) => (prev ? { ...prev, status: 'active', driver_journey_started_at: now } : prev));
       navigation.navigate('ActiveTrip', { tripId: trip.id });
+    } finally {
+      setStartLoading(false);
     }
   };
 

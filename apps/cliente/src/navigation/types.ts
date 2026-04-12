@@ -37,6 +37,25 @@ export type ShipmentPlaceParam = {
   address: string;
   latitude: number;
   longitude: number;
+  /** Cidade da origem (filtro no app motorista). */
+  city?: string;
+};
+
+/** Dados comuns: destinatário + cotação após Recipient. */
+export type ShipmentRecipientQuoteParams = {
+  origin: ShipmentPlaceParam;
+  destination: ShipmentPlaceParam;
+  whenOption: 'now' | 'later';
+  whenLabel?: string;
+  packageSize: 'pequeno' | 'medio' | 'grande';
+  packageSizeLabel: string;
+  recipient: ShipmentRecipientParam;
+  amountCents: number;
+  pricingSubtotalCents: number;
+  platformFeeCents: number;
+  priceRouteBaseCents: number;
+  pricingRouteId: string;
+  adminPctApplied: number;
 };
 
 /** Destinatário do envio */
@@ -58,22 +77,9 @@ export type ShipmentStackParamList = {
     packageSize: 'pequeno' | 'medio' | 'grande';
     packageSizeLabel: string;
   };
-  ConfirmShipment: {
-    origin: ShipmentPlaceParam;
-    destination: ShipmentPlaceParam;
-    whenOption: 'now' | 'later';
-    whenLabel?: string;
-    packageSize: 'pequeno' | 'medio' | 'grande';
-    packageSizeLabel: string;
-    recipient: ShipmentRecipientParam;
-    /** Total = pricing_subtotal_cents + platform_fee_cents (catálogo preparer_shipments + taxa admin). */
-    amountCents: number;
-    pricingSubtotalCents: number;
-    platformFeeCents: number;
-    /** Base do trecho (catálogo, antes do multiplicador de tamanho). */
-    priceRouteBaseCents: number;
-    pricingRouteId: string;
-    adminPctApplied: number;
+  SelectShipmentDriver: ShipmentRecipientQuoteParams;
+  ConfirmShipment: ShipmentRecipientQuoteParams & {
+    clientPreferredDriverId: string;
     orderId?: string;
     shipmentId?: string;
   };
