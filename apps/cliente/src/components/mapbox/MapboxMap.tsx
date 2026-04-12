@@ -27,6 +27,10 @@ type MapboxMapProps = {
   initialRegion: MapRegion;
   scrollEnabled?: boolean;
   showControls?: boolean;
+  /** Desloca os botões +/−/centrar para baixo do entalhe (safe area). */
+  controlsTopInset?: number;
+  /** Desloca os botões para dentro da margem direita (safe area). */
+  controlsRightInset?: number;
   children?: React.ReactNode;
 };
 
@@ -36,7 +40,15 @@ type MapboxMapProps = {
  * Região inválida ou (0,0) → centro do Brasil; câmera re-sincroniza quando initialRegion muda.
  */
 export const MapboxMap = forwardRef<MapboxMapRef, MapboxMapProps>(function MapboxMap(
-  { style, initialRegion, scrollEnabled = true, showControls = false, children },
+  {
+    style,
+    initialRegion,
+    scrollEnabled = true,
+    showControls = false,
+    controlsTopInset,
+    controlsRightInset,
+    children,
+  },
   ref,
 ) {
   if (!MAPBOX_TOKEN.trim()) {
@@ -135,7 +147,16 @@ export const MapboxMap = forwardRef<MapboxMapRef, MapboxMapProps>(function Mapbo
       </MapView>
 
       {showControls && (
-        <View style={styles.controls} pointerEvents="box-none">
+        <View
+          style={[
+            styles.controls,
+            {
+              top: controlsTopInset ?? 10,
+              right: controlsRightInset ?? 10,
+            },
+          ]}
+          pointerEvents="box-none"
+        >
           <TouchableOpacity style={styles.controlBtn} onPress={zoomIn} activeOpacity={0.7}>
             <MaterialIcons name="add" size={22} color="#0d0d0d" />
           </TouchableOpacity>
@@ -173,8 +194,6 @@ const styles = StyleSheet.create({
   },
   controls: {
     position: 'absolute',
-    right: 10,
-    top: 10,
     gap: 6,
   },
   controlBtn: {

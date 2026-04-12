@@ -30,8 +30,10 @@ import { supabase } from '../../lib/supabase';
 import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
+import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
 import { formatVehicleDescription, formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
 import { fetchResolvedPriceCentsForScheduledTrip } from '../../lib/clientScheduledTrips';
+import { flatPricingSnapshot } from '../../lib/orderPricingSnapshot';
 import { PaymentMethodSection, type PaymentMethodType } from '../../components/PaymentMethodSection';
 
 const supabasePublicUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
@@ -159,15 +161,6 @@ export function CheckoutScreen({ navigation, route }: Props) {
     return () => { cancelled = true; };
   }, [origin?.latitude, origin?.longitude, destination?.latitude, destination?.longitude]);
 
-  const refreshCheckout = useCallback(() => {
-    // Quando houver API de status de pagamento ou preço dinâmico para viagem, buscar aqui e atualizar estado.
-  }, []);
-
-  useEffect(() => {
-    const interval = setInterval(refreshCheckout, 5000);
-    return () => clearInterval(interval);
-  }, [refreshCheckout]);
-
   const handleConfirmPayment = useCallback(
     async (params: { method: PaymentMethodType; paymentMethodId?: string }) => {
       if (!origin || !destination) return;
@@ -205,67 +198,110 @@ export function CheckoutScreen({ navigation, route }: Props) {
           bags: p.bags ?? '',
         }));
         const passenger_count = Math.max(1, passengersParam.length);
-        const { data: row, error } = await supabase
-          .from('bookings')
-          .insert({
-            user_id: user.id,
-            scheduled_trip_id: scheduledTripId,
-            origin_address: origin.address,
-            origin_lat: origin.latitude,
-            origin_lng: origin.longitude,
-            destination_address: destination.address,
-            destination_lat: destination.latitude,
-            destination_lng: destination.longitude,
-            passenger_count,
-            bags_count: bagsCount,
-            passenger_data,
-            amount_cents: finalAmountCents,
-            // pending: motorista vê em «Viagens pendentes» e aceita/recusa; depois vira confirmed + paid_at.
-            status: 'pending',
-          })
-          .select('id')
-          .single();
-        if (error) {
-          showAlert(
-            'Erro ao reservar',
-            getUserErrorMessage(error, 'Não foi possível registrar sua viagem. Tente novamente.')
-          );
-          return;
-        }
-        const bookingId = row && typeof row === 'object' && 'id' in row ? String((row as { id: string }).id) : '';
-        if (!bookingId) {
-          showAlert('Erro', 'Não foi possível obter o identificador da reserva.');
-          return;
-        }
+        const pricing = flatPricingSnapshot(finalAmountCents);
 
-        const cancelBookingHold = async () => {
-          await supabase
-            .from('bookings')
-            .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
-            .eq('id', bookingId);
-        };
+        let bookingId = '';
+        let chargedAmountCents = finalAmountCents;
 
         if (params.method === 'credito' || params.method === 'debito') {
-          if (params.paymentMethodId) {
-            const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke('charge-booking', {
-              body: {
-                booking_id: bookingId,
-                stripe_payment_method_id: params.paymentMethodId,
+          if (!params.paymentMethodId) {
+            showAlert('Pagamento', 'Informe e confirme os dados do cartão.');
+            return;
+          }
+          const { data: { session: sessionBefore } } = await supabase.auth.getSession();
+          if (!sessionBefore?.access_token) {
+            showAlert('Sessão', 'Faça login novamente para concluir o pagamento.');
+            return;
+          }
+          const { data: refreshData, error: refreshErr } = await supabase.auth.refreshSession();
+          const accessToken = refreshData.session?.access_token ?? sessionBefore.access_token;
+          if (!accessToken) {
+            showAlert(
+              'Sessão',
+              getUserErrorMessage(refreshErr, 'Sessão expirada. Faça login novamente.'),
+            );
+            return;
+          }
+          const { data: ensureData, error: ensureErr } = await supabase.functions.invoke('ensure-stripe-customer', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          if (ensureErr) {
+            const raw = await describeInvokeFailure(ensureData, ensureErr);
+            showAlert('Pagamento', getUserErrorMessage({ message: raw }, raw));
+            return;
+          }
+          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke('charge-booking', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            body: {
+              stripe_payment_method_id: params.paymentMethodId,
+              draft_booking: {
+                scheduled_trip_id: scheduledTripId,
+                origin_address: origin.address,
+                origin_lat: origin.latitude,
+                origin_lng: origin.longitude,
+                destination_address: destination.address,
+                destination_lat: destination.latitude,
+                destination_lng: destination.longitude,
+                passenger_count,
+                bags_count: bagsCount,
+                passenger_data,
               },
-            });
-            const chargeErrMsg =
-              chargeFnError?.message ??
-              (chargeData && typeof chargeData === 'object' && 'error' in chargeData
-                ? String((chargeData as { error?: string }).error ?? '')
-                : '');
-            if (chargeErrMsg) {
-              await cancelBookingHold();
-              showAlert(
-                'Pagamento',
-                chargeErrMsg || 'Não foi possível confirmar o pagamento. A reserva foi liberada.',
-              );
-              return;
-            }
+            },
+          });
+          if (chargeFnError) {
+            const raw = await describeInvokeFailure(chargeData, chargeFnError);
+            const chargeErrMsg = getUserErrorMessage({ message: raw }, raw);
+            showAlert(
+              'Pagamento',
+              chargeErrMsg || 'Não foi possível confirmar o pagamento. Nenhuma reserva foi criada.',
+            );
+            return;
+          }
+          const chargeBody =
+            chargeData && typeof chargeData === 'object' ? (chargeData as Record<string, unknown>) : null;
+          bookingId = chargeBody?.booking_id != null ? String(chargeBody.booking_id) : '';
+          if (!bookingId) {
+            showAlert(
+              'Pagamento',
+              'Pagamento retornou sem identificador da reserva. Contate o suporte com o horário da tentativa.',
+            );
+            return;
+          }
+          const ac = chargeBody?.amount_cents;
+          if (typeof ac === 'number' && Number.isFinite(ac) && ac >= 0) {
+            chargedAmountCents = Math.floor(ac);
+          }
+        } else {
+          const { data: row, error } = await supabase
+            .from('bookings')
+            .insert({
+              user_id: user.id,
+              scheduled_trip_id: scheduledTripId,
+              origin_address: origin.address,
+              origin_lat: origin.latitude,
+              origin_lng: origin.longitude,
+              destination_address: destination.address,
+              destination_lat: destination.latitude,
+              destination_lng: destination.longitude,
+              passenger_count,
+              bags_count: bagsCount,
+              passenger_data,
+              ...pricing,
+              status: 'pending',
+            })
+            .select('id')
+            .single();
+          if (error) {
+            showAlert(
+              'Erro ao reservar',
+              getUserErrorMessage(error, 'Não foi possível registrar sua viagem. Tente novamente.')
+            );
+            return;
+          }
+          bookingId = row && typeof row === 'object' && 'id' in row ? String((row as { id: string }).id) : '';
+          if (!bookingId) {
+            showAlert('Erro', 'Não foi possível obter o identificador da reserva.');
+            return;
           }
         }
 
@@ -275,15 +311,22 @@ export function CheckoutScreen({ navigation, route }: Props) {
           destination_address: destination.address,
           departure: driver.departure,
           arrival: driver.arrival,
-          amount_cents: finalAmountCents,
+          amount_cents: chargedAmountCents,
           driver_name: driver.name,
         };
         const tripLive: TripLiveDriverDisplay = {
           driverName: driver.name,
           rating: driver.rating,
           vehicleLabel: formatVehicleDescription(driver.vehicle_model, driver.vehicle_year, driver.vehicle_plate),
-          amountCents: finalAmountCents,
+          amountCents: chargedAmountCents,
           bookingId: bookingId || undefined,
+          scheduledTripId: scheduledTripId,
+          origin: origin
+            ? { latitude: origin.latitude, longitude: origin.longitude, address: origin.address }
+            : undefined,
+          destination: destination
+            ? { latitude: destination.latitude, longitude: destination.longitude, address: destination.address }
+            : undefined,
         };
         navigation.replace('PaymentConfirmed', {
           booking: summary,
@@ -311,6 +354,8 @@ export function CheckoutScreen({ navigation, route }: Props) {
       route.params?.immediateTrip,
       scheduledTripId,
       showAlert,
+      origin,
+      destination,
     ]
   );
 
@@ -381,16 +426,11 @@ export function CheckoutScreen({ navigation, route }: Props) {
           {origin &&
             destination &&
             isValidTripCoordinate(origin.latitude, origin.longitude) &&
-            isValidTripCoordinate(destination.latitude, destination.longitude) && (
+            isValidTripCoordinate(destination.latitude, destination.longitude) &&
+            routeCoords != null &&
+            routeCoords.length >= 2 && (
             <MapboxPolyline
-              coordinates={
-                routeCoords?.length
-                  ? routeCoords
-                  : [
-                      { latitude: origin.latitude, longitude: origin.longitude },
-                      { latitude: destination.latitude, longitude: destination.longitude },
-                    ]
-              }
+              coordinates={routeCoords}
               strokeColor={COLORS.black}
               strokeWidth={4}
             />

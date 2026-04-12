@@ -5,6 +5,7 @@ import { HomeScreen } from '../screens/HomeScreen';
 import { ServicesScreen } from '../screens/ServicesScreen';
 import { ActivitiesStack } from './ActivitiesStack';
 import { ProfileStack } from './ProfileStack';
+import { getMainTabBarStyleFromInsets } from './mainTabBarStyle';
 
 export type MainTabParamList = {
   Home: undefined;
@@ -18,15 +19,8 @@ const Tab = createBottomTabNavigator<MainTabParamList>();
 const TAB_ACTIVE = '#0d0d0d';
 const TAB_INACTIVE = '#767676';
 
-/** Altura fixa da área de conteúdo (ícone + rótulo) para evitar corte em qualquer dispositivo */
-const TAB_BAR_CONTENT_HEIGHT = 62;
-/** Inset mínimo quando o sistema não reporta */
-const MIN_BOTTOM_INSET = 8;
-
 export function MainTabs() {
   const insets = useSafeAreaInsets();
-  const bottomPadding = Math.max(insets.bottom, MIN_BOTTOM_INSET);
-  const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + bottomPadding;
 
   return (
     <Tab.Navigator
@@ -39,18 +33,7 @@ export function MainTabs() {
           fontSize: 12,
           fontWeight: '500',
         },
-        tabBarStyle: {
-          backgroundColor: '#FFFFFF',
-          borderTopWidth: 1,
-          borderTopColor: '#f1f1f1',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 4 },
-          shadowOpacity: 0.15,
-          shadowRadius: 12,
-          elevation: 8,
-          height: tabBarHeight,
-          paddingBottom: bottomPadding,
-        },
+        tabBarStyle: getMainTabBarStyleFromInsets(insets),
         tabBarItemStyle: {
           paddingVertical: 8,
         },

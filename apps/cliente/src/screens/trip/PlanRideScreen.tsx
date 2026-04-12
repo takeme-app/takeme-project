@@ -13,7 +13,11 @@ import { useAppAlert } from '../../contexts/AppAlertContext';
 import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
 import { addRecentDestination } from '../../lib/recentDestinations';
 import { ALL_TIME_SLOTS, getAvailableTimeSlots, toISODate, formatDateDisplayLabel } from '../../lib/dateTimeSlots';
-import { loadClientScheduledTrips } from '../../lib/clientScheduledTrips';
+import {
+  loadClientScheduledTrips,
+  compareTripsByDepartureAndBadge,
+  tripFitsPassengersAndBags,
+} from '../../lib/clientScheduledTrips';
 import { formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
 import type { ScheduledTripItem } from './SearchTripScreen';
 
@@ -35,6 +39,8 @@ const DEFAULT_DESTINATION_COORDS = { latitude: -7.3305, longitude: -35.3335 };
 const EDIT_SHEET_SLIDE = 400;
 const TIME_SHEET_SLIDE = 450;
 const ROUTE_MATCH_DEGREES = 0.15;
+const LIST_PASSENGERS = 1;
+const LIST_BAGS = 0;
 
 /** Converte slot "09:00 - 09:30" em { startMinutes, endMinutes } (minutos desde meia-noite). */
 function parseTimeSlot(slot: string): { startMinutes: number; endMinutes: number } | null {
@@ -159,7 +165,8 @@ export function PlanRideScreen({ navigation, route }: Props) {
         Math.abs(t.origin_lat - oLat) <= ROUTE_MATCH_DEGREES &&
         Math.abs(t.origin_lng - oLng) <= ROUTE_MATCH_DEGREES &&
         Math.abs(t.latitude - dLat) <= ROUTE_MATCH_DEGREES &&
-        Math.abs(t.longitude - dLng) <= ROUTE_MATCH_DEGREES
+        Math.abs(t.longitude - dLng) <= ROUTE_MATCH_DEGREES &&
+        tripFitsPassengersAndBags(t, LIST_PASSENGERS, LIST_BAGS)
     );
     if (filterDateId && list.length > 0) {
       list = list.filter((t) => {
@@ -176,7 +183,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
         return true;
       });
     }
-    return [...list].sort((a, b) => (a.badge === 'Take Me' ? 0 : 1) - (b.badge === 'Take Me' ? 0 : 1));
+    return [...list].sort(compareTripsByDepartureAndBadge);
   }, [allScheduledTrips, origin?.latitude, origin?.longitude, destination?.latitude, destination?.longitude, filterDateId, filterTimeSlot]);
 
   useEffect(() => {

@@ -21,7 +21,7 @@ function hasJsonMethod(x: unknown): x is { json: () => Promise<unknown> } {
 
 /**
  * Monta mensagem a partir do corpo JSON da edge ou do gateway.
- * Suporta `{ error }`, `{ error: { message } }`, `{ message }` / `{ msg }`, `{ code }`.
+ * Suporta `{ error }`, `{ error: { message } }` (Stripe), `{ message }` / `{ msg }` (Supabase 401), `{ code }`.
  */
 export function formatEdgeFunctionBody(body: unknown): string | null {
   if (body == null) return null;
@@ -66,7 +66,6 @@ export async function parseInvokeError(fnError: unknown): Promise<string | null>
 
   const ctx = err?.context;
 
-  // Formato atual: { response: Response }
   if (ctx && typeof ctx === 'object' && 'response' in ctx) {
     const response = (ctx as { response: unknown }).response;
     if (hasJsonMethod(response)) {
@@ -87,7 +86,6 @@ export async function parseInvokeError(fnError: unknown): Promise<string | null>
     }
   }
 
-  // context é a própria Response (algumas versões / ambientes)
   if (hasJsonMethod(ctx)) {
     try {
       const body = await ctx.json();
@@ -98,7 +96,6 @@ export async function parseInvokeError(fnError: unknown): Promise<string | null>
     }
   }
 
-  // Legado: context.json()
   if (ctx && typeof ctx === 'object' && typeof (ctx as { json?: unknown }).json === 'function') {
     try {
       const body = await (ctx as { json: () => Promise<unknown> }).json();
@@ -123,14 +120,14 @@ export async function parseInvokeError(fnError: unknown): Promise<string | null>
   return null;
 }
 
+const GENERIC_NON_2XX = /edge function returned a non-2xx status code/i;
+
 /**
  * Mensagem útil quando invoke retorna erro (combina data + FunctionsHttpError).
- * Em alguns casos o JSON de erro vem em `data` mesmo com `error` preenchido.
+ * O cliente Supabase costuma preencher `error.message` com texto genérico em inglês
+ * mesmo quando o corpo JSON traz `{ error: "…" }` com o motivo real.
  */
-export async function describeInvokeFailure(
-  fnData: unknown,
-  fnError: unknown
-): Promise<string> {
+export async function describeInvokeFailure(fnData: unknown, fnError: unknown): Promise<string> {
   const fromData = formatEdgeFunctionBody(parseInvokeData(fnData));
   if (fromData) return fromData;
 
@@ -141,11 +138,7 @@ export async function describeInvokeFailure(
     fnError && typeof fnError === 'object' && typeof (fnError as { message?: string }).message === 'string'
       ? (fnError as { message: string }).message.trim()
       : '';
-  if (msg && msg !== 'Edge function returned a non-2xx status code') return msg;
+  if (msg && !GENERIC_NON_2XX.test(msg)) return msg;
 
-  return [
-    'A função create-motorista-account respondeu com erro (HTTP não-2xx).',
-    'Abra o painel Supabase → Edge Functions → create-motorista-account → Logs.',
-    'Confira também deploy, secrets (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) e JWT da função.',
-  ].join(' ');
+  return 'Serviço temporariamente indisponível. Tente novamente em instantes.';
 }

@@ -1,4 +1,6 @@
-export type ActivitiesStackParamList = {
+import type { TripFollowStackParamList } from './types';
+
+type ActivitiesOnlyParamList = {
   ActivitiesList: undefined;
   TravelHistory: undefined;
   TripDetail: { bookingId: string };
@@ -22,3 +24,5 @@ export type ActivitiesStackParamList = {
   ExcursionPassengerForm: { excursionRequestId: string; passengerId?: string };
   DependentShipmentDetail: { dependentShipmentId: string };
 };
+
+export type ActivitiesStackParamList = ActivitiesOnlyParamList & TripFollowStackParamList;

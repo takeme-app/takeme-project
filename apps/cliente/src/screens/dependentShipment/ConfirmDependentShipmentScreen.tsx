@@ -15,6 +15,8 @@ import { PaymentMethodSection, type PaymentMethodType } from '../../components/P
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
+import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
+import { flatPricingSnapshot } from '../../lib/orderPricingSnapshot';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'ConfirmDependentShipment'>;
 
@@ -78,6 +80,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
                 ? 'pix'
                 : 'dinheiro';
         const status = 'pending_review';
+        const pricing = flatPricingSnapshot(amountCents);
         const { data: row, error } = await supabase
           .from('dependent_shipments')
           .insert({
@@ -96,7 +99,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
             when_option: whenOption,
             scheduled_at: whenOption === 'later' ? null : null,
             payment_method: paymentMethodDb,
-            amount_cents: amountCents,
+            ...pricing,
             status,
           })
           .select('id')
@@ -116,12 +119,9 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
               stripe_payment_method_id: params.paymentMethodId,
             },
           });
-          const chargeErrMsg =
-            chargeFnError?.message ??
-            (chargeData && typeof chargeData === 'object' && 'error' in chargeData
-              ? String((chargeData as { error?: string }).error ?? '')
-              : '');
-          if (chargeErrMsg) {
+          if (chargeFnError) {
+            const raw = await describeInvokeFailure(chargeData, chargeFnError);
+            const chargeErrMsg = getUserErrorMessage({ message: raw }, raw);
             await supabase
               .from('dependent_shipments')
               .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)

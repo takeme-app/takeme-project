@@ -64,6 +64,27 @@ Depois que a reserva fica paga, o sistema pode criar uma linha na tabela de **re
 
 Na entrega por **motorista na estrada**, o repasse por valor do pedido faz sentido. Na **base (preparador)**, a regra de negócio é outra (diária fixa do admin). Por isso, **nesta fase**, a cobrança de envio no Stripe foi feita de forma **simples**: valor **inteiro** para a plataforma; repasses específicos (diária, motorista) seguem regra de produto e processos internos/`payouts`.
 
+### Exemplo numérico (só para entender a conta)
+
+Imagine que o **admin** cadastrou no painel um trecho de encomenda (**preparador de envios**) assim:
+
+- **Origem** (cidade A) e **destino** (cidade B) parecidos com o que o cliente escolheu no app.
+- Modo de preço: **valor fixo** de **R$ 25,00** pelo trecho (isso vira a “base” do catálogo).
+- **Taxa administrativa** da plataforma nesse trecho: **8%** sobre o subtotal (valor antes da taxa).
+
+O cliente marca um pacote **médio**. No app, a regra de produto aplica um **ajuste por tamanho** em cima da base (ex.: multiplicar a base por **1,12** para médio — números ilustrativos).
+
+| Etapa | Conta (em reais) | Resultado |
+|--------|-------------------|-------------|
+| Base do trecho (catálogo) | R$ 25,00 | R$ 25,00 |
+| Subtotal (após tamanho médio) | R$ 25,00 × 1,12 | **R$ 28,00** |
+| Taxa da plataforma (8%) | 8% de R$ 28,00 | **R$ 2,24** |
+| **Total que o cliente vê e paga** | R$ 28,00 + R$ 2,24 | **R$ 30,24** |
+
+Na prática, o sistema **grava** no pedido de envio: subtotal, taxa, total e qual trecho do catálogo foi usado — assim o valor **não muda depois** naquele pedido, mesmo que o admin altere o preço do trecho no futuro.
+
+**Se o trecho for “por km”** em vez de fixo: a base deixa de ser um valor único e passa a ser “**quantos quilômetros** entre origem e destino × preço por km cadastrado”; depois entram o mesmo tipo de ajuste por tamanho (se houver) e a taxa administrativa em cima do subtotal.
+
 ---
 
 ## 5. Estorno (devolução)

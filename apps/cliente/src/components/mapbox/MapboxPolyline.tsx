@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { ShapeSource, LineLayer } from '@rnmapbox/maps';
 import type { LatLng } from './mapboxUtils';
 
@@ -18,6 +18,11 @@ export function MapboxPolyline({
   strokeColor = '#0d0d0d',
   strokeWidth = 4,
 }: MapboxPolylineProps) {
+  const { sourceId, layerId } = useMemo(() => {
+    const n = Math.random().toString(36).slice(2, 10);
+    return { sourceId: `route-src-${n}`, layerId: `route-layer-${n}` };
+  }, []);
+
   if (!coordinates.length) return null;
 
   const geojson = {
@@ -30,9 +35,9 @@ export function MapboxPolyline({
   };
 
   return (
-    <ShapeSource id="route-line-source" shape={geojson}>
+    <ShapeSource id={sourceId} shape={geojson}>
       <LineLayer
-        id="route-line-layer"
+        id={layerId}
         style={{
           lineColor: strokeColor,
           lineWidth: strokeWidth,

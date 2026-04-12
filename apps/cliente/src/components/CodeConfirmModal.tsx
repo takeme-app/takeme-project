@@ -17,7 +17,8 @@ type Props = {
   instruction: string;
   inputPlaceholder?: string;
   submitLabel: string;
-  onSubmit: (code: string) => void;
+  /** Retorne `false` para manter o modal aberto (ex.: código inválido). */
+  onSubmit: (code: string) => void | boolean;
   backLabel?: string;
 };
 
@@ -34,7 +35,8 @@ export function CodeConfirmModal({
   const [code, setCode] = useState('');
 
   const handleSubmit = () => {
-    onSubmit(code);
+    const result = onSubmit(code);
+    if (result === false) return;
     setCode('');
     onClose();
   };

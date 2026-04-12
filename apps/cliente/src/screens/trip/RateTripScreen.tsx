@@ -1,15 +1,17 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { View, TouchableOpacity, TextInput, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { TripStackParamList } from '../../navigation/types';
+import type { TripFollowStackParamList } from '../../navigation/types';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { loadBookingTripLiveContext } from '../../lib/clientBookingTripLive';
+import { getRouteWithDuration, formatDuration, formatDistanceKmLabel } from '../../lib/route';
 
-type Props = NativeStackScreenProps<TripStackParamList, 'RateTrip'>;
+type Props = NativeStackScreenProps<TripFollowStackParamList, 'RateTrip'>;
 
 export function RateTripScreen({ navigation, route }: Props) {
   const bookingId = route.params?.bookingId;
@@ -17,6 +19,44 @@ export function RateTripScreen({ navigation, route }: Props) {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [durationLabel, setDurationLabel] = useState('—');
+  const [distanceLabel, setDistanceLabel] = useState('—');
+  const [totalPaidLabel, setTotalPaidLabel] = useState('—');
+
+  useEffect(() => {
+    if (!bookingId) {
+      setDurationLabel('—');
+      setDistanceLabel('—');
+      setTotalPaidLabel('—');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await loadBookingTripLiveContext(bookingId);
+      if (cancelled) return;
+      if (error || !data) {
+        setDurationLabel('—');
+        setDistanceLabel('—');
+        setTotalPaidLabel('—');
+        return;
+      }
+      const { booking } = data;
+      setTotalPaidLabel(`R$ ${(booking.amount_cents / 100).toFixed(2).replace('.', ',')}`);
+      const o = { latitude: booking.origin_lat, longitude: booking.origin_lng };
+      const d = { latitude: booking.destination_lat, longitude: booking.destination_lng };
+      const rt = await getRouteWithDuration(o, d);
+      if (cancelled) return;
+      if (rt && rt.durationSeconds > 0) {
+        setDurationLabel(formatDuration(rt.durationSeconds));
+      } else {
+        setDurationLabel('—');
+      }
+      setDistanceLabel(formatDistanceKmLabel(rt?.distanceMeters));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookingId]);
 
   const goToMain = () => {
     navigation.getParent()?.navigate('Main');
@@ -51,16 +91,16 @@ export function RateTripScreen({ navigation, route }: Props) {
       <Text style={styles.subtitle}>Obrigado por utilizar o Take Me. Avalie sua experiência.</Text>
       <View style={styles.resumoBox}>
         <View style={styles.resumoRow}>
-          <Text style={styles.resumoLabel}>Tempo total</Text>
-          <Text style={styles.resumoValue}>45 min</Text>
+          <Text style={styles.resumoLabel}>Tempo estimado (rota)</Text>
+          <Text style={styles.resumoValue}>{durationLabel}</Text>
         </View>
         <View style={styles.resumoRow}>
-          <Text style={styles.resumoLabel}>Distância</Text>
-          <Text style={styles.resumoValue}>12 km</Text>
+          <Text style={styles.resumoLabel}>Distância (rota)</Text>
+          <Text style={styles.resumoValue}>{distanceLabel}</Text>
         </View>
         <View style={styles.resumoRow}>
-          <Text style={styles.resumoLabel}>Total recebido</Text>
-          <Text style={styles.resumoValue}>R$ 64,00</Text>
+          <Text style={styles.resumoLabel}>Valor da viagem</Text>
+          <Text style={styles.resumoValue}>{totalPaidLabel}</Text>
         </View>
       </View>
       <Text style={styles.ratingTitle}>Como foi a sua viagem?</Text>

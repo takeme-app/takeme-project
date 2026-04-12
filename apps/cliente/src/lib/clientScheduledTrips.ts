@@ -83,6 +83,8 @@ export type ClientScheduledTripItem = {
   vehicle_model: string | null;
   vehicle_year: number | null;
   vehicle_plate: string | null;
+  /** Capacidade máxima de passageiros do veículo (quando cadastrada), para exibir/validar oferta. */
+  vehicle_passenger_capacity: number | null;
   badge: string;
   departure: string;
   arrival: string;
@@ -111,23 +113,50 @@ type ScheduledTripRow = {
   arrival_at: string;
   seats_available: number;
   bags_available: number;
+  capacity?: number | null;
   badge?: string | null;
   amount_cents?: number | null;
   price_per_person_cents?: number | null;
 };
+
+/**
+ * Ordenação de negócio: horário de saída (origem) crescente; em empate, motoristas Take Me antes dos demais.
+ */
+export function compareTripsByDepartureAndBadge(a: ClientScheduledTripItem, b: ClientScheduledTripItem): number {
+  const ta = new Date(a.departure_at).getTime();
+  const tb = new Date(b.departure_at).getTime();
+  if (ta !== tb) return ta - tb;
+  const rank = (x: ClientScheduledTripItem) => (x.badge === 'Take Me' ? 0 : 1);
+  return rank(a) - rank(b);
+}
+
+/** Indica se a oferta comporta passageiros e malas pedidos (lugares/malas restantes na viagem). */
+export function tripFitsPassengersAndBags(
+  trip: Pick<ClientScheduledTripItem, 'seats' | 'bags'>,
+  passengerCount: number,
+  bagsCount: number
+): boolean {
+  const p = Math.max(1, Math.floor(passengerCount));
+  const b = Math.max(0, Math.floor(bagsCount));
+  return trip.seats >= p && trip.bags >= b;
+}
 
 export async function loadClientScheduledTrips(): Promise<{
   items: ClientScheduledTripItem[];
   error: string | null;
 }> {
   const sb = supabase as { from: (table: string) => any };
+  const nowIso = new Date().toISOString();
   const { data: tripsRaw, error: tripsErr } = await sb
     .from('scheduled_trips')
     .select(
-      'id, title, driver_id, route_id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, departure_at, arrival_at, seats_available, bags_available, badge, amount_cents, price_per_person_cents'
+      'id, title, driver_id, route_id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, departure_at, arrival_at, seats_available, bags_available, capacity, badge, amount_cents, price_per_person_cents'
     )
     .eq('status', 'active')
     .eq('is_active', true)
+    .is('driver_journey_started_at', null)
+    .gt('departure_at', nowIso)
+    .gt('seats_available', 0)
     .order('departure_at');
   if (tripsErr) {
     return { items: [], error: getUserErrorMessage(tripsErr, 'Não foi possível carregar as viagens.') };
@@ -159,16 +188,20 @@ export async function loadClientScheduledTrips(): Promise<{
     model: string;
     year: number;
     plate: string;
+    passenger_capacity: number | null;
   };
   const { data: vehiclesRaw } = await sb.from('vehicles')
-    .select('worker_id, model, year, plate')
+    .select('worker_id, model, year, plate, passenger_capacity')
     .in('worker_id', driverIds)
     .eq('is_active', true)
     .eq('status', 'approved');
   const vehicles = (vehiclesRaw ?? []) as VehicleRow[];
 
   const profileMap = new Map((profiles ?? []).map((p) => [p.id as string, p]));
-  const vehicleByWorker = new Map<string, { model: string | null; year: number | null; plate: string | null }>();
+  const vehicleByWorker = new Map<
+    string,
+    { model: string | null; year: number | null; plate: string | null; passenger_capacity: number | null }
+  >();
   for (const v of vehicles) {
     const wid = v.worker_id;
     if (vehicleByWorker.has(wid)) continue;
@@ -176,13 +209,22 @@ export async function loadClientScheduledTrips(): Promise<{
       model: v.model?.trim() ? v.model : null,
       year: v.year != null ? Number(v.year) : null,
       plate: v.plate?.trim() ? v.plate : null,
+      passenger_capacity: v.passenger_capacity != null ? Number(v.passenger_capacity) : null,
     });
   }
 
-  const items: ClientScheduledTripItem[] = trips.map((t) => {
+  const items: ClientScheduledTripItem[] = [];
+  for (const t of trips) {
     const prof = profileMap.get(t.driver_id);
     const veh = vehicleByWorker.get(t.driver_id);
-    return {
+    const tripCap = t.capacity != null ? Number(t.capacity) : null;
+    const vehCap = veh?.passenger_capacity ?? null;
+    /** Coerência: oferta da viagem não pode exceder a capacidade do veículo. */
+    if (vehCap != null && vehCap >= 1) {
+      if (t.seats_available > vehCap) continue;
+      if (tripCap != null && tripCap > vehCap) continue;
+    }
+    items.push({
       id: t.id,
       driver_id: t.driver_id,
       title: t.title ?? `${t.origin_address} → ${t.destination_address}`,
@@ -192,6 +234,7 @@ export async function loadClientScheduledTrips(): Promise<{
       vehicle_model: veh?.model ?? null,
       vehicle_year: veh?.year ?? null,
       vehicle_plate: veh?.plate ?? null,
+      vehicle_passenger_capacity: vehCap,
       badge: t.badge ?? 'Take Me',
       departure: formatTime(t.departure_at),
       arrival: formatTime(t.arrival_at),
@@ -210,7 +253,9 @@ export async function loadClientScheduledTrips(): Promise<{
         routePriceById
       ),
       departure_at: t.departure_at,
-    };
-  });
+    });
+  }
+
+  items.sort(compareTripsByDepartureAndBadge);
   return { items, error: null };
 }

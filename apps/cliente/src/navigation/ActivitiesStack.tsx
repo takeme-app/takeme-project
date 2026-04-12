@@ -12,6 +12,9 @@ import { ExcursionBudgetScreen } from '../screens/excursion/ExcursionBudgetScree
 import { ExcursionPassengerListScreen } from '../screens/excursion/ExcursionPassengerListScreen';
 import { ExcursionPassengerFormScreen } from '../screens/excursion/ExcursionPassengerFormScreen';
 import { DependentShipmentDetailScreen } from '../screens/dependentShipment/DependentShipmentDetailScreen';
+import { DriverOnTheWayScreen } from '../screens/trip/DriverOnTheWayScreen';
+import { TripInProgressScreen } from '../screens/trip/TripInProgressScreen';
+import { RateTripScreen } from '../screens/trip/RateTripScreen';
 
 const Stack = createNativeStackNavigator<ActivitiesStackParamList>();
 
@@ -26,6 +29,9 @@ export function ActivitiesStack() {
       <Stack.Screen name="ActivitiesList" component={ActivitiesScreen} />
       <Stack.Screen name="TravelHistory" component={TravelHistoryScreen} />
       <Stack.Screen name="TripDetail" component={TripDetailScreen} />
+      <Stack.Screen name="DriverOnTheWay" component={DriverOnTheWayScreen} />
+      <Stack.Screen name="TripInProgress" component={TripInProgressScreen} />
+      <Stack.Screen name="RateTrip" component={RateTripScreen} />
       <Stack.Screen name="ShipmentDetail" component={ShipmentDetailScreen} />
       <Stack.Screen name="ShipmentTip" component={ShipmentTipScreen} />
       <Stack.Screen name="ShipmentRating" component={ShipmentRatingScreen} />
