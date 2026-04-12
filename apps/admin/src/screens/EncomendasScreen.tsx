@@ -13,8 +13,6 @@ import {
 } from '../styles/webStyles';
 import {
   fetchEncomendas,
-  updateShipmentStatus,
-  updateDependentShipmentStatus,
 } from '../data/queries';
 import type { EncomendaListItem } from '../data/types';
 
@@ -618,17 +616,12 @@ export default function EncomendasScreen() {
           type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
           onClick: () => { if (item) navigate(`/encomendas/${item.id}/editar`, { state: { from: 'encomendas' } }); },
         }, pencilActionSvg),
-        row.rawStatus === 'pending_review' ? React.createElement('button', {
-          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Confirmar encomenda',
-          onClick: async () => {
-            if (item && confirm('Confirmar esta encomenda?')) {
-              if (item.tipo === 'dependent_shipment') await updateDependentShipmentStatus(item.id, 'confirmed');
-              else await updateShipmentStatus(item.id, 'confirmed');
-              await refetch();
-            }
-          },
+        row.rawStatus === 'pending_review' && item?.supportConversationId ? React.createElement('button', {
+          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Ver atendimento',
+          title: 'Abrir atendimento vinculado',
+          onClick: () => navigate(`/atendimentos/${item.supportConversationId}`),
         }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
-          React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#22c55e', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))) : null),
+          React.createElement('path', { d: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z', stroke: '#6366f1', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))) : null),
     ];
     return React.createElement('div', {
       key: row.id,

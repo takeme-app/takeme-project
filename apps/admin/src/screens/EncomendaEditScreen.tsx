@@ -862,7 +862,7 @@ export default function EncomendaEditScreen() {
               React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
                 motoristasComRota.slice(0, 2).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id)))),
               React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
-                motoristasComRota.slice(2, 4).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id))))))),
+                motoristasComRota.slice(2, 4).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id)))))))),
     // Encomendas
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
       React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Encomendas'),

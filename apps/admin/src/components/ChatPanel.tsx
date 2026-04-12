@@ -17,6 +17,8 @@ export interface ChatPanelProps {
   onAfterMarkRead?: () => void;
   /** Modo flutuante (fixed bottom-right) ou inline */
   floating?: boolean;
+  /** Conversa encerrada — somente leitura */
+  closed?: boolean;
   style?: React.CSSProperties;
 }
 
@@ -37,7 +39,7 @@ const panelStyle: React.CSSProperties = {
 
 const floatingStyle: React.CSSProperties = {
   position: 'fixed',
-  bottom: 24,
+  bottom: 80,
   right: 24,
   width: 380,
   height: 520,
@@ -256,26 +258,33 @@ export default function ChatPanel(props: ChatPanelProps) {
         )
       : null,
 
-    // Input bar
-    React.createElement('div', { style: inputBarStyle },
-      React.createElement('button', {
-        onClick: () => setShowUpload(!showUpload),
-        style: { background: 'none', border: 'none', cursor: 'pointer', padding: 4 },
-        title: 'Anexar arquivo',
-      }, attachSvg),
-      React.createElement('input', {
-        type: 'text',
-        value: inputText,
-        onChange: (e: any) => setInputText(e.target.value),
-        onKeyDown: handleKeyDown,
-        placeholder: 'Digite uma mensagem...',
-        style: inputStyle,
-      }),
-      React.createElement('button', {
-        onClick: handleSend,
-        disabled: !inputText.trim(),
-        style: { ...sendBtnStyle, opacity: inputText.trim() ? 1 : 0.5 },
-      }, 'Enviar'),
-    ),
+    // Input bar or closed banner
+    props.closed
+      ? React.createElement('div', {
+          style: {
+            ...inputBarStyle, justifyContent: 'center',
+            background: '#f1f1f1', color: '#767676', fontSize: 13, fontWeight: 500,
+          },
+        }, 'Atendimento encerrado')
+      : React.createElement('div', { style: inputBarStyle },
+          React.createElement('button', {
+            onClick: () => setShowUpload(!showUpload),
+            style: { background: 'none', border: 'none', cursor: 'pointer', padding: 4 },
+            title: 'Anexar arquivo',
+          }, attachSvg),
+          React.createElement('input', {
+            type: 'text',
+            value: inputText,
+            onChange: (e: any) => setInputText(e.target.value),
+            onKeyDown: handleKeyDown,
+            placeholder: 'Digite uma mensagem...',
+            style: inputStyle,
+          }),
+          React.createElement('button', {
+            onClick: handleSend,
+            disabled: !inputText.trim(),
+            style: { ...sendBtnStyle, opacity: inputText.trim() ? 1 : 0.5 },
+          }, 'Enviar'),
+        ),
   );
 }

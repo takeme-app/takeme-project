@@ -244,6 +244,8 @@ export interface EncomendaListItem {
   rawStatus: string;
   /** Viagem agendada vinculada (`shipments.scheduled_trip_id`) — detalhe em `/viagens/:id` */
   scheduledTripId: string | null;
+  /** Conversa de atendimento ativa vinculada (para encomendas pending_review) */
+  supportConversationId: string | null;
 }
 
 export interface MotoristaListItem {
