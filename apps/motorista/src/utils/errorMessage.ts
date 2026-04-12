@@ -23,6 +23,10 @@ const ERROR_PT: Array<[RegExp, string]> = [
   [/bucket not found|bucket does not exist|not found.*bucket/i, 'O armazenamento de anexos ainda não foi configurado no servidor (bucket chat-attachments).'],
   [/payload too large|entity too large|413|file too large|maximum.*size/i, 'Arquivo muito grande. Tente uma imagem menor ou outro formato.'],
   [/invalid.*mime|mime type|content-type/i, 'Formato de arquivo não aceito. Tente JPG, PNG ou outro tipo suportado.'],
+  [
+    /could not find the table.*trip_ratings|trip_ratings.*schema cache/i,
+    'Avaliação de viagem: o servidor ainda não tem esta funcionalidade (aplique as migrações que criam trip_ratings no Supabase).',
+  ],
 ];
 
 const DEFAULT_MESSAGE = 'Algo deu errado. Tente novamente.';
@@ -35,6 +39,25 @@ function getMessageFromError(error: unknown): string {
     if (msg) return msg;
   }
   return '';
+}
+
+/**
+ * Erro típico do PostgREST quando a tabela `trip_ratings` não existe ou não está no cache do schema
+ * (migração `*_trip_ratings_*.sql` não aplicada no projeto Supabase).
+ */
+export function isTripRatingsUnavailableError(error: unknown): boolean {
+  const raw = getMessageFromError(error);
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code)
+      : '';
+  const combined = `${raw} ${code}`.toLowerCase();
+  return (
+    combined.includes('trip_ratings') &&
+    (combined.includes('schema cache') ||
+      combined.includes('could not find the table') ||
+      combined.includes('pgrst205'))
+  );
 }
 
 /**

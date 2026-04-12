@@ -7,6 +7,7 @@ import {
   Switch,
   Modal,
   ActivityIndicator,
+  InteractionManager,
 } from 'react-native';
 
 let Location: any = null;
@@ -21,6 +22,7 @@ import { supabase } from '../../lib/supabase';
 import { fetchWorkerShipmentBaseId } from '../../lib/preparerEncomendasBase';
 import { createOrGetShipmentConversation } from '../../lib/shipmentConversation';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { getUserErrorMessage } from '../../utils/errorMessage';
 
 type PackageSize = 'Pequeno' | 'Médio' | 'Grande';
 
@@ -187,6 +189,9 @@ export function HomeEncomendasScreen() {
 
   const confirmAccept = useCallback(async () => {
     if (!acceptModal || !userId) return;
+    const modal = acceptModal;
+    /** Navegar só depois de fechar o Modal — iOS costuma travar ao trocar de tab com Modal visível. */
+    let chatNav: { conversationId: string; participantName: string } | null = null;
     setActioning(true);
     try {
       const { data: row, error: upErr } = await supabase
@@ -196,7 +201,7 @@ export function HomeEncomendasScreen() {
           driver_id: userId,
           driver_accepted_at: new Date().toISOString(),
         } as never)
-        .eq('id', acceptModal.id)
+        .eq('id', modal.id)
         .is('driver_id', null)
         .select('id')
         .maybeSingle();
@@ -214,25 +219,33 @@ export function HomeEncomendasScreen() {
         return;
       }
 
-      setAccepted((prev) => [...prev, acceptModal.id]);
+      setAccepted((prev) => [...prev, modal.id]);
 
-      const conv = await createOrGetShipmentConversation(acceptModal.id, userId);
+      const conv = await createOrGetShipmentConversation(modal.id, userId);
       if (conv.error && !conv.conversationId) {
         showAlert('Chat', `Coleta aceita, mas o chat não pôde ser criado: ${conv.error}`);
       }
 
       if (conv.conversationId) {
-        navigation.navigate('ChatEnc', {
-          screen: 'ChatEncThread',
-          params: {
-            conversationId: conv.conversationId,
-            participantName: acceptModal.clientName,
-          },
-        });
+        chatNav = {
+          conversationId: conv.conversationId,
+          participantName: modal.clientName,
+        };
       }
+    } catch (e: unknown) {
+      showAlert('Erro', getUserErrorMessage(e, 'Não foi possível aceitar a coleta.'));
     } finally {
       setActioning(false);
       setAcceptModal(null);
+    }
+    if (chatNav) {
+      const params = chatNav;
+      InteractionManager.runAfterInteractions(() => {
+        navigation.navigate('ChatEnc', {
+          screen: 'ChatEncThread',
+          params,
+        });
+      });
     }
   }, [acceptModal, userId, navigation, showAlert, load]);
 
@@ -332,7 +345,14 @@ export function HomeEncomendasScreen() {
                     <Text style={styles.acceptedText}>Aceito</Text>
                   </View>
                 ) : (
-                  <TouchableOpacity style={styles.acceptBtn} onPress={() => setAcceptModal(s)} activeOpacity={0.85}>
+                  <TouchableOpacity
+                    style={styles.acceptBtn}
+                    onPress={() => {
+                      setPromoModal(null);
+                      setAcceptModal(s);
+                    }}
+                    activeOpacity={0.85}
+                  >
                     <Text style={styles.acceptBtnText}>Aceitar coleta</Text>
                   </TouchableOpacity>
                 )}

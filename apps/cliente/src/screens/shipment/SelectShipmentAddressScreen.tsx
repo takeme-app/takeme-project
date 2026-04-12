@@ -34,6 +34,7 @@ import {
   formatDateDisplayLabel,
 } from '../../lib/dateTimeSlots';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
+import { guessCityFromPtAddress } from '../../lib/shipmentOriginCity';
 
 type Props = NativeStackScreenProps<ShipmentStackParamList, 'SelectShipmentAddress'>;
 
@@ -91,6 +92,8 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
   const [originAddress, setOriginAddress] = useState('Obtendo sua localização...');
   const [originLat, setOriginLat] = useState(DEFAULT_COORDS.latitude);
   const [originLng, setOriginLng] = useState(DEFAULT_COORDS.longitude);
+  /** Cidade da origem (filtro no app motorista); preenchida pelo autocomplete ou heurística PT. */
+  const [originCityTag, setOriginCityTag] = useState('');
   const [recentDestinations, setRecentDestinations] = useState<RecentDestination[]>([]);
   const [whenSheetVisible, setWhenSheetVisible] = useState(false);
   const [whenOption, setWhenOption] = useState<'now' | 'later' | null>(null);
@@ -125,6 +128,7 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
       setOriginAddress(place.address);
       setOriginLat(place.latitude);
       setOriginLng(place.longitude);
+      setOriginCityTag(guessCityFromPtAddress(place.address));
     } else {
       setOriginAddress('Permita acesso à localização');
     }
@@ -139,6 +143,7 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
       setOriginAddress(currentPlace.address);
       setOriginLat(currentPlace.latitude);
       setOriginLng(currentPlace.longitude);
+      setOriginCityTag(guessCityFromPtAddress(currentPlace.address));
     } else {
       loadOrigin();
     }
@@ -185,6 +190,7 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
         setOriginLat(place.latitude);
         setOriginLng(place.longitude);
         setEditOrigin(place.address);
+        setOriginCityTag(guessCityFromPtAddress(place.address));
       } else {
         showAlert(
           'Localização',
@@ -199,7 +205,10 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
   }, [refreshLocation, showAlert]);
 
   const goToRecipient = useCallback(
-    (origin: { address: string; latitude: number; longitude: number }, destination: { address: string; latitude: number; longitude: number }) => {
+    (
+      origin: { address: string; latitude: number; longitude: number; city?: string },
+      destination: { address: string; latitude: number; longitude: number }
+    ) => {
       navigation.navigate('Recipient', {
         origin,
         destination,
@@ -230,8 +239,14 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
         longitude: destinationLng,
       }).then(loadRecentDestinations);
       closeEditModal();
+      const originCityResolved = (originCityTag.trim() || guessCityFromPtAddress(newOriginAddress)).trim();
       goToRecipient(
-        { address: newOriginAddress, latitude: originLat, longitude: originLng },
+        {
+          address: newOriginAddress,
+          latitude: originLat,
+          longitude: originLng,
+          ...(originCityResolved ? { city: originCityResolved } : {}),
+        },
         { address: destText, latitude: destinationLat, longitude: destinationLng }
       );
     } else {
@@ -244,6 +259,7 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
     originAddress,
     originLat,
     originLng,
+    originCityTag,
     destinationLat,
     destinationLng,
     destinationConfirmed,
@@ -582,6 +598,7 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
                   setOriginLat(place.latitude);
                   setOriginLng(place.longitude);
                   setEditOrigin(place.address);
+                  setOriginCityTag(place.city?.trim() || guessCityFromPtAddress(place.address));
                 }}
                 placeholder="Ex: Av. Presidente João Pessoa, 422"
                 editable={!locationLoading}
@@ -668,8 +685,14 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
               style={styles.recentListPageRow}
               activeOpacity={0.7}
               onPress={() => {
+                const originCityResolved = (originCityTag.trim() || guessCityFromPtAddress(originAddress)).trim();
                 goToRecipient(
-                  { address: originAddress, latitude: originLat, longitude: originLng },
+                  {
+                    address: originAddress,
+                    latitude: originLat,
+                    longitude: originLng,
+                    ...(originCityResolved ? { city: originCityResolved } : {}),
+                  },
                   { address: item.address, latitude: lat, longitude: lng }
                 );
               }}

@@ -15,6 +15,8 @@ import {
   Platform,
   Animated,
   Image,
+  Clipboard,
+  Share,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -35,6 +37,7 @@ import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib
 import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
 import { StatusBadge, shipmentStatusToBadge } from '../../components/StatusBadge';
 import { SupportSheet } from '../../components/SupportSheet';
+import { storageUrl } from '../../utils/storageUrl';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ShipmentDetail'>;
 
@@ -96,13 +99,30 @@ type ShipmentDetail = {
   recipient_phone: string;
   instructions: string | null;
   tip_cents: number | null;
+  driver_id: string | null;
+  pickup_code: string | null;
+  delivery_code: string | null;
+  cancellation_reason: string | null;
 };
+
+type DriverProfileRow = { full_name: string | null; avatar_url: string | null };
+
+/** Um dígito/caracter por chip (PIN gravado no BD, normalmente 4 dígitos). */
+function pinCharsForDisplay(code: string | null | undefined): string[] {
+  const s = (code ?? '').trim();
+  if (!s) return ['—', '—', '—', '—'];
+  const chars = s.split('');
+  const out: string[] = [];
+  for (let i = 0; i < 4; i += 1) out.push(chars[i] ?? '—');
+  return out;
+}
 
 type ShipmentRatingRow = { rating: number; comment: string | null } | null;
 
 export function ShipmentDetailScreen({ navigation, route }: Props) {
   const shipmentId = route.params?.shipmentId ?? '';
   const [detail, setDetail] = useState<ShipmentDetail | null>(null);
+  const [driverProfile, setDriverProfile] = useState<DriverProfileRow | null>(null);
   const [ratingRow, setRatingRow] = useState<ShipmentRatingRow>(null);
   const [loading, setLoading] = useState(true);
   const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
@@ -129,7 +149,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
       return;
     }
     let cancelled = false;
-    (async () => {
+    const load = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         setLoading(false);
@@ -137,7 +157,9 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
       }
       const { data: shipment, error: shipErr } = await supabase
         .from('shipments')
-        .select('id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents')
+        .select(
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, driver_id, pickup_code, delivery_code, cancellation_reason'
+        )
         .eq('id', shipmentId)
         .eq('user_id', user.id)
         .single();
@@ -145,22 +167,63 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         setLoading(false);
         return;
       }
+      const row = shipment as {
+        id: string;
+        origin_address: string;
+        origin_lat: number | null;
+        origin_lng: number | null;
+        destination_address: string;
+        destination_lat: number | null;
+        destination_lng: number | null;
+        amount_cents: number;
+        status: string;
+        created_at: string;
+        recipient_name: string;
+        recipient_phone: string;
+        instructions: string | null;
+        tip_cents: number | null;
+        driver_id: string | null;
+        pickup_code: string | null;
+        delivery_code: string | null;
+        cancellation_reason: string | null;
+      };
       setDetail({
-        id: shipment.id,
-        origin_address: shipment.origin_address,
-        origin_lat: shipment.origin_lat,
-        origin_lng: shipment.origin_lng,
-        destination_address: shipment.destination_address,
-        destination_lat: shipment.destination_lat,
-        destination_lng: shipment.destination_lng,
-        amount_cents: shipment.amount_cents,
-        status: shipment.status,
-        created_at: shipment.created_at,
-        recipient_name: shipment.recipient_name,
-        recipient_phone: shipment.recipient_phone,
-        instructions: shipment.instructions ?? null,
-        tip_cents: shipment.tip_cents ?? null,
+        id: row.id,
+        origin_address: row.origin_address,
+        origin_lat: row.origin_lat,
+        origin_lng: row.origin_lng,
+        destination_address: row.destination_address,
+        destination_lat: row.destination_lat,
+        destination_lng: row.destination_lng,
+        amount_cents: row.amount_cents,
+        status: row.status,
+        created_at: row.created_at,
+        recipient_name: row.recipient_name,
+        recipient_phone: row.recipient_phone,
+        instructions: row.instructions ?? null,
+        tip_cents: row.tip_cents ?? null,
+        driver_id: row.driver_id ?? null,
+        pickup_code: row.pickup_code ?? null,
+        delivery_code: row.delivery_code ?? null,
+        cancellation_reason: row.cancellation_reason ?? null,
       });
+      if (row.driver_id) {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('full_name, avatar_url')
+          .eq('id', row.driver_id)
+          .maybeSingle();
+        if (!cancelled) {
+          if (prof) {
+            const p = prof as DriverProfileRow;
+            setDriverProfile({ full_name: p.full_name, avatar_url: p.avatar_url });
+          } else {
+            setDriverProfile(null);
+          }
+        }
+      } else if (!cancelled) {
+        setDriverProfile(null);
+      }
       const { data: rating } = await supabase
         .from('shipment_ratings')
         .select('rating, comment')
@@ -168,8 +231,22 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         .maybeSingle();
       if (!cancelled) setRatingRow(rating ? { rating: rating.rating, comment: rating.comment } : null);
       setLoading(false);
-    })();
-    return () => { cancelled = true; };
+    };
+    void load();
+    const channel = supabase
+      .channel(`shipment-detail-${shipmentId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'shipments', filter: `id=eq.${shipmentId}` },
+        () => {
+          void load();
+        }
+      )
+      .subscribe();
+    return () => {
+      cancelled = true;
+      void supabase.removeChannel(channel);
+    };
   }, [shipmentId]);
 
   useEffect(() => {
@@ -211,7 +288,44 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
   const hasValidShipmentMapCoords = mapRegion != null;
 
   const canCancel = detail?.status && ['pending_review', 'awaiting_driver', 'confirmed', 'in_progress'].includes(detail.status);
-  const driverOnWay = detail?.status && ['confirmed', 'in_progress'].includes(detail.status);
+  const hasAssignedDriver = Boolean(detail?.driver_id);
+  const driverOnWay =
+    hasAssignedDriver && detail?.status && ['confirmed', 'in_progress'].includes(detail.status);
+
+  const awaitingDriverMessage = (() => {
+    if (!detail || hasAssignedDriver) return null;
+    if (detail.status === 'cancelled' && detail.cancellation_reason === 'no_driver_accepted') {
+      return 'Nenhum motorista aceitou este envio no prazo. O pedido foi cancelado.';
+    }
+    if (detail.status === 'cancelled') return null;
+    if (detail.status === 'delivered') return null;
+    return 'Ainda não há motorista atribuído. Assim que um motorista aceitar, os dados dele aparecerão aqui e você poderá acompanhar o envio.';
+  })();
+
+  const copyPin = (label: string, code: string | null | undefined) => {
+    const t = (code ?? '').trim();
+    if (!t) {
+      Alert.alert(label, 'PIN ainda não disponível.');
+      return;
+    }
+    Clipboard.setString(t);
+    Alert.alert('Copiado', `${label}: ${t}`);
+  };
+
+  const sharePin = async (label: string, code: string | null | undefined) => {
+    const t = (code ?? '').trim();
+    if (!t) {
+      Alert.alert(label, 'PIN ainda não disponível para compartilhar.');
+      return;
+    }
+    try {
+      await Share.share({
+        message: `${label} (Take Me): ${t}`,
+      });
+    } catch {
+      Alert.alert('Compartilhar', 'Não foi possível abrir o compartilhamento.');
+    }
+  };
 
   useEffect(() => {
     if (!showTipSheet) return;
@@ -364,6 +478,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
   }
 
   const displayId = detail.id.length >= 6 ? `EN${detail.id.slice(-6).toUpperCase()}` : detail.id;
+  const driverAvatarUri = storageUrl('avatars', driverProfile?.avatar_url ?? null);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -381,21 +496,6 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(40, insets.bottom + 24) }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Faixa de status: bloco próprio, sem sobrepor o mapa */}
-        <View style={styles.statusBanner}>
-          <View style={styles.statusBannerLeft}>
-            <View style={styles.statusBannerIconWrap}>
-              <MaterialIcons name="check" size={20} color={COLORS.background} />
-            </View>
-            <View style={styles.statusBannerTextWrap}>
-              <Text style={styles.statusBannerText}>{shipmentStatusMessage(detail.status)}</Text>
-              <TouchableOpacity activeOpacity={0.8} style={styles.pagarAgoraLink}>
-                <Text style={styles.pagarAgoraText}>Pagar agora</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-
         {/* Mapa em bloco separado com altura fixa; botão abaixo do mapa, sem sobreposição */}
         <View style={styles.mapSection}>
           <View style={styles.mapContainer}>
@@ -426,21 +526,55 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         </View>
 
-        {/* PIN de Coleta: chips amarelos (ou placeholder), ícones copiar/compartilhar à direita, botão reenviar oval */}
+        {(awaitingDriverMessage || hasAssignedDriver) && (
+          <View style={styles.driverSection}>
+            {awaitingDriverMessage ? (
+              <View style={styles.driverPendingCard}>
+                <MaterialIcons name="schedule" size={22} color="#92400e" style={styles.driverPendingIcon} />
+                <Text style={styles.driverPendingText}>{awaitingDriverMessage}</Text>
+              </View>
+            ) : (
+              <View style={styles.driverAssignedCard}>
+                {driverAvatarUri ? (
+                  <Image source={{ uri: driverAvatarUri }} style={styles.driverAvatarImg} />
+                ) : (
+                  <View style={styles.driverAvatarPlaceholder}>
+                    <MaterialIcons name="person" size={28} color={COLORS.neutral700} />
+                  </View>
+                )}
+                <View style={styles.driverAssignedTextWrap}>
+                  <Text style={styles.driverAssignedLabel}>Motorista</Text>
+                  <Text style={styles.driverAssignedName}>{driverProfile?.full_name?.trim() || 'Motorista'}</Text>
+                </View>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* PIN de Coleta: dígitos do banco; copiar / compartilhar o código completo */}
         <View style={styles.pinSection}>
           <Text style={styles.pinLabel}>PIN de Coleta</Text>
           <View style={styles.pinRow}>
             <View style={styles.pinChipsWrap}>
-              <View style={styles.pinChip}><Text style={styles.pinChipText}>—</Text></View>
-              <View style={styles.pinChip}><Text style={styles.pinChipText}>—</Text></View>
-              <View style={styles.pinChip}><Text style={styles.pinChipText}>—</Text></View>
-              <View style={styles.pinChip}><Text style={styles.pinChipText}>—</Text></View>
+              {pinCharsForDisplay(detail.pickup_code).map((ch, i) => (
+                <View key={`pc-${i}`} style={styles.pinChip}>
+                  <Text style={styles.pinChipText}>{ch}</Text>
+                </View>
+              ))}
             </View>
             <View style={styles.pinIconButtons}>
-              <TouchableOpacity style={styles.pinIconBtn} activeOpacity={0.8}>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() => copyPin('PIN de coleta', detail.pickup_code)}
+              >
                 <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
               </TouchableOpacity>
-              <TouchableOpacity style={styles.pinIconBtn} activeOpacity={0.8}>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() => void sharePin('PIN de coleta', detail.pickup_code)}
+              >
                 <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
               </TouchableOpacity>
             </View>
@@ -454,16 +588,25 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
           <Text style={styles.pinLabel}>PIN de entrega</Text>
           <View style={styles.pinRow}>
             <View style={styles.pinChipsWrap}>
-              <View style={styles.pinChip}><Text style={styles.pinChipText}>—</Text></View>
-              <View style={styles.pinChip}><Text style={styles.pinChipText}>—</Text></View>
-              <View style={styles.pinChip}><Text style={styles.pinChipText}>—</Text></View>
-              <View style={styles.pinChip}><Text style={styles.pinChipText}>—</Text></View>
+              {pinCharsForDisplay(detail.delivery_code).map((ch, i) => (
+                <View key={`dc-${i}`} style={styles.pinChip}>
+                  <Text style={styles.pinChipText}>{ch}</Text>
+                </View>
+              ))}
             </View>
             <View style={styles.pinIconButtons}>
-              <TouchableOpacity style={styles.pinIconBtn} activeOpacity={0.8}>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() => copyPin('PIN de entrega', detail.delivery_code)}
+              >
                 <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
               </TouchableOpacity>
-              <TouchableOpacity style={styles.pinIconBtn} activeOpacity={0.8}>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() => void sharePin('PIN de entrega', detail.delivery_code)}
+              >
                 <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
               </TouchableOpacity>
             </View>
@@ -481,7 +624,6 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
               <MaterialIcons name="inventory-2" size={28} color="#92400e" />
             </View>
           </View>
-          <Text style={styles.cardMeta}>Motorista: —</Text>
           <Text style={styles.cardDate}>{formatDetailDate(detail.created_at)}</Text>
           <Text style={styles.cardPrice}>R$ {(detail.amount_cents / 100).toFixed(2)} • {shipmentStatusMessage(detail.status)}</Text>
           <TouchableOpacity style={styles.receiptButton} activeOpacity={0.8}>
@@ -575,8 +717,12 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
       <SupportSheet
         visible={supportSheetVisible}
         onClose={() => setSupportSheetVisible(false)}
-        showDriverChat={canCancel}
-        onOpenDriverChat={() => navigation.navigate('Chat', { contactName: 'Motorista' })}
+        showDriverChat={Boolean(canCancel && hasAssignedDriver)}
+        onOpenDriverChat={() =>
+          navigation.navigate('Chat', {
+            contactName: driverProfile?.full_name?.trim() || 'Motorista',
+          })
+        }
         onOpenSupportChat={() =>
           navigation.navigate('Chat', { contactName: 'Suporte Take Me', supportBackoffice: true })}
       />
@@ -739,24 +885,39 @@ const styles = StyleSheet.create({
   placeholder: { fontSize: 15, color: COLORS.neutral700 },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 40 },
-  statusBanner: {
-    backgroundColor: COLORS.black,
-    paddingHorizontal: 24,
-    paddingVertical: 16,
+  driverSection: { paddingHorizontal: 24, marginTop: 16 },
+  driverPendingCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    padding: 14,
+    backgroundColor: '#FEF9C3',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FDE047',
   },
-  statusBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  statusBannerIconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+  driverPendingIcon: { marginTop: 2 },
+  driverPendingText: { flex: 1, fontSize: 14, color: '#713F12', lineHeight: 20 },
+  driverAssignedCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    padding: 14,
+    backgroundColor: COLORS.neutral300,
+    borderRadius: 12,
+  },
+  driverAvatarImg: { width: 56, height: 56, borderRadius: 28, backgroundColor: COLORS.neutral400 },
+  driverAvatarPlaceholder: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: COLORS.neutral400,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  statusBannerTextWrap: { flex: 1 },
-  statusBannerText: { fontSize: 16, fontWeight: '600', color: COLORS.background },
-  pagarAgoraLink: { marginTop: 4 },
-  pagarAgoraText: { fontSize: 14, fontWeight: '500', color: COLORS.accent },
+  driverAssignedTextWrap: { flex: 1 },
+  driverAssignedLabel: { fontSize: 12, fontWeight: '600', color: COLORS.neutral700, textTransform: 'uppercase' },
+  driverAssignedName: { fontSize: 17, fontWeight: '700', color: COLORS.black, marginTop: 2 },
   mapSection: { paddingHorizontal: 24, paddingTop: 16 },
   mapContainer: { width: '100%', height: 200, borderRadius: 12, overflow: 'hidden', backgroundColor: COLORS.neutral300 },
   mapLoading: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },

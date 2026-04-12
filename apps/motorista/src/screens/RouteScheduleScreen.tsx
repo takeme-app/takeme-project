@@ -25,9 +25,10 @@ import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import {
-  latLngFromDbColumns,
-  DEFAULT_MAP_REGION_BR,
-} from '../components/googleMaps';
+  coordsForScheduledTripFromRoute,
+  normalizeRouteTimeForSchedule,
+  computeNextDepartureArrivalFromWeekday,
+} from '../lib/routeScheduleTimes';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'RouteSchedule'>;
 
@@ -45,6 +46,7 @@ type TripRow = {
   confirmed_count: number;
   price_per_person_cents: number;
   is_active: boolean;
+  status: string | null;
 };
 
 type DayToggle = Record<number, boolean>;
@@ -59,56 +61,6 @@ function formatCents(cents: number): string {
   return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
-/**
- * Coordenadas para `scheduled_trips` (colunas NOT NULL): copia de `worker_routes` quando válidas;
- * senão fallback no Brasil (nunca 0,0 — evita mapa no Atlântico).
- */
-function coordsForScheduledTripFromRoute(row: {
-  origin_lat?: number | null;
-  origin_lng?: number | null;
-  destination_lat?: number | null;
-  destination_lng?: number | null;
-}): {
-  origin_lat: number;
-  origin_lng: number;
-  destination_lat: number;
-  destination_lng: number;
-} {
-  const o = latLngFromDbColumns(row.origin_lat, row.origin_lng);
-  const d = latLngFromDbColumns(row.destination_lat, row.destination_lng);
-  if (o && d) {
-    return {
-      origin_lat: o.latitude,
-      origin_lng: o.longitude,
-      destination_lat: d.latitude,
-      destination_lng: d.longitude,
-    };
-  }
-  if (o && !d) {
-    return {
-      origin_lat: o.latitude,
-      origin_lng: o.longitude,
-      destination_lat: o.latitude + 0.04,
-      destination_lng: o.longitude + 0.04,
-    };
-  }
-  if (!o && d) {
-    return {
-      origin_lat: d.latitude - 0.04,
-      origin_lng: d.longitude - 0.04,
-      destination_lat: d.latitude,
-      destination_lng: d.longitude,
-    };
-  }
-  const c = DEFAULT_MAP_REGION_BR;
-  return {
-    origin_lat: c.latitude,
-    origin_lng: c.longitude,
-    destination_lat: c.latitude + 0.05,
-    destination_lng: c.longitude + 0.05,
-  };
-}
-
 function totalValue(base: number, count: number, adjust: PriceAdjust, dayIdx: number): number {
   const isWeekend = dayIdx === 5 || dayIdx === 6;
   let total = base * count;
@@ -117,45 +69,6 @@ function totalValue(base: number, count: number, adjust: PriceAdjust, dayIdx: nu
     total = total * (1 + pct / 100);
   }
   return total;
-}
-
-/**
- * Próxima data/hora de partida > agora (calendário local), para o weekday e horários fixos da rota.
- * dayNum: 0=Dom … 6=Sáb (igual Date.getDay()).
- */
-function computeNextDepartureArrivalFromWeekday(
-  dayNum: number,
-  departureTimeHHMM: string,
-  arrivalTimeHHMM: string,
-): { departureAt: Date; arrivalAt: Date } {
-  const depMatch = departureTimeHHMM.trim().match(/^(\d{1,2}):(\d{2})$/);
-  const arrMatch = arrivalTimeHHMM.trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!depMatch || !arrMatch) {
-    throw new Error('Horário inválido.');
-  }
-  const depH = parseInt(depMatch[1], 10);
-  const depMin = parseInt(depMatch[2], 10);
-  const arrH = parseInt(arrMatch[1], 10);
-  const arrMin = parseInt(arrMatch[2], 10);
-
-  const now = new Date();
-  const maxScan = 400;
-  for (let add = 0; add < maxScan; add++) {
-    const cal = new Date(now.getFullYear(), now.getMonth(), now.getDate() + add, 0, 0, 0, 0);
-    if (cal.getDay() !== dayNum) continue;
-
-    const departureAt = new Date(cal);
-    departureAt.setHours(depH, depMin, 0, 0);
-    if (departureAt.getTime() <= now.getTime()) continue;
-
-    const arrivalAt = new Date(cal);
-    arrivalAt.setHours(arrH, arrMin, 0, 0);
-    if (arrivalAt.getTime() <= departureAt.getTime()) {
-      arrivalAt.setDate(arrivalAt.getDate() + 1);
-    }
-    return { departureAt, arrivalAt };
-  }
-  throw new Error('Não foi possível calcular a próxima data da viagem.');
 }
 
 export function RouteScheduleScreen({ navigation, route }: Props) {
@@ -191,9 +104,12 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
     }
     const { data, error } = await supabase
       .from('scheduled_trips')
-      .select('id, day_of_week, departure_time, arrival_time, capacity, confirmed_count, price_per_person_cents, is_active')
+      .select(
+        'id, day_of_week, departure_time, arrival_time, capacity, confirmed_count, price_per_person_cents, is_active, status',
+      )
       .eq('route_id', routeId)
       .eq('driver_id', user.id)
+      .in('status', ['active', 'scheduled'])
       .order('day_of_week', { ascending: true });
 
     if (error) {
@@ -209,7 +125,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
     const toggles: DayToggle = {};
     for (const t of rows) {
       const idx = t.day_of_week === 0 ? 6 : t.day_of_week - 1;
-      if (toggles[idx] === undefined) toggles[idx] = t.is_active;
+      toggles[idx] = (toggles[idx] ?? false) || Boolean(t.is_active);
     }
     setDayToggles(toggles);
     setLoading(false);
@@ -228,33 +144,47 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
     const dayNum = dayIdx === 6 ? 0 : dayIdx + 1;
     try {
       if (value) {
-        const list = dayTrips(dayIdx).filter(
-          (t) => /^\d{1,2}:\d{2}$/.test((t.departure_time ?? '').trim())
-            && /^\d{1,2}:\d{2}$/.test((t.arrival_time ?? '').trim()),
-        );
-        await Promise.all(
-          list.map((t) => {
-            const { departureAt, arrivalAt } = computeNextDepartureArrivalFromWeekday(
-              dayNum,
-              t.departure_time as string,
-              t.arrival_time as string,
+        const rowsToEnable: { id: string; dep: string; arr: string }[] = [];
+        for (const t of dayTrips(dayIdx)) {
+          const dep = normalizeRouteTimeForSchedule(t.departure_time);
+          const arr = normalizeRouteTimeForSchedule(t.arrival_time);
+          if (dep && arr) rowsToEnable.push({ id: t.id, dep, arr });
+        }
+        if (rowsToEnable.length === 0) {
+          const dayList = dayTrips(dayIdx);
+          if (dayList.length === 0) {
+            showAlert('Atenção', 'Não há viagens neste dia. Use + Adicionar viagem.');
+          } else {
+            showAlert(
+              'Atenção',
+              'Horários de partida ou chegada inválidos. Use HH:MM (ex.: 09:00 e 10:30).',
             );
-            return supabase
-              .from('scheduled_trips')
-              .update(
-                {
-                  is_active: true,
-                  status: 'active',
-                  departure_at: departureAt.toISOString(),
-                  arrival_at: arrivalAt.toISOString(),
-                  updated_at: new Date().toISOString(),
-                } as never,
-              )
-              .eq('id', t.id);
-          }),
-        );
+          }
+          await load();
+          return;
+        }
+        for (const row of rowsToEnable) {
+          const { departureAt, arrivalAt } = computeNextDepartureArrivalFromWeekday(
+            dayNum,
+            row.dep,
+            row.arr,
+          );
+          const { error } = await supabase
+            .from('scheduled_trips')
+            .update(
+              {
+                is_active: true,
+                status: 'active',
+                departure_at: departureAt.toISOString(),
+                arrival_at: arrivalAt.toISOString(),
+                updated_at: new Date().toISOString(),
+              } as never,
+            )
+            .eq('id', row.id);
+          if (error) throw error;
+        }
       } else {
-        await supabase
+        const { error } = await supabase
           .from('scheduled_trips')
           .update(
             {
@@ -265,7 +195,10 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
             } as never,
           )
           .eq('route_id', routeId)
-          .eq('day_of_week', dayNum);
+          .eq('day_of_week', dayNum)
+          .neq('status', 'completed')
+          .neq('status', 'cancelled');
+        if (error) throw error;
       }
     } catch {
       showAlert('Erro', 'Não foi possível atualizar o cronograma.');
@@ -306,16 +239,13 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         day_of_week: dayNum,
         updated_at: new Date().toISOString(),
       };
-      if (
-        moved?.departure_time
-        && moved?.arrival_time
-        && /^\d{1,2}:\d{2}$/.test(moved.departure_time.trim())
-        && /^\d{1,2}:\d{2}$/.test(moved.arrival_time.trim())
-      ) {
+      const depN = normalizeRouteTimeForSchedule(moved?.departure_time);
+      const arrN = normalizeRouteTimeForSchedule(moved?.arrival_time);
+      if (depN && arrN) {
         const { departureAt, arrivalAt } = computeNextDepartureArrivalFromWeekday(
           dayNum,
-          moved.departure_time,
-          moved.arrival_time,
+          depN,
+          arrN,
         );
         patch = {
           ...patch,

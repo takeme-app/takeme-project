@@ -10,15 +10,15 @@
     "motorista:android": "npm run motorista:android --prefix ../..",
     "build:apk": "node scripts/build-apk.js",
     "motorista:apk": "npm run motorista:apk --prefix ../..",
-    "start": "expo start",
-    "start:lan": "node -e \"const fs=require('fs'),path=require('path');const r=path.resolve(__dirname,'../../.env');const d=path.resolve(__dirname,'.env');if(fs.existsSync(r))fs.copyFileSync(r,d);\" && expo start --port 8081 --host lan",
+    "start": "expo start --port 8082",
+    "start:lan": "node -e \"const fs=require('fs'),path=require('path');const r=path.resolve(__dirname,'../../.env');const d=path.resolve(__dirname,'.env');if(fs.existsSync(r))fs.copyFileSync(r,d);\" && expo start --port 8082 --host lan",
     "native:ios": "expo run:ios",
     "native:android": "node scripts/expo-android.js",
     "android": "node scripts/expo-android.js",
     "android:run": "node scripts/expo-android.js --no-bundler",
     "android:reverse": "node scripts/adb-reverse.js",
     "ios": "expo run:ios",
-    "web": "expo start --web",
+    "web": "expo start --web --port 8082",
     "lint": "expo lint"
   },
   "dependencies": {

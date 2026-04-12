@@ -23,6 +23,9 @@ import {
   shipmentPricingSnapshotFromParams,
   shipmentOrderInsertFromQuoteParams,
 } from '../../lib/orderPricingSnapshot';
+import { guessCityFromPtAddress } from '../../lib/shipmentOriginCity';
+import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
+import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
 
 type Props = NativeStackScreenProps<ShipmentStackParamList, 'ConfirmShipment'>;
 
@@ -61,6 +64,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
     priceRouteBaseCents,
     pricingRouteId,
     adminPctApplied,
+    clientPreferredDriverId,
   } = route.params;
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -149,6 +153,8 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           origin: { latitude: origin.latitude, longitude: origin.longitude },
           originAddress: origin.address,
         });
+        const originCityResolved =
+          (origin.city?.trim() || guessCityFromPtAddress(origin.address)).trim() || null;
         const { data: row, error } = await supabase
           .from('shipments')
           .insert({
@@ -156,6 +162,8 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
             origin_address: origin.address,
             origin_lat: origin.latitude,
             origin_lng: origin.longitude,
+            origin_city: originCityResolved,
+            client_preferred_driver_id: clientPreferredDriverId,
             destination_address: destination.address,
             destination_lat: destination.latitude,
             destination_lng: destination.longitude,
@@ -175,6 +183,17 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           .select('id')
           .single();
         if (error) {
+          const raw = `${(error as { message?: string }).message ?? ''} ${(error as { details?: string }).details ?? ''}`;
+          if (
+            (error as { code?: string }).code === 'PGRST204' ||
+            /column .*does not exist|Could not find the .*column/i.test(raw)
+          ) {
+            showAlert(
+              'Atualização do servidor',
+              'O banco de dados ainda não tem as colunas de envio (motorista preferido / cidade). Aplique as migrações Supabase mais recentes do repositório e tente de novo.',
+            );
+            return;
+          }
           showAlert('Erro', getUserErrorMessage(error, 'Não foi possível registrar o envio. Tente novamente.'));
           return;
         }
@@ -185,8 +204,19 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         const paymentProcessed =
           params.method === 'credito' || params.method === 'debito' || params.method === 'pix';
 
+        let stripeCardCharged = false;
         if (shipmentId && (params.method === 'credito' || params.method === 'debito') && params.paymentMethodId) {
-          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke('charge-shipment', {
+          const stripeCtx = await ensureAccessTokenForStripeFunctions();
+          if (!stripeCtx.ok) {
+            await supabase
+              .from('shipments')
+              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+              .eq('id', shipmentId);
+            showAlert('Pagamento', stripeCtx.message);
+            return;
+          }
+          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke(EDGE_CHARGE_SHIPMENT_SLUG, {
+            headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
             body: {
               shipment_id: shipmentId,
               stripe_payment_method_id: params.paymentMethodId,
@@ -204,6 +234,54 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
               chargeErrMsg || 'Não foi possível confirmar o pagamento; o pedido foi cancelado.',
             );
             return;
+          }
+          const charged = chargeData as { ok?: boolean } | null;
+          stripeCardCharged = charged?.ok === true;
+        }
+
+        if (
+          shipmentId &&
+          status === 'confirmed' &&
+          packageSize !== 'grande' &&
+          clientPreferredDriverId
+        ) {
+          const { data: beginData, error: beginErr } = await supabase.rpc('shipment_begin_driver_offering', {
+            p_shipment_id: shipmentId,
+          });
+          if (beginErr) {
+            showAlert(
+              'Aviso',
+              getUserErrorMessage(beginErr, 'Não foi possível iniciar a fila de motoristas. Contacte o suporte.'),
+            );
+          } else {
+            const begin = beginData as {
+              cancelled?: boolean;
+              ok?: boolean;
+              error?: string;
+              skipped?: boolean;
+            } | null;
+            if (begin && begin.ok === false && begin.error) {
+              showAlert(
+                'Envio',
+                begin.error === 'missing_preferred_driver'
+                  ? 'Não foi possível abrir a fila: falta motorista preferido. Volte e escolha um motorista.'
+                  : begin.error === 'forbidden'
+                    ? 'Sessão inválida ao iniciar a fila. Faça login de novo.'
+                    : `Não foi possível iniciar a fila (${begin.error}). Contacte o suporte.`,
+              );
+            } else if (begin?.cancelled) {
+              if (stripeCardCharged) {
+                await supabase.functions.invoke('refund-shipment-no-driver', {
+                  body: { shipment_id: shipmentId },
+                });
+              }
+              showAlert(
+                'Envio cancelado',
+                'Não há motoristas disponíveis nesta rota no momento. Se houve cobrança no cartão, o estorno será processado em instantes.',
+              );
+              navigation.reset({ index: 0, routes: [{ name: 'SelectShipmentAddress' }] });
+              return;
+            }
           }
         }
 
@@ -224,6 +302,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
       destination,
       whenOption,
       packageSize,
+      clientPreferredDriverId,
       recipient,
       amountCents,
       pricingInsertRow,

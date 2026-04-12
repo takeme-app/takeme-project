@@ -11,6 +11,8 @@ import {
   Pressable,
   Platform,
   useWindowDimensions,
+  Alert,
+  Image,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -39,7 +41,8 @@ import { Text } from '../components/Text';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getRouteWithDuration, getMultiPointRoute, formatEta } from '../lib/route';
 import { getGoogleMapsApiKey, getMapboxAccessToken } from '../lib/googleMapsConfig';
-import { getUserErrorMessage } from '../utils/errorMessage';
+import { getUserErrorMessage, isTripRatingsUnavailableError } from '../utils/errorMessage';
+import { insertPlannedRouteSlotAfterComplete } from '../lib/insertPlannedRouteSlotAfterComplete';
 import {
   buildNavigationPadding,
   computeNextNavigationCamera,
@@ -48,6 +51,7 @@ import {
   type NavigationBearingState,
 } from '../lib/navigationCamera';
 import { snapToRoutePolyline, trimPolylineFromSnap } from '../lib/routeSnap';
+import * as ImagePicker from 'expo-image-picker';
 // expo-location — defensive import (needs native rebuild if just added)
 let Location: any = null;
 try { Location = require('expo-location'); } catch { /* not available yet */ }
@@ -196,6 +200,12 @@ type TripRow = {
   destination_lng: number | null;
   amount_cents: number | null;
   status: string;
+  route_id?: string | null;
+  day_of_week?: number | null;
+  departure_time?: string | null;
+  arrival_time?: string | null;
+  capacity?: number | null;
+  price_per_person_cents?: number | null;
   bookings?: { amount_cents: number; status: string }[] | null;
 };
 
@@ -325,8 +335,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const [confirmCode, setConfirmCode] = useState('');
   const [confirmError, setConfirmError] = useState('');
 
-  // Finalize
-  const [expenseAttached, setExpenseAttached] = useState(false);
+  // Finalize — comprovantes (fotos) enviados ao storage ao concluir a viagem
+  const [tripExpenseFiles, setTripExpenseFiles] = useState<{ uri: string; mimeType: string; name: string }[]>([]);
   const [finalizingTrip, setFinalizingTrip] = useState(false);
 
   // Rating
@@ -558,7 +568,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       const { data: tripData } = await supabase
         .from('scheduled_trips')
         .select(
-          'id, origin_address, destination_address, departure_at, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, status, bookings(amount_cents, status)'
+          [
+            'id, origin_address, destination_address, departure_at, origin_lat, origin_lng,',
+            'destination_lat, destination_lng, amount_cents, status,',
+            'route_id, day_of_week, departure_time, arrival_time, capacity, price_per_person_cents,',
+            'bookings(amount_cents, status)',
+          ].join(' '),
         )
         .eq('id', tripId)
         .single();
@@ -942,15 +957,45 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   };
 
   const openFinalize = () => {
+    setTripExpenseFiles([]);
     finalizeSlide.setValue(600);
     setFinalizeVisible(true);
     Animated.spring(finalizeSlide, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
   };
 
   const closeFinalize = () => {
-    Animated.timing(finalizeSlide, { toValue: 600, duration: 250, useNativeDriver: true }).start(() =>
-      setFinalizeVisible(false),
-    );
+    Animated.timing(finalizeSlide, { toValue: 600, duration: 250, useNativeDriver: true }).start(() => {
+      setFinalizeVisible(false);
+      setTripExpenseFiles([]);
+    });
+  };
+
+  const handlePickTripExpenses = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      showAlert('Permissão', 'Precisamos de acesso às fotos para anexar comprovantes de despesa.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: true,
+      quality: 0.85,
+      selectionLimit: 8,
+    });
+    if (result.canceled || !result.assets?.length) return;
+    setTripExpenseFiles((prev) => {
+      const next = [...prev];
+      for (const a of result.assets) {
+        const mime = a.mimeType ?? 'image/jpeg';
+        const name = a.fileName ?? `comprovante-${Date.now()}.jpg`;
+        next.push({ uri: a.uri, mimeType: mime, name });
+      }
+      return next.slice(0, 8);
+    });
+  };
+
+  const removeTripExpenseAt = (index: number) => {
+    setTripExpenseFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
   /**
@@ -1069,21 +1114,85 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     }
   };
 
+  /** Fecha o sheet “Viagem concluída” e volta ao tab principal (após avaliação ou fallback). */
+  const goHomeFromCompletedRating = useCallback(() => {
+    Animated.timing(completedSlide, { toValue: 600, duration: 280, useNativeDriver: true }).start(() => {
+      setCompletedVisible(false);
+      completedSlide.setValue(600);
+      requestAnimationFrame(() => {
+        navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Main' }] }));
+      });
+    });
+  }, [navigation, completedSlide]);
+
   const handleFinalizeTrip = async () => {
+    const routeSlotSnapshot = trip;
     setFinalizingTrip(true);
     try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user?.id) throw new Error('Sessão inválida. Faça login novamente.');
+
+      const uploadedPaths: string[] = [];
+      for (const file of tripExpenseFiles) {
+        const res = await fetch(file.uri);
+        const blob = await res.blob();
+        const rawExt = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() : 'jpg';
+        const ext = rawExt && /^[a-z0-9]+$/.test(rawExt) ? rawExt : 'jpg';
+        const path = `${user.id}/${tripId}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+        const { error: upErr } = await supabase.storage.from('trip-expenses').upload(path, blob, {
+          contentType: file.mimeType || 'image/jpeg',
+          upsert: false,
+        });
+        if (upErr) throw upErr;
+        uploadedPaths.push(path);
+      }
+
+      const updatePayload: Record<string, unknown> = {
+        status: 'completed',
+        is_active: false,
+        driver_journey_started_at: null,
+        updated_at: new Date().toISOString(),
+      };
+      if (uploadedPaths.length > 0) {
+        updatePayload.driver_expense_paths = uploadedPaths;
+      }
       const { error } = await supabase
         .from('scheduled_trips')
-        .update({ status: 'completed' } as never)
-        .eq('id', tripId);
+        .update(updatePayload as never)
+        .eq('id', tripId)
+        .eq('driver_id', user.id);
       if (error) throw error;
       await closeConversationsForScheduledTrip(tripId);
+
+      if (
+        routeSlotSnapshot?.route_id &&
+        routeSlotSnapshot.day_of_week != null &&
+        !Number.isNaN(Number(routeSlotSnapshot.day_of_week))
+      ) {
+        await insertPlannedRouteSlotAfterComplete(supabase, user.id, {
+          route_id: routeSlotSnapshot.route_id,
+          day_of_week: Number(routeSlotSnapshot.day_of_week),
+          departure_time: routeSlotSnapshot.departure_time ?? null,
+          arrival_time: routeSlotSnapshot.arrival_time ?? null,
+          capacity: routeSlotSnapshot.capacity ?? 4,
+          price_per_person_cents: routeSlotSnapshot.price_per_person_cents ?? 0,
+          origin_address: routeSlotSnapshot.origin_address,
+          destination_address: routeSlotSnapshot.destination_address,
+          origin_lat: routeSlotSnapshot.origin_lat ?? null,
+          origin_lng: routeSlotSnapshot.origin_lng ?? null,
+          destination_lat: routeSlotSnapshot.destination_lat ?? null,
+          destination_lng: routeSlotSnapshot.destination_lng ?? null,
+        });
+      }
     } catch (e: unknown) {
       showAlert('Erro', getUserErrorMessage(e));
       return;
     } finally {
       setFinalizingTrip(false);
     }
+    setTripExpenseFiles([]);
     // Não animar finalize com o modal a desmontar ao abrir o próximo — iOS pode travar toques.
     finalizeSlide.setValue(600);
     setFinalizeVisible(false);
@@ -1095,29 +1204,48 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   };
 
   const handleSubmitRating = async () => {
+    if (rating < 1) {
+      // Modal nativo: fica acima do bottom sheet (Modal) da viagem concluída; showAlert pode ficar oculto.
+      Alert.alert('Avaliação', 'Selecione de 1 a 5 estrelas para enviar.');
+      return;
+    }
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user?.id) {
+      Alert.alert('Erro', 'Sessão inválida. Faça login novamente.');
+      return;
+    }
     setSubmittingRating(true);
     try {
-      if (rating > 0) {
-        const { error } = await supabase.from('trip_ratings' as never).insert({
+      const { error } = await supabase.from('trip_ratings' as never).upsert(
+        {
           trip_id: tripId,
+          driver_id: user.id,
           rating,
           comment: ratingComment.trim() || null,
-        } as never);
-        if (error) throw error;
-      }
+        } as never,
+        { onConflict: 'trip_id,driver_id' }
+      );
+      if (error) throw error;
     } catch (e: unknown) {
-      showAlert('Erro', getUserErrorMessage(e));
+      if (isTripRatingsUnavailableError(e)) {
+        Alert.alert(
+          'Avaliação indisponível',
+          'O servidor Supabase deste app ainda não tem a tabela de avaliações (trip_ratings). É preciso aplicar as migrações do repositório nesse projeto (por exemplo `supabase db push` ou SQL no painel).\n\nVocê pode ir para o início sem salvar a avaliação.',
+          [
+            { text: 'Ficar aqui', style: 'cancel' },
+            { text: 'Ir para o início', onPress: () => goHomeFromCompletedRating() },
+          ],
+        );
+      } else {
+        Alert.alert('Erro', getUserErrorMessage(e));
+      }
       return;
     } finally {
       setSubmittingRating(false);
     }
-    Animated.timing(completedSlide, { toValue: 600, duration: 280, useNativeDriver: true }).start(() => {
-      setCompletedVisible(false);
-      completedSlide.setValue(600);
-      requestAnimationFrame(() => {
-        navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Main' }] }));
-      });
-    });
+    goHomeFromCompletedRating();
   };
 
   // ---------------------------------------------------------------------------
@@ -1708,18 +1836,41 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
           <Text style={styles.expenseOptional}>Anexar despesas (opcional)</Text>
           <TouchableOpacity
-            style={[styles.expenseBox, expenseAttached && styles.expenseBoxAttached]}
-            onPress={() => setExpenseAttached(!expenseAttached)}
+            style={[styles.expenseBox, tripExpenseFiles.length > 0 && styles.expenseBoxAttached]}
+            onPress={() => void handlePickTripExpenses()}
             activeOpacity={0.8}
           >
-            <MaterialIcons name="description" size={24} color={expenseAttached ? GOLD : '#9CA3AF'} />
-            <Text style={[styles.expenseText, expenseAttached && { color: GOLD }]}>
-              {expenseAttached ? 'Despesa anexada' : 'Clique para anexar'}
-            </Text>
+            <MaterialIcons
+              name="add-photo-alternate"
+              size={26}
+              color={tripExpenseFiles.length > 0 ? GOLD : '#9CA3AF'}
+            />
+            <View style={styles.expenseTextCol}>
+              <Text style={[styles.expenseText, tripExpenseFiles.length > 0 && { color: DARK, fontWeight: '600' }]}>
+                Toque para escolher fotos dos comprovantes
+              </Text>
+              <Text style={styles.expenseHint}>Até 8 imagens (galeria)</Text>
+            </View>
           </TouchableOpacity>
+          {tripExpenseFiles.length > 0 ? (
+            <View style={styles.expenseThumbsRow}>
+              {tripExpenseFiles.map((f, idx) => (
+                <View key={`${f.uri}-${idx}`} style={styles.expenseThumbWrap}>
+                  <Image source={{ uri: f.uri }} style={styles.expenseThumbImg} />
+                  <TouchableOpacity
+                    style={styles.expenseThumbRemove}
+                    onPress={() => removeTripExpenseAt(idx)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <MaterialIcons name="close" size={16} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          ) : null}
 
           <TouchableOpacity
-            style={[styles.actionBtn, finalizingTrip && { opacity: 0.6 }]}
+            style={[styles.actionBtn, styles.actionBtnFullWidth, finalizingTrip && { opacity: 0.6 }]}
             onPress={handleFinalizeTrip}
             disabled={finalizingTrip}
             activeOpacity={0.85}
@@ -1759,7 +1910,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             <ScrollView
               contentContainerStyle={styles.completedScroll}
               showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
+              keyboardShouldPersistTaps="always"
             >
               <View style={styles.completedIconCircle}>
                 <MaterialIcons name="check" size={40} color="#fff" />
@@ -1816,7 +1967,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               />
 
               <TouchableOpacity
-                style={[styles.actionBtn, submittingRating && { opacity: 0.6 }]}
+                style={[styles.actionBtn, styles.actionBtnFullWidth, submittingRating && { opacity: 0.6 }]}
                 onPress={handleSubmitRating}
                 disabled={submittingRating}
                 activeOpacity={0.85}
@@ -2171,6 +2322,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 20,
   },
+  /** Em ScrollView com `alignItems: 'center'`, força o botão à largura útil do sheet. */
+  actionBtnFullWidth: { alignSelf: 'stretch', width: '100%' },
   actionBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   cancelBtn: {
     borderRadius: 14,
@@ -2255,6 +2408,34 @@ const styles = StyleSheet.create({
   },
   expenseBoxAttached: { borderColor: GOLD },
   expenseText: { fontSize: 14, color: '#9CA3AF', fontWeight: '500' },
+  expenseTextCol: { flex: 1, gap: 4, minWidth: 0 },
+  expenseHint: { fontSize: 12, color: '#9CA3AF' },
+  expenseThumbsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 12,
+    marginTop: 4,
+  },
+  expenseThumbWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 8,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  expenseThumbImg: { width: '100%', height: '100%' },
+  expenseThumbRemove: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   expenseOptional: {
     fontSize: 13,
     fontWeight: '600',

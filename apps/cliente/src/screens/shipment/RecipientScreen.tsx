@@ -127,7 +127,7 @@ export function RecipientScreen({ navigation, route }: Props) {
       showAlert('Valor', quoteError ?? 'Não foi possível calcular o valor do envio.');
       return;
     }
-    navigation.navigate('ConfirmShipment', {
+    navigation.navigate('SelectShipmentDriver', {
       origin,
       destination,
       whenOption,
