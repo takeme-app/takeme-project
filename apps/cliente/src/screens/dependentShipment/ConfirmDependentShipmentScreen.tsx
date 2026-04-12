@@ -53,9 +53,29 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     instructions,
     dependentId,
     amountCents,
+    photoUri,
   } = route.params;
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const uploadPhotoAndGetPath = useCallback(
+    async (userId: string, localUri: string): Promise<string | null> => {
+      try {
+        const res = await fetch(localUri);
+        const blob = await res.blob();
+        const ext = localUri.split('.').pop()?.toLowerCase() === 'png' ? 'png' : 'jpg';
+        const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+        const { error } = await supabase.storage
+          .from('shipment-photos')
+          .upload(path, blob, { contentType: ext === 'png' ? 'image/png' : 'image/jpeg' });
+        if (error) return null;
+        return path;
+      } catch {
+        return null;
+      }
+    },
+    [],
+  );
 
   const amountFormatted = `R$ ${(amountCents / 100).toFixed(2).replace('.', ',')}`;
   const contactDisplay = formatPhoneDisplay(contactPhone);
@@ -83,6 +103,10 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
                 : 'dinheiro';
         const status = 'pending_review';
         const pricing = flatPricingSnapshot(amountCents);
+        let photoUrl: string | null = null;
+        if (photoUri) {
+          photoUrl = await uploadPhotoAndGetPath(user.id, photoUri);
+        }
         const { data: row, error } = await supabase
           .from('dependent_shipments')
           .insert({
@@ -103,6 +127,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
             payment_method: paymentMethodDb,
             ...pricing,
             status,
+            photo_url: photoUrl,
           })
           .select('id')
           .single();

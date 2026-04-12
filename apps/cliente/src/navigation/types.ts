@@ -98,6 +98,7 @@ export type DependentShipmentFormParams = {
   bagsCount: number;
   instructions?: string;
   dependentId?: string;
+  photoUri?: string;
 };
 
 export type DependentShipmentStackParamList = {
@@ -116,6 +117,7 @@ export type DependentShipmentStackParamList = {
     instructions?: string;
     dependentId?: string;
     amountCents: number;
+    photoUri?: string;
   };
   DependentShipmentSuccess: {
     orderId: string;

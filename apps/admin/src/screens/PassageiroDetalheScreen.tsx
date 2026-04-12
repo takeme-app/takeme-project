@@ -14,10 +14,12 @@ import {
   updateDependentStatus,
   fetchPassageiroDetailForAdmin,
   fetchPassageiroBookings,
+  fetchPassageiroEncomendas,
   saveProfileFields,
   insertPassengerPaymentMethodAdmin,
 } from '../data/queries';
 import type { PaymentMethodRow, ViagemListItem } from '../data/types';
+import type { PassageiroEncomendaItem } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -258,28 +260,35 @@ export default function PassageiroDetalheScreen() {
   const navigate = useNavigate();
   const location = useLocation();
   const { id: idFromRoute } = useParams<{ id: string }>();
-  const passageiroState = (location.state as { passageiro?: { id?: string; nome: string; cidade: string; estado: string; dataCriacao: string; cpf: string; status: string } })?.passageiro;
+  const navState = location.state as { passageiro?: { id?: string; nome: string; cidade: string; estado: string; dataCriacao: string; cpf: string; status: string }; tab?: string; filter?: string } | null;
+  const passageiroState = navState?.passageiro;
 
   const passageiroId = idFromRoute || passageiroState?.id || '';
   const [detailLoad, setDetailLoad] = useState<Awaited<ReturnType<typeof fetchPassageiroDetailForAdmin>>>(null);
   const [detailLoading, setDetailLoading] = useState(!!passageiroId);
   const [bookings, setBookings] = useState<ViagemListItem[]>([]);
+  const [encomendas, setEncomendas] = useState<PassageiroEncomendaItem[]>([]);
 
   useEffect(() => {
     if (!passageiroId) {
       setDetailLoading(false);
       setDetailLoad(null);
       setBookings([]);
+      setEncomendas([]);
       return;
     }
     let cancel = false;
     setDetailLoading(true);
     (async () => {
-      const d = await fetchPassageiroDetailForAdmin(passageiroId);
-      const b = await fetchPassageiroBookings(passageiroId);
+      const [d, b, e] = await Promise.all([
+        fetchPassageiroDetailForAdmin(passageiroId),
+        fetchPassageiroBookings(passageiroId),
+        fetchPassageiroEncomendas(passageiroId),
+      ]);
       if (cancel) return;
       setDetailLoad(d);
       setBookings(b);
+      setEncomendas(e);
       setDetailLoading(false);
     })();
     return () => { cancel = true; };
@@ -296,7 +305,8 @@ export default function PassageiroDetalheScreen() {
       }
     : undefined);
 
-  const [activeTab, setActiveTab] = useState<'dados' | 'dependentes' | 'pagamentos' | 'historico'>('dados');
+  const [activeTab, setActiveTab] = useState<'dados' | 'dependentes' | 'pagamentos' | 'historico'>(navState?.tab === 'historico' ? 'historico' : 'dados');
+  const [histFilterType, setHistFilterType] = useState<'viagens' | 'encomendas'>(navState?.filter === 'encomendas' ? 'encomendas' : 'viagens');
   const isVerified = detailLoad ? detailLoad.status === 'Ativo' : passageiro?.status === 'Verificado';
   const [verifying, setVerifying] = useState(false);
   const [verifyConfirmOpen, setVerifyConfirmOpen] = useState(false);
@@ -730,13 +740,74 @@ export default function PassageiroDetalheScreen() {
       style: { height: 40, padding: '0 12px', borderRadius: 8, border: '1px solid #e2e2e2', background: '#fff', fontSize: 13, cursor: 'pointer', ...font },
     }, 'Limpar') : null);
 
+  const histTypeToggle = React.createElement('div', { style: { display: 'flex', gap: 8 } },
+    React.createElement('button', {
+      type: 'button', onClick: () => setHistFilterType('viagens'),
+      style: {
+        height: 36, padding: '0 16px', borderRadius: 999, border: histFilterType === 'viagens' ? 'none' : '1px solid #e2e2e2',
+        background: histFilterType === 'viagens' ? '#0d0d0d' : '#fff', color: histFilterType === 'viagens' ? '#fff' : '#0d0d0d',
+        fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font,
+      },
+    }, 'Viagens'),
+    React.createElement('button', {
+      type: 'button', onClick: () => setHistFilterType('encomendas'),
+      style: {
+        height: 36, padding: '0 16px', borderRadius: 999, border: histFilterType === 'encomendas' ? 'none' : '1px solid #e2e2e2',
+        background: histFilterType === 'encomendas' ? '#0d0d0d' : '#fff', color: histFilterType === 'encomendas' ? '#fff' : '#0d0d0d',
+        fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font,
+      },
+    }, `Encomendas (${encomendas.length})`));
+
+  const statusLabelMap: Record<string, string> = {
+    pending_review: 'Aguardando aprovação',
+    confirmed: 'Confirmada',
+    in_progress: 'Em andamento',
+    delivered: 'Entregue',
+    cancelled: 'Cancelada',
+  };
+  const statusColorMap: Record<string, string> = {
+    pending_review: '#cba04b',
+    confirmed: '#2563eb',
+    in_progress: '#f59e0b',
+    delivered: '#22c55e',
+    cancelled: '#b53838',
+  };
+
+  const encomendasSection = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%' } },
+    encomendas.length === 0
+      ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhuma encomenda registrada para este passageiro.')
+      : null,
+    ...encomendas.map((enc) =>
+      React.createElement('div', {
+        key: enc.id,
+        style: {
+          display: 'flex', alignItems: 'center', gap: 16, padding: 16,
+          background: '#f1f1f1', borderRadius: 12, width: '100%', boxSizing: 'border-box' as const,
+        },
+      },
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 2, minWidth: 0, flex: 1 } },
+          React.createElement('p', { style: { margin: 0, fontSize: 15, fontWeight: 600, color: '#0d0d0d', lineHeight: 1.5, ...font } },
+            `${enc.origem} → ${enc.destino}`),
+          React.createElement('p', { style: { margin: 0, fontSize: 13, color: '#767676', ...font } },
+            enc.createdAt ? new Date(enc.createdAt).toLocaleDateString('pt-PT', { day: '2-digit', month: 'short', year: 'numeric' }) : '—')),
+        React.createElement('span', {
+          style: { fontSize: 12, fontWeight: 600, color: statusColorMap[enc.status] || '#767676', ...font },
+        }, statusLabelMap[enc.status] || enc.status),
+        React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#0d0d0d', ...font, minWidth: 70, textAlign: 'right' as const } },
+          `R$ ${(enc.amountCents / 100).toFixed(2).replace('.', ',')}`),
+        enc.packageSize !== '—' ? React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, enc.packageSize) : null)));
+
   const historicoAlteracoesSection = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' } },
-    React.createElement('p', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 'normal', ...font } }, 'Histórico de viagens'),
-    histFilterRow,
-    historicoAlteracoesRows.length === 0
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' as const, gap: 12 } },
+      React.createElement('p', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 'normal', ...font } },
+        histFilterType === 'encomendas' ? 'Histórico de encomendas' : 'Histórico de viagens'),
+      histTypeToggle),
+    histFilterType === 'encomendas' ? encomendasSection : null,
+    histFilterType === 'viagens' ? histFilterRow : null,
+    histFilterType === 'viagens' && historicoAlteracoesRows.length === 0
       ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhuma viagem registrada para este passageiro.')
       : null,
-    ...historicoAlteracoesRows.map((row, idx) =>
+    ...(histFilterType === 'viagens' ? historicoAlteracoesRows : []).map((row, idx) =>
       React.createElement('div', {
         key: row.listItem.bookingId || idx,
         style: {

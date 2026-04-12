@@ -1238,7 +1238,7 @@ export async function fetchPassageiroDetailForAdmin(userId: string): Promise<Pas
 // ── Encomendas ──────────────────────────────────────────────────────────
 
 export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
-  const [shipRes, depRes] = await Promise.all([
+  const [shipRes, depRes, convRes] = await Promise.all([
     supabase
       .from('shipments')
       .select(`
@@ -1253,7 +1253,22 @@ export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
       .select('id, origin_address, destination_address, full_name, status, amount_cents, created_at')
       .order('created_at', { ascending: false })
       .limit(200),
+    supabase
+      .from('conversations')
+      .select('id, shipment_id, context')
+      .eq('conversation_kind', 'support_backoffice')
+      .eq('category', 'encomendas')
+      .eq('status', 'active'),
   ]);
+
+  // Mapear shipment_id e dependent_shipment_id para conversation id
+  const shipConvMap = new Map<string, string>();
+  const depConvMap = new Map<string, string>();
+  for (const c of (convRes.data ?? []) as any[]) {
+    if (c.shipment_id) shipConvMap.set(String(c.shipment_id), String(c.id));
+    const depId = c.context?.dependent_shipment_id;
+    if (depId) depConvMap.set(String(depId), String(c.id));
+  }
 
   const shipments: EncomendaListItem[] = (shipRes.data ?? []).map((s: any) => {
     const trip = s.scheduled_trips as { departure_at?: string; arrival_at?: string } | null | undefined;
@@ -1274,6 +1289,7 @@ export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
       chegada: arrAt ? fmtTime(arrAt) : '—',
       rawStatus: String(s.status ?? ''),
       scheduledTripId: s.scheduled_trip_id ? String(s.scheduled_trip_id) : null,
+      supportConversationId: shipConvMap.get(String(s.id)) ?? null,
     };
   });
 
@@ -1291,6 +1307,7 @@ export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
     chegada: '—',
     rawStatus: String(d.status ?? ''),
     scheduledTripId: null,
+    supportConversationId: depConvMap.get(String(d.id)) ?? null,
   }));
 
   return [...shipments, ...depShipments].sort(
@@ -2343,6 +2360,45 @@ export async function insertPassengerPaymentMethodAdmin(params: {
 
 export async function fetchPassageiroBookings(userId: string): Promise<ViagemListItem[]> {
   return fetchBookingsForPassengerUser(userId);
+}
+
+export interface PassageiroEncomendaItem {
+  id: string;
+  tipo: 'shipment' | 'dependent_shipment';
+  origem: string;
+  destino: string;
+  status: string;
+  amountCents: number;
+  packageSize: string;
+  createdAt: string;
+}
+
+export async function fetchPassageiroEncomendas(userId: string): Promise<PassageiroEncomendaItem[]> {
+  const [shipRes, depRes] = await Promise.all([
+    sb.from('shipments')
+      .select('id, origin_address, destination_address, status, amount_cents, package_size, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(50),
+    sb.from('dependent_shipments')
+      .select('id, origin_address, destination_address, status, amount_cents, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(50),
+  ]);
+  const ships: PassageiroEncomendaItem[] = (shipRes.data ?? []).map((s: any) => ({
+    id: s.id, tipo: 'shipment' as const,
+    origem: shortAddr(s.origin_address), destino: shortAddr(s.destination_address),
+    status: String(s.status ?? ''), amountCents: s.amount_cents ?? 0,
+    packageSize: s.package_size ?? '—', createdAt: s.created_at ?? '',
+  }));
+  const deps: PassageiroEncomendaItem[] = (depRes.data ?? []).map((d: any) => ({
+    id: d.id, tipo: 'dependent_shipment' as const,
+    origem: shortAddr(d.origin_address), destino: shortAddr(d.destination_address),
+    status: String(d.status ?? ''), amountCents: d.amount_cents ?? 0,
+    packageSize: '—', createdAt: d.created_at ?? '',
+  }));
+  return [...ships, ...deps].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 // ── Atendimento / conversas de suporte ───────────────────────────────

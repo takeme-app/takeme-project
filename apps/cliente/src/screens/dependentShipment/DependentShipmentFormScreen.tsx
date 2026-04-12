@@ -17,6 +17,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import * as ImagePicker from 'expo-image-picker';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'DependentShipmentForm'>;
 
@@ -50,6 +51,24 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
   const [dependentId, setDependentId] = useState<string | undefined>(undefined);
   const [dependents, setDependents] = useState<Dependent[]>([]);
   const [loadingDependents, setLoadingDependents] = useState(true);
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+
+  const pickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      showAlert('Permissão', 'Precisamos de acesso à galeria para adicionar uma foto da encomenda.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets[0]?.uri) {
+      setPhotoUri(result.assets[0].uri);
+    }
+  };
 
   const loadDependents = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -102,6 +121,7 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
       bagsCount,
       instructions: instructions.trim() || undefined,
       dependentId,
+      photoUri: photoUri ?? undefined,
     });
   };
 
@@ -207,6 +227,18 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
             multiline
             numberOfLines={3}
           />
+
+          <Text style={styles.label}>Foto da encomenda (opcional)</Text>
+          <TouchableOpacity style={styles.photoBox} onPress={pickImage} activeOpacity={0.8}>
+            {photoUri ? (
+              <Text style={styles.photoPlaceholderText} numberOfLines={1}>Foto selecionada</Text>
+            ) : (
+              <>
+                <MaterialIcons name="camera-alt" size={32} color={COLORS.neutral700} />
+                <Text style={styles.photoPlaceholderText}>Toque para adicionar</Text>
+              </>
+            )}
+          </TouchableOpacity>
 
           <TouchableOpacity style={styles.primaryButton} onPress={handleDefineTrip} activeOpacity={0.8}>
             <Text style={styles.primaryButtonText}>Definir viagem</Text>
@@ -322,6 +354,17 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   stepperHint: { fontSize: 13, color: COLORS.neutral700, textAlign: 'center' },
+  photoBox: {
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: '#E2E2E2',
+    borderRadius: 12,
+    minHeight: 120,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    marginBottom: 24,
+  },
+  photoPlaceholderText: { fontSize: 14, color: COLORS.neutral700, marginTop: 4 },
   primaryButton: {
     backgroundColor: COLORS.black,
     paddingVertical: 16,
