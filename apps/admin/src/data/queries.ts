@@ -253,12 +253,16 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
   // Step 2: fetch profile names for all user_ids
   const userIds = [...new Set(data.map((b: any) => b.user_id).filter(Boolean))];
   const profileMap: Record<string, string> = {};
+  const avatarUrlMap: Record<string, string> = {};
   if (userIds.length > 0) {
     const { data: profiles } = await supabase
       .from('profiles')
-      .select('id, full_name')
+      .select('id, full_name, avatar_url')
       .in('id', userIds);
-    if (profiles) profiles.forEach((p: any) => { profileMap[p.id] = p.full_name; });
+    if (profiles) profiles.forEach((p: any) => {
+      profileMap[p.id] = p.full_name;
+      if (p.avatar_url) avatarUrlMap[p.id] = p.avatar_url;
+    });
   }
 
   const driverIds = [...new Set(data.map((b: any) => b.scheduled_trips?.driver_id).filter(Boolean))] as string[];
@@ -286,6 +290,7 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
     return {
       bookingId: b.id,
       passageiro: profileMap[b.user_id] ?? 'Sem nome',
+      passageiroAvatarUrl: avatarUrlMap[b.user_id] ?? null,
       origem: shortAddr(b.origin_address),
       destino: shortAddr(b.destination_address),
       data: fmtDate(dep),

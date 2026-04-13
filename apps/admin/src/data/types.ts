@@ -85,6 +85,7 @@ export interface ExcursionRequestRow {
 export interface ViagemListItem {
   bookingId: string;
   passageiro: string;
+  passageiroAvatarUrl: string | null;
   origem: string;
   destino: string;
   data: string;

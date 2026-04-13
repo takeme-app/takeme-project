@@ -38,6 +38,7 @@ const COLORS = {
 type Dependent = {
   id: string;
   full_name: string;
+  contact_phone: string | null;
   age: string | null;
   document_url: string | null;
   representative_document_url: string | null;
@@ -58,7 +59,7 @@ export function DependentDetailScreen({ navigation, route }: Props) {
       (async () => {
         const { data, error } = await supabase
           .from('dependents')
-          .select('id, full_name, age, document_url, representative_document_url, observations, status')
+          .select('id, full_name, contact_phone, age, document_url, representative_document_url, observations, status')
           .eq('id', dependentId)
           .single();
         setDep(error ? null : data);
@@ -125,6 +126,14 @@ export function DependentDetailScreen({ navigation, route }: Props) {
             {dep.age ? <Text style={styles.depAge}>{dep.age} anos</Text> : null}
           </View>
         </View>
+        {dep.contact_phone ? (
+          <View style={styles.row}>
+            <MaterialIcons name="phone" size={24} color={COLORS.black} />
+            <Text style={styles.phoneText}>
+              {dep.contact_phone.replace(/(\d{2})(\d{4,5})(\d{4})/, '($1) $2-$3')}
+            </Text>
+          </View>
+        ) : null}
 
         <Text style={styles.sectionTitle}>Documentos</Text>
         {dep.document_url ? (
@@ -202,6 +211,7 @@ const styles = StyleSheet.create({
   rowText: { marginLeft: 14, paddingVertical: 4 },
   depName: { fontSize: 16, fontWeight: '600', color: COLORS.black },
   depAge: { fontSize: 14, color: COLORS.neutral700, marginTop: 8 },
+  phoneText: { fontSize: 15, color: COLORS.black, marginLeft: 14 },
   docRow: {
     flexDirection: 'row',
     alignItems: 'center',

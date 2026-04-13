@@ -134,6 +134,7 @@ export default function AtendimentoDetalheScreen() {
   const [profilePhone, setProfilePhone] = useState('—');
   const [profileCity, setProfileCity] = useState('—');
   const [profileState, setProfileState] = useState('—');
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null);
   const [categoria, setCategoria] = useState(ticket.categoria || 'Outros');
   const [rawCategory, setRawCategory] = useState<string>(ticket.rawCategory || labelToRaw(ticket.categoria || 'Outros'));
   const [trechoLinha, setTrechoLinha] = useState('—');
@@ -141,6 +142,7 @@ export default function AtendimentoDetalheScreen() {
   const [viagemRefLinha, setViagemRefLinha] = useState('—');
   const [viagemStatusLinha, setViagemStatusLinha] = useState('—');
   const [atendenteNome, setAtendenteNome] = useState('Não atribuído');
+  const [assignedAdminId, setAssignedAdminId] = useState<string | null>(null);
   const [solicitacaoShort, setSolicitacaoShort] = useState(conversationId ? String(conversationId).slice(0, 8).toUpperCase() : '—');
   const [subjectUserId, setSubjectUserId] = useState<string>('');
   const [ctxJson, setCtxJson] = useState<Record<string, unknown>>({});
@@ -158,6 +160,7 @@ export default function AtendimentoDetalheScreen() {
   const [encomendaInstructions, setEncomendaInstructions] = useState('');
   const [encomendaPhotoUrl, setEncomendaPhotoUrl] = useState<string | null>(null);
   const [workerSubtype, setWorkerSubtype] = useState<string | null>(null);
+  const [minorStatus, setMinorStatus] = useState<string | null>(null);
 
   const status = ticket.status || 'nao_atendida';
   const isEncomenda = rawCategory === 'encomendas';
@@ -238,6 +241,7 @@ export default function AtendimentoDetalheScreen() {
   const [currentStatus, setCurrentStatus] = useState(status);
   const [finalizarOpen, setFinalizarOpen] = useState(false);
   const [finishNoteDraft, setFinishNoteDraft] = useState('');
+  const [savedFinishNote, setSavedFinishNote] = useState<string | null>(null);
   const [reprovarOpen, setReprovarOpen] = useState(false);
   const [autorizarOpen, setAutorizarOpen] = useState(false);
   const [autorizarSubmitting, setAutorizarSubmitting] = useState(false);
@@ -335,8 +339,12 @@ export default function AtendimentoDetalheScreen() {
     void (async () => {
       const conv = await fetchSupportConversationDetail(conversationId);
       if (cancelled || !conv) return;
-      if (conv.status === 'closed') setConvStatus('closed');
-      else setConvStatus('active');
+      if (conv.status === 'closed') {
+        setConvStatus('closed');
+        if (conv.finish_note) setSavedFinishNote(conv.finish_note);
+      } else {
+        setConvStatus('active');
+      }
       setRawCategory(conv.category || 'outros');
       setCategoria(categoryLabelPt[conv.category || ''] || conv.category || 'Outros');
       setSolicitacaoShort(conv.id.replace(/-/g, '').slice(0, 8).toUpperCase());
@@ -353,18 +361,23 @@ export default function AtendimentoDetalheScreen() {
       const cp = await fetchProfileBasics(conv.client_id);
       if (!cancelled) setNome(cp.full_name || conv.participant_name || '—');
       // Fetch full profile for dados cadastrais
-      const { data: fullProfile } = await (supabase as any).from('profiles').select('cpf, phone, city, state, email').eq('id', conv.client_id).maybeSingle();
+      const { data: fullProfile } = await (supabase as any).from('profiles').select('cpf, phone, city, state, avatar_url').eq('id', conv.client_id).maybeSingle();
       if (fullProfile && !cancelled) {
         setProfileCpf((fullProfile as any).cpf || '—');
         setProfilePhone((fullProfile as any).phone || '—');
         setProfileCity((fullProfile as any).city || '—');
         setProfileState((fullProfile as any).state || '—');
-        if ((fullProfile as any).email) setEmail((fullProfile as any).email);
+        if ((fullProfile as any).avatar_url) {
+          const resolved = await resolveStorageDisplayUrl((fullProfile as any).avatar_url);
+          if (!cancelled) setProfileAvatarUrl(resolved);
+        }
       }
       if (conv.admin_id) {
+        setAssignedAdminId(conv.admin_id);
         const ap = await fetchProfileBasics(conv.admin_id);
         if (!cancelled) setAtendenteNome(ap.full_name || 'Atendente');
       } else {
+        setAssignedAdminId(null);
         setAtendenteNome('Não atribuído');
       }
       const hist = await fetchSupportHistoryForClient(conv.client_id, conv.id);
@@ -442,6 +455,29 @@ export default function AtendimentoDetalheScreen() {
     return () => { cancelled = true; };
   }, [conversationId]);
 
+  // Fetch minor status for autorizar_menores
+  useEffect(() => {
+    if (!isSupabaseConfigured || rawCategory !== 'autorizar_menores') {
+      setMinorStatus(null);
+      return;
+    }
+    let cancelled = false;
+    const depId = (ctxJson.dependent_id as string) || '';
+    if (!depId && !subjectUserId) return;
+    const sb = supabase as any;
+    const query = depId
+      ? sb.from('dependents').select('id, full_name, age, observations, document_url, representative_document_url, status').eq('id', depId).maybeSingle()
+      : sb.from('dependents').select('id, full_name, age, observations, document_url, representative_document_url, status').eq('user_id', subjectUserId).order('created_at', { ascending: false }).limit(1).maybeSingle();
+    void query.then(({ data }: any) => {
+      if (cancelled) return;
+      if (data) {
+        setMinorData(data);
+        setMinorStatus(data.status || null);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [rawCategory, ctxJson.dependent_id, subjectUserId]);
+
   useEffect(() => {
     if (!isSupabaseConfigured || rawCategory !== 'cadastro_transporte' || !motoristaDocWorkerId) {
       setWorkerCadastroStatus(null);
@@ -489,6 +525,22 @@ export default function AtendimentoDetalheScreen() {
         const meta = encomendaShipmentStatus === 'confirmed'
           ? { bg: '#b0e8d1', color: '#174f38', border: '#22c55e', label: 'Encomenda aprovada' }
           : { bg: '#eeafaa', color: '#551611', border: '#b53838', label: 'Encomenda rejeitada' };
+        return React.createElement('div', {
+          style: { marginTop: 8, padding: '14px 18px', borderRadius: 12, background: meta.bg, border: `1px solid ${meta.border}`, display: 'flex', alignItems: 'center', gap: 10, ...font },
+        },
+          React.createElement('span', { style: { width: 10, height: 10, borderRadius: '50%', background: meta.border, flexShrink: 0 } }),
+          React.createElement('span', { style: { fontSize: 15, fontWeight: 600, color: meta.color } }, meta.label));
+      })()
+    : null;
+
+  const minorDecidido = minorStatus === 'validated' || minorStatus === 'rejected';
+  const hideMinorButtons = isAutorizarMenores && minorDecidido;
+
+  const minorDecididoBanner = hideMinorButtons
+    ? (() => {
+        const meta = minorStatus === 'validated'
+          ? { bg: '#b0e8d1', color: '#174f38', border: '#22c55e', label: 'Menor autorizado' }
+          : { bg: '#eeafaa', color: '#551611', border: '#b53838', label: 'Autorização negada' };
         return React.createElement('div', {
           style: { marginTop: 8, padding: '14px 18px', borderRadius: 12, background: meta.bg, border: `1px solid ${meta.border}`, display: 'flex', alignItems: 'center', gap: 10, ...font },
         },
@@ -560,14 +612,21 @@ export default function AtendimentoDetalheScreen() {
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const } },
           React.createElement('span', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Atendimento'),
           React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, `Solicitação #${solicitacaoShort}`))),
-      React.createElement('button', {
-        type: 'button',
-        onClick: () => setFinalizarOpen(true),
-        style: {
-          height: 40, padding: '8px 24px', borderRadius: 999, border: 'none',
-          background: '#f2afaf', color: '#681f1f', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
-        },
-      }, 'Finalizar atendimento')),
+      convStatus !== 'closed'
+        ? React.createElement('button', {
+            type: 'button',
+            onClick: () => setFinalizarOpen(true),
+            style: {
+              height: 40, padding: '8px 24px', borderRadius: 999, border: 'none',
+              background: '#f2afaf', color: '#681f1f', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
+            },
+          }, 'Finalizar atendimento')
+        : React.createElement('span', {
+            style: {
+              height: 32, padding: '4px 16px', borderRadius: 999,
+              background: '#b0e8d1', color: '#174f38', fontSize: 13, fontWeight: 600, display: 'inline-flex', alignItems: 'center', ...font,
+            },
+          }, 'Finalizado')),
 
     // Body content with padding
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, padding: 16 } },
@@ -585,26 +644,33 @@ export default function AtendimentoDetalheScreen() {
         },
           React.createElement('span', { style: { width: 10, height: 10, borderRadius: '50%', background: statusDot } }),
           statusLabel),
-        React.createElement('button', {
-          type: 'button',
-          onClick: () => setEditStatusOpen(true),
-          style: {
-            display: 'flex', alignItems: 'center', gap: 8, height: 36, padding: '8px 24px',
-            borderRadius: 999, background: '#f1f1f1', border: 'none',
-            fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
-          },
-        }, pencilSvg, 'Editar status')),
+        convStatus !== 'closed'
+          ? React.createElement('button', {
+              type: 'button',
+              onClick: () => setEditStatusOpen(true),
+              style: {
+                display: 'flex', alignItems: 'center', gap: 8, height: 36, padding: '8px 24px',
+                borderRadius: 999, background: '#f1f1f1', border: 'none',
+                fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
+              },
+            }, pencilSvg, 'Editar status')
+          : null),
 
       // User info with border bottom
       React.createElement('div', {
         style: { display: 'flex', alignItems: 'center', gap: 16, paddingBottom: 24, borderBottom: '1px solid #e2e2e2' },
       },
-        React.createElement('div', {
-          style: {
-            width: 56, height: 56, borderRadius: 1000, background: '#E8725C', flexShrink: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          },
-        }, React.createElement('span', { style: { color: '#fff', fontSize: 22, fontWeight: 600, ...font } }, nome.charAt(0))),
+        profileAvatarUrl
+          ? React.createElement('img', {
+              src: profileAvatarUrl, alt: nome,
+              style: { width: 56, height: 56, borderRadius: 1000, objectFit: 'cover' as const, flexShrink: 0 },
+            })
+          : React.createElement('div', {
+              style: {
+                width: 56, height: 56, borderRadius: 1000, background: '#E8725C', flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              },
+            }, React.createElement('span', { style: { color: '#fff', fontSize: 22, fontWeight: 600, ...font } }, nome.charAt(0))),
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
           React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, nome),
           React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, email))),
@@ -616,7 +682,25 @@ export default function AtendimentoDetalheScreen() {
           React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, isExcursao ? 'Solicitação de excursão' : categoria)),
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, flex: 1 } },
           React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'Atendente responsável'),
-          React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, atendenteNome)))),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, atendenteNome),
+            convStatus !== 'closed' && assignedAdminId !== currentUserId
+              ? React.createElement('button', {
+                  type: 'button',
+                  onClick: async () => {
+                    const { error } = await (supabase as any).rpc('claim_support_conversation', { p_conversation_id: conversationId });
+                    if (error) { showToast(`Erro: ${error.message || error}`); return; }
+                    setAssignedAdminId(currentUserId);
+                    const me = await fetchProfileBasics(currentUserId);
+                    setAtendenteNome(me.full_name || 'Eu');
+                    showToast('Atendimento assumido');
+                  },
+                  style: {
+                    height: 28, padding: '0 12px', borderRadius: 999, border: 'none',
+                    background: '#0d0d0d', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font,
+                  },
+                }, 'Assumir')
+              : null)))),
 
     // Trecho + Período (hidden for encomendas — shown in modal)
     hideViagemSections ? null : React.createElement('div', {
@@ -664,6 +748,15 @@ export default function AtendimentoDetalheScreen() {
       },
         React.createElement('span', { style: { fontWeight: 600, display: 'block', marginBottom: 8, ...font } }, 'Mensagem / reclamação'),
         complaintBody)
+      : null,
+
+    // Nota de finalização (quando atendimento encerrado)
+    savedFinishNote
+      ? React.createElement('div', {
+          style: { padding: 16, background: '#f0faf4', borderRadius: 12, border: '1px solid #b0e8d1', fontSize: 14, color: '#174f38', lineHeight: 1.5, ...font },
+        },
+          React.createElement('span', { style: { fontWeight: 600, display: 'block', marginBottom: 8, ...font } }, 'Nota de finalização'),
+          savedFinishNote)
       : null,
 
     // Action chips (grid of 3 per row, Figma style)
@@ -753,23 +846,31 @@ export default function AtendimentoDetalheScreen() {
                   background: '#0d8344', color: '#fff8e6', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
                 },
               }, 'Aprovar encomenda')))
-      : hideCadastroAprovarReprovar
-          ? React.createElement('div', { style: { padding: 16 } }, cadastroDecididoBanner)
-          : React.createElement('div', { style: { display: 'flex', gap: 16, padding: 16 } },
+      : hideMinorButtons
+          ? React.createElement('div', { style: { padding: 16 } }, minorDecididoBanner)
+      : isAutorizarMenores
+          ? React.createElement('div', { style: { display: 'flex', gap: 16, padding: 16 } },
               React.createElement('button', {
                 type: 'button', onClick: () => setReprovarOpen(true),
-                style: {
-                  flex: 1, height: 47, borderRadius: 999, border: 'none',
-                  background: '#f2afaf', color: '#681f1f', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
-                },
-              }, rawCategory === 'autorizar_menores' ? 'Negar autorização' : workerSubtype === 'excursions' || workerSubtype === 'shipments' ? 'Reprovar preparador' : 'Reprovar cadastro'),
+                style: { flex: 1, height: 47, borderRadius: 999, border: 'none', background: '#f2afaf', color: '#681f1f', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font },
+              }, 'Negar autorização'),
               React.createElement('button', {
                 type: 'button', onClick: () => setAutorizarOpen(true),
-                style: {
-                  flex: 1, height: 47, borderRadius: 999, border: 'none',
-                  background: '#0d8344', color: '#fff8e6', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
-                },
-              }, rawCategory === 'autorizar_menores' ? 'Autorizar menor' : workerSubtype === 'excursions' || workerSubtype === 'shipments' ? 'Autorizar preparador' : 'Autorizar cadastro')));
+                style: { flex: 1, height: 47, borderRadius: 999, border: 'none', background: '#0d8344', color: '#fff8e6', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font },
+              }, 'Autorizar menor'))
+      : isCadastro
+          ? (hideCadastroAprovarReprovar
+              ? React.createElement('div', { style: { padding: 16 } }, cadastroDecididoBanner)
+              : React.createElement('div', { style: { display: 'flex', gap: 16, padding: 16 } },
+                  React.createElement('button', {
+                    type: 'button', onClick: () => setReprovarOpen(true),
+                    style: { flex: 1, height: 47, borderRadius: 999, border: 'none', background: '#f2afaf', color: '#681f1f', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font },
+                  }, workerSubtype === 'excursions' || workerSubtype === 'shipments' ? 'Reprovar preparador' : 'Reprovar cadastro'),
+                  React.createElement('button', {
+                    type: 'button', onClick: () => setAutorizarOpen(true),
+                    style: { flex: 1, height: 47, borderRadius: 999, border: 'none', background: '#0d8344', color: '#fff8e6', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font },
+                  }, workerSubtype === 'excursions' || workerSubtype === 'shipments' ? 'Autorizar preparador' : 'Autorizar cadastro')))
+      : null);
 
   // ── Right panel: Histórico ────────────────────────────────────────────
   const rightPanel = React.createElement('div', {
@@ -1759,6 +1860,7 @@ export default function AtendimentoDetalheScreen() {
               const { error } = await (supabase as any).from('dependents').update({ status: 'rejected' }).eq('id', depId);
               setReprovarSubmitting(false);
               if (error) { showToast(`Erro ao negar: ${error.message || error}`); return; }
+              setMinorStatus('rejected');
               if (conversationId) {
                 await (supabase as any).rpc('close_support_conversation', { p_conversation_id: conversationId, p_finish_note: 'Autorização de menor negada' });
               }
@@ -1853,6 +1955,7 @@ export default function AtendimentoDetalheScreen() {
               const { error } = await (supabase as any).from('dependents').update({ status: 'validated' }).eq('id', depId);
               setAutorizarSubmitting(false);
               if (error) { showToast(`Erro ao autorizar: ${error.message || error}`); return; }
+              setMinorStatus('validated');
               if (conversationId) {
                 await (supabase as any).rpc('close_support_conversation', { p_conversation_id: conversationId, p_finish_note: 'Menor autorizado' });
               }
@@ -1957,6 +2060,7 @@ export default function AtendimentoDetalheScreen() {
             }
             setCurrentStatus('finalizada');
             setConvStatus('closed');
+            if (finishNoteDraft.trim()) setSavedFinishNote(finishNoteDraft.trim());
             setFinalizarOpen(false);
             setFinishNoteDraft('');
             showToast('Atendimento finalizado');

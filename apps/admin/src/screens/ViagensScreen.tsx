@@ -30,6 +30,7 @@ import {
   type ViagemListFilter,
 } from '../data/queries';
 import type { ViagemListItem } from '../data/types';
+import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 // SVG icons for view/edit actions (stroke-based, matching project icons)
@@ -281,8 +282,32 @@ export default function ViagensScreen() {
     navigate(`/viagens/${item.bookingId}`, { state: { trip: row } });
   };
 
-  // Render avatar with initial letter and colored bg
-  const renderAvatar = (name: string) => {
+  // Resolve avatar URLs from storage paths
+  const [resolvedAvatars, setResolvedAvatars] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const paths = [...new Set(viagens.map((v) => v.passageiroAvatarUrl).filter(Boolean))] as string[];
+    if (paths.length === 0) return;
+    void (async () => {
+      const map: Record<string, string> = {};
+      for (const p of paths) {
+        const url = await resolveStorageDisplayUrl(p);
+        if (url) map[p] = url;
+      }
+      if (!cancelled) setResolvedAvatars(map);
+    })();
+    return () => { cancelled = true; };
+  }, [viagens]);
+
+  // Render avatar with photo or initial letter
+  const renderAvatar = (name: string, avatarPath?: string | null) => {
+    const resolved = avatarPath ? resolvedAvatars[avatarPath] : null;
+    if (resolved) {
+      return React.createElement('img', {
+        src: resolved, alt: name,
+        style: { ...webStyles.viagensAvatar, objectFit: 'cover' as const },
+      });
+    }
     const initial = name.charAt(0).toUpperCase();
     const bg = avatarColors[initial] || '#999';
     return React.createElement('div', {
@@ -317,7 +342,7 @@ export default function ViagensScreen() {
             setAlterarPassageiroData({ id: item.bookingId, nome: row.passageiro, contato: '(21) 98888-7777', mala: 'Pequena', valor: 'R$ 25,00' });
             setAlterarPassageiroOpen(true);
           },
-        }, renderAvatar(row.passageiro)),
+        }, renderAvatar(row.passageiro, item.passageiroAvatarUrl)),
         React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', lineHeight: '1.5' } }, row.passageiro)),
       // Origem
       React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, row.origem),

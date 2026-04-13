@@ -217,7 +217,7 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
                   style={styles.serviceCard}
                   activeOpacity={0.8}
                   onPress={() => {
-                  if (service.id === 'viagens') navigateToTripStack('SearchTrip', { immediateTrip: false });
+                  if (service.id === 'viagens') navigateToTripStack('PlanTrip');
                   if (service.id === 'envios') navigateToShipmentStack('SelectShipmentAddress');
                 }}
                 >

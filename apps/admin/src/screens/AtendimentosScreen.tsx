@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
 import { fetchViagemCounts, fetchEncomendaCounts, fetchMotoristas } from '../data/queries';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
 import { useAuth } from '../contexts/AuthContext';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -37,6 +38,7 @@ type Ticket = {
   id: string;
   nome: string;
   avatar: string;
+  avatarUrl: string | null;
   categoria: string;
   descricao: string;
   tempo: string;
@@ -88,6 +90,30 @@ export default function AtendimentosScreen() {
   const [todosStatusActive, setTodosStatusActive] = useState('Todos');
   const [onlineStatus, setOnlineStatus] = useState<'Online' | 'Ausente' | 'Offline'>('Online');
   const [statusDropdownOpen, setStatusDropdownOpen] = useState(false);
+
+  // Horário automático: 09h00-18h00 — atualiza disponibilidade ao abrir e a cada minuto
+  useEffect(() => {
+    if (!isSupabaseConfigured || !currentUserId) return;
+    const dbToUi: Record<string, 'Online' | 'Ausente' | 'Offline'> = { online: 'Online', away: 'Ausente', offline: 'Offline' };
+    const applyAutoSchedule = () => {
+      const hour = new Date().getHours();
+      const autoStatus = (hour >= 9 && hour < 18) ? 'online' : 'offline';
+      void (supabase as any).from('worker_profiles').select('availability').eq('id', currentUserId).maybeSingle()
+        .then(({ data }: any) => {
+          const current = data?.availability || 'online';
+          // Atualizar automaticamente se está fora do horário e marcado como online, ou dentro e marcado como offline
+          if ((hour >= 9 && hour < 18 && current === 'offline') || (!(hour >= 9 && hour < 18) && current === 'online')) {
+            setOnlineStatus(dbToUi[autoStatus] || 'Online');
+            void (supabase as any).rpc('update_admin_availability', { p_status: autoStatus });
+          } else {
+            setOnlineStatus(dbToUi[current] || 'Online');
+          }
+        });
+    };
+    applyAutoSchedule();
+    const interval = setInterval(applyAutoSchedule, 60_000);
+    return () => clearInterval(interval);
+  }, [currentUserId]);
   const [filtrarStatusOpen, setFiltrarStatusOpen] = useState(false);
   const [filtrarStatusSelected, setFiltrarStatusSelected] = useState('Todos');
   const [meuAtendimentoDropdown, setMeuAtendimentoDropdown] = useState(false);
@@ -176,15 +202,35 @@ export default function AtendimentosScreen() {
             id: String(c.id),
             nome: name,
             avatar: name.charAt(0).toUpperCase(),
+            avatarUrl: null as string | null,
             categoria: categoryLabelMap[c.category || ''] || c.category || 'Outros',
             descricao: c.last_message || 'Sem mensagens',
             tempo,
             status: ticketStatus,
             adminId: c.admin_id ? String(c.admin_id) : null,
             rawCategory: String(c.category || 'outros'),
+            _clientId: String(c.client_id || ''),
           };
         });
-        setRealTickets(tickets);
+        // Fetch avatar_urls for all clients
+        const clientIds = [...new Set(data.map((c: any) => c.client_id).filter(Boolean))];
+        if (clientIds.length > 0) {
+          (supabase as any).from('profiles').select('id, avatar_url').in('id', clientIds)
+            .then(async ({ data: profiles }: any) => {
+              if (cancelled || !profiles) { setRealTickets(tickets); return; }
+              const avatarMap: Record<string, string> = {};
+              for (const p of profiles) {
+                if (p.avatar_url) {
+                  const resolved = await resolveStorageDisplayUrl(p.avatar_url);
+                  if (resolved) avatarMap[p.id] = resolved;
+                }
+              }
+              if (cancelled) return;
+              setRealTickets(tickets.map((t: any) => ({ ...t, avatarUrl: avatarMap[t._clientId] || null })));
+            });
+        } else {
+          setRealTickets(tickets);
+        }
       })
       .catch(() => { if (!cancelled) setRealTickets([]); });
     return () => { cancelled = true; };
@@ -338,12 +384,17 @@ export default function AtendimentosScreen() {
         // Left side
         React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, flex: 1, minWidth: 0 } },
           // Avatar
-          React.createElement('div', {
-            style: {
-              width: 44, height: 44, borderRadius: '50%', background: avatarBg, flexShrink: 0,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            },
-          }, React.createElement('span', { style: { color: '#fff', fontSize: 18, fontWeight: 600, ...font } }, t.avatar)),
+          t.avatarUrl
+            ? React.createElement('img', {
+                src: t.avatarUrl, alt: t.nome,
+                style: { width: 44, height: 44, borderRadius: '50%', objectFit: 'cover' as const, flexShrink: 0 },
+              })
+            : React.createElement('div', {
+                style: {
+                  width: 44, height: 44, borderRadius: '50%', background: avatarBg, flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                },
+              }, React.createElement('span', { style: { color: '#fff', fontSize: 18, fontWeight: 600, ...font } }, t.avatar)),
           // Info
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6, minWidth: 0, flex: 1 } },
             // Name + category
@@ -407,7 +458,12 @@ export default function AtendimentosScreen() {
     ...(['Online', 'Ausente', 'Offline'] as const).map((opt) =>
       React.createElement('button', {
         key: opt, type: 'button',
-        onClick: () => { setOnlineStatus(opt); setStatusDropdownOpen(false); },
+        onClick: () => {
+          setOnlineStatus(opt);
+          setStatusDropdownOpen(false);
+          const dbMap: Record<string, string> = { Online: 'online', Ausente: 'away', Offline: 'offline' };
+          void (supabase as any).rpc('update_admin_availability', { p_status: dbMap[opt] });
+        },
         style: {
           display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '10px 20px',
           background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600,

@@ -467,17 +467,6 @@ export default function EncomendasScreen() {
 
   // ── Search row (campo à esquerda — Figma 849-37140) ───────────────────────
   const searchRow = React.createElement('div', { style: { ...webStyles.searchRow, alignItems: 'center' } },
-    React.createElement('div', { style: webStyles.searchInputWrap },
-      React.createElement('div', { style: webStyles.searchInputInner },
-        React.createElement('span', { style: webStyles.searchIcon }, searchIconSvg),
-        React.createElement('input', {
-          type: 'search',
-          value: search,
-          placeholder: 'Buscar por origem, destino ou remetente',
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value),
-          style: webStyles.searchInput,
-          'aria-label': 'Buscar encomendas',
-        }))),
     React.createElement('div', { style: { ...webStyles.filterGroup, flexShrink: 0 } },
       React.createElement('div', { style: { width: 1, height: 16, background: '#e2e2e2', flexShrink: 0 } }),
       React.createElement('div', { style: { position: 'relative' as const } },
