@@ -44,6 +44,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
     priceRouteBaseCents,
     pricingRouteId,
     adminPctApplied,
+    resolvedBaseId,
   } = route.params;
 
   const [items, setItems] = useState<ClientScheduledTripItem[]>([]);
@@ -83,6 +84,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
     priceRouteBaseCents,
     pricingRouteId,
     adminPctApplied,
+    resolvedBaseId,
   };
 
   const handleContinue = () => {

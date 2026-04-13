@@ -56,6 +56,11 @@ export type ShipmentRecipientQuoteParams = {
   priceRouteBaseCents: number;
   pricingRouteId: string;
   adminPctApplied: number;
+  /**
+   * Base de hub resolvida na origem (`null` = sem base na região → escolha de motorista de viagem).
+   * Definido no Recipient antes de SelectShipmentDriver / ConfirmShipment.
+   */
+  resolvedBaseId?: string | null;
 };
 
 /** Destinatário do envio */
@@ -79,7 +84,8 @@ export type ShipmentStackParamList = {
   };
   SelectShipmentDriver: ShipmentRecipientQuoteParams;
   ConfirmShipment: ShipmentRecipientQuoteParams & {
-    clientPreferredDriverId: string;
+    /** Ausente quando o envio tem base (coleta por preparador até a base). */
+    clientPreferredDriverId?: string;
     orderId?: string;
     shipmentId?: string;
   };

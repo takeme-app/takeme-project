@@ -2,6 +2,9 @@ import { supabase } from './supabase';
 
 type LatLng = { latitude: number; longitude: number };
 
+/** Bases mais distantes que isso não contam como "região com base" para o envio. */
+const MAX_BASE_DISTANCE_KM = 120;
+
 function haversineKm(a: LatLng, b: LatLng): number {
   const R = 6371;
   const dLat = ((b.latitude - a.latitude) * Math.PI) / 180;
@@ -15,8 +18,8 @@ function haversineKm(a: LatLng, b: LatLng): number {
 }
 
 /**
- * Escolhe a base ativa mais adequada para o envio (coordenadas da coleta, depois cidade no endereço).
- * Usado para preencher `shipments.base_id` e alinhar com o preparador da mesma base.
+ * Escolhe a base ativa na região do envio (coordenadas da coleta dentro do raio, ou cidade no endereço).
+ * Usado para preencher `shipments.base_id`. Se nenhuma base se aplica, retorna null (fluxo sem hub → motorista de viagem).
  */
 export async function resolveShipmentBaseId(params: {
   origin: LatLng;
@@ -46,7 +49,9 @@ export async function resolveShipmentBaseId(params: {
         bestId = b.id;
       }
     }
-    if (bestId) return bestId;
+    if (bestId != null && bestKm <= MAX_BASE_DISTANCE_KM) {
+      return bestId;
+    }
   }
 
   const addr = params.originAddress.toLowerCase();
@@ -55,5 +60,5 @@ export async function resolveShipmentBaseId(params: {
     if (c && addr.includes(c)) return b.id;
   }
 
-  return rows[0]!.id;
+  return null;
 }
