@@ -99,9 +99,23 @@ type BookingDetail = {
   vehicle_plate: string | null;
 };
 
+type TripShipmentRow = {
+  id: string;
+  package_size: string;
+  status: string;
+  recipient_name: string;
+};
+
+function shipmentPackageLabelPt(size: string): string {
+  if (size === 'pequeno') return 'Pequeno';
+  if (size === 'grande') return 'Grande';
+  return 'Médio';
+}
+
 export function TripDetailScreen({ navigation, route }: Props) {
   const bookingId = route.params?.bookingId ?? '';
   const [detail, setDetail] = useState<BookingDetail | null>(null);
+  const [tripShipments, setTripShipments] = useState<TripShipmentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
   const [routeDuration, setRouteDuration] = useState<string | null>(null);
@@ -129,6 +143,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     if (!bookingId) {
+      setTripShipments([]);
       setLoading(false);
       return;
     }
@@ -148,6 +163,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
         .eq('user_id', user.id)
         .single();
       if (cancelled || bookErr || !booking) {
+        if (!cancelled) setTripShipments([]);
         setLoading(false);
         return;
       }
@@ -219,6 +235,19 @@ export function TripDetailScreen({ navigation, route }: Props) {
         vehicle_year: vehicleYear,
         vehicle_plate: vehiclePlate,
       });
+      const tripId = b.scheduled_trip_id ?? null;
+      if (tripId && !cancelled) {
+        const { data: shipRows } = await supabase
+          .from('shipments')
+          .select('id, package_size, status, recipient_name')
+          .eq('scheduled_trip_id', tripId)
+          .eq('user_id', user.id);
+        if (!cancelled) {
+          setTripShipments((shipRows ?? []) as TripShipmentRow[]);
+        }
+      } else if (!cancelled) {
+        setTripShipments([]);
+      }
       setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -441,7 +470,9 @@ export function TripDetailScreen({ navigation, route }: Props) {
           <Text style={styles.tripId}>VG{detail.id.slice(-6).toUpperCase()}</Text>
           <Text style={styles.cardDate}>{formatDetailDate(detail.created_at)}</Text>
           <Text style={styles.cardSummary}>
-            {detail.passenger_count} {detail.passenger_count === 1 ? 'passageiro' : 'passageiros'} · 0 encomenda
+            {detail.passenger_count} {detail.passenger_count === 1 ? 'passageiro' : 'passageiros'} ·{' '}
+            {tripShipments.length}{' '}
+            {tripShipments.length === 1 ? 'encomenda' : 'encomendas'}
           </Text>
           <Text style={styles.cardSummary}>
             Ocupação do bagageiro:{' '}
@@ -497,14 +528,28 @@ export function TripDetailScreen({ navigation, route }: Props) {
             ))
           )}
         </View>
-        {!isCompleted && (
-          <>
-            <Text style={styles.sectionHeading}>Encomenda</Text>
-            <View style={styles.placeholderSection}>
-              <Text style={styles.placeholderSectionText}>Nenhuma encomenda</Text>
-            </View>
-          </>
-        )}
+
+        <Text style={styles.sectionHeading}>Encomenda</Text>
+        <View style={styles.placeholderSection}>
+          {tripShipments.length === 0 ? (
+            <Text style={styles.placeholderSectionText}>
+              Nenhuma encomenda sua vinculada a esta viagem. Envios pelo fluxo Envios aparecem aqui quando usam o
+              mesmo motorista/viagem.
+            </Text>
+          ) : (
+            tripShipments.map((s) => (
+              <View key={s.id} style={styles.shipmentRow}>
+                <MaterialIcons name="inventory-2" size={20} color={COLORS.neutral700} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.passengerRowText}>
+                    {shipmentPackageLabelPt(s.package_size)} · {s.recipient_name}
+                  </Text>
+                  <Text style={styles.shipmentMeta}>Status: {s.status}</Text>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
 
         <Text style={styles.sectionHeading}>Despesas</Text>
         <TouchableOpacity style={styles.uploadExpenseBox} activeOpacity={0.8}>
@@ -734,6 +779,8 @@ const styles = StyleSheet.create({
   sectionHeading: { fontSize: 16, fontWeight: '700', color: COLORS.black, marginHorizontal: 24, marginTop: 20, marginBottom: 8 },
   placeholderSection: { marginHorizontal: 24, paddingVertical: 12, paddingHorizontal: 14, backgroundColor: COLORS.neutral300, borderRadius: 10 },
   placeholderSectionText: { fontSize: 14, color: COLORS.neutral700 },
+  shipmentRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10 },
+  shipmentMeta: { fontSize: 12, color: COLORS.neutral700, marginTop: 2 },
   uploadExpenseBox: {
     marginHorizontal: 24,
     marginTop: 4,

@@ -6,6 +6,9 @@ node_modules/
 .env.local
 .env.*.local
 
+# Supabase CLI cache (máquina local)
+supabase/.temp/
+
 # Expo
 .expo/
 dist/

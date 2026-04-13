@@ -18,6 +18,7 @@ import type { ShipmentStackParamList } from '../../navigation/types';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import * as ImagePicker from 'expo-image-picker';
 import { quoteShipmentForClient, type ShipmentQuoteOk } from '../../lib/shipmentQuote';
+import { resolveShipmentBaseId } from '../../lib/resolveShipmentBase';
 
 type Props = NativeStackScreenProps<ShipmentStackParamList, 'Recipient'>;
 
@@ -127,27 +128,52 @@ export function RecipientScreen({ navigation, route }: Props) {
       showAlert('Valor', quoteError ?? 'Não foi possível calcular o valor do envio.');
       return;
     }
-    navigation.navigate('SelectShipmentDriver', {
+    const recipientPayload = {
+      name: nameTrim,
+      email: emailTrim,
+      phone: phoneDigits,
+      instructions: instructions.trim() || undefined,
+      photoUri: photoUri ?? undefined,
+    };
+    const quoteParams = {
       origin,
       destination,
       whenOption,
       whenLabel,
       packageSize,
       packageSizeLabel,
-      recipient: {
-        name: nameTrim,
-        email: emailTrim,
-        phone: phoneDigits,
-        instructions: instructions.trim() || undefined,
-        photoUri: photoUri ?? undefined,
-      },
+      recipient: recipientPayload,
       amountCents: quote.amountCents,
       pricingSubtotalCents: quote.pricingSubtotalCents,
       platformFeeCents: quote.platformFeeCents,
       priceRouteBaseCents: quote.priceRouteBaseCents,
       pricingRouteId: quote.pricingRouteId,
       adminPctApplied: quote.adminPctApplied,
-    });
+    };
+    setLoading(true);
+    void (async () => {
+      try {
+        const resolvedBaseId = await resolveShipmentBaseId({
+          origin: { latitude: origin.latitude, longitude: origin.longitude },
+          originAddress: origin.address,
+        });
+        if (resolvedBaseId) {
+          navigation.navigate('ConfirmShipment', {
+            ...quoteParams,
+            resolvedBaseId,
+          });
+        } else {
+          navigation.navigate('SelectShipmentDriver', {
+            ...quoteParams,
+            resolvedBaseId: null,
+          });
+        }
+      } catch {
+        showAlert('Erro', 'Não foi possível verificar a base da região. Tente de novo.');
+      } finally {
+        setLoading(false);
+      }
+    })();
   };
 
   return (

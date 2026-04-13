@@ -65,9 +65,12 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
     pricingRouteId,
     adminPctApplied,
     clientPreferredDriverId,
+    resolvedBaseId: resolvedBaseIdParam,
   } = route.params;
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const hubColetaNaBase = Boolean(resolvedBaseIdParam);
 
   const showFeeBreakdown = true;
   const pricingSnapshot = shipmentPricingSnapshotFromParams({
@@ -149,10 +152,13 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
                 : 'dinheiro';
         const status =
           packageSize === 'grande' ? 'pending_review' : params.method === 'dinheiro' ? 'confirmed' : 'confirmed';
-        const baseId = await resolveShipmentBaseId({
-          origin: { latitude: origin.latitude, longitude: origin.longitude },
-          originAddress: origin.address,
-        });
+        const baseIdForInsert =
+          resolvedBaseIdParam !== undefined
+            ? resolvedBaseIdParam
+            : await resolveShipmentBaseId({
+                origin: { latitude: origin.latitude, longitude: origin.longitude },
+                originAddress: origin.address,
+              });
         const originCityResolved =
           (origin.city?.trim() || guessCityFromPtAddress(origin.address)).trim() || null;
         const { data: row, error } = await supabase
@@ -163,7 +169,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
             origin_lat: origin.latitude,
             origin_lng: origin.longitude,
             origin_city: originCityResolved,
-            client_preferred_driver_id: clientPreferredDriverId,
+            ...(clientPreferredDriverId ? { client_preferred_driver_id: clientPreferredDriverId } : {}),
             destination_address: destination.address,
             destination_lat: destination.latitude,
             destination_lng: destination.longitude,
@@ -178,7 +184,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
             payment_method: paymentMethodDb,
             ...pricingInsertRow,
             status,
-            ...(baseId ? { base_id: baseId } : {}),
+            ...(baseIdForInsert ? { base_id: baseIdForInsert } : {}),
           })
           .select('id')
           .single();
@@ -243,7 +249,8 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           shipmentId &&
           status === 'confirmed' &&
           packageSize !== 'grande' &&
-          clientPreferredDriverId
+          clientPreferredDriverId &&
+          !baseIdForInsert
         ) {
           const { data: beginData, error: beginErr } = await supabase.rpc('shipment_begin_driver_offering', {
             p_shipment_id: shipmentId,
@@ -259,6 +266,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
               ok?: boolean;
               error?: string;
               skipped?: boolean;
+              reason?: string;
             } | null;
             if (begin && begin.ok === false && begin.error) {
               showAlert(
@@ -303,6 +311,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
       whenOption,
       packageSize,
       clientPreferredDriverId,
+      resolvedBaseIdParam,
       recipient,
       amountCents,
       pricingInsertRow,
@@ -329,6 +338,15 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.summaryCard}>
+          {hubColetaNaBase ? (
+            <View style={styles.hubNotice}>
+              <MaterialIcons name="warehouse" size={20} color={COLORS.neutral700} />
+              <Text style={styles.hubNoticeText}>
+                Coleta na sua região com base: um preparador levará o pacote até a base. O trecho após a base não é
+                acompanhado pelo app.
+              </Text>
+            </View>
+          ) : null}
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Envio para {recipient.name}</Text>
             {!showFeeBreakdown && <Text style={styles.summaryPrice}>{amountFormatted}</Text>}
@@ -404,6 +422,16 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 24,
   },
+  hubNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 14,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.neutral400,
+  },
+  hubNoticeText: { flex: 1, fontSize: 13, color: COLORS.neutral700, lineHeight: 18 },
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   summaryFeeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   summaryLabel: { fontSize: 16, fontWeight: '600', color: COLORS.black },
