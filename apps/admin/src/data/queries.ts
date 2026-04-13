@@ -59,7 +59,11 @@ export async function invokeEdgeFunction<T = any>(
     });
 
     const json = await res.json();
-    if (!res.ok) return { data: null, error: json.error || `HTTP ${res.status}` };
+    if (!res.ok) {
+      const errMsg = json.error || `HTTP ${res.status}`;
+      const details = json.details ? ` (${json.details})` : '';
+      return { data: json, error: `${errMsg}${details}` };
+    }
     return { data: json as T, error: null };
   } catch (err: any) {
     return { data: null, error: err.message || 'Erro desconhecido' };
@@ -316,6 +320,7 @@ function listItemFromBookingJoin(
   profileMap: Record<string, string>,
   driverNameMap: Record<string, string>,
   driverPartnerMap: Record<string, boolean>,
+  avatarUrlMap?: Record<string, string | null>,
 ): ViagemListItem {
   const trip = b.scheduled_trips;
   const dep = trip?.departure_at ?? b.created_at;
@@ -325,6 +330,7 @@ function listItemFromBookingJoin(
   return {
     bookingId: b.id,
     passageiro: profileMap[b.user_id] ?? 'Sem nome',
+    passageiroAvatarUrl: avatarUrlMap?.[b.user_id] ?? null,
     origem: shortAddr(b.origin_address),
     destino: shortAddr(b.destination_address),
     data: fmtDate(dep),
@@ -699,7 +705,7 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
       tripDepartureAt: trip?.departure_at ?? null,
       tripArrivalAt: trip?.arrival_at ?? null,
       senderName,
-      photoUrl: r.photo_url ? await resolveStorageDisplayUrl(r.photo_url) : null,
+      photoUrl: r.photo_url ? await resolveStorageDisplayUrl(supabase as any, r.photo_url) : null,
       recipientName: r.recipient_name ?? '',
       recipientPhone: r.recipient_phone ?? '',
       recipientEmail: r.recipient_email ?? '',
@@ -734,7 +740,7 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
     createdAt: r.created_at ?? '',
     bagsCount: r.bags_count ?? 0,
     scheduledAt: r.scheduled_at ?? null,
-    photoUrl: r.photo_url ? await resolveStorageDisplayUrl(r.photo_url) : null,
+    photoUrl: r.photo_url ? await resolveStorageDisplayUrl(supabase as any, r.photo_url) : null,
   };
 }
 
@@ -1850,7 +1856,7 @@ export async function fetchPreparadorEncomendaDetail(id: string): Promise<import
         id: r.driver_id,
         fullName: (pp as any)?.full_name || null,
         phone: (pp as any)?.phone || null,
-        avatarUrl: (pp as any)?.avatar_url ? await resolveStorageDisplayUrl((pp as any).avatar_url) : null,
+        avatarUrl: (pp as any)?.avatar_url ? await resolveStorageDisplayUrl(supabase as any, (pp as any).avatar_url) : null,
         status: (wp as any)?.status || null,
         subtype: (wp as any)?.subtype || null,
       };
@@ -1860,7 +1866,7 @@ export async function fetchPreparadorEncomendaDetail(id: string): Promise<import
       originAddress: r.origin_address || '—', destinationAddress: r.destination_address || '—',
       status: r.status, statusLabel: statusLabelMap[r.status] || r.status,
       amountCents: r.amount_cents || 0, packageSize: r.package_size || null,
-      photoUrl: r.photo_url ? await resolveStorageDisplayUrl(r.photo_url) : null,
+      photoUrl: r.photo_url ? await resolveStorageDisplayUrl(supabase as any, r.photo_url) : null,
       recipientName: r.recipient_name, recipientPhone: r.recipient_phone, recipientEmail: r.recipient_email,
       senderName, instructions: r.instructions, createdAt: r.created_at || '',
       preparerProfile,
@@ -1878,7 +1884,7 @@ export async function fetchPreparadorEncomendaDetail(id: string): Promise<import
       originAddress: r.origin_address || '—', destinationAddress: r.destination_address || '—',
       status: r.status, statusLabel: statusLabelMap[r.status] || r.status,
       amountCents: r.amount_cents || 0, packageSize: null,
-      photoUrl: r.photo_url ? await resolveStorageDisplayUrl(r.photo_url) : null,
+      photoUrl: r.photo_url ? await resolveStorageDisplayUrl(supabase as any, r.photo_url) : null,
       recipientName: null, recipientPhone: null, recipientEmail: null,
       senderName: r.full_name || null, instructions: r.instructions, createdAt: r.created_at || '',
       preparerProfile: null,
@@ -1899,7 +1905,7 @@ export async function fetchPreparadorEncomendaDetail(id: string): Promise<import
       senderName: null, instructions: null, createdAt: '',
       preparerProfile: {
         id, fullName: (pp as any)?.full_name || null, phone: (pp as any)?.phone || null,
-        avatarUrl: (pp as any)?.avatar_url ? await resolveStorageDisplayUrl((pp as any).avatar_url) : null,
+        avatarUrl: (pp as any)?.avatar_url ? await resolveStorageDisplayUrl(supabase as any, (pp as any).avatar_url) : null,
         status: (wp as any).status, subtype: (wp as any).subtype,
       },
     };
@@ -2370,7 +2376,7 @@ function mapEntityType(t: string): string {
 export async function fetchPagamentos(): Promise<PagamentoListItem[]> {
   const { data, error } = await sb
     .from('payouts')
-    .select('id, worker_id, entity_type, entity_id, gross_amount_cents, worker_amount_cents, admin_amount_cents, status, paid_at, created_at')
+    .select('id, worker_id, entity_type, entity_id, gross_amount_cents, worker_amount_cents, admin_amount_cents, status, paid_at, created_at, payout_method')
     .order('created_at', { ascending: false })
     .limit(200);
 
@@ -2390,6 +2396,7 @@ export async function fetchPagamentos(): Promise<PagamentoListItem[]> {
 
   return payoutRows.map((p: any) => ({
     id: p.id,
+    workerId: String(p.worker_id || ''),
     workerName: nameMap[p.worker_id] || 'Sem nome',
     entityType: mapEntityType(p.entity_type),
     dataFinalizacao: p.paid_at ? fmtDate(p.paid_at) : fmtDate(p.created_at),
@@ -2398,6 +2405,7 @@ export async function fetchPagamentos(): Promise<PagamentoListItem[]> {
     grossAmountCents: p.gross_amount_cents,
     workerAmountCents: p.worker_amount_cents,
     adminAmountCents: p.admin_amount_cents,
+    payoutMethod: p.payout_method || 'pix',
   }));
 }
 

@@ -52,7 +52,7 @@ function readOnlyField(label: string, value: string) {
 export default function ConfiguracoesScreen() {
   const navigate = useNavigate();
   const { session } = useAuth();
-  const [aba, setAba] = useState<'perfil' | 'usuarios' | 'plataforma'>('perfil');
+  const [aba, setAba] = useState<'perfil' | 'usuarios' | 'plataforma' | 'pagamentos'>('perfil');
   const [novoUsuarioOpen, setNovoUsuarioOpen] = useState(false);
   const [nuNome, setNuNome] = useState('');
   const [nuEmail, setNuEmail] = useState('');
@@ -130,6 +130,17 @@ export default function ConfiguracoesScreen() {
         onClick: () => setAba('plataforma'),
       }, 'Plataforma',
         aba === 'plataforma' ? React.createElement('span', {
+          style: {
+            position: 'absolute' as const, left: 0, right: 0, bottom: 0, height: 2,
+            background: '#0d0d0d', borderRadius: 100,
+          },
+        }) : null),
+      React.createElement('button', {
+        type: 'button',
+        style: tabStyle(aba === 'pagamentos'),
+        onClick: () => setAba('pagamentos'),
+      }, 'Pagamentos',
+        aba === 'pagamentos' ? React.createElement('span', {
           style: {
             position: 'absolute' as const, left: 0, right: 0, bottom: 0, height: 2,
             background: '#0d0d0d', borderRadius: 100,
@@ -332,6 +343,130 @@ export default function ConfiguracoesScreen() {
       }, 'Salvar'),
       platSaved ? React.createElement('span', { style: { color: '#22c55e', fontSize: 14, fontWeight: 500, ...font } }, 'Salvo com sucesso!') : null));
 
+  // ── Pagamentos Automáticos ──────────────────────────────────────────────
+  const [payAutoEnabled, setPayAutoEnabled] = useState(false);
+  const [payScheduleType, setPayScheduleType] = useState<'monthly' | 'weekly'>('monthly');
+  const [payScheduleDay, setPayScheduleDay] = useState('5');
+  const [payMinThreshold, setPayMinThreshold] = useState('50');
+  const [paySaved, setPaySaved] = useState(false);
+
+  useEffect(() => {
+    if (!platLoading) {
+      setPayAutoEnabled(platSettings.payout_auto_enabled === true);
+      setPayScheduleType(platSettings.payout_schedule_type || 'monthly');
+      setPayScheduleDay(String(platSettings.payout_schedule_day ?? 5));
+      setPayMinThreshold(String((platSettings.payout_min_threshold_cents ?? 5000) / 100));
+    }
+  }, [platLoading, platSettings]);
+
+  const savePayoutSettings = useCallback(async () => {
+    const threshCents = Math.round(parseFloat(payMinThreshold || '0') * 100);
+    await Promise.all([
+      updateSetting('payout_auto_enabled', payAutoEnabled),
+      updateSetting('payout_schedule_type', payScheduleType),
+      updateSetting('payout_schedule_day', parseInt(payScheduleDay, 10) || 5),
+      updateSetting('payout_min_threshold_cents', threshCents),
+    ]);
+    setPaySaved(true);
+    setTimeout(() => setPaySaved(false), 2500);
+  }, [payAutoEnabled, payScheduleType, payScheduleDay, payMinThreshold, updateSetting]);
+
+  const toggleStyle = (active: boolean): React.CSSProperties => ({
+    width: 52, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer',
+    background: active ? '#22c55e' : '#d9d9d9', position: 'relative' as const,
+    transition: 'background 0.2s',
+  });
+  const toggleKnob = (active: boolean): React.CSSProperties => ({
+    width: 22, height: 22, borderRadius: '50%', background: '#fff',
+    position: 'absolute' as const, top: 3,
+    left: active ? 27 : 3, transition: 'left 0.2s',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+  });
+
+  const chipStyle = (active: boolean): React.CSSProperties => ({
+    height: 36, padding: '0 16px', borderRadius: 999, border: active ? '2px solid #0d0d0d' : '1px solid #d9d9d9',
+    background: active ? '#0d0d0d' : '#fff', color: active ? '#fff' : '#3a3a3a',
+    fontSize: 13, fontWeight: 500, cursor: 'pointer', ...font,
+  });
+
+  const weekDays = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+  const pagamentosContent = React.createElement('div', {
+    style: { display: 'flex', flexDirection: 'column' as const, gap: 28, width: '100%', maxWidth: 600 },
+  },
+    // Título
+    React.createElement('h2', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Pagamento Automático'),
+
+    // Toggle ON/OFF
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 14 } },
+      React.createElement('button', {
+        type: 'button',
+        style: toggleStyle(payAutoEnabled),
+        onClick: () => setPayAutoEnabled((v) => !v),
+      },
+        React.createElement('span', { style: toggleKnob(payAutoEnabled) })),
+      React.createElement('span', { style: { fontSize: 15, fontWeight: 500, color: '#0d0d0d', ...font } },
+        payAutoEnabled ? 'Habilitado' : 'Desabilitado')),
+
+    // Tipo de agendamento
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+      React.createElement('label', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Frequência'),
+      React.createElement('div', { style: { display: 'flex', gap: 8 } },
+        React.createElement('button', { type: 'button', style: chipStyle(payScheduleType === 'monthly'), onClick: () => setPayScheduleType('monthly') }, 'Mensal'),
+        React.createElement('button', { type: 'button', style: chipStyle(payScheduleType === 'weekly'), onClick: () => setPayScheduleType('weekly') }, 'Semanal'))),
+
+    // Dia
+    payScheduleType === 'monthly'
+      ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
+          React.createElement('label', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Dia do mês'),
+          React.createElement('input', {
+            type: 'number', min: '1', max: '28', value: payScheduleDay,
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setPayScheduleDay(e.target.value),
+            style: { width: 80, height: 44, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', ...font },
+          }))
+      : React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
+          React.createElement('label', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Dia da semana'),
+          React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' as const } },
+            ...weekDays.map((d, i) =>
+              React.createElement('button', {
+                key: d, type: 'button',
+                style: chipStyle(String(i) === payScheduleDay),
+                onClick: () => setPayScheduleDay(String(i)),
+              }, d)))),
+
+    // Valor mínimo
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6, maxWidth: 260 } },
+      React.createElement('label', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Valor mínimo para liberar'),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+        React.createElement('span', { style: { fontSize: 16, color: '#767676', ...font } }, 'R$'),
+        React.createElement('input', {
+          type: 'number', step: '0.01', min: '0', value: payMinThreshold, placeholder: '50,00',
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setPayMinThreshold(e.target.value),
+          style: { height: 44, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', flex: 1, ...font },
+        }))),
+
+    // Nota informativa
+    React.createElement('div', {
+      style: {
+        background: '#f8f9fa', borderRadius: 8, padding: '12px 16px', borderLeft: '3px solid #6366f1',
+      },
+    },
+      React.createElement('p', { style: { fontSize: 13, color: '#555', margin: 0, lineHeight: 1.5, ...font } },
+        'Para motoristas/preparadores com Stripe Connect, os valores já são transferidos automaticamente no momento da cobrança ao cliente. ',
+        'Esta configuração controla quando os registros são marcados como pagos e quando o relatório de pagamento manual é gerado para profissionais sem Stripe Connect.')),
+
+    // Botão Salvar
+    React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
+      React.createElement('button', {
+        type: 'button',
+        onClick: savePayoutSettings,
+        style: {
+          height: 44, padding: '0 28px', borderRadius: 999, border: 'none',
+          background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
+        },
+      }, 'Salvar'),
+      paySaved ? React.createElement('span', { style: { color: '#22c55e', fontSize: 14, fontWeight: 500, ...font } }, 'Salvo com sucesso!') : null));
+
   // ── Novo Usuário Modal ──────────────────────────────────────────────────
   const permModulos = ['Início', 'Viagens', 'Passageiros', 'Motoristas', 'Destinos', 'Encomendas', 'Preparadores', 'Promoções', 'Pagamentos', 'Atendimento'];
   const togglePerm = (mod: string) => setNuPermissoes((prev) => ({ ...prev, [mod]: !prev[mod] }));
@@ -424,16 +559,23 @@ export default function ConfiguracoesScreen() {
         React.createElement('button', {
           type: 'button',
           onClick: async () => {
-            if (nuNome.trim() && nuEmail.trim()) {
+            if (!nuNome.trim() || !nuEmail.trim()) return;
+            try {
               // Gerar senha aleatória
-              const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-              const tempPassword = Array.from({ length: 10 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-              await createAdminUser({
-                full_name: nuNome,
-                email: nuEmail,
+              const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$';
+              const tempPassword = Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('') + 'Aa1!';
+              const { data, error } = await createAdminUser({
+                full_name: nuNome.trim(),
+                email: nuEmail.trim(),
+                password: tempPassword,
                 permissions: nuPermissoes,
                 backoffice_subtype: nuBackofficeTipo,
               });
+              if (error) {
+                const detail = (data as any)?.details || '';
+                alert(`Erro ao criar usuário: ${error}${detail ? '\n\nDetalhe: ' + detail : ''}`);
+                return;
+              }
               // Enviar credenciais por email
               try {
                 await invokeEdgeFunction('send-admin-credentials', 'POST', undefined, {
@@ -442,8 +584,11 @@ export default function ConfiguracoesScreen() {
               } catch (e) { console.warn('Falha ao enviar email de credenciais:', e); }
               const items = await fetchAdminUsers();
               setAdminUsers(items);
+              setNovoUsuarioOpen(false);
+              setNuNome(''); setNuEmail('');
+            } catch (e) {
+              alert(`Erro: ${(e as any)?.message || 'Falha ao criar usuário'}`);
             }
-            setNovoUsuarioOpen(false);
           },
           style: { flex: 1, height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', fontSize: 16, fontWeight: 600, color: '#fff', cursor: 'pointer', ...font },
         }, 'Salvar')))) : null;
@@ -453,6 +598,6 @@ export default function ConfiguracoesScreen() {
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%' } },
         React.createElement('h1', { style: { ...webStyles.homeTitle, margin: 0, width: '100%' } }, 'Configurações'),
         tabsRow),
-      aba === 'perfil' ? perfilContent : aba === 'usuarios' ? usuariosContent : plataformaContent),
+      aba === 'perfil' ? perfilContent : aba === 'usuarios' ? usuariosContent : aba === 'plataforma' ? plataformaContent : pagamentosContent),
     novoUsuarioModal);
 }

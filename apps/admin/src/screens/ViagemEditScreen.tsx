@@ -136,7 +136,7 @@ function PassengerAvatarCircle({ avatarUrl, name, size = 48 }: { avatarUrl: stri
   useEffect(() => {
     if (!avatarUrl?.trim()) { setResolvedUrl(null); return; }
     let c = false;
-    void resolveStorageDisplayUrl(avatarUrl.trim()).then((u) => { if (!c) setResolvedUrl(u); });
+    void resolveStorageDisplayUrl(supabase as any, avatarUrl.trim()).then((u) => { if (!c) setResolvedUrl(u); });
     return () => { c = true; };
   }, [avatarUrl]);
   const showImg = Boolean(resolvedUrl) && !failed;

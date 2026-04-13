@@ -61,6 +61,7 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
   const [destinationPlace, setDestinationPlace] = useState<GoogleGeocodeResult | null>(null);
   const [price, setPrice] = useState('');
   const [useTakeMe, setUseTakeMe] = useState(false);
+  const [useAdminTemplate, setUseAdminTemplate] = useState(false);
   const slideAnim = useRef(new Animated.Value(300)).current;
 
   const load = useCallback(async () => {
@@ -85,6 +86,7 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
     setDestinationPlace(null);
     setPrice('');
     setUseTakeMe(false);
+    setUseAdminTemplate(false);
     resetDrag();
     slideAnim.setValue(300);
     setModalVisible(true);
@@ -112,6 +114,46 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
   };
 
   const handleSave = async () => {
+    if (useAdminTemplate) {
+      // Load admin-created templates (pricing_routes where role_type='driver')
+      setSaving(true);
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user?.id) throw new Error('Não autenticado.');
+        // Detect worker subtype to fetch correct templates
+        const { data: wp } = await (supabase as any).from('worker_profiles').select('subtype').eq('id', user.id).maybeSingle();
+        const subtype = wp?.subtype || 'takeme';
+        const roleType = subtype === 'shipments' ? 'preparer_shipments' : subtype === 'excursions' ? 'preparer_excursions' : 'driver';
+        const { data: templates } = await (supabase as any)
+          .from('pricing_routes')
+          .select('id, origin_address, destination_address, price_cents')
+          .eq('role_type', roleType)
+          .eq('is_active', true);
+        if (!templates?.length) {
+          showAlert('Aviso', 'Nenhum template de rota disponível no momento.');
+          setSaving(false);
+          return;
+        }
+        const inserts = templates.map((r: any) => ({
+          worker_id: user.id,
+          origin_address: r.origin_address,
+          destination_address: r.destination_address,
+          price_per_person_cents: r.price_cents || 0,
+          is_active: true,
+          pricing_route_id: r.id,
+        }));
+        const { error } = await supabase.from('worker_routes').insert(inserts);
+        if (error) throw error;
+        closeModal();
+        await load();
+      } catch (e) {
+        showAlert('Erro', (e as { message?: string })?.message ?? 'Erro ao importar templates.');
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     if (useTakeMe) {
       // Load TakeMe routes and copy to worker_routes
       setSaving(true);
@@ -334,7 +376,22 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
                 </View>
                 <Switch
                   value={useTakeMe}
-                  onValueChange={setUseTakeMe}
+                  onValueChange={(v) => { setUseTakeMe(v); if (v) setUseAdminTemplate(false); }}
+                  trackColor={{ false: '#E5E7EB', true: '#111827' }}
+                  thumbColor="#FFFFFF"
+                />
+              </View>
+
+              <View style={styles.toggleRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.toggleLabel}>Importar templates do admin</Text>
+                  <Text style={styles.toggleSub}>
+                    Usar os trechos configurados pelo administrador como base para suas rotas.
+                  </Text>
+                </View>
+                <Switch
+                  value={useAdminTemplate}
+                  onValueChange={(v) => { setUseAdminTemplate(v); if (v) setUseTakeMe(false); }}
                   trackColor={{ false: '#E5E7EB', true: '#111827' }}
                   thumbColor="#FFFFFF"
                 />

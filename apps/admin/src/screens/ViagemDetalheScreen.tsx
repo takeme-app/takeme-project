@@ -86,6 +86,23 @@ export default function ViagemDetalheScreen() {
   const [linkedShipments, setLinkedShipments] = useState<TripShipmentListItem[]>([]);
   const [tripCoords] = useTripMapCoords(detail);
   const [driverStats, setDriverStats] = useState<{ rating: number | null; totalTrips: number; avatarUrl: string | null }>({ rating: null, totalTrips: 0, avatarUrl: null });
+  const [driverAvatarSrc, setDriverAvatarSrc] = useState<string | null>(null);
+  const [passengerAvatarSrc, setPassengerAvatarSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    const raw = detail?.listItem?.passageiroAvatarUrl;
+    if (!raw) { setPassengerAvatarSrc(null); return; }
+    let c = false;
+    void resolveStorageDisplayUrl(supabase as any, raw).then((url) => { if (!c && url) setPassengerAvatarSrc(url); });
+    return () => { c = true; };
+  }, [detail?.listItem?.passageiroAvatarUrl]);
+
+  useEffect(() => {
+    if (!driverStats.avatarUrl) { setDriverAvatarSrc(null); return; }
+    let c = false;
+    void resolveStorageDisplayUrl(supabase as any, driverStats.avatarUrl).then((url) => { if (!c && url) setDriverAvatarSrc(url); });
+    return () => { c = true; };
+  }, [driverStats.avatarUrl]);
 
   // Multi-ponto: buscar paradas da viagem
   const tripIdForStops = detail?.listItem?.tripId || null;
@@ -255,22 +272,6 @@ export default function ViagemDetalheScreen() {
       React.createElement('div', { style: webStyles.detailMotoristaInfoText },
         React.createElement('div', { style: webStyles.detailResumoLabel }, label),
         React.createElement('div', { style: webStyles.detailResumoValue }, value)));
-  const [driverAvatarSrc, setDriverAvatarSrc] = useState<string | null>(null);
-  const [passengerAvatarSrc, setPassengerAvatarSrc] = useState<string | null>(null);
-  useEffect(() => {
-    const raw = detail?.listItem?.passageiroAvatarUrl;
-    if (!raw) { setPassengerAvatarSrc(null); return; }
-    let c = false;
-    void resolveStorageDisplayUrl(raw).then((url) => { if (!c && url) setPassengerAvatarSrc(url); });
-    return () => { c = true; };
-  }, [detail?.listItem?.passageiroAvatarUrl]);
-
-  useEffect(() => {
-    if (!driverStats.avatarUrl) { setDriverAvatarSrc(null); return; }
-    let c = false;
-    void resolveStorageDisplayUrl(driverStats.avatarUrl).then((url) => { if (!c && url) setDriverAvatarSrc(url); });
-    return () => { c = true; };
-  }, [driverStats.avatarUrl]);
 
   const motoristaDriverBlock = React.createElement('div', { style: webStyles.detailMotoristaDriverBlock },
     driverAvatarSrc

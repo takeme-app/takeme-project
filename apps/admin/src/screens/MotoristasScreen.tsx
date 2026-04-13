@@ -12,6 +12,7 @@ import { fetchMotoristas, fetchMotoristaTableRows, fetchAllMotoristaProfiles, up
 import type { MotoristaListItem, WorkerApprovalRow, WorkerApprovalStatus } from '../data/types';
 import type { MotoristaTableRow } from '../data/queries';
 import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
+import { supabase } from '../lib/supabase';
 
 const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } = require('recharts');
 
@@ -66,7 +67,7 @@ export default function MotoristasScreen() {
     void (async () => {
       const map: Record<string, string> = {};
       for (const p of paths) {
-        const url = await resolveStorageDisplayUrl(p);
+        const url = await resolveStorageDisplayUrl(supabase as any, p);
         if (url) map[p] = url;
       }
       if (!cancelled) setResolvedAvatars(map);

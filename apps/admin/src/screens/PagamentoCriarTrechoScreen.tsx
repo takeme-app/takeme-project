@@ -10,6 +10,8 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { createPricingRoute, fetchSurchargeCatalog } from '../data/queries';
 import type { SurchargeCatalogRow } from '../data/types';
+import PlacesAddressInput from '../components/PlacesAddressInput';
+import type { PlaceResolved } from '../components/PlacesAddressInput';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -209,6 +211,9 @@ export default function PagamentoCriarTrechoScreen() {
   const [surcharges, setSurcharges] = useState<SurchargeCatalogRow[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
+  // Coordenadas resolvidas pelo Google Places
+  const [originCoord, setOriginCoord] = useState<{ lat: number; lng: number } | null>(null);
+  const [destCoord, setDestCoord] = useState<{ lat: number; lng: number } | null>(null);
 
   useEffect(() => {
     fetchSurchargeCatalog().then(setSurcharges);
@@ -274,6 +279,8 @@ export default function PagamentoCriarTrechoScreen() {
       ...(Number.isFinite(da) ? { admin_pct: da } : {}),
       accepted_payment_methods: methods.length ? methods : undefined,
       surcharges,
+      ...(originCoord ? { origin_lat: originCoord.lat, origin_lng: originCoord.lng } : {}),
+      ...(destCoord ? { destination_lat: destCoord.lat, destination_lng: destCoord.lng } : {}),
     });
     setSaving(false);
     if (error) {
@@ -380,6 +387,19 @@ export default function PagamentoCriarTrechoScreen() {
         placeholder,
         onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
         style: { ...inputGray, color: value ? '#0d0d0d' : '#767676' },
+      }));
+
+  const fieldPlaces = (rotulo: string, value: string, onChange: (v: string) => void, onResolved: (p: PlaceResolved) => void, placeholder: string) =>
+    React.createElement('div', {
+      style: { flex: '1 1 200px', minWidth: 0, display: 'flex', flexDirection: 'column' as const, gap: 0 },
+    },
+      React.createElement('span', { style: labelField }, rotulo),
+      React.createElement(PlacesAddressInput, {
+        value,
+        onChange,
+        onPlaceResolved: onResolved,
+        inputStyle: { ...inputGray, color: value ? '#0d0d0d' : '#767676' },
+        placeholder,
       }));
 
   const fieldDateTime = (rotulo: string, value: string, onChange: (v: string) => void) =>
@@ -518,16 +538,16 @@ export default function PagamentoCriarTrechoScreen() {
     React.createElement('h2', { style: tituloCard }, 'Dados do trecho'),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
       React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
-        fieldText('Origem', f.origem, (v) => patch({ origem: v }), ph.origem),
-        fieldText('Destino', f.destino, (v) => patch({ destino: v }), ph.destino)),
+        fieldPlaces('Origem', f.origem, (v) => patch({ origem: v }), (p) => { patch({ origem: p.formattedAddress }); setOriginCoord({ lat: p.lat, lng: p.lng }); }, ph.origem),
+        fieldPlaces('Destino', f.destino, (v) => patch({ destino: v }), (p) => { patch({ destino: p.formattedAddress }); setDestCoord({ lat: p.lat, lng: p.lng }); }, ph.destino)),
       fieldText('Valor da diária (R$)', f.diaria, (v) => patch({ diaria: v }), ph.diaria, true)));
 
   const cardDadosEnc = React.createElement('div', { style: card },
     React.createElement('h2', { style: tituloCard }, 'Dados do trecho'),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
       React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
-        fieldText('Origem', f.origem, (v) => patch({ origem: v }), phEnc.origem),
-        fieldText('Destino', f.destino, (v) => patch({ destino: v }), phEnc.destino)),
+        fieldPlaces('Origem', f.origem, (v) => patch({ origem: v }), (p) => { patch({ origem: p.formattedAddress }); setOriginCoord({ lat: p.lat, lng: p.lng }); }, phEnc.origem),
+        fieldPlaces('Destino', f.destino, (v) => patch({ destino: v }), (p) => { patch({ destino: p.formattedAddress }); setDestCoord({ lat: p.lat, lng: p.lng }); }, phEnc.destino)),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
         React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', lineHeight: 1.4, ...font } }, 'Tipo de valor'),
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%' } },

@@ -125,18 +125,41 @@ Deno.serve(async (req) => {
         ? rawSub
         : "admin";
 
-      // Create auth user with admin role
+      // Check if email already exists — if so, upgrade to admin
       const password = body.password || Math.random().toString(36).slice(2) + "Aa1!";
-      const { data: newUser, error: createErr } = await admin.auth.admin.createUser({
-        email: body.email.trim(),
-        password,
-        email_confirm: true,
-        app_metadata: { role: "admin" },
-        user_metadata: { full_name: body.full_name.trim() },
-      });
+      let newUser: any = null;
+      const { data: existingUsers } = await admin.auth.admin.listUsers();
+      const existingUser = (existingUsers?.users || []).find((u: any) => u.email === body.email.trim());
 
-      if (createErr) {
-        return jsonRes({ error: "Erro ao criar usuário", details: createErr.message }, 400);
+      if (existingUser) {
+        // User exists — check if already admin
+        const existingWp = await admin.from("worker_profiles").select("id, role").eq("id", existingUser.id).eq("role", "admin").maybeSingle();
+        if (existingWp.data) {
+          return jsonRes({ error: "Este usuário já é um administrador." }, 400);
+        }
+        // Upgrade existing user to admin
+        const { data: updated, error: updateErr } = await admin.auth.admin.updateUserById(existingUser.id, {
+          app_metadata: { ...existingUser.app_metadata, role: "admin" },
+          user_metadata: { ...existingUser.user_metadata, full_name: body.full_name.trim() },
+          password,
+        });
+        if (updateErr) {
+          return jsonRes({ error: "Erro ao promover usuário existente", details: updateErr.message }, 400);
+        }
+        newUser = { user: updated.user };
+      } else {
+        // Create new auth user
+        const { data: created, error: createErr } = await admin.auth.admin.createUser({
+          email: body.email.trim(),
+          password,
+          email_confirm: true,
+          app_metadata: { role: "admin" },
+          user_metadata: { full_name: body.full_name.trim() },
+        });
+        if (createErr) {
+          return jsonRes({ error: "Erro ao criar usuário", details: createErr.message }, 400);
+        }
+        newUser = created;
       }
 
       // The handle_new_user trigger creates profiles row automatically.

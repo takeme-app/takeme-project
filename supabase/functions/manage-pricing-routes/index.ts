@@ -151,6 +151,10 @@ Deno.serve(async (req) => {
           accepted_payment_methods: body.accepted_payment_methods ?? [],
           departure_at: body.departure_at || null,
           return_at: body.return_at || null,
+          origin_lat: typeof body.origin_lat === "number" ? body.origin_lat : null,
+          origin_lng: typeof body.origin_lng === "number" ? body.origin_lng : null,
+          destination_lat: typeof body.destination_lat === "number" ? body.destination_lat : null,
+          destination_lng: typeof body.destination_lng === "number" ? body.destination_lng : null,
           created_by: user.id,
         })
         .select()
@@ -238,6 +242,10 @@ Deno.serve(async (req) => {
         "departure_at",
         "return_at",
         "is_active",
+        "origin_lat",
+        "origin_lng",
+        "destination_lat",
+        "destination_lng",
       ];
       const updates: Record<string, unknown> = {};
       for (const key of allowedFields) {

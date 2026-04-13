@@ -5,6 +5,7 @@ import { webStyles } from '../styles/webStyles';
 import { Logo } from './Logo';
 import { chevronDownSvg, lockOutlineSvg, desktopOutlineSvg, settingsOutlineSvg, exitToAppSvg } from './icons';
 import { useAuth } from '../contexts/AuthContext';
+import { useAdminPermissions, PATH_TO_PERMISSION } from '../hooks/useAdminPermissions';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -36,6 +37,22 @@ export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { session, signOut } = useAuth();
+  const { canAccess } = useAdminPermissions();
+
+  // Filter nav tabs by permissions
+  const allowedNavTabs = navTabsList.filter((tab) => {
+    const permKey = PATH_TO_PERMISSION[tab.path];
+    return !permKey || canAccess(tab.path);
+  });
+
+  // Redirect if no permission for current route
+  useEffect(() => {
+    const basePath = '/' + (location.pathname.split('/')[1] || '');
+    const permKey = PATH_TO_PERMISSION[basePath];
+    if (permKey && !canAccess(basePath) && basePath !== '/') {
+      navigate('/', { replace: true });
+    }
+  }, [location.pathname, canAccess, navigate]);
 
   // Scroll to top on route change
   useEffect(() => {
@@ -104,19 +121,19 @@ export default function Layout() {
     const calc = () => {
       const available = window.innerWidth - NAV_RESERVED_WIDTH;
       const fit = Math.max(2, Math.floor(available / NAV_TAB_AVG_WIDTH));
-      setMaxVisibleTabs(Math.min(fit, navTabsList.length));
+      setMaxVisibleTabs(Math.min(fit, allowedNavTabs.length));
     };
     calc();
     window.addEventListener('resize', calc);
     return () => window.removeEventListener('resize', calc);
-  }, []);
+  }, [allowedNavTabs.length]);
 
   // When navigating from another module (e.g. encomendas → viagem detail),
   // keep that module's nav tab active instead of matching /viagens
   const fromModule = (location.state as any)?.from as string | undefined;
   const fromPath = fromModule ? `/${fromModule}` : null;
 
-  const activeNavIndex = navTabsList.findIndex((tab) => {
+  const activeNavIndex = allowedNavTabs.findIndex((tab) => {
     if (fromPath && location.pathname.startsWith('/viagens')) {
       return tab.path === fromPath;
     }
@@ -128,9 +145,9 @@ export default function Layout() {
   const userEmail = session?.user?.email || 'pedro.henriq@gmail.com';
   const avatarLetter = userName.charAt(0).toUpperCase();
 
-  const needsMore = navTabsList.length > maxVisibleTabs;
-  const visibleTabs = needsMore ? navTabsList.slice(0, maxVisibleTabs) : navTabsList;
-  const overflowTabs = needsMore ? navTabsList.slice(maxVisibleTabs) : [];
+  const needsMore = allowedNavTabs.length > maxVisibleTabs;
+  const visibleTabs = needsMore ? allowedNavTabs.slice(0, maxVisibleTabs) : allowedNavTabs;
+  const overflowTabs = needsMore ? allowedNavTabs.slice(maxVisibleTabs) : [];
 
   const activeInOverflow = needsMore && activeNavIndex >= maxVisibleTabs;
 
@@ -169,7 +186,7 @@ export default function Layout() {
       },
     },
       ...overflowTabs.map((tab) => {
-        const idx = navTabsList.indexOf(tab);
+        const idx = allowedNavTabs.indexOf(tab);
         const isActive = idx === activeNavIndex;
         return React.createElement('button', {
           key: tab.label,

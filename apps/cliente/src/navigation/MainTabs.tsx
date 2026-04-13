@@ -84,6 +84,12 @@ export function MainTabs() {
             <MaterialIcons name="person-outline" size={24} color={color} />
           ),
         }}
+        listeners={({ navigation }) => ({
+          tabPress: (e) => {
+            e.preventDefault();
+            navigation.navigate('Profile', { screen: 'ProfileMain' });
+          },
+        })}
       />
     </Tab.Navigator>
   );

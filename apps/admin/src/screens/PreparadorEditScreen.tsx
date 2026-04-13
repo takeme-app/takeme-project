@@ -290,7 +290,7 @@ export default function PreparadorEditScreen() {
           ? (supabase as any).from('excursion_requests').select('id, destination, excursion_date, status, scheduled_departure_at, created_at').eq('preparer_id', id).order('created_at', { ascending: false }).limit(20)
           : Promise.resolve({ data: [] }),
       ]);
-      const avatarResolved = pp?.avatar_url ? await resolveAvatar(pp.avatar_url) : null;
+      const avatarResolved = pp?.avatar_url ? await resolveAvatar(supabase as any, pp.avatar_url) : null;
       // Populate edit states
       setEncNome(pp?.full_name || '');
       setEncCpf(wp?.cpf || pp?.cpf || '');

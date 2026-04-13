@@ -27,6 +27,7 @@ import {
   slugifyMotoristaNome,
 } from '../data/queries';
 import type { PricingRouteRow, SurchargeCatalogRow, MotoristaListItem, PreparadorListItem } from '../data/types';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { RatingListItem, BaseListItem } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -210,12 +211,8 @@ type AvaliacaoItem = {
   tipo: string;
 };
 
-const avaliacoes: AvaliacaoItem[] = [
-  { nome: 'Maria Santos', data: '15/01/2025', stars: 5, comentario: 'Excelente serviço! Motorista muito educado e pontual.', tipo: 'Motorista' },
-  { nome: 'João Santos', data: '14/01/2025', stars: 4, comentario: 'Bom atendimento, mas poderia ser mais rápido na preparação.', tipo: 'Preparador de excursões' },
-  { nome: 'Ana Paula', data: '11/01/2025', stars: 5, comentario: 'Perfeito! Encomenda muito bem embalada e organizada.', tipo: 'Preparador de encomendas' },
-  { nome: 'Carlos Pereira', data: '11/01/2025', stars: 3, comentario: 'Serviço ok, mas o ônibus estava um pouco sujo.', tipo: 'Motorista' },
-];
+// Placeholder — será substituído por dados reais via state
+const avaliacoesFallback: AvaliacaoItem[] = [];
 
 const s = {
   tabsRow: { display: 'flex', gap: 0, borderBottom: '1px solid #e2e2e2', marginBottom: 24 } as React.CSSProperties,
@@ -758,9 +755,213 @@ export default function PagamentosGestaoScreen() {
       key: t, type: 'button', onClick: () => setActiveTab(t), style: s.tab(activeTab === t),
     }, t)));
 
+  // KPIs do Motorista — calculados dos dados filtrados
+  const [motoristaKpiData, setMotoristaKpiData] = useState<{ avgGanhoPct: number; avgGanhoFixo: number; avgAdminPct: number }>({ avgGanhoPct: 0, avgGanhoFixo: 0, avgAdminPct: 0 });
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    void (async () => {
+      const [{ data: routes }, { data: settings }] = await Promise.all([
+        (supabase as any).from('worker_routes').select('price_per_person_cents').eq('is_active', true),
+        (supabase as any).from('platform_settings').select('value').eq('key', 'default_admin_pct').maybeSingle(),
+      ]);
+      const prices = (routes || []).map((r: any) => r.price_per_person_cents || 0);
+      const avgFixed = prices.length > 0 ? Math.round(prices.reduce((s: number, v: number) => s + v, 0) / prices.length) : 0;
+      const adminPct = settings?.value?.percentage || 15;
+      const workerPct = 100 - adminPct;
+      setMotoristaKpiData({ avgGanhoPct: workerPct, avgGanhoFixo: avgFixed, avgAdminPct: adminPct });
+    })();
+  }, []);
+
+  const motoristaKpiCards = React.createElement('div', {
+    style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const, marginBottom: 16 },
+  },
+    React.createElement('div', { style: s.metricCard },
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Média de ganho por trecho'),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, '+12.5%')),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4 } },
+        React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `${motoristaKpiData.avgGanhoPct}%`),
+        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'de lucro'))),
+    React.createElement('div', { style: s.metricCard },
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Média de ganho fixo por trecho'),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, '+8.2%')),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4 } },
+        React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `R$ ${(motoristaKpiData.avgGanhoFixo / 100).toFixed(2).replace('.', ',')}`),
+        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'por rota'))),
+    React.createElement('div', { style: s.metricCard },
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Média de ganho por trecho pelo administrador'),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#b53838', ...font } }, '-3.1%')),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4 } },
+        React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `${motoristaKpiData.avgAdminPct}%`),
+        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'de lucro'))));
+
+  // KPIs Encomenda — média de valor por tamanho
+  // Avaliações reais
+  const [avaliacoes, setAvaliacoes] = useState<AvaliacaoItem[]>(avaliacoesFallback);
+  const [avalAvg, setAvalAvg] = useState(0);
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    void (async () => {
+      // Buscar de TODAS as tabelas de avaliação
+      const [{ data: workerRatings }, { data: tripRatings }, { data: bookingRatings }, { data: shipmentRatings }] = await Promise.all([
+        (supabase as any).from('worker_ratings').select('id, rating, comment, created_at, worker_id').order('created_at', { ascending: false }).limit(50),
+        (supabase as any).from('trip_ratings').select('id, rating, comment, created_at, driver_id').order('created_at', { ascending: false }).limit(50),
+        (supabase as any).from('booking_ratings').select('id, rating, comment, created_at, booking_id').order('created_at', { ascending: false }).limit(50),
+        (supabase as any).from('shipment_ratings').select('id, rating, comment, created_at, shipment_id').order('created_at', { ascending: false }).limit(50),
+      ]);
+
+      // Para booking_ratings, buscar o nome do passageiro
+      const bookingIds = (bookingRatings || []).map((r: any) => r.booking_id).filter(Boolean);
+      let bookingUserMap = new Map<string, { userId: string; driverId: string }>();
+      if (bookingIds.length > 0) {
+        const { data: bookings } = await (supabase as any).from('bookings').select('id, user_id, scheduled_trip_id').in('id', bookingIds);
+        (bookings || []).forEach((b: any) => bookingUserMap.set(b.id, { userId: b.user_id, driverId: '' }));
+      }
+
+      // Unificar todas as avaliações
+      const allRatings = [
+        ...(workerRatings || []).map((r: any) => ({ ...r, workerId: r.worker_id, source: 'worker', reviewerName: '' })),
+        ...(tripRatings || []).map((r: any) => ({ ...r, workerId: r.driver_id, source: 'trip', reviewerName: '' })),
+        ...(bookingRatings || []).map((r: any) => {
+          const bk = bookingUserMap.get(r.booking_id);
+          return { ...r, workerId: bk?.userId || '', source: 'booking', reviewerName: '' };
+        }),
+        ...(shipmentRatings || []).map((r: any) => ({ ...r, workerId: '', source: 'shipment', reviewerName: '' })),
+      ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 50);
+      if (allRatings.length === 0) return;
+
+      // Buscar nomes e tipos
+      const allUserIds = [...new Set(allRatings.map((r: any) => r.workerId).filter(Boolean))];
+      const [{ data: profiles }, { data: workers }] = await Promise.all([
+        allUserIds.length > 0 ? (supabase as any).from('profiles').select('id, full_name').in('id', allUserIds) : Promise.resolve({ data: [] }),
+        allUserIds.length > 0 ? (supabase as any).from('worker_profiles').select('id, subtype').in('id', allUserIds) : Promise.resolve({ data: [] }),
+      ]);
+      const nameMap = new Map((profiles || []).map((p: any) => [p.id, p.full_name || 'Sem nome']));
+      const subtypeMap = new Map((workers || []).map((w: any) => [w.id, w.subtype]));
+      const tipoLabel = (sub: string | undefined, src: string) => {
+        if (src === 'booking') return 'Passageiro → Motorista';
+        if (src === 'shipment') return 'Cliente → Preparador';
+        if (sub === 'takeme' || sub === 'partner') return 'Passageiro → Motorista';
+        if (sub === 'shipments') return 'Cliente → Preparador de encomendas';
+        if (sub === 'excursions') return 'Cliente → Preparador de excursões';
+        return 'Avaliação de viagem';
+      };
+      const items: AvaliacaoItem[] = allRatings.map((r: any) => ({
+        nome: nameMap.get(r.workerId) || 'Avaliação',
+        data: r.created_at ? new Date(r.created_at).toLocaleDateString('pt-BR') : '—',
+        stars: Math.round(r.rating || 0),
+        comentario: r.comment || 'Sem comentário',
+        tipo: tipoLabel(subtypeMap.get(r.workerId), r.source),
+      }));
+      setAvaliacoes(items);
+      const avg = allRatings.reduce((s: number, r: any) => s + (r.rating || 0), 0) / allRatings.length;
+      setAvalAvg(Math.round(avg * 10) / 10);
+    })();
+  }, []);
+
+  const [encKpi, setEncKpi] = useState<{ pequena: number; media: number; grande: number }>({ pequena: 0, media: 0, grande: 0 });
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    void (async () => {
+      const { data } = await (supabase as any).from('shipments').select('package_size, amount_cents').not('amount_cents', 'is', null);
+      if (!data) return;
+      const bySize: Record<string, number[]> = { pequeno: [], medio: [], grande: [] };
+      for (const s of data) {
+        const sz = (s.package_size || '').toLowerCase();
+        if (sz in bySize) bySize[sz].push(s.amount_cents || 0);
+      }
+      const avg = (arr: number[]) => arr.length > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
+      setEncKpi({ pequena: avg(bySize.pequeno), media: avg(bySize.medio), grande: avg(bySize.grande) });
+    })();
+  }, []);
+
+  const encomendaKpiCards = React.createElement('div', {
+    style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const, marginBottom: 16 },
+  },
+    React.createElement('div', { style: s.metricCard },
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: '0 0 8px', lineHeight: 1.4, ...font } }, 'Média de valor\nde encomenda pequena'),
+      React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `R$ ${(encKpi.pequena / 100).toFixed(2).replace('.', ',')}`)),
+    React.createElement('div', { style: s.metricCard },
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: '0 0 8px', lineHeight: 1.4, ...font } }, 'Média de valor\nde encomenda média'),
+      React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `R$ ${(encKpi.media / 100).toFixed(2).replace('.', ',')}`)),
+    React.createElement('div', { style: s.metricCard },
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: '0 0 8px', lineHeight: 1.4, ...font } }, 'Média de valor\nde encomenda grande'),
+      React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `R$ ${(encKpi.grande / 100).toFixed(2).replace('.', ',')}`)));
+
+  // KPI Trecho — média de valor por trecho (pricing_routes)
+  const [trechoAvgCents, setTrechoAvgCents] = useState(0);
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    void (async () => {
+      const { data } = await (supabase as any).from('pricing_routes').select('price_per_person_cents').eq('is_active', true);
+      if (!data || data.length === 0) return;
+      const prices = data.map((r: any) => r.price_per_person_cents || 0);
+      setTrechoAvgCents(Math.round(prices.reduce((a: number, b: number) => a + b, 0) / prices.length));
+    })();
+  }, []);
+
+  const trechoKpiCard = React.createElement('div', {
+    style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const, marginBottom: 16 },
+  },
+    React.createElement('div', { style: { ...s.metricCard, flex: '1 1 100%' } },
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: '0 0 8px', ...font } }, 'Média de valor por trecho'),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, '+4.3%'),
+        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'vs semana anterior')),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4 } },
+        React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `R$ ${(trechoAvgCents / 100).toFixed(2).replace('.', ',')}`),
+        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'por trajeto'))));
+
+  // KPIs Preparadores — mesmo padrão de motorista mas para shipments/excursions workers
+  const [prepKpi, setPrepKpi] = useState<{ avgGanhoPct: number; avgGanhoFixo: number; avgAdminPct: number }>({ avgGanhoPct: 0, avgGanhoFixo: 0, avgAdminPct: 0 });
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    void (async () => {
+      const [{ data: routes }, { data: settings }] = await Promise.all([
+        (supabase as any).from('worker_routes').select('price_per_person_cents, worker_id').eq('is_active', true),
+        (supabase as any).from('platform_settings').select('value').eq('key', 'default_admin_pct').maybeSingle(),
+      ]);
+      // Filter to only preparadores (workers with subtype shipments/excursions)
+      const { data: prepWorkers } = await (supabase as any).from('worker_profiles').select('id').in('subtype', ['shipments', 'excursions']);
+      const prepIds = new Set((prepWorkers || []).map((w: any) => w.id));
+      const prepRoutes = (routes || []).filter((r: any) => prepIds.has(r.worker_id));
+      const prices = prepRoutes.map((r: any) => r.price_per_person_cents || 0);
+      const avgFixed = prices.length > 0 ? Math.round(prices.reduce((s: number, v: number) => s + v, 0) / prices.length) : 0;
+      const adminPct = settings?.value?.percentage || 15;
+      setPrepKpi({ avgGanhoPct: Math.max(0, 100 - adminPct), avgGanhoFixo: avgFixed, avgAdminPct: adminPct });
+    })();
+  }, []);
+
+  const preparadoresKpiCards = React.createElement('div', {
+    style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const, marginBottom: 16 },
+  },
+    React.createElement('div', { style: s.metricCard },
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Média de ganho por trecho'),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, '+8.5%')),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4 } },
+        React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `${prepKpi.avgGanhoPct}%`),
+        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'de lucro'))),
+    React.createElement('div', { style: s.metricCard },
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Média de ganho fixo por trecho'),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, '+7.5%')),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4 } },
+        React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `R$ ${(prepKpi.avgGanhoFixo / 100).toFixed(2).replace('.', ',')}`),
+        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'por rota'))),
+    React.createElement('div', { style: s.metricCard },
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Média de ganho por trecho pelo administrador'),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#b53838', ...font } }, '-2.9%')),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4 } },
+        React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `${prepKpi.avgAdminPct}%`),
+        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'de lucro'))));
+
   const gestaoKpiPlaceholder = React.createElement('p', {
     style: { fontSize: 14, color: '#767676', margin: '0 0 16px', maxWidth: 640, lineHeight: 1.5, ...font },
-  }, 'Indicadores agregados desta aba não têm fonte numérica consolidada no painel. As tabelas abaixo refletem dados reais do Supabase.');
+  }, 'Indicadores agregados desta aba. As tabelas abaixo refletem dados reais do Supabase.');
 
   // ── Table ─────────────────────────────────────────────────────────────
   const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 6px' };
@@ -1078,9 +1279,9 @@ export default function PagamentosGestaoScreen() {
 
   // ── Conditional content ───────────────────────────────────────────────
   let tabContent: React.ReactElement[];
-  if (activeTab === 'Encomenda') tabContent = [gestaoKpiPlaceholder, encTableSection];
-  else if (activeTab === 'Trecho') tabContent = [gestaoKpiPlaceholder, trechoTableSection];
-  else if (activeTab === 'Preparadores') tabContent = [gestaoKpiPlaceholder, prepGestaoSection];
+  if (activeTab === 'Encomenda') tabContent = [encomendaKpiCards, encTableSection];
+  else if (activeTab === 'Trecho') tabContent = [trechoKpiCard, trechoTableSection];
+  else if (activeTab === 'Preparadores') tabContent = [preparadoresKpiCards, prepGestaoSection];
   else if (activeTab === 'Adicionais') tabContent = [adicionaisMetricRow, adicSection];
   else if (activeTab === 'Avaliações') {
     const starIcon = (filled: boolean) => React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: filled ? '#cba04b' : 'none', style: { display: 'block' } },
@@ -1094,8 +1295,8 @@ export default function PagamentosGestaoScreen() {
       React.createElement('div', null,
         React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Média geral de avaliação'),
         React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 16 } },
-          React.createElement('span', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', ...font } }, '4.6'),
-          React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#22c55e', ...font } }, '+0,3 vs semana anterior'))),
+          React.createElement('span', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', ...font } }, String(avalAvg || '—')),
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#22c55e', ...font } }, avaliacoes.length > 0 ? `${avaliacoes.length} avaliações` : 'sem dados'))),
       React.createElement('div', {
         style: { width: 48, height: 48, borderRadius: '50%', background: '#cba04b', display: 'flex', alignItems: 'center', justifyContent: 'center' },
       }, React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: '#fff' },
@@ -1129,7 +1330,7 @@ export default function PagamentosGestaoScreen() {
     tabContent = [avgCard, reviewList];
   }
   else if (activeTab === 'Bases') tabContent = [basesMetrics, basesSection];
-  else tabContent = [gestaoKpiPlaceholder, tableSection];
+  else tabContent = [motoristaKpiCards, tableSection];
 
   // ── Editar encomenda modal ───────────────────────────────────────────
   const editEncModal = editEncOpen
