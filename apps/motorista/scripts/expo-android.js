@@ -100,8 +100,14 @@ if (noBundler) {
   console.log('\n[android:run] Metro deve estar em outro terminal: npm start (porta ' + process.env.REACT_NATIVE_PACKAGER_PORT + ')\n');
 }
 
+const metroPort = process.env.REACT_NATIVE_PACKAGER_PORT || '8082';
 const args = ['expo', 'run:android'];
-if (noBundler) args.push('--no-bundler');
+// Com Metro externo (`--no-bundler`), o Expo não aceita `--port` junto; a porta vem do build (REACT_NATIVE_PACKAGER_PORT).
+if (noBundler) {
+  args.push('--no-bundler');
+} else {
+  args.push('--port', metroPort);
+}
 // Windows: sem isso o Expo envia -PreactNativeArchitectures com 2 ABIs (ex.: x86_64,arm64-v8a) e o
 // build nativo falha com caminhos >260 chars (OneDrive). --all-arch evita esse -P; o Gradle usa então
 // reactNativeArchitectures do gradle.properties (x86_64 para emulador).
@@ -115,5 +121,26 @@ const result = spawnSync('npx', args, {
   stdio: 'inherit',
   shell: true,
 });
+
+// `expo run:android --no-bundler` costuma abrir o dev client na porta 8081; neste monorepo o Metro do motorista é outra (ex.: 8082).
+if (noBundler && (result.status === 0 || result.status === null)) {
+  const adb = findAdb();
+  if (adb) {
+    const serial = process.env.ANDROID_SERIAL || resolveAdbSerial(adb);
+    const adbPrefix = serial ? ['-s', serial] : [];
+    const qemu = spawnSync(adb, [...adbPrefix, 'shell', 'getprop', 'ro.kernel.qemu'], {
+      encoding: 'utf8',
+    });
+    const isEmu = (qemu.stdout || '').trim() === '1';
+    const hostUrl = isEmu ? `http://10.0.2.2:${metroPort}` : `http://127.0.0.1:${metroPort}`;
+    const deep =
+      'exp+take-me-motorista://expo-development-client/?url=' + encodeURIComponent(hostUrl);
+    console.log('\n[android] Reabrindo o dev client em ' + hostUrl + ' (Metro deste app).\n');
+    spawnSync(adb, [...adbPrefix, 'shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', deep], {
+      stdio: 'inherit',
+      shell: false,
+    });
+  }
+}
 
 process.exit(result.status ?? 1);

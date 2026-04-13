@@ -28,6 +28,7 @@ import {
 } from '../styles/webStyles';
 import { fetchBookingDetailForAdmin, fetchMotoristas, fetchShipmentsForScheduledTrip } from '../data/queries';
 import { supabase } from '../lib/supabase';
+import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
 import type { BookingDetailForAdmin, TripShipmentListItem } from '../data/types';
 import type { MotoristaListItem } from '../data/types';
 import MapView from '../components/MapView';
@@ -254,8 +255,28 @@ export default function ViagemDetalheScreen() {
       React.createElement('div', { style: webStyles.detailMotoristaInfoText },
         React.createElement('div', { style: webStyles.detailResumoLabel }, label),
         React.createElement('div', { style: webStyles.detailResumoValue }, value)));
+  const [driverAvatarSrc, setDriverAvatarSrc] = useState<string | null>(null);
+  const [passengerAvatarSrc, setPassengerAvatarSrc] = useState<string | null>(null);
+  useEffect(() => {
+    const raw = detail?.listItem?.passageiroAvatarUrl;
+    if (!raw) { setPassengerAvatarSrc(null); return; }
+    let c = false;
+    void resolveStorageDisplayUrl(raw).then((url) => { if (!c && url) setPassengerAvatarSrc(url); });
+    return () => { c = true; };
+  }, [detail?.listItem?.passageiroAvatarUrl]);
+
+  useEffect(() => {
+    if (!driverStats.avatarUrl) { setDriverAvatarSrc(null); return; }
+    let c = false;
+    void resolveStorageDisplayUrl(driverStats.avatarUrl).then((url) => { if (!c && url) setDriverAvatarSrc(url); });
+    return () => { c = true; };
+  }, [driverStats.avatarUrl]);
+
   const motoristaDriverBlock = React.createElement('div', { style: webStyles.detailMotoristaDriverBlock },
-    React.createElement('div', { style: webStyles.detailMotoristaAvatar }),
+    driverAvatarSrc
+      ? React.createElement('img', { src: driverAvatarSrc, alt: motoristaNome, style: { ...webStyles.detailMotoristaAvatar, objectFit: 'cover' as const } })
+      : React.createElement('div', { style: webStyles.detailMotoristaAvatar },
+          React.createElement('span', { style: { color: '#767676', fontSize: 20, fontWeight: 600, fontFamily: 'Inter, sans-serif' } }, motoristaNome.charAt(0))),
     React.createElement('div', { style: webStyles.detailMotoristaDriverInfo },
       React.createElement('div', { style: webStyles.detailMotoristaBadge },
         (detail ? v?.motoristaCategoria !== 'motorista' : true) ? logoArrowSmallSvg : null,
@@ -301,8 +322,10 @@ export default function ViagemDetalheScreen() {
     return React.createElement('div', { key: `pax-${idx}-${name}`, style: { background: '#f6f6f6', borderRadius: 12, padding: 16, minWidth: 280, maxWidth: 330, flex: '1 1 280px', display: 'flex', flexDirection: 'column' as const, gap: 0 } },
       React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, paddingBottom: 12, borderBottom: '1px solid #e2e2e2' } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, flex: 1, minWidth: 0 } },
-          React.createElement('div', { style: { width: 48, height: 48, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 600, color: '#767676', fontFamily: 'Inter, sans-serif' } },
-            name.charAt(0).toUpperCase()),
+          idx === 0 && passengerAvatarSrc
+            ? React.createElement('img', { src: passengerAvatarSrc, alt: name, style: { width: 48, height: 48, borderRadius: '50%', objectFit: 'cover' as const, flexShrink: 0 } })
+            : React.createElement('div', { style: { width: 48, height: 48, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 600, color: '#767676', fontFamily: 'Inter, sans-serif' } },
+                name.charAt(0).toUpperCase()),
           React.createElement('div', { style: { flex: 1, minWidth: 0 } },
             React.createElement('div', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } }, name),
             cpfLabel ? React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif', marginTop: 2 } }, cpfLabel) : null,

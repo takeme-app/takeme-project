@@ -28,7 +28,7 @@ const COLORS = {
   neutral700: '#767676',
 };
 
-type Dependent = { id: string; full_name: string; status: string };
+type Dependent = { id: string; full_name: string; status: string; contact_phone: string | null };
 
 function formatPhoneDisplay(digits: string): string {
   const d = digits.replace(/\D/g, '');
@@ -44,11 +44,10 @@ function applyPhoneMask(text: string): string {
 
 export function DependentShipmentFormScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
-  const [fullName, setFullName] = useState('');
   const [contactPhone, setContactPhone] = useState('');
   const [bagsCount, setBagsCount] = useState(0);
   const [instructions, setInstructions] = useState('');
-  const [dependentId, setDependentId] = useState<string | undefined>(undefined);
+  const [selectedDependent, setSelectedDependent] = useState<Dependent | null>(null);
   const [dependents, setDependents] = useState<Dependent[]>([]);
   const [loadingDependents, setLoadingDependents] = useState(true);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
@@ -56,7 +55,7 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      showAlert('Permissão', 'Precisamos de acesso à galeria para adicionar uma foto da encomenda.');
+      showAlert('Permissão', 'Precisamos de acesso à galeria para adicionar uma foto.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -78,7 +77,7 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
     }
     const { data } = await supabase
       .from('dependents')
-      .select('id, full_name, status')
+      .select('id, full_name, status, contact_phone')
       .eq('user_id', user.id)
       .in('status', ['pending', 'validated'])
       .order('created_at', { ascending: false });
@@ -100,14 +99,16 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
   };
 
   const selectDependent = (d: Dependent) => {
-    setDependentId(d.id);
-    setFullName(d.full_name);
+    if (d.status !== 'validated') return;
+    setSelectedDependent(d);
+    if (d.contact_phone) {
+      setContactPhone(formatPhoneDisplay(d.contact_phone));
+    }
   };
 
   const handleDefineTrip = () => {
-    const name = fullName.trim();
-    if (!name) {
-      showAlert('Atenção', 'Informe o nome do dependente.');
+    if (!selectedDependent) {
+      showAlert('Atenção', 'Selecione um dependente aprovado para continuar.');
       return;
     }
     const phoneDigits = contactPhone.replace(/\D/g, '');
@@ -116,11 +117,11 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
       return;
     }
     navigation.navigate('DefineDependentTrip', {
-      fullName: name,
+      fullName: selectedDependent.full_name,
       contactPhone: phoneDigits,
       bagsCount,
       instructions: instructions.trim() || undefined,
-      dependentId,
+      dependentId: selectedDependent.id,
       photoUri: photoUri ?? undefined,
     });
   };
@@ -133,7 +134,7 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
           <MaterialIcons name="arrow-back" size={24} color={COLORS.black} />
         </TouchableOpacity>
         <View style={styles.navbarTitleWrap} pointerEvents="box-none">
-          <Text style={styles.navbarTitle} numberOfLines={1}>Envio de dependentes</Text>
+          <Text style={styles.navbarTitle} numberOfLines={1}>Viagem de dependente</Text>
         </View>
       </View>
       <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -143,35 +144,66 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.sectionTitle}>Confirme os detalhes do envio para seu dependente</Text>
+          <Text style={styles.sectionTitle}>Confirme os detalhes da viagem do seu dependente</Text>
 
-          <Text style={styles.label}>Nome completo</Text>
-          <View style={styles.nameInputWrap}>
-            <TextInput
-              style={styles.nameInput}
-              value={fullName}
-              onChangeText={setFullName}
-              placeholder="Nome do dependente"
-              placeholderTextColor={COLORS.neutral700}
-            />
-            <TouchableOpacity style={styles.linkButton} onPress={goToAddDependent} activeOpacity={0.8}>
-              <Text style={styles.linkText}>Cadastrar contato</Text>
+          <View style={styles.dependentHeader}>
+            <Text style={styles.label}>Dependente</Text>
+            <TouchableOpacity onPress={goToAddDependent} activeOpacity={0.8}>
+              <Text style={styles.linkText}>+ Cadastrar novo</Text>
             </TouchableOpacity>
           </View>
-          {!loadingDependents && dependents.length > 0 && (
-            <View style={styles.dependentsRow}>
-              {dependents.map((d) => (
-                <TouchableOpacity
-                  key={d.id}
-                  style={[styles.chip, dependentId === d.id && styles.chipSelected]}
-                  onPress={() => selectDependent(d)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.chipText, dependentId === d.id && styles.chipTextSelected]} numberOfLines={1}>
-                    {d.full_name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+          {loadingDependents ? (
+            <Text style={styles.loadingText}>Carregando dependentes...</Text>
+          ) : dependents.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyText}>Nenhum dependente cadastrado.</Text>
+              <TouchableOpacity onPress={goToAddDependent} activeOpacity={0.8}>
+                <Text style={styles.emptyLink}>Cadastrar dependente</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.dependentsList}>
+              {dependents.map((d) => {
+                const isValidated = d.status === 'validated';
+                const isSelected = selectedDependent?.id === d.id;
+                return (
+                  <TouchableOpacity
+                    key={d.id}
+                    style={[
+                      styles.dependentCard,
+                      isSelected && styles.dependentCardSelected,
+                      !isValidated && styles.dependentCardDisabled,
+                    ]}
+                    onPress={() => selectDependent(d)}
+                    disabled={!isValidated}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.dependentCardContent}>
+                      <View style={[styles.radioOuter, isSelected && styles.radioOuterSelected]}>
+                        {isSelected && <View style={styles.radioInner} />}
+                      </View>
+                      <Text
+                        style={[
+                          styles.dependentCardName,
+                          !isValidated && styles.dependentCardNameDisabled,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {d.full_name}
+                      </Text>
+                    </View>
+                    {isValidated ? (
+                      <View style={styles.statusBadgeApproved}>
+                        <Text style={styles.statusBadgeApprovedText}>Aprovado</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.statusBadgePending}>
+                        <Text style={styles.statusBadgePendingText}>Aguardando aprovação</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           )}
 
@@ -188,7 +220,7 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
           <View style={styles.separator}>
             <View style={styles.separatorLine} />
           </View>
-          <Text style={styles.bagagensLabel}>Bagagens</Text>
+          <Text style={styles.bagagensLabel}>Bagagem</Text>
           <View style={styles.stepperWrap}>
             <View style={styles.stepperRow}>
               <TouchableOpacity
@@ -208,27 +240,27 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
                 <MaterialIcons name="add" size={24} color={COLORS.black} />
               </TouchableOpacity>
             </View>
-            <Text style={styles.stepperHint}>Inclua quantas malas o dependente levará</Text>
+            <Text style={styles.stepperHint}>Quantas malas o dependente levará na viagem</Text>
           </View>
           <View style={styles.separator}>
             <View style={styles.separatorLine} />
           </View>
 
           <View style={styles.optionalRow}>
-            <Text style={styles.label}>Instruções para o entregador</Text>
+            <Text style={styles.label}>Instruções para o motorista</Text>
             <Text style={styles.optional}>(Opcional)</Text>
           </View>
           <TextInput
             style={[styles.input, styles.textArea]}
             value={instructions}
             onChangeText={setInstructions}
-            placeholder="Ex: entregar direto ao portão de embarque."
+            placeholder="Ex: buscar na portaria do condomínio."
             placeholderTextColor={COLORS.neutral700}
             multiline
             numberOfLines={3}
           />
 
-          <Text style={styles.label}>Foto da encomenda (opcional)</Text>
+          <Text style={styles.label}>Foto do dependente (opcional)</Text>
           <TouchableOpacity style={styles.photoBox} onPress={pickImage} activeOpacity={0.8}>
             {photoUri ? (
               <Text style={styles.photoPlaceholderText} numberOfLines={1}>Foto selecionada</Text>
@@ -283,25 +315,65 @@ const styles = StyleSheet.create({
   bagagensLabel: { fontSize: 24, fontWeight: '600', color: COLORS.black, textAlign: 'center', marginBottom: 48 },
   optionalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   optional: { fontSize: 13, color: COLORS.neutral700 },
-  nameInputWrap: {
+  dependentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  loadingText: { fontSize: 14, color: COLORS.neutral700, marginBottom: 16 },
+  emptyState: {
+    backgroundColor: COLORS.neutral300,
+    borderRadius: 12,
+    padding: 24,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  emptyText: { fontSize: 14, color: COLORS.neutral700, marginBottom: 12 },
+  emptyLink: { fontSize: 14, fontWeight: '600', color: COLORS.black, textDecorationLine: 'underline' },
+  dependentsList: { gap: 10, marginBottom: 16 },
+  dependentCard: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     backgroundColor: COLORS.neutral300,
     borderRadius: 12,
     paddingVertical: 14,
     paddingHorizontal: 16,
-    marginBottom: 8,
+    borderWidth: 2,
+    borderColor: 'transparent',
   },
-  nameInput: {
-    flex: 1,
-    paddingVertical: 0,
-    paddingLeft: 0,
-    paddingRight: 12,
-    marginBottom: 0,
-    fontSize: 16,
-    color: COLORS.black,
-    backgroundColor: 'transparent',
+  dependentCardSelected: { borderColor: COLORS.black },
+  dependentCardDisabled: { opacity: 0.55 },
+  dependentCardContent: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 },
+  radioOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: COLORS.neutral700,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
   },
+  radioOuterSelected: { borderColor: COLORS.black },
+  radioInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: COLORS.black },
+  dependentCardName: { fontSize: 16, fontWeight: '500', color: COLORS.black, flexShrink: 1 },
+  dependentCardNameDisabled: { color: COLORS.neutral700 },
+  statusBadgeApproved: {
+    backgroundColor: '#E8F5E9',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+  },
+  statusBadgeApprovedText: { fontSize: 11, fontWeight: '600', color: '#2E7D32' },
+  statusBadgePending: {
+    backgroundColor: '#FFF3E0',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+  },
+  statusBadgePendingText: { fontSize: 11, fontWeight: '600', color: '#E65100' },
   input: {
     backgroundColor: COLORS.neutral300,
     borderRadius: 12,
@@ -312,24 +384,12 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   textArea: { minHeight: 80, textAlignVertical: 'top' },
-  linkButton: { paddingVertical: 4, paddingLeft: 8 },
   linkText: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#0D0D0D',
-    lineHeight: 18,
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.black,
     textDecorationLine: 'underline',
   },
-  dependentsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
-  chip: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 20,
-    backgroundColor: COLORS.neutral300,
-  },
-  chipSelected: { backgroundColor: COLORS.black },
-  chipText: { fontSize: 14, color: COLORS.black },
-  chipTextSelected: { color: '#FFF' },
   stepperWrap: { marginBottom: 20 },
   stepperRow: {
     flexDirection: 'row',

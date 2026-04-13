@@ -1,0 +1,44 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "admin",
+      "runtimeExecutable": "/opt/homebrew/bin/node",
+      "runtimeArgs": ["/Users/lucas/Documents/FRAKTAL/take_me/node_modules/.bin/expo", "start", "--web", "--port", "8091"],
+      "port": 8091,
+      "cwd": "apps/admin"
+    },
+    {
+      "name": "cliente",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web"],
+      "port": 8082,
+      "autoPort": true,
+      "cwd": "apps/cliente"
+    },
+    {
+      "name": "motorista",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web"],
+      "port": 8083,
+      "autoPort": true,
+      "cwd": "apps/motorista"
+    },
+    {
+      "name": "preparador-encomendas",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web"],
+      "port": 8084,
+      "autoPort": true,
+      "cwd": "apps/preparador-encomendas"
+    },
+    {
+      "name": "preparador-excursoes",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web"],
+      "port": 8085,
+      "autoPort": true,
+      "cwd": "apps/preparador-excursoes"
+    }
+  ]
+}

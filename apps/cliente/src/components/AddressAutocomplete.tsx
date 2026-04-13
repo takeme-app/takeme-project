@@ -29,6 +29,7 @@ type Props = {
   onSelectPlace: (place: AddressSuggestion) => void;
   placeholder?: string;
   editable?: boolean;
+  autoFocus?: boolean;
   style?: StyleProp<ViewStyle>;
   inputStyle?: StyleProp<TextStyle>;
 };
@@ -39,6 +40,7 @@ export function AddressAutocomplete({
   onSelectPlace,
   placeholder = 'Digite o endereço...',
   editable = true,
+  autoFocus = false,
   style,
   inputStyle,
 }: Props) {
@@ -104,6 +106,7 @@ export function AddressAutocomplete({
           placeholder={placeholder}
           placeholderTextColor={COLORS.neutral700}
           editable={editable}
+          autoFocus={autoFocus}
           onFocus={() => value.trim().length >= 2 && suggestions.length > 0 && setShowList(true)}
           onBlur={() => setTimeout(() => setShowList(false), 200)}
         />

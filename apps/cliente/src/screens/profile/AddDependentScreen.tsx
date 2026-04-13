@@ -39,9 +39,21 @@ function getExtension(name: string): string {
   return i >= 0 ? name.slice(i) : '.pdf';
 }
 
+function formatPhoneDisplay(digits: string): string {
+  const d = digits.replace(/\D/g, '');
+  if (d.length <= 2) return d ? `(${d}` : '';
+  if (d.length <= 7) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7, 11)}`;
+}
+
+function applyPhoneMask(text: string): string {
+  return formatPhoneDisplay(text.replace(/\D/g, '').slice(0, 11));
+}
+
 export function AddDependentScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
   const [fullName, setFullName] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
   const [age, setAge] = useState('');
   const [observations, setObservations] = useState('');
   const [documentFile, setDocumentFile] = useState<PickedFile | null>(null);
@@ -94,11 +106,13 @@ export function AddDependentScreen({ navigation }: Props) {
       return;
     }
 
+    const phoneDigits = contactPhone.replace(/\D/g, '');
     const { data: inserted, error: insertError } = await supabase
       .from('dependents')
       .insert({
         user_id: user.id,
         full_name: name,
+        contact_phone: phoneDigits || null,
         age: age.trim() || null,
         observations: observations.trim() || null,
         status: 'pending',
@@ -169,6 +183,15 @@ export function AddDependentScreen({ navigation }: Props) {
             onChangeText={setFullName}
             placeholder="Digite o nome do dependente"
             placeholderTextColor={COLORS.neutral700}
+          />
+          <Text style={styles.label}>Telefone de contato</Text>
+          <TextInput
+            style={styles.input}
+            value={contactPhone}
+            onChangeText={(t) => setContactPhone(applyPhoneMask(t))}
+            placeholder="(00) 00000-0000"
+            placeholderTextColor={COLORS.neutral700}
+            keyboardType="phone-pad"
           />
           <Text style={styles.label}>Idade</Text>
           <TextInput

@@ -6,9 +6,12 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 function findAdb() {
+  const adbName = process.platform === 'win32' ? 'adb.exe' : 'adb';
   const candidates = [
-    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Android', 'Sdk', 'platform-tools', 'adb.exe'),
-    process.env.ANDROID_HOME && path.join(process.env.ANDROID_HOME, 'platform-tools', 'adb.exe'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Android', 'Sdk', 'platform-tools', adbName),
+    process.env.ANDROID_HOME && path.join(process.env.ANDROID_HOME, 'platform-tools', adbName),
+    process.env.ANDROID_SDK_ROOT && path.join(process.env.ANDROID_SDK_ROOT, 'platform-tools', adbName),
+    process.env.HOME && path.join(process.env.HOME, 'Library', 'Android', 'sdk', 'platform-tools', adbName),
   ].filter(Boolean);
   for (const p of candidates) {
     try {

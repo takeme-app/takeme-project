@@ -29,6 +29,7 @@ import MapView from '../components/MapView';
 import { useTripStops } from '../hooks/useTripStops';
 import PlacesAddressInput, { type PlaceResolved } from '../components/PlacesAddressInput';
 import { supabase } from '../lib/supabase';
+import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
 import { useTripMapCoords } from '../hooks/useTripMapCoords';
 import { geocodeAddress } from '../lib/googleGeocoding';
 import { validateShipmentStopsAlongTripRoute } from '../lib/mapCoordUtils';
@@ -129,28 +130,40 @@ function cpfDigitsKey(cpf: string | undefined): string {
 }
 
 /** Avatar do passageiro: `profiles.avatar_url` ou placeholder cinza se ausente / erro ao carregar. */
-function PassengerAvatarCircle({ avatarUrl }: { avatarUrl: string | null }) {
+function PassengerAvatarCircle({ avatarUrl, name, size = 48 }: { avatarUrl: string | null; name?: string; size?: number }) {
   const [failed, setFailed] = useState(false);
-  const url = avatarUrl?.trim() || '';
-  const showImg = Boolean(url) && !failed;
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!avatarUrl?.trim()) { setResolvedUrl(null); return; }
+    let c = false;
+    void resolveStorageDisplayUrl(avatarUrl.trim()).then((u) => { if (!c) setResolvedUrl(u); });
+    return () => { c = true; };
+  }, [avatarUrl]);
+  const showImg = Boolean(resolvedUrl) && !failed;
+  const initial = (name || '?').charAt(0).toUpperCase();
   return React.createElement('div', {
     style: {
-      width: 48,
-      height: 48,
+      width: size,
+      height: size,
       borderRadius: '50%',
       background: '#e2e2e2',
       flexShrink: 0,
       overflow: 'hidden' as const,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
     },
   },
     showImg
       ? React.createElement('img', {
-        src: url,
-        alt: '',
+        src: resolvedUrl!,
+        alt: name || '',
         onError: () => setFailed(true),
-        style: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
+        style: { width: '100%', height: '100%', objectFit: 'cover' as const, display: 'block' },
       })
-      : null);
+      : React.createElement('span', {
+        style: { color: '#767676', fontSize: 18, fontWeight: 600, fontFamily: 'Inter, sans-serif' },
+      }, initial));
 }
 
 export default function ViagemEditScreen() {
@@ -673,6 +686,7 @@ export default function ViagemEditScreen() {
     valorUnitario: string;
     pessoasRestantes: string;
     ocupacaoBag: string;
+    avatarUrl: string | null;
   };
 
   const unitPassageiroCents =
@@ -694,6 +708,7 @@ export default function ViagemEditScreen() {
     valorUnitario: fmtBRL(unitPassageiroCents),
     pessoasRestantes: lugaresLivres,
     ocupacaoBag: `${ocupacao}%`,
+    avatarUrl: m.avatarUrl,
   }));
 
   const motoristaInfoRow = (label: string, value: string) =>
@@ -714,7 +729,7 @@ export default function ViagemEditScreen() {
     },
       // Top: Avatar + badge + radio
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
-        React.createElement('div', { style: { width: 56, height: 56, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0 } }),
+        React.createElement(PassengerAvatarCircle, { avatarUrl: m.avatarUrl, name: m.name, size: 56 }),
         React.createElement('div', { style: { flex: 1, minWidth: 0 } },
           React.createElement('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 4, background: '#ffefc2', marginBottom: 4 } },
             logoArrowSmallSvg,
@@ -854,7 +869,7 @@ export default function ViagemEditScreen() {
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%' } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', width: '100%', borderBottom: '1px solid #e2e2e2', paddingBottom: 12 } },
           React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 16, minWidth: 0, flex: 1 } },
-            React.createElement(PassengerAvatarCircle, { avatarUrl: p.avatarUrl }),
+            React.createElement(PassengerAvatarCircle, { avatarUrl: p.avatarUrl, name: p.name }),
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, minWidth: 0 } },
               React.createElement('div', { style: boldText }, p.name),
               React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
