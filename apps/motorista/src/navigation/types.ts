@@ -84,6 +84,8 @@ export type RootStackParamList = {
   RegistrationSuccess: undefined;
   /** Sessão ativa mas worker_profiles.status !== approved (ex.: inactive). */
   MotoristaPendingApproval: undefined;
+  /** Stripe Connect obrigatório antes de acessar o app. */
+  StripeConnectSetup: { subtype?: string };
   Main: undefined;
   PendingRequests: undefined;
   TripHistory: undefined;

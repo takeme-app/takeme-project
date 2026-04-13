@@ -224,6 +224,21 @@ Deno.serve(async (req) => {
     };
     await admin.from(table).update(updatePayload as never).eq("id", entity_id);
 
+    // Cancelar payout associado (se existir)
+    const { error: payoutCancelErr } = await admin
+      .from("payouts")
+      .update({
+        status: "cancelled",
+        cancelled_reason: "refund",
+        updated_at: now,
+      } as never)
+      .eq("entity_type", entity_type)
+      .eq("entity_id", entity_id)
+      .in("status", ["pending", "processing"]);
+    if (payoutCancelErr) {
+      console.error("[process-refund] payout cancel:", payoutCancelErr);
+    }
+
     const userId = entity.user_id as string | null | undefined;
     if (userId) {
       await admin.from("notifications").insert({

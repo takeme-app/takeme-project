@@ -5,6 +5,7 @@ export const MOTORISTA_ACTIVE_STATUS = 'approved';
 
 export type MotoristaGateResult =
   | { kind: 'active'; subtype: string }
+  | { kind: 'needs_stripe_connect'; subtype: string }
   | { kind: 'pending'; status: string }
   | { kind: 'missing_profile' }
   | { kind: 'error'; message: string };
@@ -12,7 +13,7 @@ export type MotoristaGateResult =
 export async function checkMotoristaCanAccessApp(userId: string): Promise<MotoristaGateResult> {
   const { data, error } = await supabase
     .from('worker_profiles')
-    .select('status, subtype')
+    .select('status, subtype, stripe_connect_account_id')
     .eq('id', userId)
     .maybeSingle();
 
@@ -26,6 +27,10 @@ export async function checkMotoristaCanAccessApp(userId: string): Promise<Motori
     return { kind: 'missing_profile' };
   }
   if (data.status === MOTORISTA_ACTIVE_STATUS) {
+    // Verificar se tem Stripe Connect configurado
+    if (!data.stripe_connect_account_id) {
+      return { kind: 'needs_stripe_connect', subtype: data.subtype ?? 'takeme' };
+    }
     return { kind: 'active', subtype: data.subtype ?? 'takeme' };
   }
   return { kind: 'pending', status: data.status };

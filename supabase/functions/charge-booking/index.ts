@@ -419,34 +419,8 @@ Deno.serve(async (req) => {
 
       const newBookingId = inserted.id as string;
 
-      const workerPayoutCents =
-        inserted.worker_payout_cents != null && Number.isFinite(Number(inserted.worker_payout_cents))
-          ? Math.max(0, Math.floor(Number(inserted.worker_payout_cents)))
-          : null;
-      if (driverId && workerPayoutCents != null) {
-        const { data: existingPayout } = await admin
-          .from("payouts")
-          .select("id")
-          .eq("entity_type", "booking")
-          .eq("entity_id", newBookingId)
-          .maybeSingle();
-        if (!existingPayout) {
-          const adminCents = Math.max(0, amountCents - workerPayoutCents);
-          const { error: payoutErr } = await admin.from("payouts").insert({
-            worker_id: driverId,
-            entity_type: "booking",
-            entity_id: newBookingId,
-            gross_amount_cents: amountCents,
-            worker_amount_cents: workerPayoutCents,
-            admin_amount_cents: adminCents,
-            status: "pending",
-            payout_method: "pix",
-          } as never);
-          if (payoutErr) {
-            console.error("[charge-booking] payout insert:", payoutErr);
-          }
-        }
-      }
+      // Payout é criado automaticamente pelo trigger SQL quando a trip é completada
+      // (fn_create_payouts_on_trip_complete). Não criamos aqui no charge.
 
       return new Response(
         JSON.stringify({ ok: true, booking_id: newBookingId, amount_cents: amountCents }),
@@ -564,37 +538,8 @@ Deno.serve(async (req) => {
       );
     }
 
-    if (driverId) {
-      const workerPayout = booking.worker_payout_cents;
-      const payoutCents =
-        workerPayout != null && Number.isFinite(Number(workerPayout))
-          ? Math.max(0, Math.floor(Number(workerPayout)))
-          : null;
-      if (payoutCents != null) {
-        const { data: existingPayout } = await admin
-          .from("payouts")
-          .select("id")
-          .eq("entity_type", "booking")
-          .eq("entity_id", bookingId)
-          .maybeSingle();
-        if (!existingPayout) {
-          const adminCents = Math.max(0, amountCents - payoutCents);
-          const { error: payoutErr } = await admin.from("payouts").insert({
-            worker_id: driverId,
-            entity_type: "booking",
-            entity_id: bookingId,
-            gross_amount_cents: amountCents,
-            worker_amount_cents: payoutCents,
-            admin_amount_cents: adminCents,
-            status: "pending",
-            payout_method: "pix",
-          } as never);
-          if (payoutErr) {
-            console.error("[charge-booking] payout insert:", payoutErr);
-          }
-        }
-      }
-    }
+    // Payout é criado automaticamente pelo trigger SQL quando a trip é completada
+    // (fn_create_payouts_on_trip_complete). Não criamos aqui no charge.
 
     return new Response(
       JSON.stringify({ ok: true, booking_id: bookingId, amount_cents: amountCents }),

@@ -74,6 +74,7 @@ Deno.serve(async (req) => {
     force?: boolean;
     dry_run?: boolean;
     mark_paid?: boolean;
+    receipt_url?: string;
   } = {};
   try {
     body = await req.json();
@@ -81,7 +82,7 @@ Deno.serve(async (req) => {
     // Body vazio é OK
   }
 
-  const { payout_ids, force = false, dry_run = false, mark_paid = false } = body;
+  const { payout_ids, force = false, dry_run = false, mark_paid = false, receipt_url } = body;
 
   // ── Ler configurações da plataforma ──
   let minThresholdCents = 0;
@@ -179,9 +180,11 @@ Deno.serve(async (req) => {
         result.manual_pix_paid += workerPayouts.length;
         continue;
       }
+      const updatePayload: Record<string, any> = { status: "paid", paid_at: new Date().toISOString() };
+      if (receipt_url) updatePayload.receipt_url = receipt_url;
       const { error: updErr } = await admin
         .from("payouts")
-        .update({ status: "paid", paid_at: new Date().toISOString() })
+        .update(updatePayload)
         .in("id", payoutIds);
       if (updErr) {
         errors.push(`Worker ${workerId}: erro ao marcar paid - ${updErr.message}`);
@@ -193,7 +196,7 @@ Deno.serve(async (req) => {
           payout_id: pid,
           action: "batch_released",
           performed_by: performedBy,
-          details: { method: "manual_confirmation", stripe_connect: hasConnect },
+          details: { method: "manual_confirmation", stripe_connect: hasConnect, receipt_url: receipt_url || null },
         });
       }
       result.manual_pix_paid += workerPayouts.length;
