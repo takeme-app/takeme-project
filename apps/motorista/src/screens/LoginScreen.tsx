@@ -69,6 +69,10 @@ export function LoginScreen({ navigation }: Props) {
       });
       return;
     }
+    if (gate.kind === 'needs_stripe_connect') {
+      navigation.reset({ index: 0, routes: [{ name: 'StripeConnectSetup', params: { subtype: gate.subtype } }] });
+      return;
+    }
     navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(gate.subtype) }] });
   };
 

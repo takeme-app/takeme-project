@@ -124,6 +124,9 @@ export default function PagamentosScreen() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchLoading, setBatchLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [confirmModalOpen, setConfirmModalOpen] = useState(false);
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptPreview, setReceiptPreview] = useState<string | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -356,43 +359,7 @@ export default function PagamentosScreen() {
 
   const title = React.createElement('h1', { style: webStyles.homeTitle }, 'Pagamentos');
 
-  // ── Search row ────────────────────────────────────────────────────────
-  const searchRow = React.createElement('div', {
-    style: { display: 'flex', alignItems: 'center', gap: 12, width: '100%' },
-  },
-    React.createElement('div', {
-      style: {
-        flex: 1, display: 'flex', alignItems: 'center', gap: 8,
-        background: '#f1f1f1', borderRadius: 999, height: 44, paddingLeft: 16, paddingRight: 16,
-      },
-    },
-      searchIconSvg,
-      React.createElement('input', {
-        type: 'text', value: search, placeholder: 'Buscar por preparador, destino ou origem...',
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value),
-        style: { flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 14, color: '#0d0d0d', ...font },
-      })),
-    React.createElement('button', {
-      type: 'button',
-      onClick: abrirFiltroModal,
-      'data-testid': 'pagamentos-open-table-filter',
-      style: {
-        display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
-        background: '#f1f1f1', border: 'none', borderRadius: 999,
-        fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
-      },
-    }, filterIconSvg, 'Filtro'),
-    React.createElement('button', {
-      type: 'button',
-      onClick: () => navigate(PAGAMENTOS_GESTAO_PREPARADORES_HREF),
-      style: {
-        display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 24px',
-        background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999,
-        fontSize: 14, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' as const, ...font,
-      },
-    }, 'Acessar gestão de pagamentos'));
-
-  // ── Batch actions bar ──────────────────────────────────────────────────
+  // ── Batch data & handlers (must be before searchRow) ───────────────────
   const pendingFilteredRows = filteredRows.filter((r) => r.status === 'Agendado');
   const allPendingSelected = pendingFilteredRows.length > 0 && pendingFilteredRows.every((r) => selectedIds.has(r.id));
 
@@ -405,34 +372,59 @@ export default function PagamentosScreen() {
     });
   }, [pendingFilteredRows, allPendingSelected]);
 
-  const handleBatchRelease = useCallback(async () => {
+  const handleBatchRelease = useCallback(() => {
     if (selectedIds.size === 0) return;
-    if (!confirm(`Liberar ${selectedIds.size} pagamento(s) selecionado(s)?`)) return;
+    setConfirmModalOpen(true);
+  }, [selectedIds]);
+
+  const executeRelease = useCallback(async () => {
+    setConfirmModalOpen(false);
     setBatchLoading(true);
     try {
+      // Upload comprovante se fornecido
+      let receiptUrl: string | undefined;
+      if (receiptFile) {
+        const ext = receiptFile.name.split('.').pop() || 'jpg';
+        const path = `receipts/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+        const { error: upErr } = await (supabase as any).storage
+          .from('payout-receipts')
+          .upload(path, receiptFile, { contentType: receiptFile.type, upsert: false });
+        if (!upErr) {
+          const { data: urlData } = (supabase as any).storage.from('payout-receipts').getPublicUrl(path);
+          receiptUrl = urlData?.publicUrl;
+        }
+      }
+
       const res = await invokeEdgeFunction('process-payouts', 'POST', undefined, {
         payout_ids: [...selectedIds],
         mark_paid: true,
+        receipt_url: receiptUrl,
       });
       if (res.error) { showToast('❌ ' + res.error); }
-      else if ((res.data as any)?.ok) { showToast(`✅ ${selectedIds.size} pagamento(s) liberado(s) com sucesso`); }
+      else if ((res.data as any)?.ok) {
+        const p = (res.data as any).processed || {};
+        const total = (p.manual_pix_paid || 0) + (p.stripe_connect_auto_paid || 0);
+        showToast(`✅ ${total} pagamento(s) liberado(s) com sucesso`);
+      }
       else { showToast('❌ Erro ao liberar pagamentos'); }
     } catch (e: any) {
       showToast('❌ ' + (e?.message || 'Erro ao liberar'));
     }
+    setReceiptFile(null);
+    setReceiptPreview(null);
     await refetchAll();
     setBatchLoading(false);
-  }, [selectedIds, refetchAll, showToast]);
+  }, [selectedIds, refetchAll, showToast, receiptFile]);
 
   const handleReleaseAll = useCallback(async () => {
-    if (!confirm('Liberar TODOS os pagamentos pendentes? Workers com Stripe Connect serão marcados como pagos automaticamente. Outros serão marcados como "em processamento" para pagamento manual.')) return;
+    if (!confirm('Liberar TODOS os pagamentos pendentes? Workers com Stripe Connect serão marcados como pagos. Outros como "em processamento" para pagamento manual.')) return;
     setBatchLoading(true);
     try {
       const res = await invokeEdgeFunction('process-payouts', 'POST', undefined, { force: true });
       if (res.error) { showToast('❌ ' + res.error); }
       else if ((res.data as any)?.ok) {
         const p = (res.data as any).processed || {};
-        showToast(`✅ Processados: ${p.stripe_connect_auto_paid || 0} automáticos, ${p.manual_pix_processing || 0} manuais`);
+        showToast(`✅ ${p.stripe_connect_auto_paid || 0} automáticos, ${p.manual_pix_processing || 0} manuais`);
       } else { showToast('❌ Erro ao processar pagamentos'); }
     } catch (e: any) {
       showToast('❌ ' + (e?.message || 'Erro ao processar'));
@@ -445,78 +437,115 @@ export default function PagamentosScreen() {
     setBatchLoading(true);
     try {
       const count = await exportPayoutsReport(pagamentos);
-      if (count > 0) {
-        showToast(`📥 Relatório exportado com ${count} profissional(is)`);
-      } else {
-        showToast('Nenhum pagamento pendente para exportar');
-      }
+      if (count > 0) { showToast(`📥 Relatório exportado com ${count} profissional(is)`); }
+      else { showToast('Nenhum pagamento pendente para exportar'); }
     } catch (e: any) {
       showToast('❌ ' + (e?.message || 'Erro ao exportar'));
     }
     setBatchLoading(false);
   }, [pagamentos, showToast]);
 
-  const batchBar = React.createElement('div', {
-    style: {
-      display: 'flex', alignItems: 'center', gap: 10, width: '100%', flexWrap: 'wrap' as const,
-    },
+  // ── Search row ────────────────────────────────────────────────────────
+  const actionBtnStyle = (bg: string, color: string, border?: string): React.CSSProperties => ({
+    display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 16px',
+    borderRadius: 10, border: border || 'none', background: bg, color,
+    fontSize: 13, fontWeight: 600, cursor: batchLoading ? 'default' : 'pointer',
+    whiteSpace: 'nowrap' as const, ...font,
+    opacity: batchLoading ? 0.6 : 1,
+    transition: 'opacity 0.15s',
+  });
+
+  const searchRow = React.createElement('div', {
+    style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%' },
   },
-    // Select all checkbox
-    React.createElement('button', {
-      type: 'button',
-      onClick: handleSelectAllPending,
-      style: {
-        display: 'flex', alignItems: 'center', gap: 6, height: 36, padding: '0 12px',
-        borderRadius: 8, border: '1px solid #d9d9d9', background: allPendingSelected ? '#f0f0f0' : '#fff',
-        fontSize: 12, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
-      },
+    // Row 1: Search + filter + gestão
+    React.createElement('div', {
+      style: { display: 'flex', alignItems: 'center', gap: 12, width: '100%' },
     },
       React.createElement('div', {
         style: {
-          width: 16, height: 16, borderRadius: 3, border: allPendingSelected ? 'none' : '2px solid #d9d9d9',
-          background: allPendingSelected ? '#0d0d0d' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flex: 1, display: 'flex', alignItems: 'center', gap: 8,
+          background: '#f1f1f1', borderRadius: 999, height: 44, paddingLeft: 16, paddingRight: 16,
         },
-      }, allPendingSelected ? React.createElement('svg', { width: 10, height: 10, viewBox: '0 0 24 24', fill: 'none' },
-        React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#fff', strokeWidth: 3, strokeLinecap: 'round' })) : null),
-      `Selecionar pendentes (${pendingFilteredRows.length})`),
+      },
+        searchIconSvg,
+        React.createElement('input', {
+          type: 'text', value: search, placeholder: 'Buscar por profissional, tipo...',
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value),
+          style: { flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 14, color: '#0d0d0d', ...font },
+        })),
+      React.createElement('button', {
+        type: 'button',
+        onClick: abrirFiltroModal,
+        'data-testid': 'pagamentos-open-table-filter',
+        style: {
+          display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px',
+          background: '#f1f1f1', border: 'none', borderRadius: 999,
+          fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
+        },
+      }, filterIconSvg, 'Filtro'),
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => navigate(PAGAMENTOS_GESTAO_PREPARADORES_HREF),
+        style: {
+          display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 24px',
+          background: '#0d0d0d', color: '#fff', border: 'none', borderRadius: 999,
+          fontSize: 14, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' as const, ...font,
+        },
+      }, 'Gestão de pagamentos')));
 
-    // Liberar selecionados
-    selectedIds.size > 0
-      ? React.createElement('button', {
-          type: 'button',
-          onClick: handleBatchRelease,
-          disabled: batchLoading,
+  // ── Selection bar (between KPIs and table) ─────────────────────────────
+  const selectionBar = pendingFilteredRows.length > 0
+    ? React.createElement('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 10, width: '100%' },
+      },
+        // Selecionar / deselecionar pendentes
+        React.createElement('button', {
+          type: 'button', onClick: handleSelectAllPending,
           style: {
-            height: 36, padding: '0 14px', borderRadius: 999, border: 'none',
-            background: '#22c55e', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font,
-            opacity: batchLoading ? 0.6 : 1,
+            ...actionBtnStyle('#fff', '#0d0d0d', '1.5px solid #e2e2e2'),
+            background: allPendingSelected ? '#f5f5f5' : '#fff',
           },
-        }, batchLoading ? '⏳ Processando...' : `💸 Liberar selecionados (${selectedIds.size})`)
-      : null,
+        },
+          React.createElement('div', {
+            style: {
+              width: 16, height: 16, borderRadius: 3,
+              border: allPendingSelected ? 'none' : '2px solid #c4c4c4',
+              background: allPendingSelected ? '#0d0d0d' : '#fff',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            },
+          }, allPendingSelected
+            ? React.createElement('svg', { width: 10, height: 10, viewBox: '0 0 24 24', fill: 'none' },
+                React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#fff', strokeWidth: 3, strokeLinecap: 'round' }))
+            : null),
+          allPendingSelected ? 'Desmarcar todos' : `Selecionar pendentes (${pendingFilteredRows.length})`),
 
-    // Liberar todos
-    React.createElement('button', {
-      type: 'button',
-      onClick: handleReleaseAll,
-      disabled: batchLoading,
-      style: {
-        height: 36, padding: '0 14px', borderRadius: 999, border: 'none',
-        background: '#f59e0b', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font,
-        opacity: batchLoading ? 0.6 : 1,
-      },
-    }, '⚡ Liberar todos pendentes'),
+        // Liberar selecionados (só aparece quando há seleção)
+        selectedIds.size > 0
+          ? React.createElement('button', {
+              type: 'button', onClick: handleBatchRelease, disabled: batchLoading,
+              style: actionBtnStyle('#22c55e', '#fff'),
+            },
+              React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+                React.createElement('path', { d: 'M22 2L11 13', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round' }),
+                React.createElement('path', { d: 'M22 2l-7 20-4-9-9-4z', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })),
+              batchLoading ? 'Processando...' : `Liberar selecionados (${selectedIds.size})`)
+          : null,
 
-    // Exportar CSV
-    React.createElement('button', {
-      type: 'button',
-      onClick: handleExportCsv,
-      disabled: batchLoading,
-      style: {
-        height: 36, padding: '0 14px', borderRadius: 999, border: '1px solid #d9d9d9',
-        background: '#fff', color: '#0d0d0d', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font,
-        opacity: batchLoading ? 0.6 : 1,
-      },
-    }, '📥 Exportar relatório'));
+        // Espaço flexível
+        React.createElement('div', { style: { flex: 1 } }),
+
+        // Exportar relatório
+        React.createElement('button', {
+          type: 'button', onClick: handleExportCsv, disabled: batchLoading,
+          style: actionBtnStyle('#fff', '#0d0d0d', '1.5px solid #e2e2e2'),
+        },
+          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+            React.createElement('path', { d: 'M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }),
+            React.createElement('polyline', { points: '7 10 12 15 17 10', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
+            React.createElement('line', { x1: 12, y1: 15, x2: 12, y2: 3, stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })),
+          'Exportar relatório'))
+    : null;
 
   // ── Toast notification ─────────────────────────────────────────────────
   const toastEl = toast
@@ -591,28 +620,7 @@ export default function PagamentosScreen() {
             fontSize: 13, fontWeight: 700, lineHeight: 1.5, whiteSpace: 'nowrap' as const,
             background: st.bg, color: st.color, ...font,
           },
-        }, row.status)),
-      isPending
-        ? React.createElement('button', {
-            type: 'button',
-            onClick: async () => {
-              if (!isSupabaseConfigured || !row.id) return;
-              if (!confirm('Liberar este pagamento ao profissional?')) return;
-              const { error } = await (supabase as any).from('payouts').update({ status: 'paid', paid_at: new Date().toISOString() }).eq('id', row.id);
-              if (error) { showToast('❌ Erro: ' + error.message); return; }
-              // Audit log
-              await (supabase as any).from('payout_logs').insert({
-                payout_id: row.id,
-                action: 'released',
-                performed_by: session?.user?.id || null,
-                details: { method: 'manual_individual' },
-              });
-              showToast('✅ Pagamento liberado');
-              await refetchAll();
-            },
-            style: { marginLeft: 8, height: 28, padding: '0 10px', borderRadius: 999, border: 'none', background: '#22c55e', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const },
-          }, '💸 Liberar')
-        : null);
+        }, row.status)));
   });
 
   const tableSection = React.createElement('div', {
@@ -632,6 +640,138 @@ export default function PagamentosScreen() {
     ? React.createElement('div', { style: { padding: 40, textAlign: 'center' as const, color: '#767676', ...font } }, 'Nenhum pagamento encontrado.')
     : null;
 
+  // ── Confirmation modal ──────────────────────────────────────────────────
+  const selectedPayouts = pagamentos.filter((p) => selectedIds.has(p.id));
+  const confirmTotalWorkerCents = selectedPayouts.reduce((s, p) => s + p.workerAmountCents, 0);
+  const confirmTotalGrossCents = selectedPayouts.reduce((s, p) => s + p.grossAmountCents, 0);
+  // Group by worker for summary
+  const confirmByWorker: Record<string, { name: string; total: number; count: number }> = {};
+  for (const p of selectedPayouts) {
+    if (!confirmByWorker[p.workerId]) confirmByWorker[p.workerId] = { name: p.workerName, total: 0, count: 0 };
+    confirmByWorker[p.workerId].total += p.workerAmountCents;
+    confirmByWorker[p.workerId].count += 1;
+  }
+
+  const confirmModal = confirmModalOpen
+    ? React.createElement('div', {
+        style: {
+          position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.45)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16,
+        },
+        onClick: () => setConfirmModalOpen(false),
+      },
+        React.createElement('div', {
+          style: {
+            background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, padding: '28px 32px',
+            display: 'flex', flexDirection: 'column' as const, gap: 20,
+            boxShadow: '0 20px 60px rgba(0,0,0,.18)', maxHeight: '80vh', overflowY: 'auto' as const,
+          },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          // Header
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+            React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Confirmar liberação'),
+            React.createElement('button', {
+              type: 'button', onClick: () => setConfirmModalOpen(false),
+              style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+            },
+              React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+                React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+
+          // Resumo
+          React.createElement('div', {
+            style: { background: '#f8f9fa', borderRadius: 12, padding: '16px 20px', display: 'flex', flexDirection: 'column' as const, gap: 12 },
+          },
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+              React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'Total de pagamentos'),
+              React.createElement('span', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', ...font } }, String(selectedPayouts.length))),
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+              React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'Valor bruto total'),
+              React.createElement('span', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', ...font } }, fmtBRL(confirmTotalGrossCents))),
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+              React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'Valor a liberar (profissionais)'),
+              React.createElement('span', { style: { fontSize: 20, fontWeight: 700, color: '#22c55e', ...font } }, fmtBRL(confirmTotalWorkerCents)))),
+
+          // Lista por profissional
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0 } },
+            React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#767676', marginBottom: 8, ...font } }, 'Detalhamento por profissional'),
+            ...Object.values(confirmByWorker).map((w) =>
+              React.createElement('div', {
+                key: w.name,
+                style: {
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '10px 0', borderBottom: '1px solid #f0f0f0',
+                },
+              },
+                React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 2 } },
+                  React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, w.name),
+                  React.createElement('span', { style: { fontSize: 12, color: '#999', ...font } }, `${w.count} pagamento(s)`)),
+                React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, fmtBRL(w.total))))),
+
+          // Upload comprovante
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+            React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Comprovante de pagamento (opcional)'),
+            React.createElement('label', {
+              style: {
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                height: 48, borderRadius: 10, border: '2px dashed #d9d9d9', cursor: 'pointer',
+                background: receiptPreview ? '#f0fdf4' : '#fafafa', transition: 'background 0.15s',
+              },
+            },
+              React.createElement('input', {
+                type: 'file', accept: 'image/*,.pdf',
+                style: { display: 'none' },
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    setReceiptFile(file);
+                    if (file.type.startsWith('image/')) {
+                      const reader = new FileReader();
+                      reader.onload = () => setReceiptPreview(reader.result as string);
+                      reader.readAsDataURL(file);
+                    } else {
+                      setReceiptPreview(file.name);
+                    }
+                  }
+                },
+              }),
+              receiptPreview
+                ? React.createElement(React.Fragment, null,
+                    React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+                      React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#22c55e', strokeWidth: 2, strokeLinecap: 'round' })),
+                    React.createElement('span', { style: { fontSize: 13, color: '#22c55e', fontWeight: 500, ...font } },
+                      receiptFile?.name || 'Comprovante selecionado'))
+                : React.createElement(React.Fragment, null,
+                    React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+                      React.createElement('path', { d: 'M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4', stroke: '#999', strokeWidth: 2, strokeLinecap: 'round' }),
+                      React.createElement('polyline', { points: '17 8 12 3 7 8', stroke: '#999', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
+                      React.createElement('line', { x1: 12, y1: 3, x2: 12, y2: 15, stroke: '#999', strokeWidth: 2, strokeLinecap: 'round' })),
+                    React.createElement('span', { style: { fontSize: 13, color: '#999', ...font } }, 'Anexar comprovante (imagem ou PDF)')))),
+
+          // Nota
+          React.createElement('p', {
+            style: { fontSize: 12, color: '#999', margin: 0, lineHeight: 1.5, ...font },
+          }, 'Os pagamentos serão marcados como liberados. Para profissionais sem Stripe Connect, exporte o relatório e processe os pagamentos manualmente via PIX/banco.'),
+
+          // Botões
+          React.createElement('div', { style: { display: 'flex', gap: 12, marginTop: 4 } },
+            React.createElement('button', {
+              type: 'button', onClick: () => setConfirmModalOpen(false),
+              style: {
+                flex: 1, height: 48, borderRadius: 12, border: '1.5px solid #e2e2e2', background: '#fff',
+                fontSize: 15, fontWeight: 600, color: '#0d0d0d', cursor: 'pointer', ...font,
+              },
+            }, 'Cancelar'),
+            React.createElement('button', {
+              type: 'button', onClick: executeRelease, disabled: batchLoading,
+              style: {
+                flex: 1, height: 48, borderRadius: 12, border: 'none', background: '#22c55e',
+                fontSize: 15, fontWeight: 600, color: '#fff', cursor: 'pointer', ...font,
+                opacity: batchLoading ? 0.6 : 1,
+              },
+            }, batchLoading ? 'Processando...' : 'Confirmar liberação'))))
+    : null;
+
   return React.createElement(React.Fragment, null,
-    title, searchRow, batchBar, metricCards, emptyMsg || tableSection, filtroTabelaModal, toastEl);
+    title, searchRow, metricCards, selectionBar, emptyMsg || tableSection, filtroTabelaModal, toastEl, confirmModal);
 }

@@ -38,9 +38,9 @@ Deno.serve(async (req) => {
     const userClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: `Bearer ${token}` } },
     });
-    const { data: claimsData, error: claimsError } = await userClient.auth.getClaims(token);
-    const userId = (claimsData?.claims as { sub?: string } | undefined)?.sub;
-    if (claimsError || !userId) {
+    const { data: { user }, error: userError } = await userClient.auth.getUser(token);
+    const userId = user?.id;
+    if (userError || !userId) {
       return new Response(JSON.stringify({ error: "Sessão inválida ou expirada" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },

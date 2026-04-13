@@ -40,7 +40,8 @@ type InitialRouteName =
   | 'Main'
   | 'MainExcursoes'
   | 'MainEncomendas'
-  | 'MotoristaPendingApproval';
+  | 'MotoristaPendingApproval'
+  | 'StripeConnectSetup';
 
 const SPLASH_MIN_MS = 500;
 /** Se as fontes não carregarem (rede/emulador), segue com fonte do sistema. */
@@ -99,6 +100,7 @@ export default function App() {
       return 'Welcome';
     }
     if (gate.kind === 'pending') return 'MotoristaPendingApproval';
+    if (gate.kind === 'needs_stripe_connect') return 'StripeConnectSetup';
     return subtypeToMainRoute(gate.subtype);
   }, []);
 

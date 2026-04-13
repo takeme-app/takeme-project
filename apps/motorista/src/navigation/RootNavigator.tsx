@@ -15,6 +15,7 @@ import { CompletePreparadorEncomendasScreen } from '../screens/CompletePreparado
 import { FinalizeRegistrationScreen } from '../screens/FinalizeRegistrationScreen';
 import { RegistrationSuccessScreen } from '../screens/RegistrationSuccessScreen';
 import { MotoristaPendingApprovalScreen } from '../screens/MotoristaPendingApprovalScreen';
+import { StripeConnectSetupScreen } from '../screens/StripeConnectSetupScreen';
 import { ForgotPasswordScreen } from '../screens/ForgotPasswordScreen';
 import { ForgotPasswordEmailSentScreen } from '../screens/ForgotPasswordEmailSentScreen';
 import { ResetPasswordScreen } from '../screens/ResetPasswordScreen';
@@ -35,7 +36,7 @@ import type { RootStackParamList } from './types';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 type RootNavigatorProps = {
-  initialRouteName: 'Welcome' | 'Main' | 'MainExcursoes' | 'MainEncomendas' | 'MotoristaPendingApproval';
+  initialRouteName: 'Welcome' | 'Main' | 'MainExcursoes' | 'MainEncomendas' | 'MotoristaPendingApproval' | 'StripeConnectSetup';
 };
 
 export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
@@ -68,6 +69,7 @@ export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
             component={MotoristaPendingApprovalScreen}
             options={{ animation: 'fade' }}
           />
+          <Stack.Screen name="StripeConnectSetup" component={StripeConnectSetupScreen} options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="Main" component={MainTabs} options={{ animation: 'fade' }} />
           <Stack.Screen name="MainExcursoes" component={MainExcursoesEntry} options={{ animation: 'fade' }} />
           <Stack.Screen name="MainEncomendas" component={MainTabsEncomendas} options={{ animation: 'fade' }} />

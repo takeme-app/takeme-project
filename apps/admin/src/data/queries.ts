@@ -2361,7 +2361,7 @@ export async function fetchPromocaoCounts(): Promise<PromocaoCounts> {
 function mapPayoutStatus(s: string): PagamentoListItem['status'] {
   if (s === 'paid') return 'Concluído';
   if (s === 'processing') return 'Em andamento';
-  if (s === 'failed') return 'Cancelado';
+  if (s === 'failed' || s === 'cancelled') return 'Cancelado';
   return 'Agendado';
 }
 

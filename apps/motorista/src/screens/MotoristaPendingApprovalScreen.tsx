@@ -6,7 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
-import { checkMotoristaCanAccessApp, getMotoristaPendingCopy } from '../lib/motoristaAccess';
+import { checkMotoristaCanAccessApp, getMotoristaPendingCopy, subtypeToMainRoute } from '../lib/motoristaAccess';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MotoristaPendingApproval'>;
 
@@ -48,7 +48,11 @@ export function MotoristaPendingApprovalScreen({ navigation }: Props) {
       }
       const gate = await checkMotoristaCanAccessApp(user.id);
       if (gate.kind === 'active') {
-        navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
+        navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(gate.subtype) }] });
+        return;
+      }
+      if (gate.kind === 'needs_stripe_connect') {
+        navigation.reset({ index: 0, routes: [{ name: 'StripeConnectSetup', params: { subtype: gate.subtype } }] });
         return;
       }
       if (gate.kind === 'pending') {

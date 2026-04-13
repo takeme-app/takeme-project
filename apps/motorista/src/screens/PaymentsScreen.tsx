@@ -9,6 +9,8 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Alert,
+  Linking,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -67,6 +69,8 @@ export function PaymentsScreen({ navigation }: Props) {
   const [editPixVisible, setEditPixVisible] = useState(false);
   const [newPixKey, setNewPixKey] = useState('');
   const [savingPix, setSavingPix] = useState(false);
+  const [hasStripeConnect, setHasStripeConnect] = useState(false);
+  const [connectLoading, setConnectLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -75,10 +79,11 @@ export function PaymentsScreen({ navigation }: Props) {
 
     const { data: wp } = await supabase
       .from('worker_profiles')
-      .select('pix_key')
+      .select('pix_key, stripe_connect_account_id')
       .eq('id', user.id)
       .single();
     setPixKey(wp?.pix_key ?? null);
+    setHasStripeConnect(Boolean(wp?.stripe_connect_account_id));
 
     const today = new Date();
     const start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
@@ -109,6 +114,33 @@ export function PaymentsScreen({ navigation }: Props) {
     setSavingPix(false);
     setEditPixVisible(false);
     setNewPixKey('');
+  };
+
+  const handleStripeConnectSetup = async () => {
+    setConnectLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        Alert.alert('Erro', 'Sessão expirada. Faça login novamente.');
+        setConnectLoading(false);
+        return;
+      }
+      const res = await supabase.functions.invoke('stripe-connect-link', {
+        body: {
+          return_url: 'takeme://payments',
+          refresh_url: 'takeme://payments',
+        },
+      });
+      if (res.error || !res.data?.url) {
+        Alert.alert('Erro', res.error?.message || 'Não foi possível gerar o link de configuração.');
+        setConnectLoading(false);
+        return;
+      }
+      await Linking.openURL(res.data.url);
+    } catch (e: any) {
+      Alert.alert('Erro', e?.message || 'Falha ao abrir configuração de pagamento.');
+    }
+    setConnectLoading(false);
   };
 
   return (
@@ -151,6 +183,29 @@ export function PaymentsScreen({ navigation }: Props) {
               {pixKey && <Text style={styles.pixCardValue}>{pixKey}</Text>}
             </View>
             <MaterialIcons name="edit" size={20} color={GOLD} />
+          </TouchableOpacity>
+
+          {/* Recebimento automático via Stripe Connect */}
+          <TouchableOpacity
+            style={[styles.pixCard, { borderColor: hasStripeConnect ? '#22C55E' : GOLD_BORDER }]}
+            onPress={hasStripeConnect ? undefined : handleStripeConnectSetup}
+            activeOpacity={hasStripeConnect ? 1 : 0.8}
+            disabled={connectLoading}
+          >
+            <View style={styles.pixCardContent}>
+              <Text style={[styles.pixCardLabel, hasStripeConnect && { color: '#22C55E' }]}>
+                {hasStripeConnect ? '✓ Recebimento automático ativo' : 'Ativar recebimento automático'}
+              </Text>
+              <Text style={[styles.pixCardValue, { fontSize: 12, color: '#6B7280' }]}>
+                {hasStripeConnect
+                  ? 'Seus pagamentos são depositados automaticamente via PIX'
+                  : 'Configure para receber automaticamente via PIX após cada viagem'}
+              </Text>
+            </View>
+            {connectLoading
+              ? <ActivityIndicator size="small" color={GOLD} />
+              : !hasStripeConnect && <MaterialIcons name="arrow-forward" size={20} color={GOLD} />
+            }
           </TouchableOpacity>
 
           {/* Transferências de hoje */}
