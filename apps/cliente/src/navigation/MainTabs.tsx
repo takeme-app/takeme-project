@@ -1,17 +1,19 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import type { NavigatorScreenParams } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HomeScreen } from '../screens/HomeScreen';
 import { ServicesScreen } from '../screens/ServicesScreen';
 import { ActivitiesStack } from './ActivitiesStack';
 import { ProfileStack } from './ProfileStack';
+import type { ProfileStackParamList } from './ProfileStackTypes';
 import { getMainTabBarStyleFromInsets } from './mainTabBarStyle';
 
 export type MainTabParamList = {
   Home: undefined;
   Services: undefined;
   Activities: undefined;
-  Profile: undefined;
+  Profile: NavigatorScreenParams<ProfileStackParamList>;
 };
 
 const Tab = createBottomTabNavigator<MainTabParamList>();

@@ -9,7 +9,7 @@ import {
   webStyles,
   filterIconSvg,
 } from '../styles/webStyles';
-import { fetchPreparadores } from '../data/queries';
+import { fetchPreparadores, fetchPreparadoresEncomendas } from '../data/queries';
 import type { PreparadorListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -40,6 +40,7 @@ const avatarColors: Record<string, string> = {
 
 type PrepRow = {
   id: string;
+  workerId: string;
   nome: string;
   origem: string;
   destino: string;
@@ -165,8 +166,27 @@ export default function PreparadoresScreen() {
 
   const aplicarFiltroPagina = useCallback(() => {
     setAppliedPeriodoPagina(draftPeriodoPagina);
-    setAppliedDataInicialPagina(draftDataInicialPagina);
-    setAppliedDataFinalPagina(draftDataFinalPagina);
+    // Converter período em datas se não preenchidas manualmente
+    let di = draftDataInicialPagina;
+    let df = draftDataFinalPagina;
+    if (draftPeriodoPagina !== 'todos' && !di && !df) {
+      const now = new Date();
+      const today = now.toISOString().slice(0, 10);
+      if (draftPeriodoPagina === 'semana') {
+        const d = new Date(now);
+        d.setDate(d.getDate() - d.getDay());
+        di = d.toISOString().slice(0, 10);
+        df = today;
+      } else if (draftPeriodoPagina === 'mes') {
+        di = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+        df = today;
+      } else if (draftPeriodoPagina === 'ano') {
+        di = `${now.getFullYear()}-01-01`;
+        df = today;
+      }
+    }
+    setAppliedDataInicialPagina(di);
+    setAppliedDataFinalPagina(df);
     setAppliedStatusPagina(draftStatusPagina);
     setAppliedStatusTabela(draftStatusPagina);
     setFiltroPaginaOpen(false);
@@ -226,12 +246,15 @@ export default function PreparadoresScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    fetchPreparadores().then((items) => { if (!cancelled) { setPreparadoresData(items); setDataLoading(false); } });
+    setDataLoading(true);
+    const fetchFn = activeTab === 'encomendas' ? fetchPreparadoresEncomendas : fetchPreparadores;
+    fetchFn().then((items) => { if (!cancelled) { setPreparadoresData(items); setDataLoading(false); } });
     return () => { cancelled = true; };
-  }, []);
+  }, [activeTab]);
 
   const tableRows: PrepRow[] = useMemo(() => preparadoresData.map((p) => ({
     id: p.id,
+    workerId: p.workerId || p.id,
     nome: p.nome,
     origem: p.origem,
     destino: p.destino,
@@ -547,12 +570,15 @@ export default function PreparadoresScreen() {
           boxSizing: 'border-box' as const,
         },
       },
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar' }, eyeActionSvg),
+        React.createElement('button', {
+          type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar',
+          onClick: () => navigate(`/preparadores/${row.workerId}`, { state: { tab: activeTab } }),
+        }, eyeActionSvg),
         React.createElement('button', {
           type: 'button',
           style: webStyles.viagensActionBtn,
           'aria-label': 'Editar',
-          onClick: () => navigate(`/preparadores/${row.id}/editar`, { state: { tab: activeTab } }),
+          onClick: () => navigate(`/preparadores/${row.workerId}/editar`, { state: { tab: activeTab } }),
         }, pencilActionSvg)));
   });
 

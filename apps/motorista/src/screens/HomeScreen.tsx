@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Switch,
   Platform,
+  Modal,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -118,6 +119,7 @@ export function HomeScreen({ navigation }: Props) {
   const [activeTrip, setActiveTrip] = useState<ActiveTrip | null>(null);
   const [mapUserLL, setMapUserLL] = useState<LatLng | null>(null);
   const homeMapRef = useRef<GoogleMapsMapRef>(null);
+  const [promoModal, setPromoModal] = useState<{ id: string; title: string; gainPct: number; endAt: string } | null>(null);
 
   useEffect(() => {
     if (!LocationMod) return;
@@ -327,6 +329,43 @@ export function HomeScreen({ navigation }: Props) {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
+  // Check for active promotions targeting drivers
+  useFocusEffect(useCallback(() => {
+    if (!userId) return;
+    void (async () => {
+      const { data: promos } = await (supabase as any)
+        .from('promotions')
+        .select('id, title, gain_pct_to_worker, end_at')
+        .eq('is_active', true)
+        .lte('start_at', new Date().toISOString())
+        .gte('end_at', new Date().toISOString())
+        .contains('target_audiences', ['drivers'])
+        .order('gain_pct_to_worker', { ascending: false })
+        .limit(1);
+      if (!promos || promos.length === 0) return;
+      const promo = promos[0];
+      // Check if already adhered
+      const { data: existing } = await (supabase as any)
+        .from('promotion_adhesions')
+        .select('id')
+        .eq('promotion_id', promo.id)
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (existing) return; // Already adhered
+      setPromoModal({ id: promo.id, title: promo.title, gainPct: promo.gain_pct_to_worker || 0, endAt: promo.end_at });
+    })();
+  }, [userId]));
+
+  const acceptPromotion = async () => {
+    if (!promoModal || !userId) return;
+    await (supabase as any).from('promotion_adhesions').insert({
+      promotion_id: promoModal.id,
+      user_id: userId,
+      user_type: 'motorista',
+    });
+    setPromoModal(null);
+  };
+
   const onToggleAvailable = async (value: boolean) => {
     if (!userId || toggleLoading) return;
     setToggleLoading(true);
@@ -398,6 +437,10 @@ export function HomeScreen({ navigation }: Props) {
         {/* Card da viagem ativa */}
         {activeTrip && (
           <View style={styles.tripCard}>
+            <View style={styles.ongoingStrip} accessibilityLabel="Corrida em andamento">
+              <MaterialIcons name="directions-car" size={20} color="#166534" />
+              <Text style={styles.ongoingStripText}>Corrida em andamento</Text>
+            </View>
             {/* Linha de rota */}
             <View style={styles.routeLine}>
               <View style={styles.routeStop}>
@@ -571,6 +614,41 @@ export function HomeScreen({ navigation }: Props) {
         </View>
         <View style={styles.divider} />
       </ScrollView>
+
+      {/* Promotion opt-in modal */}
+      <Modal visible={!!promoModal} transparent animationType="fade" onRequestClose={() => setPromoModal(null)}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)', padding: 24 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '100%', maxWidth: 360, gap: 16 }}>
+            <Text style={{ fontSize: 20, fontWeight: '700', color: '#0d0d0d', textAlign: 'center' }}>
+              {'\uD83C\uDF89'} Promoção Especial!
+            </Text>
+            <Text style={{ fontSize: 16, fontWeight: '600', color: '#0d0d0d', textAlign: 'center' }}>
+              {promoModal?.title}
+            </Text>
+            <View style={{ backgroundColor: '#f0faf4', borderRadius: 12, padding: 16, alignItems: 'center' }}>
+              <Text style={{ fontSize: 32, fontWeight: '700', color: '#0d8344' }}>
+                +{promoModal?.gainPct || 0}%
+              </Text>
+              <Text style={{ fontSize: 14, color: '#174f38', textAlign: 'center', marginTop: 4 }}>
+                de ganho extra por viagem
+              </Text>
+            </View>
+            <Text style={{ fontSize: 13, color: '#767676', textAlign: 'center' }}>
+              Válido até {promoModal?.endAt ? new Date(promoModal.endAt).toLocaleDateString('pt-BR') : '—'}
+            </Text>
+            <TouchableOpacity
+              style={{ backgroundColor: '#0d0d0d', borderRadius: 999, paddingVertical: 14, alignItems: 'center' }}
+              onPress={acceptPromotion}
+              activeOpacity={0.8}
+            >
+              <Text style={{ fontSize: 16, fontWeight: '600', color: '#fff' }}>Aceitar promoção</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setPromoModal(null)} activeOpacity={0.7}>
+              <Text style={{ fontSize: 14, color: '#767676', textAlign: 'center' }}>Depois</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -606,6 +684,17 @@ const styles = StyleSheet.create({
     borderWidth: 1.5, borderColor: '#111827', borderRadius: 16,
     padding: 20, marginBottom: 24,
   },
+  ongoingStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#DCFCE7',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 16,
+  },
+  ongoingStripText: { fontSize: 15, fontWeight: '700', color: '#166534' },
   routeLine: { flexDirection: 'row', gap: 14, marginBottom: 20 },
   routeStop: { alignItems: 'center', paddingTop: 4 },
   dotOrigin: {

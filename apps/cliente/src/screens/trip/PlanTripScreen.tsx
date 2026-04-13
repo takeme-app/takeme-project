@@ -1,17 +1,20 @@
-import { useCallback } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList } from '../../navigation/types';
 import {
   AddressSelectionScreen,
   type SelectedPlaces,
 } from '../../components/AddressSelectionScreen';
-import { TripResultsList } from '../../components/TripResultsList';
+import { TripResultsList, type TripListFooterMeta } from '../../components/TripResultsList';
 import type { WhenTimeResult } from '../../hooks/useWhenTimeSelection';
 import type { ClientScheduledTripItem } from '../../lib/clientScheduledTrips';
 
 type Props = NativeStackScreenProps<TripStackParamList, 'PlanTrip'>;
 
-export function PlanTripScreen({ navigation }: Props) {
+export function PlanTripScreen({ navigation, route }: Props) {
+  const placesRef = useRef<SelectedPlaces | null>(null);
+  const [tripFooter, setTripFooter] = useState<TripListFooterMeta>({ phase: 'idle' });
+
   const handleConfirm = useCallback(
     (places: SelectedPlaces, when: WhenTimeResult) => {
       if (when.whenOption === 'now') {
@@ -60,29 +63,60 @@ export function PlanTripScreen({ navigation }: Props) {
   );
 
   const renderResults = useCallback(
-    (places: SelectedPlaces) => (
-      <TripResultsList
-        places={places}
-        onSelectTrip={(trip) => handleSelectTrip(trip, places)}
-        onScheduleLater={() =>
-          navigation.navigate('PlanRide', {
-            origin: places.origin,
-            destination: places.destination,
-          })
-        }
-      />
-    ),
-    [handleSelectTrip, navigation],
+    (places: SelectedPlaces, when: WhenTimeResult) => {
+      placesRef.current = places;
+      return (
+        <TripResultsList
+          places={places}
+          when={when}
+          onListFooterMetaChange={setTripFooter}
+          onScheduleLater={() =>
+            navigation.navigate('PlanRide', {
+              origin: places.origin,
+              destination: places.destination,
+            })
+          }
+        />
+      );
+    },
+    [navigation],
   );
+
+  const continueBottomHidden =
+    tripFooter.phase === 'loading' ||
+    (tripFooter.phase === 'ready' &&
+      tripFooter.error == null &&
+      tripFooter.tripCount > 0 &&
+      tripFooter.selectedTrip == null);
+
+  const continueBottomLabel =
+    tripFooter.phase === 'ready' && tripFooter.tripCount > 0 && tripFooter.selectedTrip != null
+      ? 'Continuar para pagamento'
+      : 'Seguir sem viagem da lista';
+
+  const onContinuePressOverride =
+    tripFooter.phase === 'ready' &&
+    tripFooter.tripCount > 0 &&
+    tripFooter.selectedTrip != null
+      ? () => {
+          const p = placesRef.current;
+          const trip = tripFooter.selectedTrip;
+          if (!p || !trip) return;
+          handleSelectTrip(trip, p);
+        }
+      : undefined;
 
   return (
     <AddressSelectionScreen
       title="Planeje sua corrida"
+      initialDestination={route.params?.initialDestination}
       onConfirm={handleConfirm}
       onGoBack={() => navigation.goBack()}
       showRecentDestinations
       renderResults={renderResults}
-      continueBottomLabel="Seguir sem viagem da lista"
+      continueBottomLabel={continueBottomLabel}
+      continueBottomHidden={continueBottomHidden}
+      onContinuePressOverride={onContinuePressOverride}
       whenTitle="Para quando você precisa da viagem?"
       nowSubtitle="Chame um carro imediatamente"
       laterSubtitle="Agende para o horário que preferir"

@@ -11,6 +11,7 @@ import { DependentDetailScreen } from '../screens/profile/DependentDetailScreen'
 import { AddDependentScreen } from '../screens/profile/AddDependentScreen';
 import { DependentSuccessScreen } from '../screens/profile/DependentSuccessScreen';
 import { ConversationsScreen } from '../screens/profile/ConversationsScreen';
+import { ChatScreen } from '../screens/ChatScreen';
 import { AddPaymentMethodScreen } from '../screens/AddPaymentMethodScreen';
 import { AddCardScreen } from '../screens/AddCardScreen';
 import { ProfileCardRegisteredSuccessScreen } from '../screens/profile/ProfileCardRegisteredSuccessScreen';
@@ -65,6 +66,7 @@ export function ProfileStack() {
       <Stack.Screen name="AddDependent" component={AddDependentScreen} />
       <Stack.Screen name="DependentSuccess" component={DependentSuccessScreen} />
       <Stack.Screen name="Conversations" component={ConversationsScreen} />
+      <Stack.Screen name="Chat" component={ChatScreen} />
       <Stack.Screen name="AddPaymentMethod" component={AddPaymentMethodWrapper} />
       <Stack.Screen name="AddCard" component={AddCardWrapper} />
       <Stack.Screen name="CardRegisteredSuccess" component={ProfileCardRegisteredSuccessScreen} />

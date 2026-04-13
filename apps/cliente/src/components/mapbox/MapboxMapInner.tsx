@@ -7,6 +7,7 @@ import React, {
   useEffect,
 } from 'react';
 import { MapView, Camera } from '@rnmapbox/maps';
+import { MAPBOX_NATIVE_MAP_STYLE_URL } from '@take-me/shared';
 import type { MapRegion } from './mapboxUtils';
 import { toMapboxCoord, regionToZoomLevel, sanitizeMapRegion } from './mapboxUtils';
 
@@ -71,7 +72,12 @@ const MapboxMapInner = forwardRef<MapboxMapRef, MapboxMapInnerProps>(function Ma
   useImperativeHandle(ref, () => ({ animateToRegion }), [animateToRegion]);
 
   return (
-    <MapView style={style ?? { flex: 1 }} scrollEnabled={scrollEnabled} scaleBarEnabled={false}>
+    <MapView
+      style={style ?? { flex: 1 }}
+      styleURL={MAPBOX_NATIVE_MAP_STYLE_URL}
+      scrollEnabled={scrollEnabled}
+      scaleBarEnabled={false}
+    >
       <Camera
         ref={cameraRef}
         defaultSettings={{

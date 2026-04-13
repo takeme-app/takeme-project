@@ -96,4 +96,22 @@ export function formatDateDisplayLabel(isoDate: string): string {
   return `${WEEKDAY_SHORT[d.getDay()]}, ${String(d.getDate()).padStart(2, '0')} ${MONTH_SHORT[d.getMonth()]}`;
 }
 
+/** Converte slot "09:00 - 09:30" em minutos desde meia-noite (início e fim exclusivo no fim). */
+export function parseTimeSlotRange(slot: string): { startMinutes: number; endMinutes: number } | null {
+  const m = slot.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const startMinutes = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  const endMinutes = parseInt(m[3], 10) * 60 + parseInt(m[4], 10);
+  return { startMinutes, endMinutes };
+}
+
+/** Data ISO (YYYY-MM-DD) a partir de um timestamp ISO (ex.: departure_at). */
+export function toISODateFromUtcIso(iso: string): string {
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${day}`;
+}
+
 export { isSameDay, toISODate };

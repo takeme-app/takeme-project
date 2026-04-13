@@ -57,11 +57,16 @@ let Location: any = null;
 try { Location = require('expo-location'); } catch { /* not available yet */ }
 
 /** Distância máxima para projetar o GPS na polyline (map matching simples). */
-const NAV_ROUTE_SNAP_MAX_M = 52;
-/** Abaixo disso, o bearing da câmera prioriza o segmento da rota (alinha com a linha). */
-const NAV_ROAD_BEARING_SNAP_M = 40;
-const NAV_LOOK_AHEAD_M = 56;
-const NAV_CAMERA_ANIMATION_MS = 320;
+const NAV_ROUTE_SNAP_MAX_M = 68;
+/**
+ * Metros à frente do PIN para o centro da câmera.
+ * Muito alto + card no rodapé esconde o ícone; ~78–85 equilibra via à frente e PIN acima do card.
+ */
+const NAV_LOOK_AHEAD_M = 68;
+/** Reserva para o mini-sheet sobre o mapa — se o PIN ainda encostar no card, subir este valor. */
+const NAV_MAP_EXTRA_BOTTOM_FOR_MINI_CARD_PX = 268;
+/** Câmera em modo seguir: 0 = sem animação entre fixes (evita “voar”/atraso vs. GPS). */
+const NAV_CAMERA_ANIMATION_MS = 0;
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ActiveTrip'>;
 
@@ -377,15 +382,16 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           latitude: snap.snapped.latitude,
           longitude: snap.snapped.longitude,
         };
-        if (snap.distanceM <= NAV_ROAD_BEARING_SNAP_M) {
-          roadCourseDeg = snap.segmentBearingDeg;
-        }
+        // Sempre que estiver colado à rota, o bearing segue o segmento (alinha rotação com a linha).
+        roadCourseDeg = snap.segmentBearingDeg;
       }
     }
+    const miniCardLiftFromScreenBottom = Platform.OS === 'ios' ? 28 : 20;
     const padding = buildNavigationPadding({
       windowHeight,
       safeTop: insets.top,
       safeBottom: insets.bottom,
+      extraBottomOverlayPx: miniCardLiftFromScreenBottom + NAV_MAP_EXTRA_BOTTOM_FOR_MINI_CARD_PX,
     });
     const out = computeNextNavigationCamera({
       fix,
@@ -862,6 +868,25 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     };
   }, [followMyLocation, driverPosition, stopsRouteCoords, driverRouteCoords]);
 
+  /**
+   * Pin do motorista no mapa: em modo seguir, usa o mesmo snap da polyline (fica na linha/rua),
+   * em vez de overlay fixo na tela (que não acompanha look-ahead + padding da câmera).
+   */
+  const driverMapPinCoordinate = useMemo((): LatLng | null => {
+    if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) {
+      return null;
+    }
+    if (!followMyLocation) return driverPosition;
+    const goldBase = stopsRouteCoords;
+    const darkBase = driverRouteCoords;
+    const guide =
+      goldBase.length >= 2 ? goldBase : darkBase.length >= 2 ? darkBase : [];
+    if (guide.length < 2) return driverPosition;
+    const snap = snapToRoutePolyline(driverPosition, guide, NAV_ROUTE_SNAP_MAX_M);
+    if (snap.distanceM > NAV_ROUTE_SNAP_MAX_M) return driverPosition;
+    return snap.snapped;
+  }, [driverPosition, followMyLocation, stopsRouteCoords, driverRouteCoords]);
+
   const focusStopOnMap = useCallback(
     (idx: number) => {
       const stop = stops[idx];
@@ -930,9 +955,6 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     hasFramedDriverOnMap.current = true;
     return () => cancelAnimationFrame(id);
   }, [loading, driverPosition]);
-
-  /** Posição vertical do “puck” fixo na tela (~68% da altura) em modo navegação. */
-  const navPuckTopPx = useMemo(() => Math.round(windowHeight * 0.68 - 24), [windowHeight]);
 
   // ---------------------------------------------------------------------------
   // Detail sheet animation
@@ -1345,35 +1367,24 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           );
         })}
 
-        {/* Pin no mapa só fora do modo navegação (no modo seguir, o puck é fixo na overlay). */}
-        {driverPosition && !followMyLocation && (
+        {driverMapPinCoordinate && (
           <MapMarker
             id="driver"
-            coordinate={driverPosition}
+            coordinate={driverMapPinCoordinate}
             anchor={{ x: 0.5, y: 0.5 }}
           >
             <View style={styles.driverPulse}>
               <View style={styles.driverMarker}>
-                <MaterialIcons name="play-arrow" size={18} color="#fff" />
+                <MaterialIcons
+                  name={followMyLocation ? 'navigation' : 'play-arrow'}
+                  size={18}
+                  color="#fff"
+                />
               </View>
             </View>
           </MapMarker>
         )}
       </GoogleMapsMap>
-
-      {followMyLocation &&
-        driverPosition &&
-        isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) && (
-          <View style={styles.navPuckOverlay} pointerEvents="none">
-            <View style={[styles.navPuckAnchor, { top: navPuckTopPx }]}>
-              <View style={styles.driverPulse}>
-                <View style={styles.driverMarker}>
-                  <MaterialIcons name="navigation" size={18} color="#fff" />
-                </View>
-              </View>
-            </View>
-          </View>
-        )}
 
       {!activeTripMapReady && (
         <View style={styles.mapCoordsLoading} pointerEvents="none">
@@ -2001,16 +2012,6 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   mapCoordsLoadingText: { fontSize: 14, color: '#6B7280' },
-  navPuckOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 4,
-  },
-  navPuckAnchor: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
 
   // ── Map markers ──────────────────────────────────────────
   mapMarker: {

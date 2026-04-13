@@ -10,6 +10,7 @@ import { View, StyleSheet, TouchableOpacity } from 'react-native';
 import { Text } from '../Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { MapView, Camera } from '@rnmapbox/maps';
+import { MAPBOX_NATIVE_MAP_STYLE_URL } from '@take-me/shared';
 import type { MapRegion } from './mapboxUtils';
 import { toMapboxCoord, regionToZoomLevel, sanitizeMapRegion } from './mapboxUtils';
 
@@ -24,6 +25,8 @@ export type MapboxMapRef = {
 
 type MapboxMapProps = {
   style?: object;
+  /** Sobrescreve o estilo padrão (alinhado ao app motorista). */
+  styleURL?: string;
   initialRegion: MapRegion;
   scrollEnabled?: boolean;
   showControls?: boolean;
@@ -42,6 +45,7 @@ type MapboxMapProps = {
 export const MapboxMap = forwardRef<MapboxMapRef, MapboxMapProps>(function MapboxMap(
   {
     style,
+    styleURL = MAPBOX_NATIVE_MAP_STYLE_URL,
     initialRegion,
     scrollEnabled = true,
     showControls = false,
@@ -135,7 +139,12 @@ export const MapboxMap = forwardRef<MapboxMapRef, MapboxMapProps>(function Mapbo
 
   return (
     <View style={[{ flex: 1 }, style]}>
-      <MapView style={StyleSheet.absoluteFill} scrollEnabled={scrollEnabled} scaleBarEnabled={false}>
+      <MapView
+        style={StyleSheet.absoluteFill}
+        styleURL={styleURL}
+        scrollEnabled={scrollEnabled}
+        scaleBarEnabled={false}
+      >
         <Camera
           ref={cameraRef}
           defaultSettings={{
@@ -158,14 +167,14 @@ export const MapboxMap = forwardRef<MapboxMapRef, MapboxMapProps>(function Mapbo
           pointerEvents="box-none"
         >
           <TouchableOpacity style={styles.controlBtn} onPress={zoomIn} activeOpacity={0.7}>
-            <MaterialIcons name="add" size={22} color="#0d0d0d" />
+            <MaterialIcons name="add" size={22} color="#111827" />
           </TouchableOpacity>
           <TouchableOpacity style={styles.controlBtn} onPress={zoomOut} activeOpacity={0.7}>
-            <MaterialIcons name="remove" size={22} color="#0d0d0d" />
+            <MaterialIcons name="remove" size={22} color="#111827" />
           </TouchableOpacity>
           <View style={styles.controlSpacer} />
           <TouchableOpacity style={styles.controlBtn} onPress={resetCamera} activeOpacity={0.7}>
-            <MaterialIcons name="my-location" size={20} color="#0d0d0d" />
+            <MaterialIcons name="my-location" size={20} color="#111827" />
           </TouchableOpacity>
         </View>
       )}

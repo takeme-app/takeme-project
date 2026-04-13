@@ -1,6 +1,7 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import Constants from 'expo-constants';
 import { preparadorEncomendaSlug } from '../utils/preparadorSlug';
+import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
 
 /** Tabelas fora do `Database` gerado — evita erros de tipo em `.from()`. */
 const sb = supabase as any;
@@ -698,7 +699,7 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
       tripDepartureAt: trip?.departure_at ?? null,
       tripArrivalAt: trip?.arrival_at ?? null,
       senderName,
-      photoUrl: r.photo_url ?? null,
+      photoUrl: r.photo_url ? await resolveStorageDisplayUrl(r.photo_url) : null,
       recipientName: r.recipient_name ?? '',
       recipientPhone: r.recipient_phone ?? '',
       recipientEmail: r.recipient_email ?? '',
@@ -733,6 +734,7 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
     createdAt: r.created_at ?? '',
     bagsCount: r.bags_count ?? 0,
     scheduledAt: r.scheduled_at ?? null,
+    photoUrl: r.photo_url ? await resolveStorageDisplayUrl(r.photo_url) : null,
   };
 }
 
@@ -1662,41 +1664,131 @@ function asRecord(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as Record<string, unknown>) } : {};
 }
 
+export async function fetchPreparadoresEncomendas(): Promise<PreparadorListItem[]> {
+  const { data: workers, error } = await (supabase as any)
+    .from('worker_profiles')
+    .select('id, status, subtype')
+    .eq('role', 'preparer')
+    .eq('subtype', 'shipments');
+  if (error || !workers || workers.length === 0) return [];
+
+  const workerIds = workers.map((w: any) => w.id);
+  const [{ data: profiles }, { data: shipments }] = await Promise.all([
+    supabase.from('profiles').select('id, full_name').in('id', workerIds),
+    (supabase as any).from('shipments').select('id, origin_address, destination_address, status, created_at, driver_id').in('driver_id', workerIds).order('created_at', { ascending: false }).limit(500),
+  ]);
+
+  const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p.full_name || 'Preparador']));
+
+  // Group shipments by driver_id
+  const shipByWorker = new Map<string, any[]>();
+  for (const s of (shipments ?? [])) {
+    const list = shipByWorker.get(s.driver_id) || [];
+    list.push(s);
+    shipByWorker.set(s.driver_id, list);
+  }
+
+  const items: PreparadorListItem[] = [];
+  for (const w of workers as any[]) {
+    const workerShipments = shipByWorker.get(w.id) || [];
+    if (workerShipments.length === 0) {
+      // Worker sem encomendas — mostrar como item
+      items.push({
+        id: w.id,
+        workerId: w.id,
+        nome: profileMap.get(w.id) || 'Preparador',
+        origem: '—',
+        destino: '—',
+        dataInicio: '—',
+        rawDate: '',
+        previsao: '—',
+        avaliacao: null,
+        status: w.status === 'approved' ? 'Agendado' : 'Cancelado',
+      });
+    } else {
+      for (const s of workerShipments) {
+        const st = s.status as string;
+        let uiStatus: PreparadorListItem['status'] = 'Em andamento';
+        if (st === 'delivered') uiStatus = 'Concluído';
+        else if (st === 'cancelled') uiStatus = 'Cancelado';
+        else if (st === 'confirmed' || st === 'pending_review') uiStatus = 'Agendado';
+        items.push({
+          id: s.id,
+          workerId: w.id,
+          nome: profileMap.get(w.id) || 'Preparador',
+          origem: shortAddr(s.origin_address || ''),
+          destino: shortAddr(s.destination_address || ''),
+          dataInicio: s.created_at ? `${fmtDate(s.created_at)}\n${fmtTime(s.created_at)}` : '—',
+          rawDate: s.created_at ? new Date(s.created_at).toISOString().slice(0, 10) : '',
+          previsao: '—',
+          avaliacao: null,
+          status: uiStatus,
+        });
+      }
+    }
+  }
+  return items;
+}
+
 export async function fetchPreparadores(): Promise<PreparadorListItem[]> {
-  // FK preparer_id → auth.users (not public.profiles), so we do two queries
-  const { data, error } = await (supabase as any)
-    .from('excursion_requests')
-    .select('id, destination, excursion_date, status, preparer_id, scheduled_departure_at, created_at')
-    .not('preparer_id', 'is', null)
-    .order('created_at', { ascending: false })
-    .limit(200);
+  // Buscar workers com subtype='excursions' + excursion_requests vinculadas
+  const { data: workers, error } = await (supabase as any)
+    .from('worker_profiles')
+    .select('id, status, subtype')
+    .eq('role', 'preparer')
+    .eq('subtype', 'excursions');
+  if (error || !workers || workers.length === 0) return [];
 
-  if (error || !data || data.length === 0) return [];
+  const workerIds = workers.map((w: any) => w.id);
+  const [{ data: profiles }, { data: excursions }] = await Promise.all([
+    supabase.from('profiles').select('id, full_name').in('id', workerIds),
+    (supabase as any).from('excursion_requests').select('id, destination, excursion_date, status, preparer_id, scheduled_departure_at, created_at').in('preparer_id', workerIds).order('created_at', { ascending: false }).limit(500),
+  ]);
 
-  // Fetch preparer names from profiles (keyed by user id)
-  const preparerIds: string[] = [...new Set<string>(data.map((e: any) => e.preparer_id as string))];
-  const { data: profilesData } = await (supabase as any)
-    .from('profiles')
-    .select('id, full_name')
-    .in('id', preparerIds);
+  const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p.full_name || 'Preparador']));
 
-  const profileMap: Record<string, string> = {};
-  (profilesData ?? []).forEach((p: any) => { profileMap[p.id] = p.full_name ?? 'Preparador'; });
+  const excByWorker = new Map<string, any[]>();
+  for (const e of (excursions ?? [])) {
+    const list = excByWorker.get(e.preparer_id) || [];
+    list.push(e);
+    excByWorker.set(e.preparer_id, list);
+  }
 
-  return data.map((e: any) => {
-    const dateIso: string = (e.scheduled_departure_at || e.excursion_date || '');
-    return {
-      id: e.id,
-      nome: profileMap[e.preparer_id] ?? 'Preparador',
-      origem: '—',
-      destino: e.destination,
-      dataInicio: dateIso ? `${fmtDate(dateIso)}\n${fmtTime(dateIso)}` : '—',
-      rawDate: dateIso ? dateIso.slice(0, 10) : '',
-      previsao: '—',
-      avaliacao: null,
-      status: mapPreparadorStatus(e.status),
-    };
-  });
+  const items: PreparadorListItem[] = [];
+  for (const w of workers as any[]) {
+    const workerExcursions = excByWorker.get(w.id) || [];
+    if (workerExcursions.length === 0) {
+      items.push({
+        id: w.id,
+        workerId: w.id,
+        nome: profileMap.get(w.id) || 'Preparador',
+        origem: '—',
+        destino: '—',
+        dataInicio: '—',
+        rawDate: '',
+        previsao: '—',
+        avaliacao: null,
+        status: w.status === 'approved' ? 'Agendado' : 'Cancelado',
+      });
+    } else {
+      for (const e of workerExcursions) {
+        const dateIso: string = (e.scheduled_departure_at || e.excursion_date || '');
+        items.push({
+          id: e.id,
+          workerId: w.id,
+          nome: profileMap.get(w.id) || 'Preparador',
+          origem: '—',
+          destino: e.destination,
+          dataInicio: dateIso ? `${fmtDate(dateIso)}\n${fmtTime(dateIso)}` : '—',
+          rawDate: dateIso ? dateIso.slice(0, 10) : '',
+          previsao: '—',
+          avaliacao: null,
+          status: mapPreparadorStatus(e.status),
+        });
+      }
+    }
+  }
+  return items;
 }
 
 export async function fetchPreparadorById(id: string): Promise<PreparadorListItem | null> {
@@ -1728,6 +1820,91 @@ export async function fetchPreparadorById(id: string): Promise<PreparadorListIte
     avaliacao: null,
     status: mapPreparadorStatus(e.status),
   };
+}
+
+export async function fetchPreparadorEncomendaDetail(id: string): Promise<import('../data/types').PreparadorEncomendaDetail | null> {
+  if (!isSupabaseConfigured) return null;
+  const statusLabelMap: Record<string, string> = {
+    pending_review: 'Aguardando aprovação', confirmed: 'Confirmada',
+    in_progress: 'Em andamento', delivered: 'Entregue', cancelled: 'Cancelada',
+  };
+
+  // Try shipments first
+  const { data: s } = await (supabase as any).from('shipments')
+    .select('id, origin_address, destination_address, status, amount_cents, package_size, photo_url, recipient_name, recipient_phone, recipient_email, instructions, created_at, driver_id, user_id')
+    .eq('id', id).maybeSingle();
+  if (s) {
+    const r = s as any;
+    let senderName: string | null = null;
+    if (r.user_id) {
+      const { data: p } = await supabase.from('profiles').select('full_name').eq('id', r.user_id).maybeSingle();
+      senderName = (p as any)?.full_name || null;
+    }
+    let preparerProfile = null;
+    if (r.driver_id) {
+      const [{ data: pp }, { data: wp }] = await Promise.all([
+        supabase.from('profiles').select('full_name, phone, avatar_url').eq('id', r.driver_id).maybeSingle(),
+        (supabase as any).from('worker_profiles').select('status, subtype').eq('id', r.driver_id).maybeSingle(),
+      ]);
+      preparerProfile = {
+        id: r.driver_id,
+        fullName: (pp as any)?.full_name || null,
+        phone: (pp as any)?.phone || null,
+        avatarUrl: (pp as any)?.avatar_url ? await resolveStorageDisplayUrl((pp as any).avatar_url) : null,
+        status: (wp as any)?.status || null,
+        subtype: (wp as any)?.subtype || null,
+      };
+    }
+    return {
+      id: r.id, kind: 'shipment',
+      originAddress: r.origin_address || '—', destinationAddress: r.destination_address || '—',
+      status: r.status, statusLabel: statusLabelMap[r.status] || r.status,
+      amountCents: r.amount_cents || 0, packageSize: r.package_size || null,
+      photoUrl: r.photo_url ? await resolveStorageDisplayUrl(r.photo_url) : null,
+      recipientName: r.recipient_name, recipientPhone: r.recipient_phone, recipientEmail: r.recipient_email,
+      senderName, instructions: r.instructions, createdAt: r.created_at || '',
+      preparerProfile,
+    };
+  }
+
+  // Try dependent_shipments
+  const { data: d } = await (supabase as any).from('dependent_shipments')
+    .select('id, origin_address, destination_address, status, amount_cents, photo_url, full_name, contact_phone, instructions, created_at')
+    .eq('id', id).maybeSingle();
+  if (d) {
+    const r = d as any;
+    return {
+      id: r.id, kind: 'dependent_shipment',
+      originAddress: r.origin_address || '—', destinationAddress: r.destination_address || '—',
+      status: r.status, statusLabel: statusLabelMap[r.status] || r.status,
+      amountCents: r.amount_cents || 0, packageSize: null,
+      photoUrl: r.photo_url ? await resolveStorageDisplayUrl(r.photo_url) : null,
+      recipientName: null, recipientPhone: null, recipientEmail: null,
+      senderName: r.full_name || null, instructions: r.instructions, createdAt: r.created_at || '',
+      preparerProfile: null,
+    };
+  }
+
+  // Try as worker_id (preparador sem encomendas)
+  const { data: wp } = await (supabase as any).from('worker_profiles').select('id, status, subtype').eq('id', id).eq('subtype', 'shipments').maybeSingle();
+  if (wp) {
+    const { data: pp } = await supabase.from('profiles').select('full_name, phone, avatar_url').eq('id', id).maybeSingle();
+    return {
+      id, kind: 'shipment',
+      originAddress: '—', destinationAddress: '—',
+      status: (wp as any).status === 'approved' ? 'confirmed' : 'pending_review',
+      statusLabel: (wp as any).status === 'approved' ? 'Ativo' : 'Pendente',
+      amountCents: 0, packageSize: null, photoUrl: null,
+      recipientName: null, recipientPhone: null, recipientEmail: null,
+      senderName: null, instructions: null, createdAt: '',
+      preparerProfile: {
+        id, fullName: (pp as any)?.full_name || null, phone: (pp as any)?.phone || null,
+        avatarUrl: (pp as any)?.avatar_url ? await resolveStorageDisplayUrl((pp as any).avatar_url) : null,
+        status: (wp as any).status, subtype: (wp as any).subtype,
+      },
+    };
+  }
+  return null;
 }
 
 export async function fetchPreparadorEditDetail(id: string): Promise<PreparadorEditDetail | null> {
@@ -2151,8 +2328,8 @@ export async function fetchPromocoes(): Promise<PromocaoListItem[]> {
     id: p.id,
     nome: p.title,
     descricao: p.description || '',
-    dataInicio: fmtDate(p.start_at),
-    dataTermino: fmtDate(p.end_at),
+    dataInicio: p.start_at ? `${fmtDate(p.start_at)}\n${fmtTime(p.start_at)}` : '—',
+    dataTermino: p.end_at ? `${fmtDate(p.end_at)}\n${fmtTime(p.end_at)}` : '—',
     startAtIso: p.start_at ?? '',
     endAtIso: p.end_at ?? '',
     tipoPublico: mapTargetAudience(p.target_audiences || []),

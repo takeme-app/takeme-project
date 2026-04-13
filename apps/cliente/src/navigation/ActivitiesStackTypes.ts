@@ -1,5 +1,18 @@
 import type { TripFollowStackParamList } from './types';
 
+/** Parâmetros da tela de chat (Atividades ou Perfil). */
+export type ClientChatRouteParams = {
+  contactName?: string;
+  conversationId?: string;
+  /** Quando true, abre a fila `support_backoffice` (ticket existente ou `open_support_ticket`). */
+  supportBackoffice?: boolean;
+  /** Abre/cria conversa passageiro–motorista (RLS exige driver_id + client_id). */
+  driverId?: string;
+  bookingId?: string | null;
+  /** Caminho em `avatars` ou URL pública — exibido no cabeçalho. */
+  participantAvatarKey?: string | null;
+};
+
 type ActivitiesOnlyParamList = {
   ActivitiesList: undefined;
   TravelHistory: undefined;
@@ -7,17 +20,7 @@ type ActivitiesOnlyParamList = {
   ShipmentDetail: { shipmentId: string };
   ShipmentTip: { shipmentId: string };
   ShipmentRating: { shipmentId: string };
-  Chat: {
-    contactName?: string;
-    conversationId?: string;
-    /** Quando true, abre a fila `support_backoffice` (ticket existente ou `open_support_ticket`). */
-    supportBackoffice?: boolean;
-    /** Abre/cria conversa passageiro–motorista (RLS exige driver_id + client_id). */
-    driverId?: string;
-    bookingId?: string | null;
-    /** Caminho em `avatars` ou URL pública — exibido no cabeçalho. */
-    participantAvatarKey?: string | null;
-  };
+  Chat: ClientChatRouteParams;
   ExcursionDetail: { excursionRequestId: string };
   ExcursionBudget: { excursionRequestId: string };
   ExcursionPassengerList: { excursionRequestId: string };

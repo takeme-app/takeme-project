@@ -619,7 +619,7 @@ export default function EncomendaEditScreen() {
 
   const resumoId = `#${detail.id.slice(0, 8)}`;
   const statusLabel = shipmentStatusLabel(detail.status || '');
-  const leadShipment = detail.kind === 'shipment' && detail.photoUrl
+  const leadShipment = detail.photoUrl
     ? React.createElement('img', {
       src: detail.photoUrl,
       alt: '',

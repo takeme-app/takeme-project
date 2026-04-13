@@ -33,7 +33,8 @@ import { getUserErrorMessage } from '../../utils/errorMessage';
 import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
 import { formatVehicleDescription, formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
 import { fetchResolvedPriceCentsForScheduledTrip } from '../../lib/clientScheduledTrips';
-import { flatPricingSnapshot } from '../../lib/orderPricingSnapshot';
+import { MAPBOX_DESTINATION_MARKER_COLOR, MAPBOX_ORIGIN_MARKER_COLOR } from '@take-me/shared';
+import { flatPricingSnapshot, applyPromotionToSnapshot } from '../../lib/orderPricingSnapshot';
 import { PaymentMethodSection, type PaymentMethodType } from '../../components/PaymentMethodSection';
 
 const supabasePublicUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
@@ -198,10 +199,24 @@ export function CheckoutScreen({ navigation, route }: Props) {
           bags: p.bags ?? '',
         }));
         const passenger_count = Math.max(1, passengersParam.length);
-        const pricing = flatPricingSnapshot(finalAmountCents);
+        // Aplicar promoção ativa (se houver)
+        let pricing = flatPricingSnapshot(finalAmountCents);
+        let appliedPromoId: string | null = null;
+        try {
+          const { data: promoResult } = await supabase.rpc('apply_active_promotion', {
+            p_order_type: 'bookings',
+            p_user_id: user.id,
+            p_amount_cents: finalAmountCents,
+          });
+          if (promoResult && promoResult[0]?.promotion_id) {
+            const pr = promoResult[0];
+            appliedPromoId = pr.promotion_id;
+            pricing = applyPromotionToSnapshot(pricing, pr.promo_discount_cents, pr.adjusted_admin_pct);
+          }
+        } catch { /* promoção não disponível, segue sem desconto */ }
 
         let bookingId = '';
-        let chargedAmountCents = finalAmountCents;
+        let chargedAmountCents = pricing.amount_cents;
 
         if (params.method === 'credito' || params.method === 'debito') {
           if (!params.paymentMethodId) {
@@ -245,6 +260,9 @@ export function CheckoutScreen({ navigation, route }: Props) {
                 passenger_count,
                 bags_count: bagsCount,
                 passenger_data,
+                promotion_id: appliedPromoId || undefined,
+                promo_discount_cents: pricing.promo_discount_cents || 0,
+                admin_pct_applied: (pricing as any).admin_pct_applied || undefined,
               },
             },
           });
@@ -410,7 +428,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
               anchor={{ x: 0.5, y: 1 }}
               title="Partida"
               description={origin.address}
-              pinColor="#0d0d0d"
+              pinColor={MAPBOX_ORIGIN_MARKER_COLOR}
             />
           )}
           {destination && isValidTripCoordinate(destination.latitude, destination.longitude) && (
@@ -420,7 +438,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
               anchor={{ x: 0.5, y: 1 }}
               title="Destino"
               description={destination.address}
-              pinColor="#dc2626"
+              pinColor={MAPBOX_DESTINATION_MARKER_COLOR}
             />
           )}
           {origin &&
@@ -429,11 +447,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
             isValidTripCoordinate(destination.latitude, destination.longitude) &&
             routeCoords != null &&
             routeCoords.length >= 2 && (
-            <MapboxPolyline
-              coordinates={routeCoords}
-              strokeColor={COLORS.black}
-              strokeWidth={4}
-            />
+            <MapboxPolyline coordinates={routeCoords} strokeWidth={4} />
           )}
         </MapboxMap>
       </View>

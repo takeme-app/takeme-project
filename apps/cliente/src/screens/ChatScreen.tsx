@@ -16,9 +16,9 @@ import * as DocumentPicker from 'expo-document-picker';
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { ActivitiesStackParamList } from '../navigation/ActivitiesStackTypes';
+import type { ClientChatRouteParams } from '../navigation/ActivitiesStackTypes';
 import { getOrCreateActiveSupportConversationId } from '@take-me/shared';
 import { supabase } from '../lib/supabase';
 import { ensureDriverClientConversation, markConversationReadByClient } from '../lib/chatConversations';
@@ -35,7 +35,7 @@ import {
 
 const sb = supabase as { from: (table: string) => any };
 
-type Props = NativeStackScreenProps<ActivitiesStackParamList, 'Chat'>;
+type Props = NativeStackScreenProps<{ Chat: ClientChatRouteParams }, 'Chat'>;
 
 const COLORS = {
   background: '#FFFFFF',
@@ -89,6 +89,7 @@ function getInitials(name: string): string {
 }
 
 export function ChatScreen({ navigation, route }: Props) {
+  const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
   const contactName = route.params?.contactName ?? 'Suporte Take Me';
   const routeConversationId = route.params?.conversationId;
@@ -537,6 +538,7 @@ export function ChatScreen({ navigation, route }: Props) {
             renderItem={renderItem}
             contentContainerStyle={styles.messagesContent}
             showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
             onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
             ListEmptyComponent={
               !conversationId ? (
@@ -558,63 +560,80 @@ export function ChatScreen({ navigation, route }: Props) {
         )}
 
         {!resolveError && conversationStatus === 'active' && (
-          <View style={styles.inputRow}>
+          <View
+            style={[
+              styles.composer,
+              { paddingBottom: Math.max(insets.bottom, 10) + 6 },
+            ]}
+          >
             {isRecording ? (
               <Text style={styles.recordingLabel}>Gravando… toque no microfone para enviar</Text>
             ) : null}
-            <TouchableOpacity
-              style={styles.inputAction}
-              onPress={openAttachmentMenu}
-              disabled={inputDisabled}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons name="attach-file" size={24} color={COLORS.neutral700} />
-            </TouchableOpacity>
-            <TextInput
-              style={styles.input}
-              placeholder="Mensagem"
-              placeholderTextColor={COLORS.neutral700}
-              value={inputText}
-              onChangeText={setInputText}
-              multiline
-              maxLength={500}
-              editable={!inputDisabled}
-            />
-            <TouchableOpacity
-              style={styles.inputAction}
-              onPress={() => { void openCamera(); }}
-              disabled={inputDisabled}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons name="camera-alt" size={24} color={COLORS.neutral700} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.inputAction}
-              onPress={() => { void toggleRecording(); }}
-              disabled={uploadingAttachment || !myId || !conversationId}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons
-                name="mic"
-                size={24}
-                color={isRecording ? '#DC2626' : COLORS.neutral700}
+            <View style={styles.inputRow}>
+              <TouchableOpacity
+                style={[styles.iconButton, inputDisabled && styles.iconButtonDisabled]}
+                onPress={openAttachmentMenu}
+                disabled={inputDisabled}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="attach-file" size={22} color={COLORS.neutral700} />
+              </TouchableOpacity>
+              <TextInput
+                style={styles.input}
+                placeholder="Mensagem"
+                placeholderTextColor={COLORS.neutral700}
+                value={inputText}
+                onChangeText={setInputText}
+                multiline
+                maxLength={500}
+                editable={!inputDisabled}
+                onSubmitEditing={() => { void sendMessage(); }}
+                textAlignVertical={Platform.OS === 'android' ? 'top' : 'center'}
               />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.sendButton, (!inputText.trim() || inputDisabled) && styles.sendButtonDisabled]}
-              onPress={sendMessage}
-              disabled={!inputText.trim() || inputDisabled}
-              activeOpacity={0.8}
-            >
-              {sending ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <MaterialIcons name="send" size={22} color="#FFFFFF" />
-              )}
-            </TouchableOpacity>
-            {uploadingAttachment ? (
-              <ActivityIndicator size="small" color={COLORS.black} style={{ marginLeft: 4 }} />
-            ) : null}
+              <View style={styles.inputTrailing}>
+                <TouchableOpacity
+                  style={[styles.iconButton, inputDisabled && styles.iconButtonDisabled]}
+                  onPress={() => { void openCamera(); }}
+                  disabled={inputDisabled}
+                  activeOpacity={0.7}
+                >
+                  <MaterialIcons name="camera-alt" size={22} color={COLORS.neutral700} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.iconButton,
+                    (uploadingAttachment || !myId || !conversationId) && styles.iconButtonDisabled,
+                  ]}
+                  onPress={() => { void toggleRecording(); }}
+                  disabled={uploadingAttachment || !myId || !conversationId}
+                  activeOpacity={0.7}
+                >
+                  <MaterialIcons
+                    name="mic"
+                    size={22}
+                    color={isRecording ? '#DC2626' : COLORS.neutral700}
+                  />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.sendButton,
+                    (!inputText.trim() || inputDisabled) && styles.sendButtonDisabled,
+                  ]}
+                  onPress={() => { void sendMessage(); }}
+                  disabled={!inputText.trim() || inputDisabled}
+                  activeOpacity={0.8}
+                >
+                  {sending ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <MaterialIcons name="send" size={20} color="#FFFFFF" />
+                  )}
+                </TouchableOpacity>
+                {uploadingAttachment ? (
+                  <ActivityIndicator size="small" color={COLORS.black} style={styles.uploadSpinner} />
+                ) : null}
+              </View>
+            </View>
           </View>
         )}
       </KeyboardAvoidingView>
@@ -687,41 +706,61 @@ const styles = StyleSheet.create({
     paddingVertical: 24,
   },
 
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    flexWrap: 'wrap',
-    paddingHorizontal: 8,
-    paddingVertical: 8,
+  composer: {
     borderTopWidth: 1,
     borderTopColor: COLORS.neutral300,
     backgroundColor: COLORS.background,
+    paddingTop: 10,
+    paddingHorizontal: 12,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
   },
   recordingLabel: {
-    width: '100%',
     fontSize: 13,
     color: '#DC2626',
     fontWeight: '600',
-    marginBottom: 4,
-    paddingHorizontal: 4,
+    marginBottom: 8,
+    paddingHorizontal: 2,
   },
-  inputAction: { padding: 8 },
+  iconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.neutral100,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconButtonDisabled: { opacity: 0.35 },
   input: {
     flex: 1,
+    minWidth: 0,
     minHeight: 40,
-    maxHeight: 100,
+    maxHeight: 120,
     backgroundColor: COLORS.neutral300,
     borderRadius: 20,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 10,
     fontSize: 16,
+    lineHeight: 20,
     color: COLORS.black,
-    marginHorizontal: 4,
+  },
+  inputTrailing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
   },
   sendButton: {
-    width: 40, height: 40, borderRadius: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: COLORS.black,
-    alignItems: 'center', justifyContent: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sendButtonDisabled: { opacity: 0.5 },
+  uploadSpinner: { marginLeft: -2 },
 });

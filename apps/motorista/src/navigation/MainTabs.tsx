@@ -7,6 +7,7 @@ import { HomeScreen } from '../screens/HomeScreen';
 import { PaymentsScreen } from '../screens/PaymentsScreen';
 import { ActivitiesScreen } from '../screens/ActivitiesScreen';
 import { ProfileStack } from './ProfileStack';
+import { useDriverOngoingTripForTabs } from '../hooks/useDriverOngoingTripForTabs';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
@@ -16,6 +17,7 @@ const TAB_BAR_CONTENT_HEIGHT = 56;
 const MIN_BOTTOM_INSET = 8;
 
 export function MainTabs() {
+  const { hasOngoingTrip } = useDriverOngoingTripForTabs();
   const insets = useSafeAreaInsets();
   const bottomPadding = Math.max(insets.bottom, MIN_BOTTOM_INSET);
   const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + bottomPadding;
@@ -46,6 +48,22 @@ export function MainTabs() {
         component={HomeScreen}
         options={{
           title: 'Início',
+          tabBarBadge: hasOngoingTrip ? ' ' : undefined,
+          tabBarBadgeStyle: hasOngoingTrip
+            ? {
+                backgroundColor: '#22C55E',
+                minWidth: 8,
+                maxWidth: 8,
+                height: 8,
+                borderRadius: 4,
+                fontSize: 1,
+                lineHeight: 8,
+                color: 'transparent',
+                paddingHorizontal: 0,
+                paddingTop: 0,
+                paddingBottom: 0,
+              }
+            : undefined,
           tabBarIcon: ({ color, focused }) => (
             <MaterialIcons name="home" size={24} color={color} style={{ opacity: focused ? 1 : 0.9 }} />
           ),

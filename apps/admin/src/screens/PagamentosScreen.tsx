@@ -171,15 +171,6 @@ export default function PagamentosScreen() {
     return () => window.removeEventListener('keydown', onKey);
   }, [filtroModalOpen, fecharFiltroModal]);
 
-  const pendingCount = useMemo(() => pagamentos.filter((p) => p.status === 'Agendado').length, [pagamentos]);
-
-  const metrics = [
-    { title: 'Pagamentos previstos', value: fmtBRL(counts.pagamentosPrevistos), pct: '+12.5%', desc: 'vs período anterior' },
-    { title: 'Pagamentos feitos', value: fmtBRL(counts.pagamentosFeitos), pct: '+8.2%', desc: 'vs período anterior' },
-    { title: 'Lucro', value: fmtBRL(counts.lucro), pct: counts.lucro > 0 ? '+' : '', desc: 'vs período anterior', negative: counts.lucro <= 0 },
-    { title: 'Aguardando liberação', value: String(pendingCount), pct: '', desc: 'pagamentos pendentes', negative: pendingCount > 0, isCount: true },
-  ];
-
   const filteredRows = useMemo(() => {
     return pagamentos.filter((r) => {
       if (search) {
@@ -201,6 +192,25 @@ export default function PagamentosScreen() {
       return true;
     });
   }, [pagamentos, search, filtroTabelaAtivo, appliedFiltro]);
+
+  // KPIs reativos aos filtros
+  const filteredPrevistos = filteredRows.reduce((s, r) => s + r.grossAmountCents, 0);
+  const filteredFeitos = filteredRows.filter((r) => r.status === 'Concluído').reduce((s, r) => s + r.workerAmountCents, 0);
+  const filteredLucro = filteredRows.filter((r) => r.status === 'Concluído').reduce((s, r) => s + r.adminAmountCents, 0);
+  const pendingCount = filteredRows.filter((p) => p.status === 'Agendado').length;
+
+  const pctVsOrig = (filtered: number, original: number) => {
+    if (original === 0) return filtered > 0 ? '+100%' : '';
+    const pct = Math.round(((filtered - original) / original) * 100);
+    return pct >= 0 ? `+${pct}%` : `${pct}%`;
+  };
+
+  const metrics = [
+    { title: 'Pagamentos previstos', value: fmtBRL(filteredPrevistos), pct: pctVsOrig(filteredPrevistos, counts.pagamentosPrevistos), desc: 'vs período anterior' },
+    { title: 'Pagamentos feitos', value: fmtBRL(filteredFeitos), pct: pctVsOrig(filteredFeitos, counts.pagamentosFeitos), desc: 'vs período anterior' },
+    { title: 'Lucro', value: fmtBRL(filteredLucro), pct: pctVsOrig(filteredLucro, counts.lucro), desc: 'vs período anterior', negative: filteredLucro <= 0 },
+    { title: 'Aguardando liberação', value: String(pendingCount), pct: '', desc: 'pagamentos pendentes', negative: pendingCount > 0, isCount: true },
+  ];
 
   const inputTabelaStyle: React.CSSProperties = {
     flex: 1,

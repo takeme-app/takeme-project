@@ -74,8 +74,9 @@ export function offsetLatLngByMeters(
 }
 
 export function zoomLevelForSpeedKmh(speedKmh: number): number {
-  const minZ = 16.15;
-  const maxZ = 18.9;
+  /** Mais “perto” que antes: parado/cidade ~19.5; autoestrada ainda legível (~17.8). */
+  const minZ = 17.75;
+  const maxZ = 19.5;
   if (!Number.isFinite(speedKmh) || speedKmh < 0) return maxZ;
   if (speedKmh < 4) return maxZ;
   if (speedKmh >= 90) return minZ;
@@ -98,20 +99,23 @@ export type NavigationEdgePadding = {
   paddingRight: number;
 };
 
-/** Padding assimétrico: “puck” ~65–72% da altura, mais rota visível à frente. */
+/** Padding assimétrico: mais área inferior → mais via à frente. `extraBottomOverlayPx` = UI sobre o mapa (card). */
 export function buildNavigationPadding(params: {
   windowHeight: number;
   safeTop: number;
   safeBottom: number;
+  /** UI flutuante no rodapé (ex. mini-sheet): soma ao padding inferior da câmera para o PIN não ficar atrás. */
+  extraBottomOverlayPx?: number;
 }): NavigationEdgePadding {
   const { windowHeight: h, safeTop, safeBottom } = params;
+  const extra = params.extraBottomOverlayPx ?? 0;
   const topBar = safeTop + 52;
-  const bottomReserve = Math.min(240, h * 0.26);
+  const bottomReserve = Math.min(240, h * 0.24);
   return {
     paddingLeft: 14,
     paddingRight: 14,
-    paddingTop: topBar + h * 0.06,
-    paddingBottom: bottomReserve + safeBottom + h * 0.1,
+    paddingTop: topBar + h * 0.05,
+    paddingBottom: bottomReserve + safeBottom + h * 0.1 + extra,
   };
 }
 

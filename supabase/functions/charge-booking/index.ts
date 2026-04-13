@@ -292,6 +292,15 @@ Deno.serve(async (req) => {
         });
       }
 
+      // Promoção passada pelo cliente
+      const promoDiscountCents = Math.max(0, Math.floor(Number(draft.promo_discount_cents ?? 0)));
+      const promoAdminPct = Number(draft.admin_pct_applied ?? 0);
+      const promoId = (draft.promotion_id as string | undefined)?.trim() ?? null;
+      const chargeAmountCents = Math.max(1, amountCents - promoDiscountCents);
+      const platformFeeCents = promoAdminPct > 0
+        ? Math.round((amountCents - promoDiscountCents) * promoAdminPct / 100)
+        : 0;
+
       const driverId = (tripRow.driver_id as string | undefined)?.trim() ?? "";
       let connectAccountId: string | null = null;
       let applicationFeeCents: number | null = null;
@@ -302,7 +311,7 @@ Deno.serve(async (req) => {
           .eq("id", driverId)
           .maybeSingle();
         connectAccountId = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? null;
-        const workerPayoutPreview = amountCents - 0;
+        const workerPayoutPreview = chargeAmountCents - platformFeeCents;
         const payout = Number.isFinite(workerPayoutPreview) ? Math.max(0, Math.floor(workerPayoutPreview)) : null;
         if (connectAccountId && payout != null) {
           if (payout > amountCents) {
@@ -322,7 +331,7 @@ Deno.serve(async (req) => {
       }
 
       const piParams = new URLSearchParams({
-        amount: String(amountCents),
+        amount: String(chargeAmountCents),
         currency: "brl",
         customer: customerId,
         "payment_method": stripePaymentMethodId,
@@ -371,11 +380,13 @@ Deno.serve(async (req) => {
         bags_count: bags,
         passenger_data: passengerDataJson,
         price_route_base_cents: amountCents,
-        pricing_subtotal_cents: amountCents,
-        platform_fee_cents: 0,
+        pricing_subtotal_cents: Math.max(0, amountCents - promoDiscountCents),
+        platform_fee_cents: platformFeeCents,
         pricing_surcharges_cents: 0,
-        promo_discount_cents: 0,
-        amount_cents: amountCents,
+        promo_discount_cents: promoDiscountCents,
+        promotion_id: promoId || null,
+        admin_pct_applied: promoAdminPct || null,
+        amount_cents: chargeAmountCents,
         status: "paid",
         paid_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),

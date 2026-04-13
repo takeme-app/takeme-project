@@ -15,6 +15,7 @@ type Props = NativeStackScreenProps<TripFollowStackParamList, 'RateTrip'>;
 
 export function RateTripScreen({ navigation, route }: Props) {
   const bookingId = route.params?.bookingId;
+  const initialRating = route.params?.initialRating;
   const { showAlert } = useAppAlert();
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
@@ -58,8 +59,44 @@ export function RateTripScreen({ navigation, route }: Props) {
     };
   }, [bookingId]);
 
+  useEffect(() => {
+    if (!bookingId) return;
+    let cancelled = false;
+    void (async () => {
+      const { data } = await supabase
+        .from('booking_ratings')
+        .select('rating, comment')
+        .eq('booking_id', bookingId)
+        .maybeSingle();
+      if (cancelled) return;
+      if (data) {
+        setRating(Number(data.rating));
+        setComment(data.comment ?? '');
+        return;
+      }
+      if (initialRating != null && initialRating >= 1 && initialRating <= 5) {
+        setRating(initialRating);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookingId, initialRating]);
+
   const goToMain = () => {
-    navigation.getParent()?.navigate('Main');
+    const nav = navigation as { getState?: () => { routeNames?: string[] }; navigate: (name: string) => void; getParent?: () => { navigate: (name: string) => void; getParent?: () => { navigate: (name: string) => void } } };
+    const routeNames = nav.getState?.()?.routeNames;
+    if (routeNames?.includes('ActivitiesList')) {
+      nav.navigate('ActivitiesList');
+      return;
+    }
+    const tripStack = nav.getParent?.();
+    const root = tripStack?.getParent?.();
+    if (root?.navigate) {
+      root.navigate('Main');
+      return;
+    }
+    tripStack?.navigate?.('Main');
   };
 
   const handleSubmit = async () => {
@@ -124,7 +161,7 @@ export function RateTripScreen({ navigation, route }: Props) {
       <Text style={styles.commentLabel}>Comentário <Text style={styles.optional}>(Opcional)</Text></Text>
       <TextInput
         style={styles.commentInput}
-        placeholder="Descreva algum comentário sobre a entrega..."
+        placeholder="Conte como foi a viagem (opcional)…"
         placeholderTextColor="#767676"
         value={comment}
         onChangeText={setComment}

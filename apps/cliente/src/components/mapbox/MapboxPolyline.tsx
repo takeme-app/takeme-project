@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { ShapeSource, LineLayer } from '@rnmapbox/maps';
+import { MAPBOX_ROUTE_STROKE_COLOR } from '@take-me/shared';
 import type { LatLng } from './mapboxUtils';
 
 type MapboxPolylineProps = {
@@ -15,7 +16,7 @@ type MapboxPolylineProps = {
  */
 export function MapboxPolyline({
   coordinates,
-  strokeColor = '#0d0d0d',
+  strokeColor = MAPBOX_ROUTE_STROKE_COLOR,
   strokeWidth = 4,
 }: MapboxPolylineProps) {
   const { sourceId, layerId } = useMemo(() => {
@@ -41,6 +42,8 @@ export function MapboxPolyline({
         style={{
           lineColor: strokeColor,
           lineWidth: strokeWidth,
+          lineCap: 'round',
+          lineJoin: 'round',
         }}
       />
     </ShapeSource>

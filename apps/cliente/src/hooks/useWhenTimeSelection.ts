@@ -24,6 +24,8 @@ export type WhenTimeResult = {
 export function useWhenTimeSelection() {
   const [whenOption, setWhenOption] = useState<'now' | 'later' | null>(null);
   const [whenLabel, setWhenLabel] = useState('Agora');
+  /** Mantém data/hora após fechar o sheet (closeTimeSheet zera selectedSlot). */
+  const [committedLater, setCommittedLater] = useState<{ day: string; slot: string } | null>(null);
   const [whenSheetVisible, setWhenSheetVisible] = useState(false);
   const [timeSheetVisible, setTimeSheetVisible] = useState(false);
   const [selectedDay, setSelectedDay] = useState(() => toISODate(new Date()));
@@ -77,6 +79,7 @@ export function useWhenTimeSelection() {
   /** Chamado ao confirmar "Agora" ou "Mais tarde" no when-sheet. Retorna a opção ou null. */
   const handleWhenContinue = useCallback((): 'now' | 'later' | null => {
     if (whenOption === 'now') {
+      setCommittedLater(null);
       setWhenLabel('Agora');
       closeWhenSheet();
       return 'now';
@@ -92,6 +95,8 @@ export function useWhenTimeSelection() {
   /** Chamado ao selecionar horário no time-sheet. Retorna o resultado ou null. */
   const handleSelectTime = useCallback((): WhenTimeResult | null => {
     if (!selectedSlot) return null;
+    setCommittedLater({ day: selectedDay, slot: selectedSlot });
+    setWhenOption('later');
     setWhenLabel(selectedSlot);
     closeTimeSheet();
     return {
@@ -102,15 +107,22 @@ export function useWhenTimeSelection() {
     };
   }, [selectedSlot, selectedDay, closeTimeSheet]);
 
-  const getResult = useCallback(
-    (): WhenTimeResult => ({
+  const getResult = useCallback((): WhenTimeResult => {
+    if (committedLater) {
+      return {
+        whenOption: 'later',
+        whenLabel: committedLater.slot,
+        scheduledDateId: committedLater.day,
+        scheduledTimeSlot: committedLater.slot,
+      };
+    }
+    return {
       whenOption: whenOption === 'later' ? 'later' : 'now',
       whenLabel,
       scheduledDateId: whenOption === 'later' ? selectedDay : undefined,
       scheduledTimeSlot: whenOption === 'later' && selectedSlot ? selectedSlot : undefined,
-    }),
-    [whenOption, whenLabel, selectedDay, selectedSlot],
-  );
+    };
+  }, [committedLater, whenOption, whenLabel, selectedDay, selectedSlot]);
 
   return {
     whenOption,

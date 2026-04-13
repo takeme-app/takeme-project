@@ -41,7 +41,13 @@ const expo = {
   plugins: [
     ...(appJson.expo.plugins || []),
     'expo-font',
-    ['@rnmapbox/maps'],
+    [
+      '@rnmapbox/maps',
+      {
+        /** Mesmo motorista: SDK Mapbox nativo (evita estilo/paleta do fork MapLibre). */
+        RNMapboxMapsImpl: 'mapbox',
+      },
+    ],
   ],
   android: {
     ...appJson.expo.android,
