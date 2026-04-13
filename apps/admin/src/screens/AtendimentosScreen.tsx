@@ -159,6 +159,7 @@ export default function AtendimentosScreen() {
       .limit(80)
       .then(({ data, error }: { data: any[] | null; error: Error | null }) => {
         if (cancelled) return;
+        if (error) console.error('[AtendimentosScreen] conversations query error:', error);
         if (error || !data) {
           setRealTickets([]);
           return;
@@ -221,7 +222,7 @@ export default function AtendimentosScreen() {
               const avatarMap: Record<string, string> = {};
               for (const p of profiles) {
                 if (p.avatar_url) {
-                  const resolved = await resolveStorageDisplayUrl(p.avatar_url);
+                  const resolved = await resolveStorageDisplayUrl(supabase as any, p.avatar_url);
                   if (resolved) avatarMap[p.id] = resolved;
                 }
               }

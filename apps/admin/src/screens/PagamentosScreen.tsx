@@ -11,9 +11,11 @@ import {
   filterIconSvg,
 } from '../styles/webStyles';
 import { PAGAMENTOS_GESTAO_PREPARADORES_HREF } from '../constants/pagamentosGestaoNav';
-import { fetchPagamentos, fetchPagamentoCounts } from '../data/queries';
+import { fetchPagamentos, fetchPagamentoCounts, invokeEdgeFunction } from '../data/queries';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 import type { PagamentoListItem, PagamentoCounts } from '../data/types';
+import { exportPayoutsReport } from '../utils/exportCsv';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -80,6 +82,7 @@ function fmtBRL(cents: number): string {
 }
 
 const tableCols = [
+  { label: '', flex: '0 0 40px', minWidth: 40 },
   { label: 'Profissional', flex: '1 1 20%', minWidth: 150 },
   { label: 'Tipo', flex: '0 0 120px', minWidth: 120 },
   { label: 'Valor bruto', flex: '0 0 130px', minWidth: 130 },
@@ -111,11 +114,36 @@ type PagAppliedFiltro = {
 
 export default function PagamentosScreen() {
   const navigate = useNavigate();
+  const { session } = useAuth();
   const [search, setSearch] = useState('');
   const [pagamentos, setPagamentos] = useState<PagamentoListItem[]>([]);
   const [counts, setCounts] = useState<PagamentoCounts>({ pagamentosPrevistos: 0, pagamentosFeitos: 0, lucro: 0 });
   const [loading, setLoading] = useState(true);
   const [filtroModalOpen, setFiltroModalOpen] = useState(false);
+  // ── Batch selection ──
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const refetchAll = useCallback(async () => {
+    const [items, c] = await Promise.all([fetchPagamentos(), fetchPagamentoCounts()]);
+    setPagamentos(items);
+    setCounts(c);
+    setSelectedIds(new Set());
+  }, []);
   const [filtroTabelaAtivo, setFiltroTabelaAtivo] = useState(false);
   const [appliedFiltro, setAppliedFiltro] = useState<PagAppliedFiltro>({
     status: 'Concluído',
@@ -364,6 +392,144 @@ export default function PagamentosScreen() {
       },
     }, 'Acessar gestão de pagamentos'));
 
+  // ── Batch actions bar ──────────────────────────────────────────────────
+  const pendingFilteredRows = filteredRows.filter((r) => r.status === 'Agendado');
+  const allPendingSelected = pendingFilteredRows.length > 0 && pendingFilteredRows.every((r) => selectedIds.has(r.id));
+
+  const handleSelectAllPending = useCallback(() => {
+    setSelectedIds((prev) => {
+      const ids = pendingFilteredRows.map((r) => r.id);
+      const next = new Set(prev);
+      if (allPendingSelected) { ids.forEach((id) => next.delete(id)); } else { ids.forEach((id) => next.add(id)); }
+      return next;
+    });
+  }, [pendingFilteredRows, allPendingSelected]);
+
+  const handleBatchRelease = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`Liberar ${selectedIds.size} pagamento(s) selecionado(s)?`)) return;
+    setBatchLoading(true);
+    try {
+      const res = await invokeEdgeFunction('process-payouts', 'POST', undefined, {
+        payout_ids: [...selectedIds],
+        mark_paid: true,
+      });
+      if (res.error) { showToast('❌ ' + res.error); }
+      else if ((res.data as any)?.ok) { showToast(`✅ ${selectedIds.size} pagamento(s) liberado(s) com sucesso`); }
+      else { showToast('❌ Erro ao liberar pagamentos'); }
+    } catch (e: any) {
+      showToast('❌ ' + (e?.message || 'Erro ao liberar'));
+    }
+    await refetchAll();
+    setBatchLoading(false);
+  }, [selectedIds, refetchAll, showToast]);
+
+  const handleReleaseAll = useCallback(async () => {
+    if (!confirm('Liberar TODOS os pagamentos pendentes? Workers com Stripe Connect serão marcados como pagos automaticamente. Outros serão marcados como "em processamento" para pagamento manual.')) return;
+    setBatchLoading(true);
+    try {
+      const res = await invokeEdgeFunction('process-payouts', 'POST', undefined, { force: true });
+      if (res.error) { showToast('❌ ' + res.error); }
+      else if ((res.data as any)?.ok) {
+        const p = (res.data as any).processed || {};
+        showToast(`✅ Processados: ${p.stripe_connect_auto_paid || 0} automáticos, ${p.manual_pix_processing || 0} manuais`);
+      } else { showToast('❌ Erro ao processar pagamentos'); }
+    } catch (e: any) {
+      showToast('❌ ' + (e?.message || 'Erro ao processar'));
+    }
+    await refetchAll();
+    setBatchLoading(false);
+  }, [refetchAll, showToast]);
+
+  const handleExportCsv = useCallback(async () => {
+    setBatchLoading(true);
+    try {
+      const count = await exportPayoutsReport(pagamentos);
+      if (count > 0) {
+        showToast(`📥 Relatório exportado com ${count} profissional(is)`);
+      } else {
+        showToast('Nenhum pagamento pendente para exportar');
+      }
+    } catch (e: any) {
+      showToast('❌ ' + (e?.message || 'Erro ao exportar'));
+    }
+    setBatchLoading(false);
+  }, [pagamentos, showToast]);
+
+  const batchBar = React.createElement('div', {
+    style: {
+      display: 'flex', alignItems: 'center', gap: 10, width: '100%', flexWrap: 'wrap' as const,
+    },
+  },
+    // Select all checkbox
+    React.createElement('button', {
+      type: 'button',
+      onClick: handleSelectAllPending,
+      style: {
+        display: 'flex', alignItems: 'center', gap: 6, height: 36, padding: '0 12px',
+        borderRadius: 8, border: '1px solid #d9d9d9', background: allPendingSelected ? '#f0f0f0' : '#fff',
+        fontSize: 12, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
+      },
+    },
+      React.createElement('div', {
+        style: {
+          width: 16, height: 16, borderRadius: 3, border: allPendingSelected ? 'none' : '2px solid #d9d9d9',
+          background: allPendingSelected ? '#0d0d0d' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        },
+      }, allPendingSelected ? React.createElement('svg', { width: 10, height: 10, viewBox: '0 0 24 24', fill: 'none' },
+        React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#fff', strokeWidth: 3, strokeLinecap: 'round' })) : null),
+      `Selecionar pendentes (${pendingFilteredRows.length})`),
+
+    // Liberar selecionados
+    selectedIds.size > 0
+      ? React.createElement('button', {
+          type: 'button',
+          onClick: handleBatchRelease,
+          disabled: batchLoading,
+          style: {
+            height: 36, padding: '0 14px', borderRadius: 999, border: 'none',
+            background: '#22c55e', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font,
+            opacity: batchLoading ? 0.6 : 1,
+          },
+        }, batchLoading ? '⏳ Processando...' : `💸 Liberar selecionados (${selectedIds.size})`)
+      : null,
+
+    // Liberar todos
+    React.createElement('button', {
+      type: 'button',
+      onClick: handleReleaseAll,
+      disabled: batchLoading,
+      style: {
+        height: 36, padding: '0 14px', borderRadius: 999, border: 'none',
+        background: '#f59e0b', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font,
+        opacity: batchLoading ? 0.6 : 1,
+      },
+    }, '⚡ Liberar todos pendentes'),
+
+    // Exportar CSV
+    React.createElement('button', {
+      type: 'button',
+      onClick: handleExportCsv,
+      disabled: batchLoading,
+      style: {
+        height: 36, padding: '0 14px', borderRadius: 999, border: '1px solid #d9d9d9',
+        background: '#fff', color: '#0d0d0d', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font,
+        opacity: batchLoading ? 0.6 : 1,
+      },
+    }, '📥 Exportar relatório'));
+
+  // ── Toast notification ─────────────────────────────────────────────────
+  const toastEl = toast
+    ? React.createElement('div', {
+        style: {
+          position: 'fixed' as const, top: 20, right: 20, zIndex: 9999,
+          background: '#0d0d0d', color: '#fff', padding: '12px 24px', borderRadius: 12,
+          fontSize: 14, fontWeight: 500, boxShadow: '0 8px 24px rgba(0,0,0,0.2)', ...font,
+          animation: 'fadeIn 0.3s ease-out',
+        },
+      }, toast)
+    : null;
+
   // ── Metrics ───────────────────────────────────────────────────────────
   const metricCards = React.createElement('div', {
     style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
@@ -395,19 +561,30 @@ export default function PagamentosScreen() {
 
   const tableRowEls = filteredRows.map((row) => {
     const st = statusStyles[row.status];
+    const isPending = row.status === 'Agendado';
+    const isSelected = selectedIds.has(row.id);
     return React.createElement('div', {
       key: row.id,
       'data-testid': 'pagamento-table-row',
       style: {
         display: 'flex', minHeight: 64, alignItems: 'center', padding: '8px 16px',
-        borderBottom: '1px solid #d9d9d9', background: '#fff',
+        borderBottom: '1px solid #d9d9d9', background: isSelected ? '#f0fdf4' : '#fff',
       },
     },
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth, fontWeight: 500 } }, row.workerName),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth } }, row.entityType),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth } }, fmtBRL(row.grossAmountCents)),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth, whiteSpace: 'pre-line' as const, fontSize: 13, lineHeight: 1.4 } }, row.dataFinalizacao),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth } },
+      // Checkbox
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth, justifyContent: 'center' } },
+        isPending
+          ? React.createElement('button', {
+              type: 'button', onClick: () => toggleSelect(row.id),
+              style: { width: 18, height: 18, borderRadius: 3, border: isSelected ? 'none' : '2px solid #d9d9d9', background: isSelected ? '#0d0d0d' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 },
+            }, isSelected ? React.createElement('svg', { width: 10, height: 10, viewBox: '0 0 24 24', fill: 'none' },
+              React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#fff', strokeWidth: 3, strokeLinecap: 'round' })) : null)
+          : null),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500 } }, row.workerName),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth } }, row.entityType),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth } }, fmtBRL(row.grossAmountCents)),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth, whiteSpace: 'pre-line' as const, fontSize: 13, lineHeight: 1.4 } }, row.dataFinalizacao),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth } },
         React.createElement('span', {
           style: {
             display: 'inline-block', padding: '4px 12px', borderRadius: 999,
@@ -415,15 +592,23 @@ export default function PagamentosScreen() {
             background: st.bg, color: st.color, ...font,
           },
         }, row.status)),
-      row.status === 'Agendado'
+      isPending
         ? React.createElement('button', {
             type: 'button',
             onClick: async () => {
               if (!isSupabaseConfigured || !row.id) return;
               if (!confirm('Liberar este pagamento ao profissional?')) return;
-              await (supabase as any).from('payouts').update({ status: 'paid', paid_at: new Date().toISOString() }).eq('id', row.id);
-              const [items, c] = await Promise.all([fetchPagamentos(), fetchPagamentoCounts()]);
-              setPagamentos(items); setCounts(c);
+              const { error } = await (supabase as any).from('payouts').update({ status: 'paid', paid_at: new Date().toISOString() }).eq('id', row.id);
+              if (error) { showToast('❌ Erro: ' + error.message); return; }
+              // Audit log
+              await (supabase as any).from('payout_logs').insert({
+                payout_id: row.id,
+                action: 'released',
+                performed_by: session?.user?.id || null,
+                details: { method: 'manual_individual' },
+              });
+              showToast('✅ Pagamento liberado');
+              await refetchAll();
             },
             style: { marginLeft: 8, height: 28, padding: '0 10px', borderRadius: 999, border: 'none', background: '#22c55e', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer', ...font, whiteSpace: 'nowrap' as const },
           }, '💸 Liberar')
@@ -448,5 +633,5 @@ export default function PagamentosScreen() {
     : null;
 
   return React.createElement(React.Fragment, null,
-    title, searchRow, metricCards, emptyMsg || tableSection, filtroTabelaModal);
+    title, searchRow, batchBar, metricCards, emptyMsg || tableSection, filtroTabelaModal, toastEl);
 }

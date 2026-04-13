@@ -479,6 +479,7 @@ export interface PayoutRow {
 
 export interface PagamentoListItem {
   id: string;
+  workerId: string;
   workerName: string;
   entityType: string;
   dataFinalizacao: string;
@@ -488,6 +489,7 @@ export interface PagamentoListItem {
   grossAmountCents: number;
   workerAmountCents: number;
   adminAmountCents: number;
+  payoutMethod: string;
 }
 
 export interface PagamentoCounts {

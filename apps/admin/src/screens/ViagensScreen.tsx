@@ -291,7 +291,7 @@ export default function ViagensScreen() {
     void (async () => {
       const map: Record<string, string> = {};
       for (const p of paths) {
-        const url = await resolveStorageDisplayUrl(p);
+        const url = await resolveStorageDisplayUrl(supabase as any, p);
         if (url) map[p] = url;
       }
       if (!cancelled) setResolvedAvatars(map);

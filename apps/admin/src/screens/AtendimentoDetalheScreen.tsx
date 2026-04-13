@@ -368,7 +368,7 @@ export default function AtendimentoDetalheScreen() {
         setProfileCity((fullProfile as any).city || '—');
         setProfileState((fullProfile as any).state || '—');
         if ((fullProfile as any).avatar_url) {
-          const resolved = await resolveStorageDisplayUrl((fullProfile as any).avatar_url);
+          const resolved = await resolveStorageDisplayUrl(supabase as any, (fullProfile as any).avatar_url);
           if (!cancelled) setProfileAvatarUrl(resolved);
         }
       }
@@ -445,7 +445,7 @@ export default function AtendimentoDetalheScreen() {
             setEncomendaSender(s.full_name || nome || '—');
             setEncomendaInstructions(s.instructions || '');
             if (s.photo_url) {
-              const resolved = await resolveStorageDisplayUrl(s.photo_url);
+              const resolved = await resolveStorageDisplayUrl(supabase as any, s.photo_url);
               if (!cancelled) setEncomendaPhotoUrl(resolved);
             }
           }
