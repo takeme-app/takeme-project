@@ -106,6 +106,8 @@ type TripShipmentRow = {
   recipient_name: string;
 };
 
+type PassengerBookingRating = { rating: number; comment: string | null };
+
 function shipmentPackageLabelPt(size: string): string {
   if (size === 'pequeno') return 'Pequeno';
   if (size === 'grande') return 'Grande';
@@ -124,6 +126,10 @@ export function TripDetailScreen({ navigation, route }: Props) {
   const [showRescheduleSheet, setShowRescheduleSheet] = useState(false);
   const [selectedRescheduleSlot, setSelectedRescheduleSlot] = useState<string | null>(null);
   const [supportSheetVisible, setSupportSheetVisible] = useState(false);
+  /** `undefined` = ainda a carregar; `null` = sem linha em `booking_ratings`. */
+  const [passengerBookingRating, setPassengerBookingRating] = useState<
+    PassengerBookingRating | null | undefined
+  >(undefined);
   const insets = useSafeAreaInsets();
 
   async function handleCancelTrip() {
@@ -149,8 +155,10 @@ export function TripDetailScreen({ navigation, route }: Props) {
     }
     let cancelled = false;
     (async () => {
+      setPassengerBookingRating(undefined);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
+        setPassengerBookingRating(null);
         setLoading(false);
         return;
       }
@@ -164,6 +172,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
         .single();
       if (cancelled || bookErr || !booking) {
         if (!cancelled) setTripShipments([]);
+        if (!cancelled) setPassengerBookingRating(null);
         setLoading(false);
         return;
       }
@@ -247,6 +256,20 @@ export function TripDetailScreen({ navigation, route }: Props) {
         }
       } else if (!cancelled) {
         setTripShipments([]);
+      }
+      if (!cancelled && booking.id) {
+        const { data: br } = await supabase
+          .from('booking_ratings')
+          .select('rating, comment')
+          .eq('booking_id', booking.id)
+          .maybeSingle();
+        if (!cancelled) {
+          setPassengerBookingRating(
+            br ? { rating: Number(br.rating), comment: br.comment ?? null } : null
+          );
+        }
+      } else if (!cancelled) {
+        setPassengerBookingRating(null);
       }
       setLoading(false);
     })();
@@ -418,7 +441,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
               <View style={styles.mapClip}>
                 <MapboxMap style={styles.map} initialRegion={mapRegion!} scrollEnabled={false} showControls={false}>
                   {routeCoords && routeCoords.length > 0 && (
-                    <MapboxPolyline coordinates={routeCoords} strokeColor={COLORS.black} strokeWidth={4} />
+                    <MapboxPolyline coordinates={routeCoords} strokeWidth={4} />
                   )}
                   {driverOnWay ? (
                     <MapboxMarker
@@ -433,17 +456,17 @@ export function TripDetailScreen({ navigation, route }: Props) {
                       id="origin"
                       coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }}
                       anchor={{ x: 0.5, y: 0.5 }}
-                      icon={require('../../../assets/icons/icon-partida.png')}
-                      iconSize={17}
-                    />
+                    >
+                      <View style={styles.markerOrigin} />
+                    </MapboxMarker>
                   )}
                   <MapboxMarker
                     id="destination"
                     coordinate={{ latitude: detail.destination_lat, longitude: detail.destination_lng }}
                     anchor={{ x: 0.5, y: 0.5 }}
-                    icon={require('../../../assets/icons/icon-destino.png')}
-                    iconSize={14}
-                  />
+                  >
+                    <View style={styles.markerDest} />
+                  </MapboxMarker>
                 </MapboxMap>
               </View>
               <TouchableOpacity
@@ -501,6 +524,56 @@ export function TripDetailScreen({ navigation, route }: Props) {
             <Text style={styles.receiptButtonText}>Recibo</Text>
           </TouchableOpacity>
         </View>
+
+        {isCompleted && passengerBookingRating !== undefined && passengerBookingRating === null && (
+          <View style={styles.ratingPromptCard}>
+            <MaterialIcons name="star" size={22} color="#CA8A04" style={styles.ratingPromptIcon} />
+            <Text style={styles.ratingPromptTitle}>Como foi com {detail.driver_name}?</Text>
+            <Text style={styles.ratingPromptSubtitle}>
+              Toque nas estrelas para abrir a avaliação (leva poucos segundos). Sua nota ajuda o motorista e outros
+              passageiros.
+            </Text>
+            <View style={styles.ratingPromptStars}>
+              {[1, 2, 3, 4, 5].map((n) => (
+                <TouchableOpacity
+                  key={n}
+                  onPress={() => navigation.navigate('RateTrip', { bookingId: detail.id, initialRating: n })}
+                  style={styles.ratingPromptStarHit}
+                  activeOpacity={0.75}
+                >
+                  <MaterialIcons name="star-border" size={36} color="#CA8A04" />
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity
+              style={styles.ratingPromptCta}
+              activeOpacity={0.85}
+              onPress={() => navigation.navigate('RateTrip', { bookingId: detail.id })}
+            >
+              <Text style={styles.ratingPromptCtaText}>Avaliar com comentário</Text>
+              <MaterialIcons name="chevron-right" size={22} color={COLORS.black} />
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {isCompleted && passengerBookingRating != null && (
+          <View style={styles.ratingDoneBanner}>
+            <MaterialIcons name="check-circle" size={22} color="#16a34a" />
+            <View style={styles.ratingDoneBody}>
+              <Text style={styles.ratingDoneTitle}>Obrigado pela avaliação</Text>
+              <Text style={styles.ratingDoneStars}>
+                {'★'.repeat(passengerBookingRating.rating)}
+                {'☆'.repeat(5 - passengerBookingRating.rating)}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('RateTrip', { bookingId: detail.id })}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.ratingDoneEdit}>Alterar</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         <View style={styles.routeSection}>
           <View style={styles.routeRow}>
@@ -577,13 +650,23 @@ export function TripDetailScreen({ navigation, route }: Props) {
               <Text style={styles.actionButtonText}>Gorjeta</Text>
             </TouchableOpacity>
           </View>
-          <View style={styles.actionRow}>
-            <MaterialIcons name="star-outline" size={20} color={COLORS.neutral700} />
-            <Text style={styles.actionLabel}>Sem avaliação</Text>
-            <TouchableOpacity style={styles.actionButton} activeOpacity={0.8}>
-              <Text style={styles.actionButtonText}>Avaliar</Text>
-            </TouchableOpacity>
-          </View>
+          {isCompleted && passengerBookingRating !== undefined && (
+            <View style={styles.actionRow}>
+              <MaterialIcons name="star-outline" size={20} color={COLORS.neutral700} />
+              <Text style={styles.actionLabel} numberOfLines={2}>
+                {passengerBookingRating
+                  ? `${'★'.repeat(passengerBookingRating.rating)}${'☆'.repeat(5 - passengerBookingRating.rating)} · avaliado`
+                  : 'Ainda sem a sua avaliação'}
+              </Text>
+              <TouchableOpacity
+                style={styles.actionButton}
+                activeOpacity={0.8}
+                onPress={() => navigation.navigate('RateTrip', { bookingId: detail.id })}
+              >
+                <Text style={styles.actionButtonText}>{passengerBookingRating ? 'Alterar' : 'Avaliar'}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
 
         {isInProgress && (
@@ -721,6 +804,23 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   mapLoadingText: { fontSize: 13, color: COLORS.neutral700 },
+  /** Mesmos marcadores que `TripDetailScreen` no app motorista. */
+  markerOrigin: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#111827',
+    borderWidth: 2.5,
+    borderColor: '#FFFFFF',
+  },
+  markerDest: {
+    width: 14,
+    height: 14,
+    borderRadius: 3,
+    backgroundColor: '#111827',
+    borderWidth: 2.5,
+    borderColor: '#FFFFFF',
+  },
   trackButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -915,4 +1015,62 @@ const styles = StyleSheet.create({
   rescheduleSlotChipSelected: { backgroundColor: '#FBBF24' },
   rescheduleSlotText: { fontSize: 14, fontWeight: '500', color: COLORS.black },
   rescheduleSlotTextSelected: { color: COLORS.black },
+  ratingPromptCard: {
+    marginHorizontal: 24,
+    marginTop: 16,
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: '#FEF9C3',
+    borderWidth: 1,
+    borderColor: '#FDE047',
+  },
+  ratingPromptIcon: { alignSelf: 'center', marginBottom: 8 },
+  ratingPromptTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: COLORS.black,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  ratingPromptSubtitle: {
+    fontSize: 14,
+    color: COLORS.neutral700,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 14,
+  },
+  ratingPromptStars: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 12,
+  },
+  ratingPromptStarHit: { padding: 4 },
+  ratingPromptCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 12,
+    backgroundColor: '#FBBF24',
+    borderRadius: 10,
+  },
+  ratingPromptCtaText: { fontSize: 15, fontWeight: '700', color: COLORS.black },
+  ratingDoneBanner: {
+    marginHorizontal: 24,
+    marginTop: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  ratingDoneBody: { flex: 1 },
+  ratingDoneTitle: { fontSize: 15, fontWeight: '700', color: COLORS.black },
+  ratingDoneStars: { fontSize: 14, color: COLORS.neutral700, marginTop: 4 },
+  ratingDoneEdit: { fontSize: 14, fontWeight: '600', color: COLORS.black, textDecorationLine: 'underline' },
 });

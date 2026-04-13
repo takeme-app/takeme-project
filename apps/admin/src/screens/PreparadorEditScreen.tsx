@@ -9,6 +9,7 @@ import {
   fetchPreparadorEditDetail,
   fetchPreparadorCandidates,
   fetchExcursionStatusHistory,
+  fetchPreparadorEncomendaDetail,
   savePreparadorExcursionFields,
   saveProfileFields,
   saveWorkerProfileFields,
@@ -16,7 +17,9 @@ import {
   formatCurrencyBRL,
   updateExcursionStatus,
 } from '../data/queries';
-import type { PreparadorEditDetail, PreparadorCandidate, ExcursionStatusHistoryRow } from '../data/types';
+import type { PreparadorEditDetail, PreparadorCandidate, ExcursionStatusHistoryRow, PreparadorEncomendaDetail } from '../data/types';
+import { supabase } from '../lib/supabase';
+import { resolveStorageDisplayUrl as resolveAvatar } from '../lib/storageDisplayUrl';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -216,10 +219,23 @@ export default function PreparadorEditScreen() {
   const state = (location.state ?? {}) as LocationState;
 
   const tabContext: TabContext = state.tab === 'excursoes' ? 'excursoes' : 'encomendas';
+  const isEncEditMode = /\/preparadores\/[^/]+\/editar$/.test(location.pathname);
   const breadcrumbParent = tabContext === 'excursoes' ? 'Preparador de excursões' : 'Preparador de encomendas';
   const dadosSectionTitle = tabContext === 'excursoes' ? 'Dados do preparador de excursões' : 'Dados do preparador de encomendas';
 
   const [detail, setDetail] = useState<PreparadorEditDetail | null>(null);
+  const [encDetail, setEncDetail] = useState<PreparadorEncomendaDetail | null>(null);
+  // Edit states for encomenda preparador
+  const [encNome, setEncNome] = useState('');
+  const [encCpf, setEncCpf] = useState('');
+  const [encIdade, setEncIdade] = useState('');
+  const [encCidade, setEncCidade] = useState('');
+  const [encExperiencia, setEncExperiencia] = useState('');
+  const [encBanco, setEncBanco] = useState('');
+  const [encAgencia, setEncAgencia] = useState('');
+  const [encConta, setEncConta] = useState('');
+  const [encPix, setEncPix] = useState('');
+  const [encSaving, setEncSaving] = useState(false);
   const [candidates, setCandidates] = useState<PreparadorCandidate[]>([]);
   const [history, setHistory] = useState<ExcursionStatusHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -257,6 +273,55 @@ export default function PreparadorEditScreen() {
 
   const reload = useCallback(async () => {
     if (!id) return;
+    if (tabContext === 'encomendas' || tabContext === 'excursoes') {
+      // Worker-focused view — fetch full worker profile data (like motorista)
+      const isShipments = tabContext === 'encomendas';
+      const [{ data: pp }, { data: wp }, { data: vehicles }, { data: shipments }, { data: ratings }, { data: excursions }] = await Promise.all([
+        (supabase as any).from('profiles').select('full_name, phone, avatar_url, cpf, city').eq('id', id).maybeSingle(),
+        (supabase as any).from('worker_profiles').select('status, subtype, cpf, age, experience_years, bank_code, bank_agency, bank_account, pix_key, cnh_document_url, cnh_document_back_url, background_check_url, city').eq('id', id).maybeSingle(),
+        isShipments
+          ? (supabase as any).from('vehicles').select('id, year, model, plate, passenger_capacity, vehicle_document_url, status').eq('worker_id', id).order('created_at', { ascending: false }).limit(5)
+          : Promise.resolve({ data: [] }),
+        isShipments
+          ? (supabase as any).from('shipments').select('id, origin_address, destination_address, status, amount_cents, created_at').eq('driver_id', id).order('created_at', { ascending: false }).limit(20)
+          : Promise.resolve({ data: [] }),
+        (supabase as any).from('worker_ratings').select('id, rating, comment, created_at, rated_by').eq('worker_id', id).order('created_at', { ascending: false }).limit(20),
+        !isShipments
+          ? (supabase as any).from('excursion_requests').select('id, destination, excursion_date, status, scheduled_departure_at, created_at').eq('preparer_id', id).order('created_at', { ascending: false }).limit(20)
+          : Promise.resolve({ data: [] }),
+      ]);
+      const avatarResolved = pp?.avatar_url ? await resolveAvatar(pp.avatar_url) : null;
+      // Populate edit states
+      setEncNome(pp?.full_name || '');
+      setEncCpf(wp?.cpf || pp?.cpf || '');
+      setEncIdade(wp?.age ? String(wp.age) : '');
+      setEncCidade(wp?.city || pp?.city || '');
+      setEncExperiencia(wp?.experience_years ? String(wp.experience_years) : '');
+      setEncBanco(wp?.bank_code || '');
+      setEncAgencia(wp?.bank_agency || '');
+      setEncConta(wp?.bank_account || '');
+      setEncPix(wp?.pix_key || '');
+
+      setEncDetail({
+        id, kind: 'shipment', originAddress: '—', destinationAddress: '—',
+        status: wp?.status || 'pending', statusLabel: wp?.status === 'approved' ? 'Ativo' : 'Pendente',
+        amountCents: 0, packageSize: null, photoUrl: null,
+        recipientName: null, recipientPhone: null, recipientEmail: null,
+        senderName: null, instructions: null, createdAt: '',
+        preparerProfile: {
+          id, fullName: pp?.full_name || null, phone: pp?.phone || null,
+          avatarUrl: avatarResolved, status: wp?.status || null, subtype: wp?.subtype || null,
+        },
+        _workerData: wp || {},
+        _profileData: pp || {},
+        _vehicles: vehicles || [],
+        _shipments: shipments || [],
+        _ratings: ratings || [],
+        _excursions: excursions || [],
+      } as any);
+      setLoading(false);
+      return;
+    }
     const [d, c, h] = await Promise.all([
       fetchPreparadorEditDetail(id),
       fetchPreparadorCandidates(),
@@ -457,6 +522,194 @@ export default function PreparadorEditScreen() {
   if (loading) {
     return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64, ...font } },
       React.createElement('span', { style: { fontSize: 16, color: '#767676' } }, 'Carregando…'));
+  }
+
+  // ── Worker-focused preparador detail (similar to MotoristaEditScreen) ──
+  if (tabContext === 'encomendas' || tabContext === 'excursoes') {
+    const isShipmentsTab = tabContext === 'encomendas';
+    if (!encDetail) {
+      return React.createElement('div', { style: { padding: 24, ...font } },
+        React.createElement('p', { style: { color: '#b53838' } }, 'Não foi possível carregar os dados deste preparador.'),
+        React.createElement('button', { type: 'button', onClick: () => navigate('/preparadores'), style: { marginTop: 16, cursor: 'pointer' } }, 'Voltar à lista'));
+    }
+    const prep = encDetail.preparerProfile;
+    const workerStatusStyle = {
+      approved: { bg: '#b0e8d1', color: '#174f38', label: 'Aprovado' },
+      pending: { bg: '#fee59a', color: '#654c01', label: 'Pendente' },
+      inactive: { bg: '#e2e2e2', color: '#545454', label: 'Inativo' },
+      rejected: { bg: '#eeafaa', color: '#551611', label: 'Rejeitado' },
+      suspended: { bg: '#eeafaa', color: '#551611', label: 'Suspenso' },
+    } as Record<string, { bg: string; color: string; label: string }>;
+    const stInfo = workerStatusStyle[prep?.status || ''] || workerStatusStyle.pending;
+    return React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%', maxWidth: 1044, boxSizing: 'border-box' as const } },
+      // Breadcrumb
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 600, ...font } },
+        React.createElement('span', { style: { color: '#767676', cursor: 'pointer' }, onClick: () => navigate('/preparadores') }, breadcrumbParent),
+        chevronBreadcrumbSvg,
+        React.createElement('span', { style: { color: '#0d0d0d' } }, 'Visualização')),
+      // Header
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' as const, gap: 12 } },
+        React.createElement('button', { type: 'button', onClick: () => navigate(-1), style: { display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#0d0d0d', padding: 0, ...font } }, arrowBackSvg, 'Voltar'),
+        isEncEditMode
+          ? React.createElement('button', {
+              type: 'button',
+              disabled: encSaving,
+              onClick: async () => {
+                setEncSaving(true);
+                try {
+                  await saveProfileFields(id!, { full_name: encNome });
+                  await saveWorkerProfileFields(id!, {
+                    cpf: encCpf, age: encIdade ? Number(encIdade) : null,
+                    experience_years: encExperiencia ? Number(encExperiencia) : null,
+                    city: encCidade, bank_code: encBanco, bank_agency: encAgencia,
+                    bank_account: encConta, pix_key: encPix,
+                  });
+                  setToast('Alterações salvas');
+                  await reload();
+                } catch { setToast('Erro ao salvar'); }
+                setEncSaving(false);
+              },
+              style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 24px', borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: encSaving ? 'wait' : 'pointer', opacity: encSaving ? 0.7 : 1, ...font },
+            }, checkSvg, encSaving ? 'Salvando…' : 'Salvar alterações')
+          : React.createElement('button', {
+              type: 'button',
+              onClick: () => navigate(`/preparadores/${id}/editar`, { state: { tab: tabContext } }),
+              style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 24px', borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font },
+            }, 'Editar dados')),
+      // Info banner
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 16, padding: '12px 16px', background: '#fff8e6', border: '0.5px solid #cba04b', borderRadius: 8, width: '100%', boxSizing: 'border-box' as const } },
+        toastAlertSvg,
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } },
+          isEncEditMode
+            ? `Você está editando os dados do ${isShipmentsTab ? 'preparador de encomendas' : 'preparador de excursões'}`
+            : `Você está visualizando os dados do ${isShipmentsTab ? 'preparador de encomendas' : 'preparador de excursões'}`)),
+      // Status bar
+      prep ? React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, padding: '16px 20px', background: '#fff', borderRadius: 12, border: '1px solid #e2e2e2' } },
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Status do preparador:'),
+        React.createElement('span', { style: { padding: '4px 12px', borderRadius: 8, background: stInfo.bg, color: stInfo.color, fontSize: 13, fontWeight: 600, ...font } }, stInfo.label)) : null,
+      // Dados do preparador
+      React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, dadosSectionTitle),
+      prep ? (() => {
+        const wd = (encDetail as any)._workerData || {};
+        const pd = (encDetail as any)._profileData || {};
+        const vehs = ((encDetail as any)._vehicles || []) as any[];
+        const ships = ((encDetail as any)._shipments || []) as any[];
+        const fmtBRL = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`;
+        const shipStatusMap: Record<string, string> = { pending_review: 'Aguardando', confirmed: 'Confirmada', in_progress: 'Em andamento', delivered: 'Entregue', cancelled: 'Cancelada' };
+
+        return React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24 } },
+          // Main card: dados básicos + bancários + documentos
+          React.createElement('div', { style: { background: '#fff', borderRadius: 16, border: '1px solid #e2e2e2', padding: 24, display: 'flex', flexDirection: 'column' as const, gap: 20 } },
+            // Avatar + Nome
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 16, paddingBottom: 16, borderBottom: '1px solid #e2e2e2' } },
+              avatarBlock(prep.fullName || '?', prep.avatarUrl, 64),
+              React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+                React.createElement('span', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', ...font } }, prep.fullName || '—'),
+                React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, prep.phone || '—'))),
+            // Dados básicos
+            React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#cba04b', margin: 0, ...font } }, 'Dados básicos'),
+            isEncEditMode ? editableField('Nome completo', encNome, setEncNome) : readOnlyBox('Nome completo', prep.fullName || '—'),
+            React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+              isEncEditMode ? editableField('CPF', encCpf, setEncCpf) : readOnlyBox('CPF', wd.cpf || pd.cpf || '—'),
+              isEncEditMode ? editableField('Idade', encIdade, setEncIdade) : readOnlyBox('Idade', wd.age ? `${wd.age} anos` : '—')),
+            React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+              isEncEditMode ? editableField('Cidade', encCidade, setEncCidade) : readOnlyBox('Cidade', wd.city || pd.city || '—'),
+              isEncEditMode ? editableField('Anos de experiência', encExperiencia, setEncExperiencia) : readOnlyBox('Anos de experiência', wd.experience_years ? `${wd.experience_years} anos` : '—')),
+            // Dados bancários
+            React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#cba04b', margin: 0, ...font } }, 'Dados bancários'),
+            React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+              isEncEditMode ? editableField('Banco', encBanco, setEncBanco) : readOnlyBox('Banco', wd.bank_code || '—'),
+              isEncEditMode ? editableField('Agência', encAgencia, setEncAgencia) : readOnlyBox('Agência', wd.bank_agency || '—')),
+            React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+              isEncEditMode ? editableField('Conta', encConta, setEncConta) : readOnlyBox('Conta', wd.bank_account || '—'),
+              isEncEditMode ? editableField('Chave Pix', encPix, setEncPix) : readOnlyBox('Chave Pix', wd.pix_key || '—')),
+            // Documentos
+            React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#cba04b', margin: 0, ...font } }, 'Documentos'),
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+              ...[
+                { label: 'CNH (frente)', url: wd.cnh_document_url },
+                { label: 'CNH (verso)', url: wd.cnh_document_back_url },
+                { label: 'Antecedentes criminais', url: wd.background_check_url },
+              ].map((doc) =>
+                React.createElement('div', { key: doc.label, style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #f1f1f1' } },
+                  React.createElement('span', { style: { fontSize: 14, ...font } }, doc.label),
+                  doc.url
+                    ? React.createElement('a', { href: doc.url, target: '_blank', rel: 'noopener noreferrer', style: { fontSize: 13, color: '#3b82f6', ...font } }, 'Ver documento')
+                    : React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, 'Não enviado'))))),
+
+          // Veículos (apenas para preparador de encomendas)
+          isShipmentsTab ? React.createElement('div', { style: { background: '#fff', borderRadius: 16, border: '1px solid #e2e2e2', padding: 24, display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+            React.createElement('h3', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Veículos'),
+            vehs.length === 0 ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhum veículo cadastrado.') : null,
+            ...vehs.map((v: any) => {
+              const vSt = v.status === 'approved' ? { bg: '#b0e8d1', color: '#174f38', label: 'Aprovado' } : v.status === 'pending' ? { bg: '#fee59a', color: '#654c01', label: 'Pendente' } : { bg: '#eeafaa', color: '#551611', label: v.status || '—' };
+              return React.createElement('div', { key: v.id, style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const, padding: '12px 0', borderBottom: '1px solid #f1f1f1', alignItems: 'flex-end' } },
+                readOnlyBox('Modelo', v.model || '—'),
+                readOnlyBox('Ano', v.year ? String(v.year) : '—'),
+                readOnlyBox('Placa', v.plate || '—'),
+                readOnlyBox('Capacidade', v.passenger_capacity ? `${v.passenger_capacity} lugares` : '—'),
+                React.createElement('span', { style: { fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 8, background: vSt.bg, color: vSt.color, alignSelf: 'center', ...font } }, vSt.label));
+            }))
+          : null,
+
+          // Avaliações
+          (() => {
+            const rats = ((encDetail as any)._ratings || []) as any[];
+            const avgRating = rats.length > 0
+              ? (rats.reduce((s: number, r: any) => s + (r.rating || 0), 0) / rats.length).toFixed(1)
+              : '—';
+            return React.createElement('div', { style: { background: '#fff', borderRadius: 16, border: '1px solid #e2e2e2', padding: 24, display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+                React.createElement('h3', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, `Avaliações (${rats.length})`),
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+                  starSvg,
+                  React.createElement('span', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', ...font } }, avgRating))),
+              rats.length === 0
+                ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhuma avaliação recebida.')
+                : null,
+              ...rats.map((r: any) =>
+                React.createElement('div', { key: r.id, style: { padding: 12, background: '#f6f6f6', borderRadius: 12, display: 'flex', flexDirection: 'column' as const, gap: 6 } },
+                  React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+                      ...Array.from({ length: 5 }, (_, i) =>
+                        React.createElement('span', { key: i, style: { color: i < (r.rating || 0) ? '#F59E0B' : '#e2e2e2', fontSize: 16 } }, '\u2605'))),
+                    React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } },
+                      r.created_at ? new Date(r.created_at).toLocaleDateString('pt-BR') : '—')),
+                  r.comment ? React.createElement('p', { style: { fontSize: 14, color: '#0d0d0d', margin: 0, lineHeight: 1.5, ...font } }, r.comment) : null)));
+          })(),
+
+          // Histórico de atividades
+          isShipmentsTab
+            ? React.createElement('div', { style: { background: '#fff', borderRadius: 16, border: '1px solid #e2e2e2', padding: 24, display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+                React.createElement('h3', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, `Histórico de encomendas (${ships.length})`),
+                ships.length === 0 ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhuma encomenda registrada.') : null,
+                ...ships.map((s: any) =>
+                  React.createElement('div', { key: s.id, style: { display: 'flex', alignItems: 'center', gap: 16, padding: 12, background: '#f6f6f6', borderRadius: 12 } },
+                    React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+                      React.createElement('p', { style: { margin: 0, fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } },
+                        `${s.origin_address?.split(',')[0] || '—'} → ${s.destination_address?.split(',')[0] || '—'}`),
+                      React.createElement('p', { style: { margin: 0, fontSize: 12, color: '#767676', ...font } },
+                        s.created_at ? new Date(s.created_at).toLocaleDateString('pt-BR') : '—')),
+                    React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#0d0d0d', ...font } }, fmtBRL(s.amount_cents || 0)),
+                    React.createElement('span', { style: { fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: s.status === 'delivered' ? '#b0e8d1' : s.status === 'cancelled' ? '#eeafaa' : '#fee59a', color: s.status === 'delivered' ? '#174f38' : s.status === 'cancelled' ? '#551611' : '#654c01', ...font } },
+                      shipStatusMap[s.status] || s.status))))
+            : (() => {
+                const excs = ((encDetail as any)._excursions || []) as any[];
+                const excStatusMap: Record<string, string> = { pending: 'Pendente', approved: 'Aprovada', in_progress: 'Em andamento', completed: 'Concluída', cancelled: 'Cancelada' };
+                return React.createElement('div', { style: { background: '#fff', borderRadius: 16, border: '1px solid #e2e2e2', padding: 24, display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+                  React.createElement('h3', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, `Histórico de excursões (${excs.length})`),
+                  excs.length === 0 ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhuma excursão registrada.') : null,
+                  ...excs.map((e: any) =>
+                    React.createElement('div', { key: e.id, style: { display: 'flex', alignItems: 'center', gap: 16, padding: 12, background: '#f6f6f6', borderRadius: 12 } },
+                      React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+                        React.createElement('p', { style: { margin: 0, fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, e.destination || '—'),
+                        React.createElement('p', { style: { margin: 0, fontSize: 12, color: '#767676', ...font } },
+                          (e.scheduled_departure_at || e.excursion_date) ? new Date(e.scheduled_departure_at || e.excursion_date).toLocaleDateString('pt-BR') : '—')),
+                      React.createElement('span', { style: { fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: e.status === 'completed' ? '#b0e8d1' : e.status === 'cancelled' ? '#eeafaa' : '#fee59a', color: e.status === 'completed' ? '#174f38' : e.status === 'cancelled' ? '#551611' : '#654c01', ...font } },
+                        excStatusMap[e.status] || e.status))));
+              })());
+      })()
+      : React.createElement('p', { style: { fontSize: 14, color: '#767676', ...font } }, 'Nenhum preparador encontrado.'));
   }
 
   if (!id || !detail) {

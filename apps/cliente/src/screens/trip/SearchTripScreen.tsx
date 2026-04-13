@@ -25,6 +25,7 @@ import {
   type ClientScheduledTripItem,
 } from '../../lib/clientScheduledTrips';
 import { formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
+import { MAPBOX_DESTINATION_MARKER_COLOR, MAPBOX_ORIGIN_MARKER_COLOR } from '@take-me/shared';
 
 type Place = { address: string; latitude: number; longitude: number };
 
@@ -589,11 +590,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
         scrollEnabled={true}
       >
         {destination && routeCoords != null && routeCoords.length >= 2 && (
-          <MapboxPolyline
-            coordinates={routeCoords}
-            strokeColor={COLORS.black}
-            strokeWidth={4}
-          />
+          <MapboxPolyline coordinates={routeCoords} strokeWidth={4} />
         )}
         {userLocationCoords && (
           <MapboxMarker
@@ -612,7 +609,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
             anchor={{ x: 0.5, y: 1 }}
             title="Partida"
             description={origin.address}
-            pinColor="#0d0d0d"
+            pinColor={MAPBOX_ORIGIN_MARKER_COLOR}
           />
         )}
         {destination && (
@@ -622,7 +619,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
             anchor={{ x: 0.5, y: 1 }}
             title="Destino"
             description={destination.address}
-            pinColor="#dc2626"
+            pinColor={MAPBOX_DESTINATION_MARKER_COLOR}
           />
         )}
         {scheduledTrips.map((trip) => (

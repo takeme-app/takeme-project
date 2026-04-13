@@ -173,6 +173,21 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
           </View>
         </View>
 
+        <TouchableOpacity
+          style={styles.conversasCard}
+          activeOpacity={0.75}
+          onPress={() => navigation.navigate('Profile', { screen: 'Conversations' })}
+        >
+          <View style={styles.conversasIconWrap}>
+            <MaterialIcons name="chat-bubble-outline" size={22} color={COLORS.black} />
+          </View>
+          <View style={styles.conversasTextWrap}>
+            <Text style={styles.conversasTitle}>Mensagens</Text>
+            <Text style={styles.conversasSubtitle}>Motorista, suporte e encomendas</Text>
+          </View>
+          <MaterialIcons name="chevron-right" size={24} color={COLORS.neutral700} />
+        </TouchableOpacity>
+
         {/* Destinos recentes (máx. 2) — só exibe quando houver histórico */}
         {recentDestinations.length > 0 && (
           <View style={styles.recentCard}>
@@ -183,15 +198,16 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
                 key={index}
                 style={styles.recentRow}
                 activeOpacity={0.7}
-                onPress={() => navigateToTripStack('SearchTrip', {
-                  destination: {
-                    address: item.address,
-                    city: item.city,
-                    latitude: item.latitude,
-                    longitude: item.longitude,
-                  },
-                  immediateTrip: true,
-                })}
+                onPress={() =>
+                  navigateToTripStack('PlanTrip', {
+                    initialDestination: {
+                      address: item.address,
+                      city: item.city,
+                      latitude: item.latitude,
+                      longitude: item.longitude,
+                    },
+                  })
+                }
               >
                 <View style={styles.recentIconWrap}>
                   <MaterialIcons name="access-time" size={24} color={COLORS.black} />
@@ -447,6 +463,38 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: COLORS.black,
     marginLeft: 4,
+  },
+  conversasCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    borderWidth: 1,
+    borderColor: COLORS.neutral400,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  conversasIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: COLORS.neutral300,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  conversasTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  conversasTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: COLORS.black,
+  },
+  conversasSubtitle: {
+    fontSize: 13,
+    fontWeight: '400',
+    color: COLORS.neutral700,
   },
   recentCard: {
     borderWidth: 1,

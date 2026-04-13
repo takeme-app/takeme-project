@@ -189,7 +189,10 @@ export type TripLiveDriverDisplay = {
 
 export type TripStackParamList = {
   WhenNeeded: undefined;
-  PlanTrip: undefined;
+  /** `initialDestination`: abre o mesmo ecrã que «Viagens» com destino já escolhido (ex.: destinos recentes na home). */
+  PlanTrip: {
+    initialDestination?: { address: string; city?: string; latitude?: number; longitude?: number };
+  };
   PlanRide: { origin?: TripPlaceParam; destination?: TripPlaceParam; scheduledDateId?: string; scheduledTimeSlot?: string };
   ChooseTime: undefined;
   SearchTrip: { destination?: { address: string; city?: string; latitude?: number; longitude?: number }; immediateTrip?: boolean };
@@ -202,7 +205,7 @@ export type TripStackParamList = {
   };
   DriverOnTheWay: TripLiveDriverDisplay | undefined;
   TripInProgress: TripLiveDriverDisplay | undefined;
-  RateTrip: { bookingId?: string };
+  RateTrip: { bookingId?: string; initialRating?: number };
 };
 
 /** Telas de acompanhamento reutilizadas no stack de Atividades e no fluxo TripStack. */

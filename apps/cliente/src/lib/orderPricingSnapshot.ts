@@ -63,6 +63,26 @@ export function shipmentPricingSnapshotFromParams(params: {
   return flatPricingSnapshot(amountCents);
 }
 
+/** Aplicar desconto de promoção a um snapshot existente. */
+export function applyPromotionToSnapshot(
+  snap: OrderPricingSnapshotInsert,
+  promoDiscountCents: number,
+  adjustedAdminPct: number,
+): OrderPricingSnapshotInsert & { promotion_id?: string; admin_pct_applied?: number } {
+  const discount = clampNonNegativeInt(Math.min(promoDiscountCents, snap.amount_cents));
+  const newAmount = Math.max(0, snap.amount_cents - discount);
+  const newSubtotal = Math.max(0, snap.pricing_subtotal_cents - discount);
+  const newFee = clampNonNegativeInt(Math.round(newSubtotal * adjustedAdminPct / 100));
+  return {
+    ...snap,
+    promo_discount_cents: discount,
+    pricing_subtotal_cents: newSubtotal,
+    platform_fee_cents: newFee,
+    amount_cents: newAmount,
+    admin_pct_applied: adjustedAdminPct,
+  };
+}
+
 /** Campos de precificação para INSERT em `shipments` (snapshot + FK do trecho). */
 export function shipmentOrderInsertFromQuoteParams(params: {
   pricingRouteId: string;

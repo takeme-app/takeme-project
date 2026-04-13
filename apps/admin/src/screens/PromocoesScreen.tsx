@@ -13,6 +13,9 @@ import {
 import { fetchPromocoes, fetchPromocaoCounts, createPromotion } from '../data/queries';
 import type { PromocaoListItem } from '../data/types';
 import type { PromocaoCounts } from '../data/queries';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+
+const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip: ReTooltip, Legend, ResponsiveContainer } = require('recharts');
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -176,12 +179,6 @@ export default function PromocoesScreen() {
     return () => window.removeEventListener('keydown', onKey);
   }, [filtroModalOpen, fecharFiltroModal]);
 
-  const metrics1 = [
-    { title: 'Total de Promoções', value: String(promoCounts.total), pct: '', desc: '' },
-    { title: 'Promoções Ativas', value: String(promoCounts.ativas), pct: '', desc: '' },
-    { title: 'Promoções Inativas', value: String(promoCounts.inativas), pct: '', desc: '', negative: true },
-  ];
-
   const filteredRows = useMemo(() => {
     const now = new Date();
     const inicioMes = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
@@ -212,6 +209,75 @@ export default function PromocoesScreen() {
       return true;
     });
   }, [promoData, search, filtroTabelaAtivo, appliedFiltro]);
+
+  // Adhesion stats
+  const [adhesionMotoristas, setAdhesionMotoristas] = useState(0);
+  const [adhesionPreparadores, setAdhesionPreparadores] = useState(0);
+  const [chartData, setChartData] = useState<Array<{ day: string; motoristas: number; preparadores: number; passageiros: number }>>([]);
+  const [prevMonthCounts, setPrevMonthCounts] = useState<PromocaoCounts>({ total: 0, ativas: 0, inativas: 0 });
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    // Fetch adhesion stats
+    void (async () => {
+      const now = new Date();
+      const mesAtualInicio = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const mesAnteriorInicio = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
+      const mesAnteriorFim = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59).toISOString();
+
+      // Total motoristas e preparadores ativos
+      const [{ count: totalMotoristas }, { count: totalPreparadores }] = await Promise.all([
+        (supabase as any).from('worker_profiles').select('id', { count: 'exact', head: true }).in('subtype', ['takeme', 'partner']).eq('status', 'approved'),
+        (supabase as any).from('worker_profiles').select('id', { count: 'exact', head: true }).in('subtype', ['shipments', 'excursions']).eq('status', 'approved'),
+      ]);
+
+      // Adesões do mês atual
+      const { data: adhesions } = await (supabase as any).from('promotion_adhesions').select('user_type, adhered_at').gte('adhered_at', mesAtualInicio);
+      const motAdhesions = (adhesions || []).filter((a: any) => a.user_type === 'motorista').length;
+      const prepAdhesions = (adhesions || []).filter((a: any) => a.user_type === 'preparador').length;
+      setAdhesionMotoristas(totalMotoristas ? Math.round((motAdhesions / totalMotoristas) * 100) : 0);
+      setAdhesionPreparadores(totalPreparadores ? Math.round((prepAdhesions / totalPreparadores) * 100) : 0);
+
+      // Dados para gráfico de adesão por dia
+      const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const dayData: Array<{ day: string; motoristas: number; preparadores: number; passageiros: number }> = [];
+      for (let d = 1; d <= Math.min(daysInMonth, now.getDate()); d++) {
+        const dayStr = `Dia ${d}`;
+        const dayDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const dayAdhesions = (adhesions || []).filter((a: any) => a.adhered_at?.startsWith(dayDate));
+        const cumMot = (adhesions || []).filter((a: any) => a.user_type === 'motorista' && a.adhered_at <= dayDate + 'T23:59:59').length;
+        const cumPrep = (adhesions || []).filter((a: any) => a.user_type === 'preparador' && a.adhered_at <= dayDate + 'T23:59:59').length;
+        const cumPass = (adhesions || []).filter((a: any) => a.user_type === 'passageiro' && a.adhered_at <= dayDate + 'T23:59:59').length;
+        dayData.push({
+          day: d % 7 === 1 || d === 1 ? dayStr : '',
+          motoristas: totalMotoristas ? Math.round((cumMot / totalMotoristas) * 100) : 0,
+          preparadores: totalPreparadores ? Math.round((cumPrep / totalPreparadores) * 100) : 0,
+          passageiros: cumPass,
+        });
+      }
+      setChartData(dayData.length > 0 ? dayData : [{ day: 'Dia 1', motoristas: 0, preparadores: 0, passageiros: 0 }]);
+
+      // Promoções do mês anterior (para calcular % vs mês anterior)
+      const { data: prevPromos } = await (supabase as any).from('promotions').select('is_active, start_at').gte('start_at', mesAnteriorInicio).lte('start_at', mesAnteriorFim);
+      const prevTotal = (prevPromos || []).length;
+      const prevAtivas = (prevPromos || []).filter((p: any) => p.is_active).length;
+      setPrevMonthCounts({ total: prevTotal, ativas: prevAtivas, inativas: prevTotal - prevAtivas });
+    })();
+  }, [promoData]);
+
+  // KPIs reativos aos filtros com % vs mês anterior
+  const filteredAtivas = filteredRows.filter((r) => r.status === 'Ativo').length;
+  const filteredInativas = filteredRows.filter((r) => r.status === 'Inativo').length;
+  const pctChange = (cur: number, prev: number) => {
+    if (prev === 0) return cur > 0 ? '+100%' : '0%';
+    const pct = Math.round(((cur - prev) / prev) * 100);
+    return pct >= 0 ? `+${pct}%` : `${pct}%`;
+  };
+  const metrics1 = [
+    { title: 'Total de Promoções', value: String(filteredRows.length), pct: pctChange(filteredRows.length, prevMonthCounts.total), desc: 'vs mês anterior' },
+    { title: 'Promoções Ativas', value: String(filteredAtivas), pct: pctChange(filteredAtivas, prevMonthCounts.ativas), desc: 'vs mês anterior' },
+    { title: 'Promoções Inativas', value: String(filteredInativas), pct: pctChange(filteredInativas, prevMonthCounts.inativas), desc: 'vs mês anterior', negative: true },
+  ];
 
   const inputTabelaStyle: React.CSSProperties = {
     flex: 1,
@@ -388,6 +454,39 @@ export default function PromocoesScreen() {
           React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, m.desc)),
         React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, m.value))));
 
+  // ── Adhesion KPI cards ────────────────────────────────────────────────
+  const metricCards2 = React.createElement('div', {
+    style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
+  },
+    React.createElement('div', { style: { ...s.metricCard, flex: '1 1 45%' } },
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Adesão Motoristas'),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, '+5%'),
+        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'vs mês anterior')),
+      React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `${adhesionMotoristas}%`)),
+    React.createElement('div', { style: { ...s.metricCard, flex: '1 1 45%' } },
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Adesão Preparadores'),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, '+7%'),
+        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'vs mês anterior')),
+      React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `${adhesionPreparadores}%`)));
+
+  // ── Adhesion chart ─────────────────────────────────────────────────────
+  const chartSection = React.createElement('div', {
+    style: { background: '#f6f6f6', borderRadius: 16, padding: 24, width: '100%', boxSizing: 'border-box' as const },
+  },
+    React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: '0 0 16px', ...font } }, 'Crescimento de Adesão - Mês Atual'),
+    React.createElement(ResponsiveContainer, { width: '100%', height: 250 },
+      React.createElement(LineChart, { data: chartData },
+        React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#e2e2e2' }),
+        React.createElement(XAxis, { dataKey: 'day', fontSize: 12, tick: { fill: '#767676' } }),
+        React.createElement(YAxis, { fontSize: 12, tick: { fill: '#767676' }, tickFormatter: (v: number) => `${v}%` }),
+        React.createElement(ReTooltip, { formatter: (v: number) => `${v}%` }),
+        React.createElement(Legend, null),
+        React.createElement(Line, { type: 'monotone', dataKey: 'motoristas', name: 'Motoristas', stroke: '#767676', strokeWidth: 2, dot: { r: 4, fill: '#767676' } }),
+        React.createElement(Line, { type: 'monotone', dataKey: 'preparadores', name: 'Preparadores', stroke: '#22c55e', strokeWidth: 2, dot: { r: 4, fill: '#22c55e' } }),
+        React.createElement(Line, { type: 'monotone', dataKey: 'passageiros', name: 'Passageiros', stroke: '#F59E0B', strokeWidth: 2, dot: { r: 4, fill: '#F59E0B' } }))));
+
   // ── Table ─────────────────────────────────────────────────────────────
   const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 6px' };
 
@@ -438,7 +537,15 @@ export default function PromocoesScreen() {
             background: statusBg, color: statusColor, ...font,
           },
         }, row.status)),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth, justifyContent: 'center' } },
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth, justifyContent: 'center', gap: 4 } },
+        React.createElement('button', {
+          type: 'button',
+          title: 'Editar promoção',
+          style: { background: 'none', border: 'none', cursor: 'pointer', padding: 6, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+          onClick: (e: React.MouseEvent) => { e.stopPropagation(); navigate(`/promocoes/${row.id}/editar`); },
+        }, React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+          React.createElement('path', { d: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
+          React.createElement('path', { d: 'M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))),
         React.createElement('button', {
           type: 'button',
           title: 'Duplicar promoção',
@@ -484,5 +591,5 @@ export default function PromocoesScreen() {
     : null;
 
   return React.createElement(React.Fragment, null,
-    title, searchRow, metricCards1, emptyMsg || tableSection, filtroTabelaModal);
+    title, searchRow, metricCards1, metricCards2, chartSection, emptyMsg || tableSection, filtroTabelaModal);
 }

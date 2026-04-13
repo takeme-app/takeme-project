@@ -14,7 +14,7 @@ import {
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -147,6 +147,7 @@ const cameraPickerOptions: ImagePicker.ImagePickerOptions = {
 
 export function ChatScreen({ navigation, route }: Props) {
   const { conversationId, participantName, participantAvatar } = route.params;
+  const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
@@ -550,6 +551,7 @@ export function ChatScreen({ navigation, route }: Props) {
             renderItem={renderItem}
             contentContainerStyle={styles.messagesContent}
             showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
             onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
             ListFooterComponent={
               conversationStatus === 'closed' ? (
@@ -560,64 +562,80 @@ export function ChatScreen({ navigation, route }: Props) {
         )}
 
         {conversationStatus === 'active' && (
-          <View style={styles.inputRow}>
+          <View
+            style={[
+              styles.composer,
+              { paddingBottom: Math.max(insets.bottom, 10) + 6 },
+            ]}
+          >
             {isRecording ? (
               <Text style={styles.recordingLabel}>Gravando… toque no microfone para enviar</Text>
             ) : null}
-            <TouchableOpacity
-              style={styles.inputAction}
-              onPress={openAttachmentMenu}
-              disabled={inputDisabled}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons name="add" size={26} color={COLORS.neutral700} />
-            </TouchableOpacity>
-            <TextInput
-              style={styles.input}
-              placeholder="Mensagem"
-              placeholderTextColor={COLORS.neutral700}
-              value={inputText}
-              onChangeText={setInputText}
-              multiline
-              maxLength={500}
-              onSubmitEditing={sendMessage}
-              editable={!inputDisabled}
-            />
-            <TouchableOpacity
-              style={[styles.sendButton, (!inputText.trim() || inputDisabled) && styles.sendButtonDisabled]}
-              onPress={sendMessage}
-              disabled={!inputText.trim() || inputDisabled}
-              activeOpacity={0.8}
-            >
-              {sending ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <MaterialIcons name="send" size={20} color="#FFFFFF" />
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.inputAction}
-              onPress={() => { void openCamera(); }}
-              disabled={inputDisabled}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons name="camera-alt" size={24} color={COLORS.neutral700} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.inputAction}
-              onPress={() => { void toggleRecording(); }}
-              disabled={uploadingAttachment || !myId}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons
-                name="mic"
-                size={24}
-                color={isRecording ? '#DC2626' : COLORS.neutral700}
+            <View style={styles.inputRow}>
+              <TouchableOpacity
+                style={[styles.iconButton, inputDisabled && styles.iconButtonDisabled]}
+                onPress={openAttachmentMenu}
+                disabled={inputDisabled}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="add" size={22} color={COLORS.neutral700} />
+              </TouchableOpacity>
+              <TextInput
+                style={styles.input}
+                placeholder="Mensagem"
+                placeholderTextColor={COLORS.neutral700}
+                value={inputText}
+                onChangeText={setInputText}
+                multiline
+                maxLength={500}
+                onSubmitEditing={sendMessage}
+                editable={!inputDisabled}
+                textAlignVertical={Platform.OS === 'android' ? 'top' : 'center'}
               />
-            </TouchableOpacity>
-            {uploadingAttachment ? (
-              <ActivityIndicator size="small" color={GOLD} style={{ marginLeft: 4 }} />
-            ) : null}
+              <View style={styles.inputTrailing}>
+                <TouchableOpacity
+                  style={[
+                    styles.sendButton,
+                    (!inputText.trim() || inputDisabled) && styles.sendButtonDisabled,
+                  ]}
+                  onPress={sendMessage}
+                  disabled={!inputText.trim() || inputDisabled}
+                  activeOpacity={0.8}
+                >
+                  {sending ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <MaterialIcons name="send" size={20} color="#FFFFFF" />
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.iconButton, inputDisabled && styles.iconButtonDisabled]}
+                  onPress={() => { void openCamera(); }}
+                  disabled={inputDisabled}
+                  activeOpacity={0.7}
+                >
+                  <MaterialIcons name="camera-alt" size={22} color={COLORS.neutral700} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.iconButton,
+                    (uploadingAttachment || !myId) && styles.iconButtonDisabled,
+                  ]}
+                  onPress={() => { void toggleRecording(); }}
+                  disabled={uploadingAttachment || !myId}
+                  activeOpacity={0.7}
+                >
+                  <MaterialIcons
+                    name="mic"
+                    size={22}
+                    color={isRecording ? '#DC2626' : COLORS.neutral700}
+                  />
+                </TouchableOpacity>
+                {uploadingAttachment ? (
+                  <ActivityIndicator size="small" color={GOLD} style={styles.uploadSpinner} />
+                ) : null}
+              </View>
+            </View>
           </View>
         )}
       </KeyboardAvoidingView>
@@ -703,45 +721,61 @@ const styles = StyleSheet.create({
     paddingVertical: 24,
   },
 
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    paddingHorizontal: 8,
-    paddingVertical: 8,
+  composer: {
     borderTopWidth: 1,
     borderTopColor: COLORS.neutral300,
     backgroundColor: COLORS.background,
-    gap: 4,
+    paddingTop: 10,
+    paddingHorizontal: 12,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
   },
   recordingLabel: {
-    width: '100%',
     fontSize: 13,
     color: '#DC2626',
     fontWeight: '600',
-    marginBottom: 4,
-    paddingHorizontal: 4,
+    marginBottom: 8,
+    paddingHorizontal: 2,
   },
-  inputAction: { padding: 6 },
+  iconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.neutral100,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconButtonDisabled: { opacity: 0.35 },
   input: {
     flex: 1,
-    minWidth: 120,
+    minWidth: 0,
     minHeight: 40,
-    maxHeight: 100,
+    maxHeight: 120,
     backgroundColor: COLORS.neutral300,
     borderRadius: 20,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 10,
     fontSize: 16,
+    lineHeight: 20,
     color: COLORS.black,
   },
+  inputTrailing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+  },
   sendButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: COLORS.black,
     alignItems: 'center',
     justifyContent: 'center',
   },
   sendButtonDisabled: { opacity: 0.4 },
+  uploadSpinner: { marginLeft: -2 },
 });

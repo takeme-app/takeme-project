@@ -141,6 +141,7 @@ Deno.serve(async (req) => {
           discount_value: body.discount_value,
           applies_to: body.applies_to,
           is_active: typeof body.is_active === "boolean" ? body.is_active : true,
+          gain_pct_to_worker: typeof body.gain_pct_to_worker === "number" ? body.gain_pct_to_worker : 0,
           created_by: user.id,
         })
         .select()
@@ -158,6 +159,22 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           }
         );
+      }
+
+      // Send notification if promotion is active
+      if (data && data.is_active) {
+        try {
+          const gainPct = data.gain_pct_to_worker || 0;
+          const title = data.title || 'Promoção';
+          // Notify all users
+          await admin.from('notifications').insert({
+            title: 'Nova promoção disponível! 🎉',
+            message: gainPct > 0
+              ? `${title} — Motoristas e preparadores ganham +${gainPct}% extra! Abra o app para participar.`
+              : `${title} — Aproveite descontos especiais! Abra o app para saber mais.`,
+            category: 'offers_promotions',
+          });
+        } catch (e) { console.error('[manage-promotions] notification error:', e); }
       }
 
       return new Response(JSON.stringify({ ok: true, promotion: data }), {
@@ -188,6 +205,7 @@ Deno.serve(async (req) => {
         "discount_value",
         "applies_to",
         "is_active",
+        "gain_pct_to_worker",
       ];
       const updates: Record<string, unknown> = {};
       for (const key of allowedFields) {

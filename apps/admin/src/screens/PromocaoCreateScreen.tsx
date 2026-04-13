@@ -2,9 +2,10 @@
  * PromocaoCreateScreen — Criar promoção conforme Figma 891-43439.
  * Uses React.createElement() calls (NOT JSX).
  */
-import React, { useState, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { createPromotion } from '../data/queries';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { createPromotion, invokeEdgeFunction } from '../data/queries';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -96,6 +97,9 @@ type AccKey = 'motoristas' | 'preparadores' | 'passageiros' | 'encomendas';
 
 export default function PromocaoCreateScreen() {
   const navigate = useNavigate();
+  const { id: editId } = useParams<{ id?: string }>();
+  const isEditMode = Boolean(editId);
+  const [loadingEdit, setLoadingEdit] = useState(isEditMode);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [startLocal, setStartLocal] = useState(defaultStartDate);
@@ -106,6 +110,7 @@ export default function PromocaoCreateScreen() {
   const [encomendas, setEncomendas] = useState(false);
   const [promoActive, setPromoActive] = useState(true);
   const [discountPct, setDiscountPct] = useState(15);
+  const [gainPctWorker, setGainPctWorker] = useState(0);
   const [citySearch, setCitySearch] = useState('');
   const [cityChecked, setCityChecked] = useState<Record<string, boolean>>(() => {
     const o: Record<string, boolean> = {};
@@ -121,6 +126,29 @@ export default function PromocaoCreateScreen() {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Load existing promotion data for edit mode
+  useEffect(() => {
+    if (!isEditMode || !editId || !isSupabaseConfigured) { setLoadingEdit(false); return; }
+    void (async () => {
+      const { data } = await (supabase as any).from('promotions').select('*').eq('id', editId).maybeSingle();
+      if (data) {
+        setTitle(data.title || '');
+        setDescription(data.description || '');
+        if (data.start_at) setStartLocal(toDatetimeLocalValue(new Date(data.start_at)));
+        if (data.end_at) setEndLocal(toDatetimeLocalValue(new Date(data.end_at)));
+        const ta = data.target_audiences || [];
+        setMotoristas(ta.includes('drivers'));
+        setPreparadores(ta.includes('preparers_shipments') || ta.includes('preparers_excursions'));
+        setPassageiros(ta.includes('passengers'));
+        setEncomendas(ta.includes('preparers_shipments'));
+        setPromoActive(data.is_active !== false);
+        setDiscountPct(data.discount_value || 15);
+        setGainPctWorker(data.gain_pct_to_worker || 0);
+      }
+      setLoadingEdit(false);
+    })();
+  }, [editId, isEditMode]);
 
   const audiences = useMemo(() => ({ motoristas, preparadores, passageiros, encomendas }), [motoristas, preparadores, passageiros, encomendas]);
 
@@ -193,7 +221,7 @@ export default function PromocaoCreateScreen() {
     if (obsMotoristas.trim()) descParts.push(`[Motoristas] ${obsMotoristas.trim()}`);
     const fullDesc = descParts.filter(Boolean).join('\n\n') || undefined;
 
-    const { error: err } = await createPromotion({
+    const payload = {
       title: title.trim(),
       description: fullDesc,
       start_at: start.toISOString(),
@@ -203,14 +231,23 @@ export default function PromocaoCreateScreen() {
       discount_value: dv,
       applies_to: ap,
       is_active: promoActive,
-    });
+      gain_pct_to_worker: gainPctWorker,
+    };
+    let err: string | null = null;
+    if (isEditMode && editId) {
+      const res = await invokeEdgeFunction('manage-promotions', 'PUT', { id: editId }, payload);
+      err = res.error;
+    } else {
+      const res = await createPromotion(payload);
+      err = res.error;
+    }
     setSaving(false);
     if (err) {
       setError(err);
       return;
     }
     navigate('/promocoes');
-  }, [title, description, startLocal, endLocal, audiences, discountPct, promoActive, obsMotoristas, navigate]);
+  }, [title, description, startLocal, endLocal, audiences, discountPct, promoActive, obsMotoristas, navigate, isEditMode, editId]);
 
   const audienceCheckbox = (
     key: 'motoristas' | 'preparadores' | 'passageiros' | 'encomendas',
@@ -265,7 +302,7 @@ export default function PromocaoCreateScreen() {
           borderRadius: 999, border: 'none', background: '#0d0d0d', cursor: saving ? 'not-allowed' : 'pointer',
           fontSize: 14, fontWeight: 600, color: '#fff', ...font, opacity: saving ? 0.7 : 1,
         },
-      }, checkSvg, saving ? 'Salvando…' : 'Salvar promoção'));
+      }, checkSvg, saving ? 'Salvando…' : isEditMode ? 'Salvar alteração' : 'Salvar promoção'));
 
   const dateRow = (label: string, value: string, onChange: (v: string) => void) =>
     React.createElement('div', { style: { flex: '1 1 280px', minWidth: 0, display: 'flex', flexDirection: 'column' as const, gap: 8 } },
@@ -400,7 +437,7 @@ export default function PromocaoCreateScreen() {
       style: { background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#767676', ...font },
     }, 'Promoções'),
     React.createElement('span', { style: { fontSize: 12, color: '#767676' } }, '›'),
-    React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Criar promoção'));
+    React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#0d0d0d', ...font } }, isEditMode ? 'Editar promoção' : 'Criar promoção'));
 
   const topRow = React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' as const, width: '100%' } },
     React.createElement('button', {
@@ -417,7 +454,7 @@ export default function PromocaoCreateScreen() {
     },
   },
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
-      React.createElement('h1', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Criar nova promoção'),
+      React.createElement('h1', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, isEditMode ? 'Editar promoção' : 'Criar nova promoção'),
       React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, lineHeight: 1.5, ...font } },
         'Preencha os dados da nova promoção. Após salvar, ela ficará disponível imediatamente se estiver marcada como ativa.')),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
@@ -456,6 +493,27 @@ export default function PromocaoCreateScreen() {
           'Ao ativar, a promoção ficará disponível imediatamente')),
       toggleSwitch()));
 
+  // Gain % to worker field
+  const gainPctSection = React.createElement('div', {
+    style: { width: '100%', maxWidth: 1044, background: '#fff', border: '1px solid #e2e2e2', borderRadius: 16, padding: 24, display: 'flex', flexDirection: 'column' as const, gap: 16, boxSizing: 'border-box' as const },
+  },
+    React.createElement('h2', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Distribuição de ganho'),
+    React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, lineHeight: 1.5, ...font } },
+      'Quando você dá porcentagem extra ao motorista/preparador, esse valor é subtraído do ganho da plataforma.'),
+    React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, flex: 1, minWidth: 200 } },
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Porcentagem extra para motorista/preparador (%)'),
+        React.createElement('input', {
+          type: 'number', min: 0, max: 15, step: 0.5, value: gainPctWorker,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setGainPctWorker(Math.min(15, Math.max(0, Number(e.target.value)))),
+          style: { height: 44, borderRadius: 8, background: '#f1f1f1', border: 'none', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', width: '100%', boxSizing: 'border-box' as const, ...font },
+        })),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, flex: 1, minWidth: 200 } },
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#767676', ...font } }, 'Resultado'),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, padding: 16, background: '#f6f6f6', borderRadius: 12 } },
+          React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, `Motorista/Preparador ganha: +${gainPctWorker}% extra`),
+          React.createElement('span', { style: { fontSize: 14, color: '#b53838', ...font } }, `Plataforma perde: -${gainPctWorker}% do ganho`)))));
+
   const accordions = React.createElement('div', { style: { width: '100%', maxWidth: 1044, display: 'flex', flexDirection: 'column' as const, gap: 16 } },
     accordionShell('motoristas', 'Motoristas', expanded.motoristas, motoristasInner),
     accordionShell('preparadores', 'Preparadores', expanded.preparadores, preparadores ? simpleAccPlaceholder('preparadores') : React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Marque «Preparadores» para ver as opções.')),
@@ -479,6 +537,7 @@ export default function PromocaoCreateScreen() {
     topRow,
     errEl,
     mainCard,
+    gainPctSection,
     accordions,
     footerActions);
 }

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { View, TouchableOpacity, StyleSheet, ScrollView, Modal, Pressable, Animated, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, ScrollView, Modal, Pressable, Animated, Platform, ActivityIndicator, Image } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -8,11 +8,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList } from '../../navigation/types';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
-import { getCurrentPlace } from '../../lib/location';
+import { distanceKm, formatDistanceKm, getCurrentPlace, type AddressSuggestion } from '../../lib/location';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
-import { addRecentDestination } from '../../lib/recentDestinations';
-import { ALL_TIME_SLOTS, getAvailableTimeSlots, toISODate, formatDateDisplayLabel } from '../../lib/dateTimeSlots';
+import { formatRecentDestinationDisplay } from '../../lib/recentDestinations';
+import { useRecentDestinationsSorted } from '../../hooks/useRecentDestinationsSorted';
+import {
+  ALL_TIME_SLOTS,
+  getAvailableTimeSlots,
+  toISODate,
+  formatDateDisplayLabel,
+  parseTimeSlotRange,
+  toISODateFromUtcIso,
+} from '../../lib/dateTimeSlots';
 import {
   loadClientScheduledTrips,
   compareTripsByDepartureAndBadge,
@@ -36,29 +44,10 @@ const DEFAULT_ORIGIN: Place = {
   longitude: -35.3328,
 };
 const DEFAULT_DESTINATION_COORDS = { latitude: -7.3305, longitude: -35.3335 };
-const EDIT_SHEET_SLIDE = 400;
 const TIME_SHEET_SLIDE = 450;
 const ROUTE_MATCH_DEGREES = 0.15;
 const LIST_PASSENGERS = 1;
 const LIST_BAGS = 0;
-
-/** Converte slot "09:00 - 09:30" em { startMinutes, endMinutes } (minutos desde meia-noite). */
-function parseTimeSlot(slot: string): { startMinutes: number; endMinutes: number } | null {
-  const m = slot.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  const startMinutes = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
-  const endMinutes = parseInt(m[3], 10) * 60 + parseInt(m[4], 10);
-  return { startMinutes, endMinutes };
-}
-
-/** Data ISO (YYYY-MM-DD) a partir de departure_at. */
-function toISODateOnly(iso: string): string {
-  const d = new Date(iso);
-  const y = d.getFullYear();
-  const mo = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${mo}-${day}`;
-}
 
 type Props = NativeStackScreenProps<TripStackParamList, 'PlanRide'>;
 
@@ -83,7 +72,13 @@ export function PlanRideScreen({ navigation, route }: Props) {
     if (!d?.address) return null;
     return { address: d.address, latitude: d.latitude ?? DEFAULT_DESTINATION_COORDS.latitude, longitude: d.longitude ?? DEFAULT_DESTINATION_COORDS.longitude };
   });
-  const hasDestination = destination != null && destination.address.length > 0;
+  const [destinationText, setDestinationText] = useState(() => route.params?.destination?.address ?? '');
+  const [destinationConfirmed, setDestinationConfirmed] = useState(() => Boolean(route.params?.destination?.address));
+  const destinationReady = destinationConfirmed && destination != null && destination.address.length > 0;
+  const { sortedRecentDestinations, saveRecentDestination } = useRecentDestinationsSorted(
+    origin.latitude,
+    origin.longitude,
+  );
   const scheduledDateId = route.params?.scheduledDateId;
   const scheduledTimeSlot = route.params?.scheduledTimeSlot ?? null;
   const [dateLabel, setDateLabel] = useState(() => {
@@ -110,12 +105,9 @@ export function PlanRideScreen({ navigation, route }: Props) {
   const [tripsError, setTripsError] = useState<string | null>(null);
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
 
-  const [editModalVisible, setEditModalVisible] = useState(false);
-  const [editOrigin, setEditOrigin] = useState(origin.address);
-  const [editDestination, setEditDestination] = useState(destination?.address ?? '');
+  const [editingOrigin, setEditingOrigin] = useState(false);
+  const [editOriginText, setEditOriginText] = useState('');
   const [locationLoading, setLocationLoading] = useState(false);
-  const editOverlayOpacity = useRef(new Animated.Value(0)).current;
-  const editSheetTranslateY = useRef(new Animated.Value(EDIT_SHEET_SLIDE)).current;
 
   // Quando não há origin nos params, usar localização pré-carregada do contexto (ou buscar) como origem padrão
   useEffect(() => {
@@ -130,14 +122,11 @@ export function PlanRideScreen({ navigation, route }: Props) {
     }
   }, [route.params?.origin, currentPlace?.latitude, currentPlace?.longitude, currentPlace?.address]);
 
-  useEffect(() => {
-    setEditOrigin(origin.address);
-    setEditDestination(destination?.address ?? '');
-  }, [origin.address, destination?.address]);
+  const effectiveDestination = destinationConfirmed && destination ? destination : null;
 
   useEffect(() => {
     setSelectedTripId(null);
-  }, [origin.latitude, origin.longitude, destination?.latitude, destination?.longitude]);
+  }, [origin.latitude, origin.longitude, effectiveDestination?.latitude, effectiveDestination?.longitude]);
 
   useEffect(() => {
     setSelectedTripId(null);
@@ -155,11 +144,11 @@ export function PlanRideScreen({ navigation, route }: Props) {
 
   /** Lista filtrada por ponto de partida, destino e data/hora. Só exibe viagens quando origem e destino estão definidos. */
   const scheduledTrips = useMemo(() => {
-    if (!origin?.latitude || !origin?.longitude || !destination?.latitude || !destination?.longitude) return [];
+    if (!origin?.latitude || !origin?.longitude || !effectiveDestination?.latitude || !effectiveDestination?.longitude) return [];
     const oLat = origin.latitude;
     const oLng = origin.longitude;
-    const dLat = destination.latitude;
-    const dLng = destination.longitude;
+    const dLat = effectiveDestination.latitude;
+    const dLng = effectiveDestination.longitude;
     let list = allScheduledTrips.filter(
       (t) =>
         Math.abs(t.origin_lat - oLat) <= ROUTE_MATCH_DEGREES &&
@@ -171,10 +160,10 @@ export function PlanRideScreen({ navigation, route }: Props) {
     if (filterDateId && list.length > 0) {
       list = list.filter((t) => {
         if (!t.departure_at) return false;
-        const tripDate = toISODateOnly(t.departure_at);
+        const tripDate = toISODateFromUtcIso(t.departure_at);
         if (tripDate !== filterDateId) return false;
         if (filterTimeSlot) {
-          const slot = parseTimeSlot(filterTimeSlot);
+          const slot = parseTimeSlotRange(filterTimeSlot);
           if (!slot) return true;
           const dep = new Date(t.departure_at);
           const depMinutes = dep.getHours() * 60 + dep.getMinutes();
@@ -184,7 +173,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
       });
     }
     return [...list].sort(compareTripsByDepartureAndBadge);
-  }, [allScheduledTrips, origin?.latitude, origin?.longitude, destination?.latitude, destination?.longitude, filterDateId, filterTimeSlot]);
+  }, [allScheduledTrips, origin?.latitude, origin?.longitude, effectiveDestination?.latitude, effectiveDestination?.longitude, filterDateId, filterTimeSlot]);
 
   useEffect(() => {
     let cancelled = false;
@@ -204,27 +193,46 @@ export function PlanRideScreen({ navigation, route }: Props) {
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    if (!editModalVisible) return;
-    editOverlayOpacity.setValue(0);
-    editSheetTranslateY.setValue(EDIT_SHEET_SLIDE);
-    Animated.sequence([
-      Animated.timing(editOverlayOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
-      Animated.timing(editSheetTranslateY, { toValue: 0, duration: 280, useNativeDriver: true }),
-    ]).start();
-  }, [editModalVisible]);
+  const toggleEditOrigin = useCallback(() => {
+    if (editingOrigin) {
+      setEditingOrigin(false);
+    } else {
+      setEditOriginText('');
+      setEditingOrigin(true);
+    }
+  }, [editingOrigin]);
 
-  const openEditModal = () => {
-    setEditOrigin(origin.address);
-    setEditDestination(destination?.address ?? '');
-    editOverlayOpacity.setValue(0);
-    editSheetTranslateY.setValue(EDIT_SHEET_SLIDE);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => setEditModalVisible(true));
-    });
-  };
+  const handleDestinationChange = useCallback((text: string) => {
+    setDestinationText(text);
+    setDestinationConfirmed(false);
+    setSelectedTripId(null);
+  }, []);
 
-  const closeEditModal = () => setEditModalVisible(false);
+  const handleDestinationSelect = useCallback(
+    (place: AddressSuggestion) => {
+      setDestinationText(place.address);
+      setDestination({ address: place.address, latitude: place.latitude, longitude: place.longitude });
+      setDestinationConfirmed(true);
+      setSelectedTripId(null);
+      const city = place.city ?? (place.address.includes(', ')
+        ? place.address.split(', ').slice(-1)[0] ?? place.address
+        : place.address);
+      void saveRecentDestination({
+        address: place.address,
+        city,
+        latitude: place.latitude,
+        longitude: place.longitude,
+      });
+    },
+    [saveRecentDestination],
+  );
+
+  const handleRecentSelect = useCallback((address: string, lat: number, lng: number) => {
+    setDestinationText(address);
+    setDestination({ address, latitude: lat, longitude: lng });
+    setDestinationConfirmed(true);
+    setSelectedTripId(null);
+  }, []);
 
   const useMyLocationForOrigin = async () => {
     setLocationLoading(true);
@@ -232,7 +240,8 @@ export function PlanRideScreen({ navigation, route }: Props) {
       const place = await refreshLocation();
       if (place) {
         setOrigin({ address: place.address, latitude: place.latitude, longitude: place.longitude });
-        setEditOrigin(place.address);
+        setEditOriginText(place.address);
+        setEditingOrigin(false);
       } else {
         showAlert('Localização', 'Não foi possível usar sua localização. Verifique se o app tem permissão nas configurações.');
       }
@@ -241,21 +250,6 @@ export function PlanRideScreen({ navigation, route }: Props) {
     } finally {
       setLocationLoading(false);
     }
-  };
-
-  const savePlaces = () => {
-    setOrigin((prev) => ({ ...prev, address: editOrigin.trim() || prev.address }));
-    const destText = editDestination.trim();
-    if (destText) {
-      const lat = destination?.latitude ?? DEFAULT_DESTINATION_COORDS.latitude;
-      const lng = destination?.longitude ?? DEFAULT_DESTINATION_COORDS.longitude;
-      setDestination({ address: destText, latitude: lat, longitude: lng });
-      const city = destText.includes(', ') ? destText.split(', ').slice(-1)[0] ?? destText : destText;
-      addRecentDestination({ address: destText, city, latitude: lat, longitude: lng });
-    } else {
-      setDestination(null);
-    }
-    closeEditModal();
   };
 
   const openTimeSheet = () => {
@@ -288,11 +282,15 @@ export function PlanRideScreen({ navigation, route }: Props) {
   const handleAgendar = useCallback(() => {
     if (!selectedTripId) return;
     const trip = scheduledTrips.find((t) => t.id === selectedTripId);
-    if (!trip || !destination) return;
+    if (!trip || !effectiveDestination) return;
     navigation.navigate('ConfirmDetails', {
       scheduled_trip_id: trip.id,
       origin: { address: origin.address, latitude: origin.latitude, longitude: origin.longitude },
-      destination: { address: destination.address, latitude: destination.latitude, longitude: destination.longitude },
+      destination: {
+        address: effectiveDestination.address,
+        latitude: effectiveDestination.latitude,
+        longitude: effectiveDestination.longitude,
+      },
       driver: {
         id: trip.id,
         driver_id: trip.driver_id,
@@ -311,7 +309,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
       },
       immediateTrip: false,
     });
-  }, [selectedTripId, scheduledTrips, destination, origin, navigation]);
+  }, [selectedTripId, scheduledTrips, effectiveDestination, origin, navigation]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -333,28 +331,106 @@ export function PlanRideScreen({ navigation, route }: Props) {
           <MaterialIcons name="keyboard-arrow-down" size={24} color={COLORS.black} />
         </TouchableOpacity>
 
-        {/* Card de rota: toque abre modal de alterar endereços (igual Procurando viagem) */}
-        <TouchableOpacity style={styles.routeCard} onPress={openEditModal} activeOpacity={0.8}>
-          <View style={styles.routeIconsColumn}>
-            <View style={styles.routeIconOrigin}>
-              <View style={styles.routeIconOriginDot} />
+        {/* Card de rota — mesmo padrão visual da tela "Agora" (AddressSelectionScreen) */}
+        <View style={styles.routeCard}>
+          <View style={styles.routeIcons}>
+            <View style={styles.originDotOuter}>
+              <View style={styles.originDotInner} />
             </View>
-            <View style={styles.routeLine} />
-            <View style={styles.routeIconDestination} />
+            <View style={styles.routeConnectorLine} />
+            <View style={styles.destSquare} />
           </View>
-          <View style={styles.routeAddresses}>
-            <Text style={styles.routeAddress} numberOfLines={1}>{origin.address}</Text>
-            <View style={styles.routeAddressDivider} />
-            <Text style={[styles.routeAddress, !hasDestination && styles.routeAddressPlaceholder]} numberOfLines={1}>
-              {hasDestination ? destination.address : 'Para onde?'}
-            </Text>
+          <View style={styles.routeFields}>
+            {editingOrigin ? (
+              <View style={styles.originEditWrap}>
+                <AddressAutocomplete
+                  value={editOriginText}
+                  onChangeText={setEditOriginText}
+                  onSelectPlace={(place) => {
+                    setOrigin({ address: place.address, latitude: place.latitude, longitude: place.longitude });
+                    setEditOriginText(place.address);
+                    setEditingOrigin(false);
+                    setSelectedTripId(null);
+                  }}
+                  placeholder="Digite o ponto de partida"
+                  autoFocus
+                  style={styles.originAutocomplete}
+                  inputStyle={styles.originInput}
+                />
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.originReadOnly} onPress={toggleEditOrigin} activeOpacity={0.7}>
+                <Text style={styles.originText} numberOfLines={1}>{origin.address}</Text>
+              </TouchableOpacity>
+            )}
+            <View style={styles.fieldDivider} />
+            <View style={[styles.destinationWrap, editingOrigin && styles.destinationWrapLowZ]}>
+              <AddressAutocomplete
+                value={destinationText}
+                onChangeText={handleDestinationChange}
+                onSelectPlace={handleDestinationSelect}
+                placeholder="Para onde?"
+                autoFocus={!editingOrigin}
+                style={styles.destAutocomplete}
+                inputStyle={styles.destInput}
+              />
+            </View>
           </View>
-          <MaterialIcons name="edit" size={20} color={COLORS.neutral700} style={styles.editIcon} />
+          <TouchableOpacity
+            style={styles.editOriginIcon}
+            onPress={toggleEditOrigin}
+            activeOpacity={0.7}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <MaterialIcons name={editingOrigin ? 'close' : 'edit'} size={18} color={COLORS.neutral700} />
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity
+          style={styles.myLocationButton}
+          onPress={useMyLocationForOrigin}
+          disabled={locationLoading}
+          activeOpacity={0.8}
+        >
+          {locationLoading ? (
+            <ActivityIndicator size="small" color={COLORS.black} />
+          ) : (
+            <MaterialIcons name="my-location" size={16} color={COLORS.black} />
+          )}
+          <Text style={styles.myLocationText}>Minha localização</Text>
         </TouchableOpacity>
 
         <Text style={styles.roundTripHint}>
           Ida e volta: faça uma reserva para cada trecho (volta em outro horário ou dia), conforme as viagens ofertadas pelo motorista.
         </Text>
+
+        {sortedRecentDestinations.length > 0 && (
+          <View style={styles.recentsSection}>
+            <Text style={styles.recentsTitle}>Destinos recentes</Text>
+            {sortedRecentDestinations.map((item, index) => {
+              const dist = distanceKm(origin.latitude, origin.longitude, item.latitude, item.longitude);
+              const distLabel = dist != null ? formatDistanceKm(dist) : null;
+              const { line1, line2 } = formatRecentDestinationDisplay(item);
+              return (
+                <TouchableOpacity
+                  key={`${item.address}-${index}`}
+                  style={styles.recentRow}
+                  onPress={() => handleRecentSelect(item.address, item.latitude ?? DEFAULT_DESTINATION_COORDS.latitude, item.longitude ?? DEFAULT_DESTINATION_COORDS.longitude)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.recentIconWrap}>
+                    <MaterialIcons name="access-time" size={22} color={COLORS.black} />
+                    {distLabel != null && <Text style={styles.recentDistance} numberOfLines={1}>{distLabel}</Text>}
+                  </View>
+                  <View style={styles.recentTextWrap}>
+                    <Text style={styles.recentLine1} numberOfLines={1}>{line1}</Text>
+                    <Text style={styles.recentLine2} numberOfLines={1}>{line2}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
 
         {/* Lista filtrada por partida, destino e horário — seleção obrigatória para Agendar */}
         {tripsLoading && (
@@ -368,7 +444,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
         )}
         {!tripsLoading && !tripsError && scheduledTrips.length === 0 && (
           <Text style={styles.tripsEmptyText}>
-            {!hasDestination ? 'Defina origem e destino para ver viagens disponíveis.' : 'Nenhuma viagem encontrada para esta rota e horário.'}
+            {!destinationReady ? 'Defina origem e destino para ver viagens disponíveis.' : 'Nenhuma viagem encontrada para esta rota e horário.'}
           </Text>
         )}
         {!tripsLoading && scheduledTrips.map((trip) => (
@@ -420,74 +496,14 @@ export function PlanRideScreen({ navigation, route }: Props) {
         ))}
 
         <TouchableOpacity
-          style={[styles.agendarButton, (!selectedTripId || !hasDestination) && styles.agendarButtonDisabled]}
+          style={[styles.agendarButton, (!selectedTripId || !destinationReady) && styles.agendarButtonDisabled]}
           onPress={handleAgendar}
-          disabled={!selectedTripId || !hasDestination}
+          disabled={!selectedTripId || !destinationReady}
           activeOpacity={0.8}
         >
           <Text style={styles.agendarButtonText}>Agendar</Text>
         </TouchableOpacity>
       </ScrollView>
-
-      <Modal visible={editModalVisible} transparent animationType="none" onRequestClose={closeEditModal}>
-        <KeyboardAvoidingView
-          style={styles.editModalOverlayContainer}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={0}
-        >
-          <Animated.View style={[styles.editModalOverlay, { opacity: editOverlayOpacity }]} />
-          <Pressable style={StyleSheet.absoluteFill} onPress={closeEditModal} />
-          <Animated.View style={[styles.modalContent, { transform: [{ translateY: editSheetTranslateY }] }]}>
-            <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>Alterar endereços</Text>
-            <ScrollView
-              style={styles.modalScroll}
-              contentContainerStyle={styles.modalScrollContent}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              <Text style={styles.modalLabel}>Ponto de partida</Text>
-              <AddressAutocomplete
-                value={editOrigin}
-                onChangeText={setEditOrigin}
-                onSelectPlace={(place) => setOrigin({ address: place.address, latitude: place.latitude, longitude: place.longitude })}
-                placeholder="Ex: Av. Presidente João Pessoa, 422"
-                editable={!locationLoading}
-                style={styles.modalAutocomplete}
-              />
-              <TouchableOpacity
-                style={styles.useMyLocationButton}
-                onPress={useMyLocationForOrigin}
-                disabled={locationLoading}
-                activeOpacity={0.8}
-              >
-                {locationLoading ? (
-                  <ActivityIndicator size="small" color={COLORS.black} />
-                ) : (
-                  <MaterialIcons name="my-location" size={20} color={COLORS.black} />
-                )}
-                <Text style={styles.useMyLocationText}>Usar minha localização atual</Text>
-              </TouchableOpacity>
-              <Text style={styles.modalLabel}>Destino</Text>
-              <AddressAutocomplete
-                value={editDestination}
-                onChangeText={setEditDestination}
-                onSelectPlace={(place) => setDestination({ address: place.address, latitude: place.latitude, longitude: place.longitude })}
-                placeholder="Ex: Rua Coronel José Gomes, 150"
-                style={styles.modalAutocomplete}
-              />
-              <View style={styles.modalButtons}>
-                <TouchableOpacity style={styles.modalButtonSecondary} onPress={closeEditModal} activeOpacity={0.8}>
-                  <Text style={styles.modalButtonSecondaryText}>Cancelar</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.modalButtonPrimary} onPress={savePlaces} activeOpacity={0.8}>
-                  <Text style={styles.modalButtonPrimaryText}>Salvar</Text>
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
-          </Animated.View>
-        </KeyboardAvoidingView>
-      </Modal>
 
       <Modal visible={timeSheetVisible} transparent animationType="none" onRequestClose={closeTimeSheet} statusBarTranslucent>
         <View style={styles.timeSheetOverlayContainer} pointerEvents="box-none">
@@ -598,110 +614,82 @@ const styles = StyleSheet.create({
   dateText: { flex: 1, fontSize: 16, fontWeight: '500', color: COLORS.black },
   routeCard: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: COLORS.background,
-    borderWidth: 1,
-    borderColor: COLORS.neutral400,
-    borderRadius: 12,
+    backgroundColor: COLORS.neutral300,
+    borderRadius: 16,
     padding: 16,
-    marginBottom: 16,
+    marginBottom: 8,
+    overflow: 'visible',
+    zIndex: 20,
   },
-  routeIconsColumn: { alignItems: 'center', marginRight: 12 },
-  routeIconOrigin: {
+  routeIcons: { alignItems: 'center', marginRight: 14, paddingTop: 14 },
+  originDotOuter: {
     width: 14,
     height: 14,
     borderRadius: 7,
     borderWidth: 2,
-    borderColor: COLORS.neutral700,
+    borderColor: COLORS.black,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  routeIconOriginDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: COLORS.neutral700,
+  originDotInner: { width: 6, height: 6, borderRadius: 3, backgroundColor: COLORS.black },
+  routeConnectorLine: { width: 2, flex: 1, backgroundColor: COLORS.neutral400, marginVertical: 4, minHeight: 20 },
+  destSquare: { width: 12, height: 12, backgroundColor: COLORS.black, borderRadius: 2 },
+  routeFields: { flex: 1, overflow: 'visible' },
+  originEditWrap: { zIndex: 20, position: 'relative' },
+  originReadOnly: { paddingVertical: 12 },
+  originText: { fontSize: 15, color: COLORS.black },
+  originAutocomplete: { marginBottom: 0 },
+  originInput: {
+    fontSize: 15,
+    color: COLORS.black,
+    backgroundColor: COLORS.background,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 0,
   },
-  routeLine: {
-    width: 2,
-    height: 24,
-    backgroundColor: COLORS.neutral400,
-    marginVertical: 4,
+  fieldDivider: { height: 1, backgroundColor: COLORS.neutral400, marginVertical: 4 },
+  destinationWrap: { zIndex: 10, position: 'relative' },
+  destinationWrapLowZ: { zIndex: 1 },
+  destAutocomplete: { marginBottom: 0 },
+  destInput: {
+    fontSize: 15,
+    color: COLORS.black,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    paddingVertical: 10,
+    paddingHorizontal: 0,
   },
-  routeIconDestination: {
-    width: 10,
-    height: 10,
-    backgroundColor: COLORS.neutral700,
+  editOriginIcon: { paddingTop: 14, paddingLeft: 8 },
+  myLocationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    marginBottom: 4,
   },
-  routeAddresses: { flex: 1 },
-  routeAddress: { fontSize: 14, fontWeight: '500', color: COLORS.black },
-  routeAddressPlaceholder: { color: COLORS.neutral700 },
+  myLocationText: { fontSize: 13, fontWeight: '500', color: COLORS.black },
+  recentsSection: { marginTop: 8, marginBottom: 8 },
+  recentsTitle: { fontSize: 14, fontWeight: '600', color: COLORS.neutral700, marginBottom: 12 },
+  recentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.neutral300,
+  },
+  recentIconWrap: { alignItems: 'center', width: 48 },
+  recentDistance: { fontSize: 11, color: COLORS.neutral700, marginTop: 2 },
+  recentTextWrap: { flex: 1, marginLeft: 4 },
+  recentLine1: { fontSize: 15, fontWeight: '500', color: COLORS.black },
+  recentLine2: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
   roundTripHint: {
     fontSize: 13,
     color: COLORS.neutral700,
     lineHeight: 18,
     marginBottom: 14,
   },
-  routeAddressDivider: {
-    height: 1,
-    backgroundColor: COLORS.neutral400,
-    marginVertical: 10,
-  },
-  editIcon: { padding: 4, marginLeft: 4, marginTop: 2 },
-  editModalOverlayContainer: { flex: 1, justifyContent: 'flex-end' },
-  editModalOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)' },
-  modalContent: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 24,
-    paddingTop: 12,
-    paddingBottom: 32,
-    maxHeight: '85%',
-    minHeight: 420,
-  },
-  modalScroll: { flex: 1, minHeight: 0 },
-  modalScrollContent: { paddingBottom: 24 },
-  modalHandle: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: COLORS.neutral400,
-    alignSelf: 'center',
-    marginBottom: 20,
-  },
-  modalTitle: { fontSize: 20, fontWeight: '700', color: COLORS.black, marginBottom: 20 },
-  modalLabel: { fontSize: 14, fontWeight: '600', color: COLORS.black, marginBottom: 8 },
-  modalAutocomplete: { marginBottom: 12 },
-  useMyLocationButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 16,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    backgroundColor: COLORS.neutral300,
-    borderRadius: 12,
-  },
-  useMyLocationText: { fontSize: 14, fontWeight: '600', color: COLORS.black },
-  modalButtons: { flexDirection: 'row', gap: 12, marginTop: 8 },
-  modalButtonSecondary: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: COLORS.black,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  modalButtonSecondaryText: { fontSize: 16, fontWeight: '600', color: COLORS.black },
-  modalButtonPrimary: {
-    flex: 1,
-    backgroundColor: COLORS.black,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  modalButtonPrimaryText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
   timeSheetOverlayContainer: {
     position: 'absolute',
     top: 0,

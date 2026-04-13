@@ -27,6 +27,10 @@ const ERROR_PT: Array<[RegExp, string]> = [
     /could not find the table.*trip_ratings|trip_ratings.*schema cache/i,
     'Avaliação de viagem: o servidor ainda não tem esta funcionalidade (aplique as migrações que criam trip_ratings no Supabase).',
   ],
+  [
+    /could not find the table.*shipment_driver_ratings|shipment_driver_ratings.*schema cache/i,
+    'Avaliação de envio: o servidor ainda não tem esta funcionalidade (aplique as migrações que criam shipment_driver_ratings no Supabase).',
+  ],
 ];
 
 const DEFAULT_MESSAGE = 'Algo deu errado. Tente novamente.';
@@ -54,6 +58,22 @@ export function isTripRatingsUnavailableError(error: unknown): boolean {
   const combined = `${raw} ${code}`.toLowerCase();
   return (
     combined.includes('trip_ratings') &&
+    (combined.includes('schema cache') ||
+      combined.includes('could not find the table') ||
+      combined.includes('pgrst205'))
+  );
+}
+
+/** Tabela `shipment_driver_ratings` ausente ou fora do cache do PostgREST. */
+export function isShipmentDriverRatingsUnavailableError(error: unknown): boolean {
+  const raw = getMessageFromError(error);
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code)
+      : '';
+  const combined = `${raw} ${code}`.toLowerCase();
+  return (
+    combined.includes('shipment_driver_ratings') &&
     (combined.includes('schema cache') ||
       combined.includes('could not find the table') ||
       combined.includes('pgrst205'))

@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, TouchableOpacity, Image, type ImageSourcePropType } from 'react-native';
 import { PointAnnotation, MarkerView } from '@rnmapbox/maps';
+import { MAPBOX_ORIGIN_MARKER_COLOR } from '@take-me/shared';
 import type { LatLng } from './mapboxUtils';
 import { isValidTripCoordinate } from './mapboxUtils';
 
@@ -23,17 +24,18 @@ type MapboxMarkerProps = {
   onPress?: () => void;
 };
 
+/** Mesmo visual que `MapMarker` no app motorista (`PointAnnotation`). */
 const defaultPin = (pinColor: string) => (
-  <View style={{ width: 24, height: 32, alignItems: 'center', justifyContent: 'flex-end' }}>
-    <View
-      style={{
-        width: 20,
-        height: 20,
-        borderRadius: 10,
-        backgroundColor: pinColor,
-      }}
-    />
-  </View>
+  <View
+    style={{
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: pinColor,
+      borderWidth: 2,
+      borderColor: '#FFFFFF',
+    }}
+  />
 );
 
 /**
@@ -47,7 +49,7 @@ export function MapboxMarker({
   anchor = { x: 0.5, y: 1 },
   title,
   description,
-  pinColor = '#0d0d0d',
+  pinColor = MAPBOX_ORIGIN_MARKER_COLOR,
   icon,
   iconSize = 20,
   children,
@@ -83,7 +85,7 @@ export function MapboxMarker({
 
     return (
       <MarkerView key={id} coordinate={coord} anchor={anchor} allowOverlap>
-        {content}
+        <View collapsable={false}>{content}</View>
       </MarkerView>
     );
   }

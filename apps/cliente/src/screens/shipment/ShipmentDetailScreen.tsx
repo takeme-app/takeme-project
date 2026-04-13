@@ -507,7 +507,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
             ) : (
               <MapboxMap style={styles.map} initialRegion={mapRegion!} scrollEnabled={false} showControls>
                 {routeCoords && routeCoords.length > 0 && (
-                  <MapboxPolyline coordinates={routeCoords} strokeColor={COLORS.black} strokeWidth={4} />
+                  <MapboxPolyline coordinates={routeCoords} strokeWidth={4} />
                 )}
                 {driverOnWay ? (
                   <MapboxMarker id="origin" coordinate={{ latitude: detail.origin_lat!, longitude: detail.origin_lng! }} anchor={{ x: 0.5, y: 0.5 }}>

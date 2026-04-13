@@ -23,8 +23,10 @@ const navTabsList = [
   { label: 'Analytics', path: '/analytics' },
 ];
 
-/** Máximo de abas na barra; o restante fica em "Ver mais". */
-const MAX_VISIBLE_NAV_TABS = 6;
+/** Largura estimada por tab (px) — inclui padding e gap */
+const NAV_TAB_AVG_WIDTH = 105;
+/** Largura mínima reservada para logo + user block */
+const NAV_RESERVED_WIDTH = 360;
 
 // Chevron right (>) para "Ver mais"
 const chevronRightSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
@@ -96,6 +98,19 @@ export default function Layout() {
     setAccountOpen(false);
   }, [location.pathname]);
 
+  // Dynamic max visible tabs based on screen width
+  const [maxVisibleTabs, setMaxVisibleTabs] = useState(6);
+  useEffect(() => {
+    const calc = () => {
+      const available = window.innerWidth - NAV_RESERVED_WIDTH;
+      const fit = Math.max(2, Math.floor(available / NAV_TAB_AVG_WIDTH));
+      setMaxVisibleTabs(Math.min(fit, navTabsList.length));
+    };
+    calc();
+    window.addEventListener('resize', calc);
+    return () => window.removeEventListener('resize', calc);
+  }, []);
+
   // When navigating from another module (e.g. encomendas → viagem detail),
   // keep that module's nav tab active instead of matching /viagens
   const fromModule = (location.state as any)?.from as string | undefined;
@@ -113,11 +128,11 @@ export default function Layout() {
   const userEmail = session?.user?.email || 'pedro.henriq@gmail.com';
   const avatarLetter = userName.charAt(0).toUpperCase();
 
-  const needsMore = navTabsList.length > MAX_VISIBLE_NAV_TABS;
-  const visibleTabs = needsMore ? navTabsList.slice(0, MAX_VISIBLE_NAV_TABS) : navTabsList;
-  const overflowTabs = needsMore ? navTabsList.slice(MAX_VISIBLE_NAV_TABS) : [];
+  const needsMore = navTabsList.length > maxVisibleTabs;
+  const visibleTabs = needsMore ? navTabsList.slice(0, maxVisibleTabs) : navTabsList;
+  const overflowTabs = needsMore ? navTabsList.slice(maxVisibleTabs) : [];
 
-  const activeInOverflow = needsMore && activeNavIndex >= MAX_VISIBLE_NAV_TABS;
+  const activeInOverflow = needsMore && activeNavIndex >= maxVisibleTabs;
 
   const navButtons = visibleTabs.map((tab, i) =>
     React.createElement('button', {

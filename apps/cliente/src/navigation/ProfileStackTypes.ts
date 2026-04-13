@@ -1,3 +1,5 @@
+import type { ClientChatRouteParams } from './ActivitiesStackTypes';
+
 export type ProfileStackParamList = {
   ProfileMain: undefined;
   PersonalInfo: undefined;
@@ -10,6 +12,7 @@ export type ProfileStackParamList = {
   AddDependent: undefined;
   DependentSuccess: undefined;
   Conversations: undefined;
+  Chat: ClientChatRouteParams;
   AddPaymentMethod: undefined;
   AddCard: { paymentType: 'credit' | 'debit' };
   CardRegisteredSuccess: undefined;

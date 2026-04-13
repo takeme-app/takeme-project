@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo } from 'react';
 import { View, TouchableOpacity, StyleSheet, ActivityIndicator, Image } from 'react-native';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -8,8 +8,10 @@ import {
   tripFitsPassengersAndBags,
   type ClientScheduledTripItem,
 } from '../lib/clientScheduledTrips';
+import { parseTimeSlotRange, toISODateFromUtcIso } from '../lib/dateTimeSlots';
 import { formatDriverRatingLabel } from '../lib/tripDriverDisplay';
 import type { SelectedPlaces } from './AddressSelectionScreen';
+import type { WhenTimeResult } from '../hooks/useWhenTimeSelection';
 
 const ROUTE_MATCH_DEGREES = 0.15;
 const LIST_PASSENGERS = 1;
@@ -31,16 +33,25 @@ function getInitials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+export type TripListFooterMeta =
+  | { phase: 'idle' }
+  | { phase: 'loading' }
+  | { phase: 'ready'; tripCount: number; selectedTrip: ClientScheduledTripItem | null; error: string | null };
+
 type Props = {
   places: SelectedPlaces;
-  onSelectTrip: (trip: ClientScheduledTripItem) => void;
+  /** Lista filtra por data/faixa quando o utilizador agenda (alinhado a PlanRideScreen). */
+  when: WhenTimeResult;
   onScheduleLater: () => void;
+  /** Atualiza o estado do rodapé (visibilidade / rótulo) na tela pai. */
+  onListFooterMetaChange?: (meta: TripListFooterMeta) => void;
 };
 
-export function TripResultsList({ places, onSelectTrip, onScheduleLater }: Props) {
+export function TripResultsList({ places, when, onScheduleLater, onListFooterMetaChange }: Props) {
   const [allTrips, setAllTrips] = useState<ClientScheduledTripItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -52,19 +63,74 @@ export function TripResultsList({ places, onSelectTrip, onScheduleLater }: Props
     });
   }, []);
 
+  // Chave estável: o pai costuma passar um novo objeto `places` a cada render; usar a referência
+  // de `places` no useMemo abaixo gerava novo `filteredTrips` sempre e reativava o layout effect
+  // que chama `onListFooterMetaChange` → setState no pai → loop "Maximum update depth exceeded".
+  const scheduleKey =
+    when.whenOption === 'later' && when.scheduledDateId && when.scheduledTimeSlot
+      ? `${when.scheduledDateId}|${when.scheduledTimeSlot}`
+      : 'now';
+  const placesKey = `${places.origin.latitude},${places.origin.longitude},${places.destination.latitude},${places.destination.longitude}|${scheduleKey}`;
+
   const filteredTrips = useMemo(() => {
     const { origin, destination } = places;
-    return allTrips
-      .filter(
-        (t) =>
-          Math.abs(t.origin_lat - origin.latitude) <= ROUTE_MATCH_DEGREES &&
-          Math.abs(t.origin_lng - origin.longitude) <= ROUTE_MATCH_DEGREES &&
-          Math.abs(t.latitude - destination.latitude) <= ROUTE_MATCH_DEGREES &&
-          Math.abs(t.longitude - destination.longitude) <= ROUTE_MATCH_DEGREES &&
-          tripFitsPassengersAndBags(t, LIST_PASSENGERS, LIST_BAGS),
-      )
-      .sort(compareTripsByDepartureAndBadge);
-  }, [allTrips, places]);
+    let list = allTrips.filter(
+      (t) =>
+        Math.abs(t.origin_lat - origin.latitude) <= ROUTE_MATCH_DEGREES &&
+        Math.abs(t.origin_lng - origin.longitude) <= ROUTE_MATCH_DEGREES &&
+        Math.abs(t.latitude - destination.latitude) <= ROUTE_MATCH_DEGREES &&
+        Math.abs(t.longitude - destination.longitude) <= ROUTE_MATCH_DEGREES &&
+        tripFitsPassengersAndBags(t, LIST_PASSENGERS, LIST_BAGS),
+    );
+    if (when.whenOption === 'later' && when.scheduledDateId && when.scheduledTimeSlot && list.length > 0) {
+      const dateId = when.scheduledDateId;
+      const slotStr = when.scheduledTimeSlot;
+      list = list.filter((t) => {
+        if (!t.departure_at) return false;
+        const tripDate = toISODateFromUtcIso(t.departure_at);
+        if (tripDate !== dateId) return false;
+        const slot = parseTimeSlotRange(slotStr);
+        if (!slot) return true;
+        const dep = new Date(t.departure_at);
+        const depMinutes = dep.getHours() * 60 + dep.getMinutes();
+        return depMinutes >= slot.startMinutes && depMinutes < slot.endMinutes;
+      });
+    }
+    return [...list].sort(compareTripsByDepartureAndBadge);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `placesKey` resume coords + janela temporal; `places` muda de referência.
+  }, [allTrips, placesKey]);
+
+  useEffect(() => {
+    setSelectedTripId(null);
+  }, [placesKey]);
+
+  useEffect(() => {
+    if (selectedTripId && !filteredTrips.some((t) => t.id === selectedTripId)) {
+      setSelectedTripId(null);
+    }
+  }, [filteredTrips, selectedTripId]);
+
+  useLayoutEffect(() => {
+    if (!onListFooterMetaChange) return;
+    if (loading) {
+      onListFooterMetaChange({ phase: 'loading' });
+      return;
+    }
+    if (error) {
+      onListFooterMetaChange({ phase: 'ready', tripCount: 0, selectedTrip: null, error });
+      return;
+    }
+    const selectedTrip =
+      selectedTripId != null ? filteredTrips.find((t) => t.id === selectedTripId) ?? null : null;
+    onListFooterMetaChange({ phase: 'ready', tripCount: filteredTrips.length, selectedTrip, error: null });
+  }, [loading, error, filteredTrips, selectedTripId, onListFooterMetaChange]);
+
+  useEffect(() => {
+    if (!onListFooterMetaChange) return;
+    return () => {
+      onListFooterMetaChange({ phase: 'idle' });
+    };
+  }, [onListFooterMetaChange]);
 
   if (loading) {
     return (
@@ -98,14 +164,14 @@ export function TripResultsList({ places, onSelectTrip, onScheduleLater }: Props
   return (
     <View style={styles.container}>
       <Text style={styles.sectionTitle}>Viagens disponíveis</Text>
-      <Text style={styles.sectionSubtitle}>Toque na viagem para continuar</Text>
+      <Text style={styles.sectionSubtitle}>Toque na viagem para selecionar; em seguida confirme no rodapé</Text>
       {filteredTrips.map((trip) => {
         return (
           <TouchableOpacity
             key={trip.id}
-            style={styles.tripCard}
+            style={[styles.tripCard, selectedTripId === trip.id && styles.tripCardSelected]}
             activeOpacity={0.8}
-            onPress={() => onSelectTrip(trip)}
+            onPress={() => setSelectedTripId(trip.id)}
           >
             <View style={styles.topRow}>
               {trip.driverAvatarUrl ? (
@@ -186,6 +252,9 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 2,
     borderColor: 'transparent',
+  },
+  tripCardSelected: {
+    borderColor: COLORS.black,
   },
   topRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   avatar: { width: 40, height: 40, borderRadius: 20, marginRight: 12 },

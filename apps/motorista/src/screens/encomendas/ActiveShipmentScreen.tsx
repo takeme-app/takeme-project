@@ -43,6 +43,7 @@ import { getRouteWithDuration, formatEta } from '../../lib/route';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { coletaLetterFromShipmentId, shipmentCodesMatch } from '../../lib/preparerEncomendasBase';
 import { closeShipmentConversation } from '../../lib/shipmentConversation';
+import { getUserErrorMessage, isShipmentDriverRatingsUnavailableError } from '../../utils/errorMessage';
 
 let Location: any = null;
 try { Location = require('expo-location'); } catch { /* not linked yet */ }
@@ -723,19 +724,42 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
 
   const submitRating = async () => {
     if (!shipment) return;
+    if (rating < 1) {
+      showAlert('Avaliação', 'Selecione de 1 a 5 estrelas para enviar.');
+      return;
+    }
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user?.id) {
+      showAlert('Erro', 'Sessão inválida. Faça login novamente.');
+      return;
+    }
     setSummaryLoading(true);
     try {
-      if (rating > 0 || ratingComment.trim()) {
-        await supabase.from('shipment_ratings').insert({
+      const { error } = await supabase.from('shipment_driver_ratings' as never).upsert(
+        {
           shipment_id: shipment.id,
+          driver_id: user.id,
           rating,
           comment: ratingComment.trim() || null,
-        } as never);
+        } as never,
+        { onConflict: 'shipment_id' }
+      );
+      if (error) throw error;
+      setSummaryVisible(false);
+      navigation.navigate('ColetasMain');
+    } catch (e: unknown) {
+      if (isShipmentDriverRatingsUnavailableError(e)) {
+        showAlert(
+          'Avaliação indisponível',
+          'O servidor Supabase ainda não tem a tabela shipment_driver_ratings. Aplique as migrações do repositório (por exemplo supabase db push ou SQL no painel).',
+        );
+      } else {
+        showAlert('Erro', getUserErrorMessage(e));
       }
     } finally {
       setSummaryLoading(false);
-      setSummaryVisible(false);
-      navigation.navigate('ColetasMain');
     }
   };
 

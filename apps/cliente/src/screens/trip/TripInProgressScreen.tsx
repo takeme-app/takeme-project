@@ -357,7 +357,7 @@ export function TripInProgressScreen({ navigation, route }: Props) {
         controlsRightInset={mapFocused ? Math.max(insets.right, 12) + 4 : undefined}
       >
         {polylineCoords.length >= 2 ? (
-          <MapboxPolyline coordinates={polylineCoords} strokeColor={COLORS.black} strokeWidth={4} />
+          <MapboxPolyline coordinates={polylineCoords} strokeWidth={4} />
         ) : null}
         {steps.map((step, i) => (
           <MapboxMarker

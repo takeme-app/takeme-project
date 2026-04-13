@@ -302,6 +302,8 @@ export interface DestinoListItem {
 
 export interface PreparadorListItem {
   id: string;
+  /** Worker ID (para navegar ao detalhe do preparador) */
+  workerId?: string;
   nome: string;
   origem: string;
   destino: string;
@@ -377,6 +379,34 @@ export interface PreparadorEditDetail {
     plate: string | null;
     passengerCapacity: number | null;
   }>;
+}
+
+/** Detalhe de encomenda no contexto do preparador. */
+export interface PreparadorEncomendaDetail {
+  id: string;
+  kind: 'shipment' | 'dependent_shipment';
+  originAddress: string;
+  destinationAddress: string;
+  status: string;
+  statusLabel: string;
+  amountCents: number;
+  packageSize: string | null;
+  photoUrl: string | null;
+  recipientName: string | null;
+  recipientPhone: string | null;
+  recipientEmail: string | null;
+  senderName: string | null;
+  instructions: string | null;
+  createdAt: string;
+  /** Preparador atribuído */
+  preparerProfile: {
+    id: string;
+    fullName: string | null;
+    phone: string | null;
+    avatarUrl: string | null;
+    status: string | null;
+    subtype: string | null;
+  } | null;
 }
 
 export interface PreparadorCandidate {

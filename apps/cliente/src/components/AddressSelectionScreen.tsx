@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, type ReactNode } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef, type ReactNode } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -24,23 +24,37 @@ import { distanceKm, formatDistanceKm, type AddressSuggestion } from '../lib/loc
 import { getRoutePolyline, type RoutePoint } from '../lib/route';
 import { formatRecentDestinationDisplay } from '../lib/recentDestinations';
 import { useAppAlert } from '../contexts/AppAlertContext';
+import { MAPBOX_DESTINATION_MARKER_COLOR, MAPBOX_ORIGIN_MARKER_COLOR } from '@take-me/shared';
 
 export type SelectedPlaces = {
   origin: { address: string; latitude: number; longitude: number; city?: string };
   destination: { address: string; latitude: number; longitude: number };
 };
 
+export type InitialDestinationParam = {
+  address: string;
+  city?: string;
+  latitude?: number;
+  longitude?: number;
+};
+
 type Props = {
   title: string;
+  /** Vindo da home (destinos recentes): mesmo UI que abrir «Viagens», já com destino. */
+  initialDestination?: InitialDestinationParam;
   onConfirm: (places: SelectedPlaces, when: WhenTimeResult) => void;
   onGoBack: () => void;
   extractOriginCity?: boolean;
   showRecentDestinations?: boolean;
   renderExtraPills?: () => ReactNode;
-  /** Conteúdo extra abaixo dos endereços (ex.: lista de viagens). */
-  renderResults?: (places: SelectedPlaces) => ReactNode;
+  /** Conteúdo extra abaixo dos endereços (ex.: lista de viagens). `when` reflete Agora vs agendamento. */
+  renderResults?: (places: SelectedPlaces, when: WhenTimeResult) => ReactNode;
   /** Texto do botão fixo inferior (padrão: "Continuar"). Útil quando há lista de viagens. */
   continueBottomLabel?: string;
+  /** Quando true, o botão inferior não é exibido (ex.: lista de viagens carregando ou aguardando seleção). */
+  continueBottomHidden?: boolean;
+  /** Se definido, substitui o fluxo padrão de `onConfirm` ao tocar no botão inferior. */
+  onContinuePressOverride?: () => void;
   destinationPlaceholder?: string;
   whenTitle?: string;
   nowSubtitle?: string;
@@ -61,6 +75,7 @@ const DEFAULT_DEST_COORDS = { latitude: -7.3305, longitude: -35.3335 };
 
 export function AddressSelectionScreen({
   title,
+  initialDestination,
   onConfirm,
   onGoBack,
   extractOriginCity = false,
@@ -68,6 +83,8 @@ export function AddressSelectionScreen({
   renderExtraPills,
   renderResults,
   continueBottomLabel,
+  continueBottomHidden = false,
+  onContinuePressOverride,
   destinationPlaceholder = 'Para onde?',
   whenTitle,
   nowSubtitle,
@@ -90,6 +107,23 @@ export function AddressSelectionScreen({
 
   const [editingOrigin, setEditingOrigin] = useState(false);
   const [editOriginText, setEditOriginText] = useState('');
+  const appliedInitialDestinationRef = useRef(false);
+
+  // Destino pré-preenchido (ex.: toque num recente na home) — uma vez por montagem do ecrã.
+  useEffect(() => {
+    if (!initialDestination || appliedInitialDestinationRef.current) return;
+    appliedInitialDestinationRef.current = true;
+    const { address, city, latitude, longitude } = initialDestination;
+    const text = [address?.trim(), city?.trim()].filter(Boolean).join(', ') || address;
+    setDestinationText(text);
+    if (latitude != null && longitude != null) {
+      setDestinationLat(latitude);
+      setDestinationLng(longitude);
+      setDestinationConfirmed(true);
+    } else {
+      setDestinationConfirmed(false);
+    }
+  }, [initialDestination]);
 
   // Buscar rota real quando destino é confirmado
   useEffect(() => {
@@ -166,6 +200,14 @@ export function AddressSelectionScreen({
     );
   }, [destinationConfirmed, destinationText, destinationLat, destinationLng, origin, when, saveRecentDestination, onConfirm, showAlert]);
 
+  const handleBottomPress = useCallback(() => {
+    if (onContinuePressOverride) {
+      onContinuePressOverride();
+      return;
+    }
+    handleContinue();
+  }, [onContinuePressOverride, handleContinue]);
+
   const handleRecentSelect = useCallback(
     (address: string, lat: number, lng: number) => {
       setDestinationText(address);
@@ -200,17 +242,17 @@ export function AddressSelectionScreen({
           <MapboxMarker
             id="origin-pin"
             coordinate={{ latitude: origin.originLat, longitude: origin.originLng }}
-            pinColor="#0d0d0d"
+            pinColor={MAPBOX_ORIGIN_MARKER_COLOR}
           />
           {destinationConfirmed && (
             <>
               <MapboxMarker
                 id="dest-pin"
                 coordinate={{ latitude: destinationLat, longitude: destinationLng }}
-                pinColor="#E53935"
+                pinColor={MAPBOX_DESTINATION_MARKER_COLOR}
               />
               {routeCoords && routeCoords.length >= 2 && (
-                <MapboxPolyline coordinates={routeCoords} strokeColor="#0d0d0d" strokeWidth={4} />
+                <MapboxPolyline coordinates={routeCoords} strokeWidth={4} />
               )}
             </>
           )}
@@ -231,7 +273,10 @@ export function AddressSelectionScreen({
         <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <ScrollView
             style={styles.flex}
-            contentContainerStyle={styles.scrollContent}
+            contentContainerStyle={[
+              styles.scrollContent,
+              continueBottomHidden && { paddingBottom: Math.max(insets.bottom, 24) },
+            ]}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
@@ -345,20 +390,22 @@ export function AddressSelectionScreen({
             )}
 
             {/* Results (viagens disponíveis, etc.) */}
-            {renderResults && selectedPlaces && renderResults(selectedPlaces)}
+            {renderResults && selectedPlaces && renderResults(selectedPlaces, when.getResult())}
           </ScrollView>
 
           {/* Continue button */}
-          <View style={styles.bottomButtonWrap}>
-            <TouchableOpacity
-              style={[styles.continueButton, !destinationConfirmed && styles.continueButtonDisabled]}
-              onPress={handleContinue}
-              disabled={!destinationConfirmed}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.continueButtonText}>{continueBottomLabel ?? 'Continuar'}</Text>
-            </TouchableOpacity>
-          </View>
+          {!continueBottomHidden && (
+            <View style={[styles.bottomButtonWrap, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+              <TouchableOpacity
+                style={[styles.continueButton, !destinationConfirmed && styles.continueButtonDisabled]}
+                onPress={handleBottomPress}
+                disabled={!destinationConfirmed}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.continueButtonText}>{continueBottomLabel ?? 'Continuar'}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </KeyboardAvoidingView>
       </View>
 
@@ -506,7 +553,7 @@ const styles = StyleSheet.create({
   recentLine1: { fontSize: 15, fontWeight: '500', color: COLORS.black },
   recentLine2: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
 
-  bottomButtonWrap: { paddingHorizontal: 24, paddingBottom: 8 },
+  bottomButtonWrap: { paddingHorizontal: 24 },
   continueButton: {
     backgroundColor: COLORS.black,
     paddingVertical: 16,

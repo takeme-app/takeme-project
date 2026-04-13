@@ -11,6 +11,7 @@ import {
 import { fetchMotoristas, fetchMotoristaTableRows, fetchAllMotoristaProfiles, updateWorkerStatus } from '../data/queries';
 import type { MotoristaListItem, WorkerApprovalRow, WorkerApprovalStatus } from '../data/types';
 import type { MotoristaTableRow } from '../data/queries';
+import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
 
 const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } = require('recharts');
 
@@ -33,11 +34,11 @@ const cadastrosGridTemplate =
   'minmax(0, 1.55fr) minmax(0, 0.58fr) minmax(0, 0.68fr) minmax(0, 0.34fr) minmax(0, 0.44fr) minmax(0, 0.52fr) minmax(220px, 0.95fr)';
 
 // ── Avatar helper ─────────────────────────────────────────────────────────
-const renderAvatar = (nome: string, avatarUrl?: string | null) => {
+const renderAvatar = (nome: string, resolvedAvatarUrl?: string | null) => {
   const initial = (nome || '?')[0].toUpperCase();
   const colors = ['#3b82f6', '#f59e0b', '#22c55e', '#ef4444', '#8b5cf6', '#ec4899'];
   const bg = colors[initial.charCodeAt(0) % colors.length];
-  if (avatarUrl) return React.createElement('img', { src: avatarUrl, alt: nome, style: { width: 36, height: 36, borderRadius: '50%', objectFit: 'cover' as const, flexShrink: 0 } });
+  if (resolvedAvatarUrl) return React.createElement('img', { src: resolvedAvatarUrl, alt: nome, style: { width: 36, height: 36, borderRadius: '50%', objectFit: 'cover' as const, flexShrink: 0 } });
   return React.createElement('div', { style: { width: 36, height: 36, borderRadius: '50%', background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 14, fontWeight: 700, flexShrink: 0, ...font } }, initial);
 };
 
@@ -54,6 +55,24 @@ export default function MotoristasScreen() {
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [cadastrosSearch, setCadastrosSearch] = useState('');
+  const [resolvedAvatars, setResolvedAvatars] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const paths = [...new Set([
+      ...tableData.map((t) => t.avatarUrl).filter(Boolean),
+      ...allProfiles.map((p) => (p as any).avatarUrl).filter(Boolean),
+    ])] as string[];
+    if (paths.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const map: Record<string, string> = {};
+      for (const p of paths) {
+        const url = await resolveStorageDisplayUrl(p);
+        if (url) map[p] = url;
+      }
+      if (!cancelled) setResolvedAvatars(map);
+    })();
+    return () => { cancelled = true; };
+  }, [tableData, allProfiles]);
 
   useEffect(() => {
     let cancelled = false;
@@ -606,7 +625,7 @@ export default function MotoristasScreen() {
                       },
                     },
                       React.createElement('div', { style: { ...cellBase, gap: 8, overflow: 'hidden' } },
-                        renderAvatar(p.nome, p.avatarUrl),
+                        renderAvatar(p.nome, p.avatarUrl ? resolvedAvatars[p.avatarUrl] : null),
                         React.createElement('span', { style: { fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } }, p.nome)),
                       React.createElement('div', { style: { ...cellBase, overflow: 'hidden' } },
                         React.createElement('span', { style: { fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 999, background: p.subtype === 'take_me' ? '#dbeafe' : '#f3e8ff', color: p.subtype === 'take_me' ? '#1e40af' : '#6b21a8', whiteSpace: 'nowrap' as const, ...font } },

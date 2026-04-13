@@ -13,6 +13,7 @@ import { Text } from '../Text';
 import type { MapCameraSetConfig, MapCameraStop } from './mapCameraTypes';
 import type { MapRegion } from './geometry';
 import { regionToZoomLevel, sanitizeMapRegion } from './geometry';
+import { MAPBOX_NATIVE_MAP_STYLE_URL } from '@take-me/shared';
 import { getMapboxAccessToken } from '../../lib/googleMapsConfig';
 
 function applyCameraStop(camera: MapboxCamera | null, config: MapCameraStop): void {
@@ -87,6 +88,7 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
   {
     style,
     initialRegion,
+    styleURL = MAPBOX_NATIVE_MAP_STYLE_URL,
     scrollEnabled = true,
     children,
     onDidFinishLoadingMap,
@@ -261,6 +263,7 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
     <View style={[{ flex: 1 }, style]}>
       <MapView
         style={StyleSheet.absoluteFill}
+        styleURL={styleURL}
         scrollEnabled={scrollEnabled}
         scaleBarEnabled={false}
         onDidFinishLoadingMap={onMapReady}
