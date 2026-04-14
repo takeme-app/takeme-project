@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Alert,
   Dimensions,
+  Switch,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -220,6 +221,45 @@ function timelineSteps(status: string): boolean[] {
 const TIMELINE_LABELS = ['Pedido feito', 'Pagamento aprovado', 'Embarque confirmado', 'Ônibus partiu'];
 const BOARDING_ACTION_STATUSES = ['approved', 'scheduled', 'in_progress', 'payment_done', 'paid', 'active'];
 
+const BOARDING_SEQ = ['not_embarked', 'embarked', 'disembarked'] as const;
+
+function nextBoardingStatus(cur: string | null | undefined): string | null {
+  const c = cur ?? 'not_embarked';
+  const i = BOARDING_SEQ.indexOf(c as (typeof BOARDING_SEQ)[number]);
+  if (i < 0 || i >= BOARDING_SEQ.length - 1) return null;
+  return BOARDING_SEQ[i + 1]!;
+}
+
+function maskCpf(cpf: string | null | undefined): string {
+  const d = (cpf ?? '').replace(/\D/g, '');
+  if (d.length < 4) return '—';
+  return `***.***.***-${d.slice(-2)}`;
+}
+
+function boardingLabel(kind: 'ida' | 'volta', status: string | null | undefined): string {
+  const s = status ?? 'not_embarked';
+  if (kind === 'ida') {
+    if (s === 'embarked') return 'A bordo (ida)';
+    if (s === 'disembarked') return 'Desembarcou (ida)';
+    return 'Aguardando embarque (ida)';
+  }
+  if (s === 'embarked') return 'A bordo (volta)';
+  if (s === 'disembarked') return 'Desembarcou (volta)';
+  return 'Aguardando embarque (volta)';
+}
+
+type ExcursionPassengerRow = {
+  id: string;
+  full_name: string;
+  cpf: string | null;
+  phone: string | null;
+  age: string | null;
+  gender: string | null;
+  status_departure: string | null;
+  status_return: string | null;
+  observations: string | null;
+};
+
 export function DetalhesExcursaoScreen({ navigation, route }: Props) {
   const { excursionId } = route.params;
   const [loading, setLoading] = useState(true);
@@ -233,6 +273,10 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
   /** Fallback para origem só em texto (sem origin_lat no banco). */
   const [geocodedOriginCoord, setGeocodedOriginCoord] = useState<[number, number] | null>(null);
   const [openingChat, setOpeningChat] = useState(false);
+  const [passengers, setPassengers] = useState<ExcursionPassengerRow[]>([]);
+  const [sortPassengersByAge, setSortPassengersByAge] = useState(false);
+  const [passengerUpdatingId, setPassengerUpdatingId] = useState<string | null>(null);
+  const [excursionActionLoading, setExcursionActionLoading] = useState(false);
   const excursionMapRef = useRef<GoogleMapsMapRef>(null);
   const [followMyLocation, setFollowMyLocation] = useState(false);
   const followFirstAnimDoneRef = useRef(false);
@@ -246,13 +290,28 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     const { data } = await supabase
       .from('excursion_requests')
       .select(
-        'id, destination, excursion_date, scheduled_departure_at, fleet_type, status, user_id, created_at, confirmed_at',
+        [
+          'id, destination, origin, excursion_date, scheduled_departure_at, fleet_type, status, user_id,',
+          'created_at, confirmed_at, origin_lat, origin_lng, destination_lat, destination_lng',
+        ].join(' '),
       )
       .eq('id', excursionId)
       .maybeSingle();
 
     if (!data) { setLoading(false); return; }
     const r = data as any;
+
+    const { data: psgRows, error: psgErr } = await supabase
+      .from('excursion_passengers')
+      .select('id, full_name, cpf, phone, age, gender, status_departure, status_return, observations')
+      .eq('excursion_request_id', r.id)
+      .order('full_name');
+    if (psgErr) {
+      console.warn('[DetalhesExcursao] excursion_passengers', psgErr.message);
+      setPassengers([]);
+    } else {
+      setPassengers((psgRows ?? []) as ExcursionPassengerRow[]);
+    }
 
     let responsible: string | null = null;
     let clientPhone: string | null = null;
@@ -270,17 +329,12 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     }
     if (!responsible) responsible = 'Cliente';
 
-    const { count: psgCount } = await supabase
-      .from('excursion_passengers')
-      .select('id', { count: 'exact', head: true })
-      .eq('excursion_request_id', r.id);
-
     const depIso = r.scheduled_departure_at ?? r.excursion_date ?? null;
     const retIso = null;
 
     setDetail({
       id: r.id,
-      origin: 'Origem',
+      origin: (typeof r.origin === 'string' && r.origin.trim()) ? r.origin.trim() : 'Origem',
       destination: r.destination ?? 'Destino',
       departureTime: depIso,
       returnTime: retIso,
@@ -288,16 +342,16 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
       responsible,
       direction: 'Ida',
       status: r.status ?? 'pending',
-      originLat: null,
-      originLng: null,
-      destLat: null,
-      destLng: null,
+      originLat: toFiniteNumber(r.origin_lat),
+      originLng: toFiniteNumber(r.origin_lng),
+      destLat: toFiniteNumber(r.destination_lat),
+      destLng: toFiniteNumber(r.destination_lng),
       createdAt: r.created_at ?? null,
       confirmedAt: r.confirmed_at ?? null,
       clientPhone,
       clientUserId: r.user_id as string,
       clientAvatarUrl,
-      registeredPassengerCount: psgCount ?? 0,
+      registeredPassengerCount: (psgRows ?? []).length,
     });
     setLoading(false);
   }, [excursionId]);
@@ -383,6 +437,75 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
       participantAvatar: detail.clientAvatarUrl ?? undefined,
     });
   }, [detail, navigation]);
+
+  const sortedPassengers = useMemo(() => {
+    const list = [...passengers];
+    if (sortPassengersByAge) {
+      list.sort((a, b) => (parseInt(String(a.age ?? ''), 10) || 0) - (parseInt(String(b.age ?? ''), 10) || 0));
+    }
+    return list;
+  }, [passengers, sortPassengersByAge]);
+
+  const idaEmbarkedCount = useMemo(
+    () => passengers.filter((p) => p.status_departure === 'embarked' || p.status_departure === 'disembarked').length,
+    [passengers],
+  );
+
+  const persistPassengerPatch = useCallback(
+    async (id: string, patch: Partial<Pick<ExcursionPassengerRow, 'status_departure' | 'status_return'>>) => {
+      setPassengerUpdatingId(id);
+      const { error } = await supabase
+        .from('excursion_passengers')
+        .update({ ...patch, updated_at: new Date().toISOString() } as never)
+        .eq('id', id);
+      setPassengerUpdatingId(null);
+      if (error) {
+        Alert.alert('Erro', 'Não foi possível atualizar o passageiro.');
+        return;
+      }
+      setPassengers((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+    },
+    [],
+  );
+
+  const handleStartExcursion = useCallback(async () => {
+    if (!detail) return;
+    setExcursionActionLoading(true);
+    const { error } = await supabase
+      .from('excursion_requests')
+      .update({ status: 'in_progress', updated_at: new Date().toISOString() } as never)
+      .eq('id', detail.id);
+    setExcursionActionLoading(false);
+    if (error) {
+      Alert.alert('Erro', 'Não foi possível iniciar a excursão.');
+      return;
+    }
+    setDetail((d) => (d ? { ...d, status: 'in_progress' } : d));
+  }, [detail]);
+
+  const handleCompleteExcursion = useCallback(() => {
+    if (!detail) return;
+    Alert.alert('Concluir excursão', 'Confirma que a excursão foi finalizada?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Concluir',
+        style: 'destructive',
+        onPress: async () => {
+          setExcursionActionLoading(true);
+          const { error } = await supabase
+            .from('excursion_requests')
+            .update({ status: 'completed', updated_at: new Date().toISOString() } as never)
+            .eq('id', detail.id);
+          setExcursionActionLoading(false);
+          if (error) {
+            Alert.alert('Erro', 'Não foi possível concluir a excursão.');
+            return;
+          }
+          setDetail((d) => (d ? { ...d, status: 'completed' } : d));
+        },
+      },
+    ]);
+  }, [detail]);
 
   const destCoord = useMemo(() => {
     if (!detail || detail.destLat == null || detail.destLng == null) return null;
@@ -804,6 +927,107 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
                 </>
               ) : null}
             </View>
+
+            <View style={[styles.card, styles.passengersCard]}>
+              <View style={styles.passengersHeaderRow}>
+                <Text style={styles.historicoTitle}>Passageiros</Text>
+                <Text style={styles.passengersCountBadge}>
+                  {idaEmbarkedCount} / {passengers.length} embarque (ida)
+                </Text>
+              </View>
+              <View style={styles.sortRow}>
+                <Text style={styles.sortLabel}>Ordenar por idade</Text>
+                <Switch
+                  value={sortPassengersByAge}
+                  onValueChange={setSortPassengersByAge}
+                  trackColor={{ false: '#E5E7EB', true: '#111827' }}
+                  thumbColor="#FFFFFF"
+                />
+              </View>
+              {sortedPassengers.length === 0 ? (
+                <Text style={styles.passengersEmpty}>Nenhum passageiro cadastrado nesta excursão.</Text>
+              ) : (
+                sortedPassengers.map((p) => {
+                  const nextDep = nextBoardingStatus(p.status_departure);
+                  const nextRet = nextBoardingStatus(p.status_return);
+                  const busy = passengerUpdatingId === p.id;
+                  return (
+                    <View key={p.id} style={styles.passengerBlock}>
+                      <Text style={styles.passengerName}>{p.full_name}</Text>
+                      <Text style={styles.passengerMeta}>
+                        CPF {maskCpf(p.cpf)}
+                        {p.phone?.trim() ? ` · ${p.phone.trim()}` : ''}
+                        {p.age?.trim() ? ` · ${p.age.trim()} anos` : ''}
+                      </Text>
+                      {p.observations?.trim() ? (
+                        <Text style={styles.passengerObs} numberOfLines={3}>
+                          {p.observations.trim()}
+                        </Text>
+                      ) : null}
+                      <Text style={styles.passengerStatusLine}>{boardingLabel('ida', p.status_departure)}</Text>
+                      <Text style={styles.passengerStatusLine}>{boardingLabel('volta', p.status_return)}</Text>
+                      <View style={styles.passengerBtnRow}>
+                        <TouchableOpacity
+                          style={[styles.passengerBtn, (!nextDep || busy) && styles.passengerBtnDisabled]}
+                          disabled={!nextDep || busy}
+                          onPress={() => void persistPassengerPatch(p.id, { status_departure: nextDep! })}
+                        >
+                          {busy ? (
+                            <ActivityIndicator size="small" color="#FFFFFF" />
+                          ) : (
+                            <Text style={styles.passengerBtnText}>
+                              {p.status_departure === 'not_embarked'
+                                ? 'Embarcar (ida)'
+                                : p.status_departure === 'embarked'
+                                  ? 'Desembarcar (ida)'
+                                  : 'Ida concluída'}
+                            </Text>
+                          )}
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.passengerBtnOutline, (!nextRet || busy) && styles.passengerBtnDisabled]}
+                          disabled={!nextRet || busy}
+                          onPress={() => void persistPassengerPatch(p.id, { status_return: nextRet! })}
+                        >
+                          <Text style={styles.passengerBtnOutlineText}>
+                            {p.status_return === 'not_embarked'
+                              ? 'Embarcar (volta)'
+                              : p.status_return === 'embarked'
+                                ? 'Desembarcar (volta)'
+                                : 'Volta concluída'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+
+              {detail.status === 'scheduled' ? (
+                <TouchableOpacity
+                  style={[styles.excursionActionBtn, excursionActionLoading && { opacity: 0.7 }]}
+                  onPress={() => void handleStartExcursion()}
+                  disabled={excursionActionLoading}
+                  activeOpacity={0.85}
+                >
+                  {excursionActionLoading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.excursionActionBtnText}>Iniciar excursão</Text>
+                  )}
+                </TouchableOpacity>
+              ) : null}
+              {detail.status === 'in_progress' ? (
+                <TouchableOpacity
+                  style={[styles.excursionActionBtnSecondary, excursionActionLoading && { opacity: 0.7 }]}
+                  onPress={handleCompleteExcursion}
+                  disabled={excursionActionLoading}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.excursionActionBtnSecondaryText}>Concluir excursão</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           </ScrollView>
       )}
     </SafeAreaView>
@@ -1023,6 +1247,87 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   historicoTitle: { fontSize: 15, fontWeight: '700', color: '#6B7280', marginBottom: 16 },
+  passengersCard: { borderColor: '#E5E7EB', marginTop: 4 },
+  passengersHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  passengersCountBadge: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#92400E',
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  sortRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    paddingVertical: 4,
+  },
+  sortLabel: { fontSize: 14, color: '#374151', fontWeight: '600' },
+  passengersEmpty: { fontSize: 14, color: '#9CA3AF', marginBottom: 8 },
+  passengerBlock: {
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    backgroundColor: '#FAFAFA',
+  },
+  passengerName: { fontSize: 15, fontWeight: '700', color: '#111827' },
+  passengerMeta: { fontSize: 12, color: '#6B7280', marginTop: 4 },
+  passengerObs: { fontSize: 12, color: '#92400E', marginTop: 6, fontStyle: 'italic' },
+  passengerStatusLine: { fontSize: 13, color: '#374151', marginTop: 6 },
+  passengerBtnRow: { flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' },
+  passengerBtn: {
+    flex: 1,
+    minWidth: 140,
+    backgroundColor: '#111827',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  passengerBtnOutline: {
+    flex: 1,
+    minWidth: 140,
+    borderWidth: 1.5,
+    borderColor: '#111827',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  passengerBtnDisabled: { opacity: 0.45 },
+  passengerBtnText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  passengerBtnOutlineText: { fontSize: 13, fontWeight: '700', color: '#111827' },
+  excursionActionBtn: {
+    marginTop: 8,
+    backgroundColor: '#111827',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  excursionActionBtnText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  excursionActionBtnSecondary: {
+    marginTop: 10,
+    borderWidth: 1.5,
+    borderColor: '#111827',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  excursionActionBtnSecondaryText: { fontSize: 15, fontWeight: '700', color: '#111827' },
   whatsappRow: {
     flexDirection: 'row',
     alignItems: 'center',

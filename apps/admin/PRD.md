@@ -1,6 +1,6 @@
 # Take Me — PRD Completo do Admin Web
 
-> **Versao:** 2.3 | **Data:** 30/03/2026 | **Status:** Implementado
+> **Versao:** 2.4 | **Data:** 14/04/2026 | **Status:** Implementado
 > **Stack:** React 19 + React Router DOM 6 + Expo Web + Supabase + Mapbox GL + Google Maps (Places/Geocoding) + Recharts
 > **Repositorio:** monorepo `take_me/apps/admin`
 > **Rendering:** `React.createElement()` (sem JSX)
@@ -281,7 +281,26 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 
 - Formulario: Linhas de itens (equipe, basicos, servicos, recreacao, desconto), total automatico
 
-### 4.11 Configuracoes (`/configuracoes`)
+### 4.11 Notificacoes (`/notificacoes`)
+
+- CRUD na tabela `notifications`
+- Broadcast limitado a perfis especificos
+- Campos: titulo, mensagem, categoria, usuario-alvo
+- Listagem com filtros e busca
+
+### 4.12 Avaliacoes (`/avaliacoes`)
+
+- Listagem unificada de `booking_ratings` e `shipment_ratings`
+- Moderacao: exclusao de avaliacoes inapropriadas
+- Filtros por tipo (viagem/envio), periodo, nota
+
+### 4.13 Analytics (`/analytics`)
+
+- Dados agregados de `bookings`, `profiles`, `worker_profiles`, `shipments`, `booking_ratings`
+- Metricas: total de reservas, usuarios ativos, workers ativos, envios, media de avaliacoes
+- Filtros por periodo
+
+### 4.14 Configuracoes (`/configuracoes`)
 
 #### Tab Perfil
 
@@ -293,20 +312,29 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 - Criar admin: Nome, Email, Permissoes por modulo + **envio de credenciais por email** (Edge Function `send-admin-credentials`)
 - Editar permissoes, Excluir admin
 
-#### Tab Plataforma (NOVA)
+#### Tab Plataforma
 
-- **Preco da gasolina** (R$/litro) — editavel, salva em `platform_settings`
-- **Preco do KM rodado** (R$/km) — editavel, salva em `platform_settings`
+- **Preco da gasolina** (R$/litro) — editavel, salva em `platform_settings` (key: `gas_price_cents`)
+- **Preco do KM rodado** (R$/km) — editavel, salva em `platform_settings` (key: `km_price_cents`)
+- **Taxa administrativa padrao** — `default_admin_pct` em `platform_settings`
+- Hook `usePlatformSettings` para leitura/escrita
 
 ---
 
 ## 5. Mapa Completo de Rotas
+
+### 5.1 Rotas Publicas (3)
 
 | # | Rota | Tela | Modulo |
 |---|------|------|--------|
 | 1 | `/login` | WebLoginScreen | Auth |
 | 2 | `/signup` | WebSignupScreen | Auth |
 | 3 | `/forgot-password` | WebForgotPasswordScreen | Auth |
+
+### 5.2 Rotas Protegidas — Principais (28)
+
+| # | Rota | Tela | Modulo |
+|---|------|------|--------|
 | 4 | `/` | HomeScreen | Dashboard |
 | 5 | `/viagens` | ViagensScreen | Viagens |
 | 6 | `/viagens/:id` | ViagemDetalheScreen | Viagens |
@@ -315,25 +343,45 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 | 9 | `/passageiros` | PassageirosScreen | Passageiros |
 | 10 | `/passageiros/:id` | PassageiroDetalheScreen | Passageiros |
 | 11 | `/motoristas` | MotoristasScreen | Motoristas |
-| 12 | `/motoristas/:id/editar` | MotoristaEditScreen | Motoristas |
-| 13 | `/destinos` | DestinosScreen | Destinos |
-| 14 | `/encomendas` | EncomendasScreen | Encomendas |
-| 15 | `/encomendas/:id/editar` | EncomendaEditScreen | Encomendas |
-| 16 | `/preparadores` | PreparadoresScreen | Preparadores |
-| 17 | `/preparadores/:id/editar` | PreparadorEditScreen | Preparadores |
-| 18 | `/promocoes` | PromocoesScreen | Promocoes |
-| 19 | `/promocoes/nova` | PromocaoCreateScreen | Promocoes |
-| 20 | `/pagamentos` | PagamentosScreen | Pagamentos |
-| 21 | `/pagamentos/gestao` | PagamentosGestaoScreen | Pagamentos |
-| 22 | `/pagamentos/gestao/criar-trecho` | PagamentoCriarTrechoScreen | Pagamentos |
-| 23 | `/pagamentos/gestao/motorista/:slug` | PagamentoMotoristaDetailScreen | Pagamentos |
-| 24 | `/pagamentos/gestao/preparador-encomendas/:slug` | PagamentoPreparadorEncomendaDetailScreen | Pagamentos |
-| 25 | `/atendimentos` | AtendimentosScreen | Atendimentos |
-| 26 | `/atendimentos/:id` | AtendimentoDetalheScreen | Atendimentos |
-| 27 | `/atendimentos/:id/orcamento` | ElaborarOrcamentoScreen | Atendimentos |
-| 28 | `/configuracoes` | ConfiguracoesScreen | Configuracoes |
+| 12 | `/motoristas/:id` | MotoristaEditScreen | Motoristas |
+| 13 | `/motoristas/:id/editar` | MotoristaEditScreen | Motoristas |
+| 14 | `/destinos` | DestinosScreen | Destinos |
+| 15 | `/encomendas` | EncomendasScreen | Encomendas |
+| 16 | `/encomendas/:id/editar` | EncomendaEditScreen | Encomendas |
+| 17 | `/preparadores` | PreparadoresScreen | Preparadores |
+| 18 | `/preparadores/:id` | PreparadorEditScreen | Preparadores |
+| 19 | `/preparadores/:id/editar` | PreparadorEditScreen | Preparadores |
+| 20 | `/promocoes` | PromocoesScreen | Promocoes |
+| 21 | `/promocoes/nova` | PromocaoCreateScreen | Promocoes |
+| 22 | `/promocoes/:id/editar` | PromocaoCreateScreen | Promocoes |
+| 23 | `/pagamentos` | PagamentosScreen | Pagamentos |
+| 24 | `/pagamentos/gestao` | PagamentosGestaoScreen | Pagamentos |
+| 25 | `/pagamentos/gestao/criar-trecho` | PagamentoCriarTrechoScreen | Pagamentos |
+| 26 | `/pagamentos/gestao/motorista/:slug` | PagamentoMotoristaDetailScreen | Pagamentos |
+| 27 | `/pagamentos/gestao/preparador-encomendas/:slug` | PagamentoPreparadorEncomendaDetailScreen | Pagamentos |
+| 28 | `/atendimentos` | AtendimentosScreen | Atendimentos |
+| 29 | `/atendimentos/:id` | AtendimentoDetalheScreen | Atendimentos |
+| 30 | `/atendimentos/:id/orcamento` | ElaborarOrcamentoScreen | Atendimentos |
+| 31 | `/notificacoes` | NotificacoesScreen | Notificacoes |
+| 32 | `/avaliacoes` | AvaliacoesScreen | Avaliacoes |
+| 33 | `/analytics` | AnalyticsScreen | Analytics |
+| 34 | `/configuracoes` | ConfiguracoesScreen | Configuracoes |
 
-**Total: 28 rotas (3 publicas + 25 protegidas)**
+### 5.3 Rotas Contextuais (navegacao cruzada entre modulos)
+
+Reutilizam telas existentes para manter contexto de origem (`location.state.from` no Layout):
+
+| # | Rota | Tela | Contexto |
+|---|------|------|----------|
+| 35 | `/motoristas/:mid/viagem/:id` | ViagemDetalheScreen | Viagem via motorista |
+| 36 | `/motoristas/:mid/viagem/:id/historico` | HistoricoViagensScreen | Historico via motorista |
+| 37 | `/passageiros/:pid/viagem/:id` | ViagemDetalheScreen | Viagem via passageiro |
+| 38 | `/passageiros/:pid/viagem/:id/editar` | ViagemEditScreen | Editar via passageiro |
+| 39 | `/passageiros/:pid/viagem/:id/historico` | HistoricoViagensScreen | Historico via passageiro |
+| 40 | `/encomendas/:eid/viagem/:id` | ViagemDetalheScreen | Viagem via encomenda |
+| 41 | `/preparadores/:pid/viagem/:id` | ViagemDetalheScreen | Viagem via preparador |
+
+**Total: 41 rotas (3 publicas + 31 protegidas principais + 7 contextuais)**
 
 ---
 
@@ -369,6 +417,12 @@ O Take Me Admin e o painel de gestao interna da plataforma Take Me — uma plata
 | `dependents` | Dependentes: full_name, age, document_url, status (pending/validated) |
 | `notifications` | Notificacoes: user_id, title, message, category, read_at |
 | `trip_stops` | Paradas ordenadas de uma viagem: scheduled_trip_id, stop_type (driver_origin/passenger_pickup/shipment_pickup/base_dropoff/trip_destination), entity_id, label, address, lat/lng, sequence_order, status (pending/arrived/completed/skipped) |
+| `promotion_adhesions` | Adesoes a promocoes: promotion_id, entity_type, entity_id, discount_cents, created_at |
+| `worker_weekly_price_adjustments` | Ajustes semanais de preco por worker: worker_id, week_start, adjustment_pct |
+| `booking_ratings` | Avaliacoes de viagem pelo passageiro: booking_id, rating (1-5), comment |
+| `shipment_ratings` | Avaliacoes de envio pelo cliente: shipment_id, rating (1-5), comment |
+| `trip_ratings` | Avaliacoes de viagem pelo motorista: trip_id, rating (1-5), comment |
+| `shipment_driver_ratings` | Avaliacoes do remetente pelo motorista: shipment_id, rating (1-5) |
 
 ### 6.2 Views SQL
 

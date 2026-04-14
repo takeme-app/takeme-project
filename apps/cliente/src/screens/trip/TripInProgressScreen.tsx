@@ -12,6 +12,7 @@ import {
   regionFromOriginDestination,
   isValidTripCoordinate,
 } from '../../components/mapbox';
+import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripFollowStackParamList, TripLiveDriverDisplay } from '../../navigation/types';
@@ -28,6 +29,7 @@ import { getRouteWithDuration, formatDuration, formatDistanceKmLabel } from '../
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { onlyDigits } from '../../utils/formatCpf';
 import { getMainTabBarStyleFromInsets } from '../../navigation/mainTabBarStyle';
+import { useScheduledTripLiveLocation } from '../../lib/useScheduledTripLiveLocation';
 
 type Props = NativeStackScreenProps<TripFollowStackParamList, 'TripInProgress'>;
 
@@ -148,10 +150,11 @@ export function TripInProgressScreen({ navigation, route }: Props) {
     useCallback(() => {
       if (!mapFocused) return undefined;
       const tabNav = findTabNavigator(navigation as unknown as NavLike);
-      if (!tabNav?.setOptions) return undefined;
-      tabNav.setOptions({ tabBarStyle: { display: 'none' } });
+      const setOpts = tabNav?.setOptions;
+      if (!setOpts) return undefined;
+      setOpts({ tabBarStyle: { display: 'none' } });
       return () => {
-        tabNav.setOptions({ tabBarStyle: getMainTabBarStyleFromInsets(insets) });
+        setOpts({ tabBarStyle: getMainTabBarStyleFromInsets(insets) });
       };
     }, [navigation, mapFocused, insets]),
   );
@@ -176,6 +179,10 @@ export function TripInProgressScreen({ navigation, route }: Props) {
   const [showCancelColetaModal, setShowCancelColetaModal] = useState(false);
   const [showCodeColetaModal, setShowCodeColetaModal] = useState(false);
   const [showCodeEntregaModal, setShowCodeEntregaModal] = useState(false);
+  const [liveDriverRouteCoords, setLiveDriverRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+  const [liveDriverEta, setLiveDriverEta] = useState<string | undefined>(undefined);
+
+  const { coords: liveDriver } = useScheduledTripLiveLocation(live?.scheduledTripId ?? null);
 
   const currentStep = steps[currentStepIndex];
   const totalSteps = steps.length;
@@ -275,6 +282,32 @@ export function TripInProgressScreen({ navigation, route }: Props) {
     };
   }, [live]);
 
+  useEffect(() => {
+    const target = currentStep;
+    if (!liveDriver || !target || !isValidTripCoordinate(target.latitude, target.longitude)) {
+      setLiveDriverRouteCoords([]);
+      setLiveDriverEta(undefined);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const rt = await getRouteWithDuration(
+        { latitude: liveDriver.latitude, longitude: liveDriver.longitude },
+        { latitude: target.latitude, longitude: target.longitude },
+      );
+      if (cancelled) return;
+      setLiveDriverRouteCoords(rt?.coordinates?.length ? rt.coordinates : []);
+      if (rt?.durationSeconds && rt.durationSeconds > 0) {
+        setLiveDriverEta(formatDuration(rt.durationSeconds));
+      } else {
+        setLiveDriverEta(undefined);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [liveDriver?.latitude, liveDriver?.longitude, currentStep?.latitude, currentStep?.longitude, currentStep?.id]);
+
   const openCurrentSheet = () => {
     if (!currentStep) return;
     if (allCompleted) {
@@ -358,6 +391,19 @@ export function TripInProgressScreen({ navigation, route }: Props) {
       >
         {polylineCoords.length >= 2 ? (
           <MapboxPolyline coordinates={polylineCoords} strokeWidth={4} />
+        ) : null}
+        {liveDriverRouteCoords.length >= 2 ? (
+          <MapboxPolyline coordinates={liveDriverRouteCoords} strokeColor="#C9A227" strokeWidth={3} />
+        ) : null}
+        {liveDriver && isValidTripCoordinate(liveDriver.latitude, liveDriver.longitude) ? (
+          <MapboxMarker
+            id="driver-live"
+            coordinate={{ latitude: liveDriver.latitude, longitude: liveDriver.longitude }}
+            title="Motorista"
+            anchor={{ x: 0.5, y: 1 }}
+          >
+            <DriverEtaMarkerIcon eta={liveDriverEta} />
+          </MapboxMarker>
         ) : null}
         {steps.map((step, i) => (
           <MapboxMarker
