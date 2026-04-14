@@ -25,9 +25,9 @@ const navTabsList = [
 ];
 
 /** Largura estimada por tab (px) — inclui padding e gap */
-const NAV_TAB_AVG_WIDTH = 105;
+const NAV_TAB_AVG_WIDTH = 95;
 /** Largura mínima reservada para logo + user block */
-const NAV_RESERVED_WIDTH = 360;
+const NAV_RESERVED_WIDTH = 420;
 
 // Chevron right (>) para "Ver mais"
 const chevronRightSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
