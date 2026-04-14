@@ -1,10 +1,10 @@
 # Take Me — PRD do App Motorista
 
-> **Versao:** 1.1 | **Data:** 30/03/2026 | **Status:** Em desenvolvimento
-> **Stack:** React Native + Expo SDK 52 + Supabase + @rnmapbox/maps v10 + expo-location
+> **Versao:** 1.2 | **Data:** 14/04/2026 | **Status:** Em desenvolvimento
+> **Stack:** React Native + Expo SDK 54 + Supabase + @rnmapbox/maps v10 + expo-location
 > **Repositorio:** monorepo `take_me/apps/motorista`
 > **Arquitetura:** New Architecture habilitada (`newArchEnabled=true`)
-> **Referencia:** Admin PRD v2.3 (fonte de verdade para modelo de dados e regras de negocio)
+> **Referencia:** Admin PRD v2.4 (fonte de verdade para modelo de dados e regras de negocio)
 
 ---
 
@@ -47,8 +47,8 @@ Ao iniciar:
 3. Redireciona para o ambiente correto:
    - `status !== 'approved'` → `MotoristaPendingApproval`
    - `role === 'driver'` → `Main` (ambiente motorista)
-   - `subtype === 'package_preparer'` → `MainEncomendas`
-   - `subtype === 'excursion_preparer'` → `MainExcursoes`
+   - `subtype === 'shipments'` → `MainEncomendas`
+   - `subtype === 'excursions'` → `MainExcursoes`
 
 ### 2.3 Telas Publicas
 
@@ -173,11 +173,11 @@ A tabela `trip_stops` e a fonte de verdade para a ordem de paradas em uma viagem
 
 | Cenario | Perfil | Fluxo |
 |---------|--------|-------|
-| 1 | Moto / `package_preparer` | Motorista → Pickup cliente → Base Take Me mais proxima → fim |
+| 1 | Moto / Preparador (`subtype = 'shipments'`) | Motorista → Pickup cliente → Base Take Me mais proxima → fim |
 | 2 | `driver` (carro Take Me ou parceiro) | Motorista → Pickup cliente → Destino final direto |
 
 **Deteccao do cenario:**
-- `worker_profiles.role === 'preparer' && subtype === 'package_preparer'` → Cenario 1
+- `worker_profiles.role === 'preparer' && subtype === 'shipments'` → Cenario 1
 - `worker_profiles.role === 'driver'` → Cenario 2
 
 **Cenario 1 — Base intermediaria:**
@@ -413,21 +413,75 @@ pending → contacted → quoted → in_analysis → approved → scheduled → 
 
 ---
 
-## 8. Edge Functions Utilizadas
+## 8. Edge Functions e RPCs Utilizadas
+
+### 8.1 Edge Functions
 
 | Funcao | Chamada em | Descricao |
 |--------|------------|-----------|
-| `respond-assignment` | `PendingRequestsScreen` | Aceitar ou rejeitar assignment; rejeicao dispara estorno Stripe |
-| `confirm-code` | `ActiveShipmentScreen` | Validar codigo de pickup/delivery |
-| `send-email-verification-code` | `VerifyEmailScreen` | Enviar OTP de 4 digitos |
-| `create-motorista-account` | `FinalizeRegistrationScreen` | Criar conta completa (auth + worker_profiles + vehicles + routes) |
+| `send-email-verification-code` | `SignUpScreen`, `VerifyEmailScreen` | Enviar OTP de 4 digitos |
+| `verify-email-code` | `VerifyEmailScreen` | Validar OTP com nome, telefone, senha |
+| `login-with-phone` | `LoginScreen` | Login por telefone |
+| `stripe-connect-link` | `PaymentsScreen`, `StripeConnectSetupScreen` | Link de cadastro Stripe Connect |
 | `expire-assignments` | Cron (nao chamada diretamente) | Expira assignments vencidos |
+
+> **Divergencia PRD vs codigo:** O PRD v1.1 citava `respond-assignment`, `confirm-code` e `create-motorista-account` como Edge Functions centrais. Na implementacao atual:
+> - `PendingRequestsScreen` usa **RPCs SQL** (`shipment_driver_accept_offer`, `shipment_driver_pass_offer`) e **updates diretos** em `bookings`/`shipments`/`worker_assignments` — nao chama `respond-assignment`.
+> - `ActiveShipmentScreen` faz **validacao local** comparando com `shipment.pickup_code`/`delivery_code` (`shipmentCodesMatch`) — nao chama `confirm-code`.
+> - `FinalizeRegistrationScreen` usa `registerMotoristaWithAuth` em `motoristaRegistration.ts` (`signUp` + inserts diretos) — nao chama `create-motorista-account`.
+
+### 8.2 RPCs SQL Utilizadas
+
+| RPC | Chamada em | Descricao |
+|-----|------------|-----------|
+| `generate_trip_stops(trip_id)` | `useTripStops` hook | Gera paradas ordenadas se nao existirem |
+| `nearest_active_base(lat, lng)` | `ActiveShipmentScreen` Cenario 1 | Retorna base mais proxima |
+| `preparer_shipment_queue()` | `HomeEncomendasScreen` | Fila de encomendas para preparador da base |
+| `shipment_process_expired_driver_offers()` | `PendingRequestsScreen` | Expira ofertas vencidas |
+| `shipment_driver_accept_offer()` | `PendingRequestsScreen` | Motorista aceita oferta de envio |
+| `shipment_driver_pass_offer()` | `PendingRequestsScreen` | Motorista recusa oferta de envio |
+| `open_support_ticket()` | `supportTickets.ts` | Abre ticket de suporte |
 
 ---
 
-## 9. Modelo de Dados Relevante
+## 9. Pagamentos e Ganhos
 
-### 9.1 Tabelas Principais
+### 9.1 Stripe Connect (obrigatorio)
+
+Apos aprovacao do cadastro (`worker_profiles.status = 'approved'`), o motorista e redirecionado para `StripeConnectSetupScreen` se nao tiver `stripe_connect_account_id`. O fluxo:
+
+1. `StripeConnectSetupScreen`: chama Edge Function `stripe-connect-link`
+2. Abre link externo no navegador para cadastro Stripe Connect
+3. Ao completar, `stripe_connect_account_id` e salvo em `worker_profiles`
+4. Gate em `App.tsx`: sem Stripe Connect, nao acessa o ambiente principal
+
+### 9.2 Historico Financeiro (`driverPaymentTransfers.ts`)
+
+- Prioriza `payouts` com `status = 'paid'`
+- Fallback: `bookings` pagos + linhas sinteticas por viagem concluida
+- Exibido em `PaymentsScreen` e `PaymentHistoryScreen`
+
+### 9.3 Ganhos por Viagem (`driverTripEarnings.ts`)
+
+- Soma valores de reservas (`bookings`) vinculadas a viagem
+- Exibido em `TripDetailScreen` e `ActiveTripScreen` (resumo ao finalizar)
+
+### 9.4 Chave PIX
+
+- Editavel em `worker_profiles.pix_key`
+- Visivel nas telas de pagamento
+
+### 9.5 Preparador de Encomendas — Pagamentos
+
+- `PagamentosEncomendasScreen`: agrega `shipments` entregues (`status = 'delivered'`)
+- Filtrado por `driver_id` + `base_id` da base do preparador
+- Modelo de negocio: diaria fixa definida pelo admin (nao percentual por encomenda)
+
+---
+
+## 10. Modelo de Dados Relevante
+
+### 10.1 Tabelas Principais
 
 | Tabela | Uso no app |
 |--------|-----------|
@@ -451,16 +505,13 @@ pending → contacted → quoted → in_analysis → approved → scheduled → 
 | `worker_ratings` | Avaliacoes recebidas pelo worker |
 | `bases` | Hubs de encomenda (Cenario 1) |
 
-### 9.2 RPCs SQL Utilizadas
+### 10.2 RPCs SQL Utilizadas
 
-| RPC | Chamada em | Descricao |
-|-----|------------|-----------|
-| `generate_trip_stops(trip_id)` | `useTripStops` hook | Gera paradas ordenadas se nao existirem |
-| `nearest_active_base(lat, lng)` | `ActiveShipmentScreen` Cenario 1 | Retorna base mais proxima |
+Ver secao 8.2 para lista completa de RPCs.
 
 ---
 
-## 10. Integracao com Supabase Realtime
+## 11. Integracao com Supabase Realtime
 
 - `ChatScreen`: subscription em `messages` para chat em tempo real com suporte/admin
 - `PendingRequestsScreen`: subscription opcional em `worker_assignments` para novos assignments chegarem sem recarregar
@@ -468,65 +519,72 @@ pending → contacted → quoted → in_analysis → approved → scheduled → 
 
 ---
 
-## 11. Seguranca
+## 12. Seguranca
 
 - RLS ativa em todas as tabelas
 - Worker so ve seus proprios dados (`worker_id = auth.uid()` ou `driver_id = auth.uid()`)
-- Codigos de pickup/delivery validados server-side via Edge Function `confirm-code` (nao comparados no cliente)
+- Codigos de pickup/delivery validados localmente comparando com `shipment.pickup_code`/`delivery_code` (ver divergencia na secao 8.1)
 - Token Mapbox exposto apenas como `EXPO_PUBLIC_` (restricao por bundle ID configurada no dashboard Mapbox)
 
 ---
 
-## 12. Status de Implementacao
+## 13. Status de Implementacao
 
-### Divergencias entre PRD Admin e banco real (verificadas)
+### Divergencias entre PRD e codigo real (verificadas em 14/04/2026)
 
-| Item | PRD Admin diz | Banco real (DATABASE.md) | Valor correto |
-|------|---------------|--------------------------|---------------|
+| Item | PRD dizia | Codigo real | Valor correto |
+|------|-----------|-------------|---------------|
 | `subtype` motorista Take Me | `take_me` | `takeme` | `takeme` |
 | `subtype` preparador encomendas | `package_preparer` | `shipments` | `shipments` |
 | `subtype` preparador excursoes | `excursion_preparer` | `excursions` | `excursions` |
 | `excursion_passengers.status_departure` | `pending`/`boarded` | `not_embarked`/`embarked`/`disembarked` | banco |
 | `excursion_passengers.age` | `integer` | `text` | banco (usar `parseInt`) |
-| `trip_stops` | Definida no PRD v2.3 | Nao consta no DATABASE.md | Verificar no Supabase |
-| `worker_assignments` | Referenciada no PRD | Nao consta no DATABASE.md | Verificar no Supabase |
+| `PendingRequestsScreen` | `respond-assignment` Edge Function | RPCs SQL (`shipment_driver_*`) + updates diretos | codigo |
+| `ActiveShipmentScreen` codigos | `confirm-code` Edge Function | Validacao local (`shipmentCodesMatch`) | codigo |
+| Cadastro motorista | `create-motorista-account` Edge Function | `registerMotoristaWithAuth` (signUp + inserts) | codigo |
+| Stripe Connect | Nao mencionado | Obrigatorio apos aprovacao (gate em `App.tsx`) | codigo |
 
 ### Implementado e Funcional
 
-- [x] Autenticacao completa (login, signup, verify email, reset password)
-- [x] Guard de sessao com redirect por role/subtype
+- [x] Autenticacao completa (login email/senha, telefone, signup com OTP, reset de senha)
+- [x] Guard de sessao com redirect por role/subtype (`motoristaAccess.ts`)
+- [x] Gate de Stripe Connect obrigatorio apos aprovacao
 - [x] HomeScreen com viagem ativa, mapa preview Mapbox, toggle disponibilidade
 - [x] Mapa Mapbox com driving-traffic (`@rnmapbox/maps` v10, New Architecture)
 - [x] `ActiveTripScreen`: mapa ao vivo, sidebar direita, card inferior flutuante, botao minha localizacao
 - [x] Zoom 16 no GPS do motorista (zoom inicial e botao centralizar)
-- [x] Validacao de coordenadas (`isValidGlobeCoordinate` com `||` para rejeitar qualquer eixo zerado)
+- [x] Validacao de coordenadas (`isValidGlobeCoordinate`)
 - [x] Fallback de rota: Mapbox → Google Directions → OSRM
-- [x] `PendingRequestsScreen`: lista de solicitacoes com badge colorido por tipo
+- [x] `PendingRequestsScreen`: lista de solicitacoes com RPCs de aceite/recusa de envios
 - [x] Stack de navegacao para todos os tres ambientes (motorista, encomendas, excursoes)
 - [x] Telas de cadastro e perfil completas
 - [x] `TripDetailScreen` com mapa e passageiros
-- [x] `ActiveShipmentScreen` com confirmacao de codigos e avaliacao final
+- [x] `ActiveShipmentScreen` com confirmacao de codigos (validacao local) e avaliacao final
+- [x] `useTripStops` hook: busca e geracao de `trip_stops` via RPC
+- [x] Historico financeiro (`driverPaymentTransfers.ts`)
+- [x] Ganhos por viagem (`driverTripEarnings.ts`)
+- [x] Chat em tempo real com suporte (Supabase Realtime em `messages`)
+- [x] `useDriverOngoingTripForTabs`: badge de viagem ativa com Realtime em `scheduled_trips`
+- [x] Preparador de encomendas: fila via `preparer_shipment_queue`, coletas, historico, pagamentos
+- [x] `DetalhesEncomendaScreen`: mapa Mapbox com rota e marcadores
 
-### Em Desenvolvimento / Faltando
+### Em Desenvolvimento / Pendente
 
-- [ ] Hook `useTripStops` — busca e geracao de `trip_stops` via RPC
-- [ ] `ActiveTripScreen`: refatorar para usar `trip_stops` (cores por tipo, stops corretos)
-- [ ] `ActiveTripScreen`: confirmar paradas escrevendo em `trip_stops.status`
-- [ ] `ActiveShipmentScreen`: deteccao de cenario (1 vs 2) por `worker_profiles`
+- [ ] `ActiveTripScreen`: refatorar para usar `trip_stops` com cores por tipo e confirmacao de paradas
+- [ ] `ActiveShipmentScreen`: deteccao automatica de cenario (1 vs 2) por `worker_profiles`
 - [ ] `ActiveShipmentScreen`: Cenario 1 com RPC `nearest_active_base`
-- [ ] `PendingRequestsScreen`: integracao com Edge Function `respond-assignment` (aceitar/rejeitar)
-- [ ] `PendingRequestsScreen`: countdown ate `expires_at`
+- [ ] `PendingRequestsScreen`: countdown ate `expires_at` nos assignments
 - [ ] `HomeExcursoesScreen`: substituir mock data por query real em `excursion_requests`
 - [ ] `DetalhesExcursaoScreen`: lista de passageiros + check-in/check-out (`excursion_passengers`)
-- [ ] `DetalhesEncomendaScreen`: mapa Mapbox real (hoje e placeholder de icone)
 - [ ] `NotificationsScreen`: query real em `notifications`
 - [ ] Badge de notificacoes nao lidas na navbar
-- [ ] Supabase Realtime em `PendingRequestsScreen` e `ActiveTripScreen`
+- [ ] Supabase Realtime em `PendingRequestsScreen` e `ActiveTripScreen` (alem do chat)
 - [ ] Insercao em `status_history` ao mudar status de viagem/encomenda/excursao
+- [ ] Push notifications nativas (`expo-notifications` nao esta nas dependencias)
 
 ---
 
-## 13. Variaveis de Ambiente
+## 14. Variaveis de Ambiente
 
 | Variavel | Uso |
 |----------|-----|
@@ -537,11 +595,11 @@ pending → contacted → quoted → in_analysis → approved → scheduled → 
 
 ---
 
-## 14. Glossario
+## 15. Glossario
 
 | Termo | Descricao |
 |-------|-----------|
-| **Take Me** | Frota propria da plataforma (`subtype = 'take_me'`) |
+| **Take Me** | Frota propria da plataforma (`subtype = 'takeme'`) |
 | **Motorista Parceiro** | Motorista terceiro (`subtype = 'partner'`) |
 | **Preparador** | Worker que organiza excursoes ou entregas de encomendas |
 | **Assignment** | Atribuicao de trabalho a um worker (tabela `worker_assignments`) |
@@ -551,8 +609,9 @@ pending → contacted → quoted → in_analysis → approved → scheduled → 
 | **Cenario 1** | Encomenda via moto/preparador: entrega ate base intermediaria |
 | **Cenario 2** | Encomenda via carro: entrega direta ao destinatario |
 | **Budget Lines** | Linhas de orcamento de uma excursao (JSONB em `excursion_requests`) |
-| **Check-in** | Confirmacao de embarque de passageiro na excursao (`status_departure = 'boarded'`) |
-| **Check-out** | Confirmacao de retorno de passageiro (`status_return = 'returned'`) |
+| **Stripe Connect** | Cadastro de recebimento do motorista no Stripe (obrigatorio apos aprovacao) |
+| **Check-in** | Confirmacao de embarque de passageiro na excursao (`status_departure = 'embarked'`) |
+| **Check-out** | Confirmacao de retorno de passageiro (`status_return = 'disembarked'`) |
 | **driving-traffic** | Perfil Mapbox Directions com trafego em tempo real (mais preciso) |
 | **driverPositionKey** | Chave de 3 casas decimais do GPS para throttling de re-render de rota |
 | **New Architecture** | `newArchEnabled=true` no Android — obrigatorio para @rnmapbox/maps v10 |

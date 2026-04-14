@@ -88,6 +88,13 @@ export default function ViagemDetalheScreen() {
   const [driverStats, setDriverStats] = useState<{ rating: number | null; totalTrips: number; avatarUrl: string | null }>({ rating: null, totalTrips: 0, avatarUrl: null });
   const [driverAvatarSrc, setDriverAvatarSrc] = useState<string | null>(null);
   const [passengerAvatarSrc, setPassengerAvatarSrc] = useState<string | null>(null);
+  const [docActionToast, setDocActionToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!docActionToast) return;
+    const t = setTimeout(() => setDocActionToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [docActionToast]);
 
   useEffect(() => {
     const raw = detail?.listItem?.passageiroAvatarUrl;
@@ -385,12 +392,22 @@ export default function ViagemDetalheScreen() {
       React.createElement('button', { type: 'button', style: webStyles.detailBackBtn, onClick: () => navigate(-1) }, arrowBackSvg, 'Voltar'),
       React.createElement('div', { style: { ...webStyles.detailDocBtns, gap: 16 } },
         acompanharTempoRealBtn,
-        React.createElement('button', { type: 'button', style: webStyles.detailDocBtn },
+        React.createElement('button', {
+          type: 'button',
+          style: webStyles.detailDocBtn,
+          title: 'Em desenvolvimento — emissão fiscal ainda não disponível no painel.',
+          onClick: () => setDocActionToast('Emissão de nota fiscal ainda não está disponível neste painel.'),
+        },
           React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
             React.createElement('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z', stroke: '#0d0d0d', strokeWidth: 2 }),
             React.createElement('path', { d: 'M14 2v6h6', stroke: '#0d0d0d', strokeWidth: 2 })),
           'Ver NF'),
-        React.createElement('button', { type: 'button', style: webStyles.detailDocBtn },
+        React.createElement('button', {
+          type: 'button',
+          style: webStyles.detailDocBtn,
+          title: 'Em desenvolvimento — download de recibo ainda não disponível.',
+          onClick: () => setDocActionToast('Download de recibo ainda não está disponível neste painel.'),
+        },
           receiptSvg,
           'Recibo'),
         isMotoristas ? React.createElement('button', {
@@ -698,11 +715,35 @@ export default function ViagemDetalheScreen() {
     ? [passageirosSection, motoristaSection, encomendasSection]
     : [motoristaSection, passageirosSection, encomendasSection];
 
+  const docToastEl = docActionToast
+    ? React.createElement('div', {
+      role: 'status',
+      style: {
+        position: 'fixed',
+        bottom: 24,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        maxWidth: 420,
+        padding: '12px 20px',
+        borderRadius: 12,
+        backgroundColor: '#111827',
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: 500,
+        fontFamily: 'Inter, sans-serif',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
+        zIndex: 9999,
+        textAlign: 'center',
+      },
+    }, docActionToast)
+    : null;
+
   return React.createElement(React.Fragment, null,
     React.createElement('div', { style: webStyles.detailPage },
       firstSection,
       resumoSection,
       ocupacaoSection,
       ...contextSections),
-    imageZoomModal);
+    imageZoomModal,
+    docToastEl);
 }

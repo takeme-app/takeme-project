@@ -531,6 +531,27 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     };
   }, [showAlert, scheduleNavFrame]);
 
+  /** Publica posição para o app do passageiro (`scheduled_trip_live_locations`) enquanto a viagem está ativa. */
+  useEffect(() => {
+    if (trip?.status !== 'active') return;
+    const publish = () => {
+      const fix = latestDriverFixRef.current;
+      if (!fix || !isValidGlobeCoordinate(fix.latitude, fix.longitude)) return;
+      void (supabase as any).from('scheduled_trip_live_locations').upsert(
+        {
+          scheduled_trip_id: tripId,
+          latitude: fix.latitude,
+          longitude: fix.longitude,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'scheduled_trip_id' },
+      );
+    };
+    publish();
+    const id = setInterval(publish, 8000);
+    return () => clearInterval(id);
+  }, [tripId, trip?.status]);
+
   /** Bússola em baixa velocidade (< ~5 km/h); fallback quando o curso do GPS é fraco. */
   useEffect(() => {
     if (!followMyLocation || !Location?.watchHeadingAsync) return;
@@ -1186,6 +1207,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         .eq('id', tripId)
         .eq('driver_id', user.id);
       if (error) throw error;
+      void (supabase as any).from('scheduled_trip_live_locations').delete().eq('scheduled_trip_id', tripId);
       await closeConversationsForScheduledTrip(tripId);
 
       if (

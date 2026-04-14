@@ -4,12 +4,21 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MapboxMap, sanitizeMapRegion } from '../../components/mapbox';
+import {
+  MapboxMap,
+  MapboxMarker,
+  MapboxPolyline,
+  sanitizeMapRegion,
+  isValidTripCoordinate,
+} from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripFollowStackParamList } from '../../navigation/types';
 import { formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
 import { loadBookingTripLiveContext, parsePassengerData } from '../../lib/clientBookingTripLive';
 import { onlyDigits } from '../../utils/formatCpf';
+import { useScheduledTripLiveLocation } from '../../lib/useScheduledTripLiveLocation';
+import { getRouteWithDuration, formatDuration } from '../../lib/route';
+import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
 
 type Props = NativeStackScreenProps<TripFollowStackParamList, 'DriverOnTheWay'>;
 
@@ -40,36 +49,65 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
   const [pickupCode, setPickupCode] = useState<string | null>(null);
   const [passengerLines, setPassengerLines] = useState<{ label: string }[]>([]);
   const [bagsCount, setBagsCount] = useState<number | null>(null);
+  const [driverEtaText, setDriverEtaText] = useState<string | undefined>(undefined);
+  const [driverRouteCoords, setDriverRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+
+  const { coords: liveDriver } = useScheduledTripLiveLocation(live?.scheduledTripId ?? null);
+
+  useEffect(() => {
+    const o = live?.origin;
+    if (!liveDriver || !o || !isValidTripCoordinate(o.latitude, o.longitude)) {
+      setDriverEtaText(undefined);
+      setDriverRouteCoords([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const rt = await getRouteWithDuration(
+        { latitude: liveDriver.latitude, longitude: liveDriver.longitude },
+        { latitude: o.latitude, longitude: o.longitude },
+      );
+      if (cancelled) return;
+      if (rt?.durationSeconds && rt.durationSeconds > 0) {
+        setDriverEtaText(formatDuration(rt.durationSeconds));
+      } else {
+        setDriverEtaText(undefined);
+      }
+      setDriverRouteCoords(rt?.coordinates?.length ? rt.coordinates : []);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [liveDriver?.latitude, liveDriver?.longitude, live?.origin]);
 
   const mapRegion = useMemo(() => {
     const o = live?.origin;
     const d = live?.destination;
-    if (
-      o &&
-      d &&
-      Number.isFinite(o.latitude) &&
-      Number.isFinite(o.longitude) &&
-      Number.isFinite(d.latitude) &&
-      Number.isFinite(d.longitude)
-    ) {
-      const latMin = Math.min(o.latitude, d.latitude);
-      const latMax = Math.max(o.latitude, d.latitude);
-      const lngMin = Math.min(o.longitude, d.longitude);
-      const lngMax = Math.max(o.longitude, d.longitude);
-      const pad = 0.006;
+    const pts: { latitude: number; longitude: number }[] = [];
+    if (o && isValidTripCoordinate(o.latitude, o.longitude)) pts.push(o);
+    if (d && isValidTripCoordinate(d.latitude, d.longitude)) pts.push(d);
+    if (liveDriver && isValidTripCoordinate(liveDriver.latitude, liveDriver.longitude)) {
+      pts.push({ latitude: liveDriver.latitude, longitude: liveDriver.longitude });
+    }
+    if (pts.length >= 2) {
+      const latMin = Math.min(...pts.map((p) => p.latitude));
+      const latMax = Math.max(...pts.map((p) => p.latitude));
+      const lngMin = Math.min(...pts.map((p) => p.longitude));
+      const lngMax = Math.max(...pts.map((p) => p.longitude));
+      const pad = 0.008;
       return sanitizeMapRegion({
         latitude: (latMin + latMax) / 2,
         longitude: (lngMin + lngMax) / 2,
-        latitudeDelta: Math.max(0.02, latMax - latMin + pad * 2),
-        longitudeDelta: Math.max(0.02, lngMax - lngMin + pad * 2),
+        latitudeDelta: Math.max(0.025, latMax - latMin + pad * 2),
+        longitudeDelta: Math.max(0.025, lngMax - lngMin + pad * 2),
       });
     }
-    if (o && Number.isFinite(o.latitude) && Number.isFinite(o.longitude)) {
+    if (pts.length === 1) {
       return sanitizeMapRegion({
-        latitude: o.latitude,
-        longitude: o.longitude,
-        latitudeDelta: 0.02,
-        longitudeDelta: 0.02,
+        latitude: pts[0].latitude,
+        longitude: pts[0].longitude,
+        latitudeDelta: 0.04,
+        longitudeDelta: 0.04,
       });
     }
     return sanitizeMapRegion({
@@ -78,7 +116,7 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
       latitudeDelta: 0.02,
       longitudeDelta: 0.02,
     });
-  }, [live?.origin, live?.destination]);
+  }, [live?.origin, live?.destination, liveDriver?.latitude, liveDriver?.longitude]);
 
   const load = useCallback(async () => {
     const bid = live?.bookingId;
@@ -126,7 +164,31 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
       <View style={styles.mapWrap}>
-        <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled={false} />
+        <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled>
+          {driverRouteCoords.length >= 2 ? (
+            <MapboxPolyline coordinates={driverRouteCoords} strokeWidth={4} />
+          ) : null}
+          {live?.origin && isValidTripCoordinate(live.origin.latitude, live.origin.longitude) ? (
+            <MapboxMarker
+              id="pickup"
+              coordinate={{ latitude: live.origin.latitude, longitude: live.origin.longitude }}
+              title="Embarque"
+              anchor={{ x: 0.5, y: 1 }}
+            >
+              <MaterialIcons name="person-pin-circle" size={36} color={COLORS.black} />
+            </MapboxMarker>
+          ) : null}
+          {liveDriver && isValidTripCoordinate(liveDriver.latitude, liveDriver.longitude) ? (
+            <MapboxMarker
+              id="driver-live"
+              coordinate={{ latitude: liveDriver.latitude, longitude: liveDriver.longitude }}
+              title="Motorista"
+              anchor={{ x: 0.5, y: 1 }}
+            >
+              <DriverEtaMarkerIcon eta={driverEtaText} />
+            </MapboxMarker>
+          ) : null}
+        </MapboxMap>
       </View>
       <View style={styles.banner}>
         <MaterialIcons name="check-circle" size={24} color="#FFFFFF" />

@@ -41,28 +41,6 @@ const SIZE_COLORS: Record<GroupSize, { bg: string; text: string }> = {
 /** Mesmos status em que Detalhes permite "aceitar" (vira approved). */
 const ACCEPTABLE_STATUSES = new Set(['pending', 'contacted', 'quoted', 'in_analysis']);
 
-function toLocalYmd(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-/** Aceita horário de saída em timestamptz (`scheduled_departure_at`) ou legado `departure_time`. */
-function rowIsToday(
-  scheduledAt: string | null,
-  excursionDate: string | null,
-  legacyDeparture?: string | null,
-): boolean {
-  const todayYmd = toLocalYmd(new Date());
-  const iso = scheduledAt ?? legacyDeparture ?? null;
-  if (iso) {
-    return toLocalYmd(new Date(iso)) === todayYmd;
-  }
-  if (excursionDate) {
-    const s = String(excursionDate).slice(0, 10);
-    return s === todayYmd;
-  }
-  return false;
-}
-
 function peopleToSize(count: number): GroupSize {
   if (count <= 15) return 'Pequeno';
   if (count <= 35) return 'Médio';
@@ -148,22 +126,27 @@ export function HomeExcursoesScreen() {
       total_amount_cents: number | null;
     }[];
 
-    const todayRows = rows
-      .filter((r) =>
-        rowIsToday(r.scheduled_departure_at ?? null, r.excursion_date, r.departure_time ?? null),
-      )
-      .sort((a, b) => {
-        const isoA = a.scheduled_departure_at ?? a.departure_time ?? null;
-        const isoB = b.scheduled_departure_at ?? b.departure_time ?? null;
-        const ta = isoA
-          ? new Date(isoA).getTime()
-          : new Date(`${String(a.excursion_date).slice(0, 10)}T12:00:00`).getTime();
-        const tb = isoB
-          ? new Date(isoB).getTime()
-          : new Date(`${String(b.excursion_date).slice(0, 10)}T12:00:00`).getTime();
-        return ta - tb;
-      });
-    const userIds = [...new Set(todayRows.map((r) => r.user_id).filter(Boolean))];
+    const byId = new Map<string, (typeof rows)[0]>();
+    for (const r of rows) {
+      const st = String(r.status ?? '');
+      const isActiveOrScheduled = st === 'scheduled' || st === 'in_progress';
+      const needsAccept = ACCEPTABLE_STATUSES.has(st);
+      if (isActiveOrScheduled || needsAccept) {
+        byId.set(r.id, r);
+      }
+    }
+    const mergedRows = [...byId.values()].sort((a, b) => {
+      const isoA = a.scheduled_departure_at ?? a.departure_time ?? null;
+      const isoB = b.scheduled_departure_at ?? b.departure_time ?? null;
+      const ta = isoA
+        ? new Date(isoA).getTime()
+        : new Date(`${String(a.excursion_date ?? '').slice(0, 10)}T12:00:00`).getTime();
+      const tb = isoB
+        ? new Date(isoB).getTime()
+        : new Date(`${String(b.excursion_date ?? '').slice(0, 10)}T12:00:00`).getTime();
+      return ta - tb;
+    });
+    const userIds = [...new Set(mergedRows.map((r) => r.user_id).filter(Boolean))];
     let profById = new Map<string, { full_name: string | null }>();
     if (userIds.length > 0) {
       const { data: pr, error: profErr } = await (supabase as any)
@@ -176,7 +159,7 @@ export function HomeExcursoesScreen() {
       profById = new Map((pr ?? []).map((p: { id: string; full_name: string | null }) => [p.id, { full_name: p.full_name }]));
     }
 
-    const list: Solicitacao[] = todayRows.map((r) => {
+    const list: Solicitacao[] = mergedRows.map((r) => {
       const pr = profById.get(r.user_id);
       const clientName = (pr?.full_name ?? 'Cliente').trim() || 'Cliente';
       const pc = r.people_count ?? 1;
@@ -256,7 +239,7 @@ export function HomeExcursoesScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
         <Text style={styles.greeting}>Olá, Preparador!</Text>
-        <Text style={styles.subGreeting}>Veja as solicitações disponíveis hoje.</Text>
+        <Text style={styles.subGreeting}>Excursões agendadas, em andamento ou aguardando sua confirmação.</Text>
 
         <Text style={styles.sectionTitle}>Ações necessárias</Text>
         <View style={styles.actionCard}>
@@ -295,7 +278,7 @@ export function HomeExcursoesScreen() {
           </View>
         ) : solicitacoes.length === 0 ? (
           <Text style={styles.emptyText}>
-            Nenhuma excursão atribuída a você para a data de hoje.
+            Nenhuma excursão atribuída a você no momento.
           </Text>
         ) : (
           solicitacoes.map((s) => {
