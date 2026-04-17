@@ -330,7 +330,7 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
       <Modal visible={sheetMode !== null} transparent animationType="none" onRequestClose={closeSheet}>
         <KeyboardAvoidingView
           style={styles.modalContainer}
-          behavior={Platform.OS === 'ios' && sheetMode === 'add' ? 'padding' : undefined}
+          behavior="padding"
         >
           <Pressable style={StyleSheet.absoluteFillObject} onPress={closeSheet} />
           <Animated.View

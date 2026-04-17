@@ -1,6 +1,6 @@
 # Take Me — PRD do App Motorista
 
-> **Versao:** 1.2 | **Data:** 14/04/2026 | **Status:** Em desenvolvimento
+> **Versao:** 1.3 | **Data:** 15/04/2026 | **Status:** Em desenvolvimento
 > **Stack:** React Native + Expo SDK 54 + Supabase + @rnmapbox/maps v10 + expo-location
 > **Repositorio:** monorepo `take_me/apps/motorista`
 > **Arquitetura:** New Architecture habilitada (`newArchEnabled=true`)
@@ -130,13 +130,13 @@ assigned → accepted → in_progress → completed
 ```
 
 - **assigned:** Admin ou sistema cria o assignment com `expires_at`
-- **accepted:** Worker aceita via `respond-assignment` Edge Function
-- **rejected:** Worker rejeita → Edge Function processa estorno Stripe automaticamente
+- **accepted:** No app motorista, aceite via fluxos da UI (RPCs de oferta de envio, updates em `bookings`/`shipments`, atualizacao de `worker_assignments` quando aplicavel). A Edge Function `respond-assignment` e o caminho canonico em outros contextos.
+- **rejected:** Worker rejeita → conforme fluxo (RPC `shipment_driver_pass_offer`, cancelamento de reserva, etc.); estornos dependem do backend/cron.
 - **expired:** Cron `expire-assignments` (5 min) expira assignments nao aceitos → estorno automatico
 - **in_progress:** Status atualizado quando viagem/encomenda e iniciada
 - **completed:** Atualizado ao final da viagem/entrega
 
-O `PendingRequestsScreen` exibe assignments com `status = 'assigned'` para o worker logado, mostrando contagem regressiva ate `expires_at`.
+O `PendingRequestsScreen` lista solicitacoes pendentes (ver §5.2) e mostra **contagem regressiva** ate o prazo efetivo: prioriza `worker_assignments.expires_at` para booking/envio vinculado a assignment; para **ofertas rotativas** de encomenda usa `shipments.current_offer_expires_at`; se nao houver `expires_at` no assignment, usa fallback **partida da viagem − 30 min** (alinhado ao comentario de schema do assignment).
 
 ### 4.2 Viagens (Motoristas) — trip_stops
 
@@ -153,11 +153,11 @@ A tabela `trip_stops` e a fonte de verdade para a ordem de paradas em uma viagem
 **Status de cada stop:** `pending → arrived → completed / skipped`
 
 **Fluxo no `ActiveTripScreen`:**
-1. Ao montar: busca `trip_stops` via hook `useTripStops`; se nao existirem, chama `generate_trip_stops(trip_id)` via RPC
+1. Ao montar: busca `trip_stops` via hook `useTripStops`; se nao existirem, chama `generate_trip_stops(trip_id)` via RPC; o hook **substitui** paradas de encomenda pela derivacao correta de `shipments` (com `base_id`: **retirada na base** como `package_pickup` + **entrega** como `package_dropoff` no destino; sem base: coleta na origem + entrega).
 2. Exibe stops em ordem na sidebar direita com icones coloridos por tipo
-3. Motorista confirma cada stop → `UPDATE trip_stops SET status = 'completed'`
+3. Motorista confirma cada stop (encomenda: codigo 4 digitos) → RPC `complete_trip_stop` atualiza `trip_stops` e, na entrega final, `shipments.status = delivered`
 4. Ao concluir ultimo stop → `UPDATE scheduled_trips SET status = 'completed'`
-5. Ao inserir `status_history`: `{ entity_type: 'trip', entity_id: tripId, status: 'completed' }`
+5. **Auditoria `status_history`:** mudancas de `scheduled_trips.status` disparam trigger no banco (`trg_scheduled_trips_status_history`) e gravam `entity_type = 'trip'`, `entity_id = scheduled_trips.id`. Reservas, encomendas e excursões já tinham triggers equivalentes (`booking`, `shipment`, `dependent_shipment`, `excursion`).
 
 **Cores dos marcadores no mapa (conforme PRD Admin §6.5):**
 
@@ -171,23 +171,19 @@ A tabela `trip_stops` e a fonte de verdade para a ordem de paradas em uma viagem
 
 ### 4.3 Cenarios de Encomenda
 
-| Cenario | Perfil | Fluxo |
-|---------|--------|-------|
-| 1 | Moto / Preparador (`subtype = 'shipments'`) | Motorista → Pickup cliente → Base Take Me mais proxima → fim |
-| 2 | `driver` (carro Take Me ou parceiro) | Motorista → Pickup cliente → Destino final direto |
+**Regra de produto:** quando a encomenda passa por uma base Take Me (`shipments.base_id` preenchido), o **preparador** faz só o trecho **origem (cliente) → base**; o **motorista** faz **base → destino final**. Quando **nao ha base** na regiao (`base_id` nulo e fluxo direto na viagem), o **motorista** faz **origem → destino** no local do cliente (sem trecho preparador→base).
 
-**Deteccao do cenario:**
-- `worker_profiles.role === 'preparer' && subtype === 'shipments'` → Cenario 1
-- `worker_profiles.role === 'driver'` → Cenario 2
+| Cenario | Quem | Fluxo na pratica |
+|---------|------|-------------------|
+| Com base (`base_id` IS NOT NULL) | Preparador (`subtype = 'shipments'`) | Posicao atual → **coleta no endereco de origem** → **depósito na base** (mapa e codigos em duas etapas) |
+| Com base | Motorista (carro / viagem) | Posicao atual → **base** → **destino final** (ex.: paradas em `trip_stops` / envio na viagem) |
+| Sem base (`base_id` IS NULL, fluxo direto) | Motorista | Posicao atual → **origem** → **destino final** (entrega ao destinatario) |
 
-**Cenario 1 — Base intermediaria:**
-- Chamar RPC `nearest_active_base(lat, lng)` para obter a base mais proxima do cliente
-- Rota: driver_position → pickup_address → base.address
-- Ao completar dropoff na base → shipment passa para responsabilidade da base
+**Deteccao no app (resumo):**
+- Tela do preparador (`ActiveShipmentScreen`): se `base_id` existe, rota completa no mapa = **origem → coordenadas da base**; a segunda etapa confirma **depósito na base** (nao altera status para `delivered`; segue `in_progress` para o motorista).
+- Motorista em envio sem base: rota **origem → destino**; entrega final com `status = delivered`.
 
-**Cenario 2 — Entrega direta:**
-- Rota: driver_position → pickup_address → destination_address
-- Confirmacao de entrega com codigo de 4 digitos
+**RPC auxiliar (quando aplicavel):** `nearest_active_base(lat, lng)` pode ser usada para sugerir/preencher base quando o produto permitir; a rota do preparador usa a base ja vinculada ao envio (`base_id`).
 
 **Status da shipment:**
 ```
@@ -260,7 +256,7 @@ pending → contacted → quoted → in_analysis → approved → scheduled → 
 
 - Viagem ativa: card com origem/destino, horario, passageiros, encomendas, bagageiro (stepper +/-)
 - Mapa preview da viagem ativa (Mapbox, zoom no GPS ou origem, nao enquadra destino para nao parecer oceano)
-- "Ver rota no mapa" → `ActiveTrip`
+- "Continuar Viagem" → `ActiveTrip`
 - "Encerrar viagem" → modal confirmacao → `UPDATE scheduled_trips SET status = 'completed'`
 - Acesso rapido: Solicitacoes pendentes (badge count), Cronograma, Rotas e valores
 - Toggle "Em viagem" → `worker_profiles.is_available_for_requests`
@@ -268,12 +264,12 @@ pending → contacted → quoted → in_analysis → approved → scheduled → 
 
 ### 5.2 PendingRequestsScreen
 
-- Lista unificada de `worker_assignments` com `status = 'assigned'` e `worker_id = userId`
-- Tipos exibidos: `passageiro` (booking), `encomenda` (shipment), `excursao` (excursion_request), `dependente`
-- Card por solicitacao: avatar, nome, tipo (badge colorido), origem → destino, valor, countdown ate `expires_at`
-- **Aceitar:** `POST respond-assignment { assignmentId, action: 'accepted' }` → navega para `TripDetail` ou `ActiveTrip`
-- **Recusar:** `POST respond-assignment { assignmentId, action: 'rejected' }` → remove da lista; Edge Function processa estorno
-- Assignment expirado: exibir banner "Solicitacao expirada", nao permitir aceite
+- **Fontes de dados (lista unificada no app):** reservas `bookings` nas viagens do motorista (`scheduled_trips.driver_id`); ofertas de envio (`shipments` com `current_offer_driver_id`, `status = 'confirmed'`, sem `driver_id`); encomendas sem base vinculadas a viagens do motorista aguardando aceite. O PRD conceitual continua centrado em `worker_assignments` para prazo e auditoria; excursões/dependentes podem entrar na lista quando o backend passar a expor assignments equivalentes.
+- Tipos exibidos na UI: **Viagem** (passageiro / booking), **Encomenda**, **Encomenda · convite** (oferta com tempo de resposta).
+- Card: avatar, nome, rota origem → destino, valor, meta (horario / passageiros ou tamanho do pacote), **countdown** `HH:mm:ss` (destaque urgente nos ultimos 5 min) ate o prazo (ver §4.1).
+- **Aceitar / recusar:** conforme tipo — RPCs `shipment_driver_accept_offer` / `shipment_driver_pass_offer` para ofertas; updates em `bookings`/`shipments` e em `worker_assignments` quando existir linha para a entidade. Navegação pós-aceite: chat cliente ou `TripDetail` conforme fluxo.
+- **Expirado:** badge "Solicitação expirada"; botoes Aceitar/Recusar desabilitados.
+- **Realtime (Supabase):** canal `pending-requests-{userId}` com `postgres_changes` em `worker_assignments` (`worker_id`), `scheduled_trips` (`driver_id`) e `shipments` (`current_offer_driver_id`); recarrega a lista sem sair da tela. Envios só na viagem sem oferta podem depender de mudança na viagem ou novo assignment (evita subscription aberta em toda a tabela `shipments`).
 
 ### 5.3 TripDetailScreen
 
@@ -311,14 +307,12 @@ pending → contacted → quoted → in_analysis → approved → scheduled → 
 
 ### 5.6 ActiveShipmentScreen (Encomenda em execucao)
 
-- Detecta cenario (§4.3) via `worker_profiles`
-- **Cenario 1:** 3 stops: driver → pickup cliente → base
-- **Cenario 2:** 2 stops: driver → pickup cliente → destino
-- Mapa Mapbox com rota driving-traffic
-- Sidebar direita com stops coloridos
-- Confirmacao de pickup: modal com codigo 4 digitos → `confirm-code`
-- Confirmacao de entrega: modal com codigo 4 digitos → `confirm-code`
-- Apos entrega: modal resumo (tempo, distancia, avaliacao 1-5 estrelas)
+- **Preparador — com base (`base_id`):** duas etapas no mapa: **coleta na origem (cliente)** → **depósito na base**; rota tracada entre esses dois pontos; segundo modal confirma depósito na base (observacoes em `delivery_notes`; envio permanece `in_progress` para o motorista).
+- **Preparador — sem base (caso raro na fila):** duas etapas **origem → destino final** (equivalente ao motorista direto).
+- Mapa com rota (Mapbox / fallback Google/OSRM conforme `route.ts`)
+- Sidebar direita com atalhos para coleta e destino da etapa
+- Codigos: `pickup_code` na coleta; codigo da segunda etapa conforme `delivery_code` (na base ou no destino)
+- Apos concluir a ultima etapa do preparador: modal resumo + avaliacao opcional
 
 ### 5.7 DetalhesEncomendaScreen
 
@@ -501,7 +495,7 @@ Apos aprovacao do cadastro (`worker_profiles.status = 'approved'`), o motorista 
 | `notifications` | Notificacoes do sistema |
 | `conversations` | Threads de chat com suporte |
 | `messages` | Mensagens do chat |
-| `status_history` | Auditoria de mudancas de status |
+| `status_history` | Auditoria de mudancas de status (`booking`, `shipment`, `dependent_shipment`, `excursion`, `trip` para `scheduled_trips`) |
 | `worker_ratings` | Avaliacoes recebidas pelo worker |
 | `bases` | Hubs de encomenda (Cenario 1) |
 
@@ -513,9 +507,12 @@ Ver secao 8.2 para lista completa de RPCs.
 
 ## 11. Integracao com Supabase Realtime
 
-- `ChatScreen`: subscription em `messages` para chat em tempo real com suporte/admin
-- `PendingRequestsScreen`: subscription opcional em `worker_assignments` para novos assignments chegarem sem recarregar
-- `ActiveTripScreen`: polling/subscription em `trip_stops` para refletir mudancas feitas pelo admin
+- `ChatScreen`: subscription em `messages` (`conversation_id`) para chat em tempo real com suporte/admin
+- `useDriverOngoingTripForTabs`: `scheduled_trips` filtrado por `driver_id` (badge de viagem ativa nas abas)
+- `PendingRequestsScreen`: canal dedicado — `worker_assignments`, `scheduled_trips`, `shipments` (oferta ao motorista); ver §5.2
+- `useTripStops` / `ActiveTripScreen`: canal `active-trip-stops-{tripId}` — eventos em `trip_stops` (`scheduled_trip_id`) e na propria viagem `scheduled_trips` (`id`), com recarga silenciosa das paradas
+
+**Publicacao `supabase_realtime`:** além de `bookings` e `scheduled_trips` (historico), incluir `worker_assignments`, `shipments` e `trip_stops` na migration do projeto para os eventos acima serem entregues (ver migration `20260430130000_realtime_pending_tables_and_trip_status_history.sql`).
 
 ---
 
@@ -530,7 +527,7 @@ Ver secao 8.2 para lista completa de RPCs.
 
 ## 13. Status de Implementacao
 
-### Divergencias entre PRD e codigo real (verificadas em 14/04/2026)
+### Divergencias entre PRD e codigo real (verificadas em 15/04/2026)
 
 | Item | PRD dizia | Codigo real | Valor correto |
 |------|-----------|-------------|---------------|
@@ -555,12 +552,12 @@ Ver secao 8.2 para lista completa de RPCs.
 - [x] Zoom 16 no GPS do motorista (zoom inicial e botao centralizar)
 - [x] Validacao de coordenadas (`isValidGlobeCoordinate`)
 - [x] Fallback de rota: Mapbox → Google Directions → OSRM
-- [x] `PendingRequestsScreen`: lista de solicitacoes com RPCs de aceite/recusa de envios
+- [x] `PendingRequestsScreen`: lista de solicitacoes com RPCs de aceite/recusa de envios, countdown ate prazo (`expires_at` / oferta / fallback), Realtime
 - [x] Stack de navegacao para todos os tres ambientes (motorista, encomendas, excursoes)
 - [x] Telas de cadastro e perfil completas
 - [x] `TripDetailScreen` com mapa e passageiros
 - [x] `ActiveShipmentScreen` com confirmacao de codigos (validacao local) e avaliacao final
-- [x] `useTripStops` hook: busca e geracao de `trip_stops` via RPC
+- [x] `useTripStops` hook: busca e geracao de `trip_stops` via RPC + Realtime em `trip_stops` / `scheduled_trips`
 - [x] Historico financeiro (`driverPaymentTransfers.ts`)
 - [x] Ganhos por viagem (`driverTripEarnings.ts`)
 - [x] Chat em tempo real com suporte (Supabase Realtime em `messages`)
@@ -570,17 +567,19 @@ Ver secao 8.2 para lista completa de RPCs.
 
 ### Em Desenvolvimento / Pendente
 
-- [ ] `ActiveTripScreen`: refatorar para usar `trip_stops` com cores por tipo e confirmacao de paradas
-- [ ] `ActiveShipmentScreen`: deteccao automatica de cenario (1 vs 2) por `worker_profiles`
-- [ ] `ActiveShipmentScreen`: Cenario 1 com RPC `nearest_active_base`
-- [ ] `PendingRequestsScreen`: countdown ate `expires_at` nos assignments
+- [ ] `ActiveTripScreen`: refinar UX/cores por tipo de parada e confirmacao de paradas (parcialmente coberto por `trip_stops` + `useTripStops`)
+- [ ] `ActiveShipmentScreen`: opcional — sugerir base via RPC `nearest_active_base` quando `base_id` ainda nulo no produto
 - [ ] `HomeExcursoesScreen`: substituir mock data por query real em `excursion_requests`
 - [ ] `DetalhesExcursaoScreen`: lista de passageiros + check-in/check-out (`excursion_passengers`)
 - [ ] `NotificationsScreen`: query real em `notifications`
 - [ ] Badge de notificacoes nao lidas na navbar
-- [ ] Supabase Realtime em `PendingRequestsScreen` e `ActiveTripScreen` (alem do chat)
-- [ ] Insercao em `status_history` ao mudar status de viagem/encomenda/excursao
 - [ ] Push notifications nativas (`expo-notifications` nao esta nas dependencias)
+
+### Concluido recentemente (v1.3)
+
+- [x] `PendingRequestsScreen`: countdown alinhado a `expires_at` do assignment (e ofertas / fallback)
+- [x] Supabase Realtime em `PendingRequestsScreen` e no hook `useTripStops` (tela de viagem ativa), alem do chat
+- [x] `status_history`: triggers no banco para mudanca de status de viagem (`entity_type = trip`), além de booking/shipment/dependent_shipment/excursion já existentes
 
 ---
 

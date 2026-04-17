@@ -34,8 +34,8 @@ const CONTENT_PADDING = 48;
 function getOtpBoxSize(): number {
   const { width } = Dimensions.get('window');
   const available = width - CONTENT_PADDING;
-  const boxSize = (available - OTP_GAP * 3) / 4;
-  return Math.min(85, Math.max(52, Math.floor(boxSize)));
+  const boxSize = (available - OTP_GAP * (CODE_LENGTH - 1)) / CODE_LENGTH;
+  return Math.min(85, Math.max(34, Math.floor(boxSize)));
 }
 
 export function VerifyEmailScreen({ navigation, route }: Props) {
@@ -46,7 +46,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
     registrationType === 'take_me' || registrationType === 'parceiro' ? registrationType : undefined;
   const { showAlert } = useAppAlert();
   const { setDeferred } = useDeferredDriverSignup();
-  const [digits, setDigits] = useState<string[]>(['', '', '', '']);
+  const [digits, setDigits] = useState<string[]>(() => Array.from({ length: CODE_LENGTH }, () => ''));
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [loading, setLoading] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
@@ -133,10 +133,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
             password,
             driverType,
           });
-          navigation.reset({
-            index: 0,
-            routes: [{ name: 'CompleteDriverRegistration', params: { driverType } }],
-          });
+          navigation.navigate('CompleteDriverRegistration', { driverType });
         } else {
           showAlert(
             'Cadastro motorista',
@@ -145,7 +142,16 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
         }
       } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-        if (signInError) throw signInError;
+        if (signInError) {
+          showAlert(
+            'Login',
+            getUserErrorMessage(
+              signInError,
+              'Não foi possível entrar após confirmar o e-mail. Tente fazer login manualmente.'
+            )
+          );
+          return;
+        }
         navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
       }
     } catch (err: unknown) {
@@ -174,7 +180,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
         );
         return;
       }
-      setDigits(['', '', '', '']);
+      setDigits(Array.from({ length: CODE_LENGTH }, () => ''));
       setFocusedIndex(0);
       inputRefs.current[0]?.focus();
     } catch (err: unknown) {
@@ -186,7 +192,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-      <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'padding'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}>
+      <KeyboardAvoidingView style={styles.container} behavior="padding" keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}>
         <StatusBar style="dark" />
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" showsVerticalScrollIndicator={false}>
           <View style={[styles.content, { paddingTop: insets.top + 96 }]}>
@@ -194,7 +200,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
             <Text style={styles.subtitle}>Digite o código de 4 dígitos enviado para seu e-mail.</Text>
 
             <View style={styles.otpWrapper}>
-              {[0, 1, 2, 3].map((index) => {
+              {Array.from({ length: CODE_LENGTH }, (_, index) => index).map((index) => {
                 const isFocused = focusedIndex === index;
                 return (
                   <TextInput

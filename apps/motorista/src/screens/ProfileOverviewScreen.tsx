@@ -221,7 +221,7 @@ export function ProfileOverviewScreen({ navigation }: Props) {
 
         <TouchableOpacity
           style={styles.listRow}
-          onPress={() => rootNav?.navigate('ResetPassword')}
+          onPress={() => rootNav?.navigate('ResetPassword', {})}
           activeOpacity={0.7}
         >
           <MaterialIcons name="edit" size={22} color="#111827" />

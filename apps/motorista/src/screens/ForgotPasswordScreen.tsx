@@ -9,6 +9,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { setLastRecoveryEmail } from '../lib/lastRecoveryEmail';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import { parseInvokeData, parseInvokeError } from '../utils/edgeFunctionResponse';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPassword'>;
 
@@ -29,10 +30,19 @@ export function ForgotPasswordScreen({ navigation }: Props) {
     }
     setLoading(true);
     try {
-      const scheme = process.env.EXPO_PUBLIC_APP_SCHEME ?? 'take-me-motorista';
-      const redirectTo = `${scheme}://reset-password`;
-      const { error } = await supabase.auth.resetPasswordForEmail(trimmed, { redirectTo });
-      if (error) throw error;
+      const { data: sendData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
+        body: { email: trimmed, purpose: 'password_reset' },
+      });
+      const payload = parseInvokeData(sendData);
+      if (payload?.error != null) {
+        showAlert('Erro', String(payload.error));
+        return;
+      }
+      if (fnError) {
+        const bodyError = await parseInvokeError(fnError);
+        showAlert('Erro', bodyError ?? getUserErrorMessage(fnError, 'Não foi possível enviar o código.'));
+        return;
+      }
       await supabase.auth.signOut();
       setLastRecoveryEmail(trimmed);
       navigation.dispatch(
@@ -40,7 +50,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
           index: 1,
           routes: [
             { name: 'Welcome' },
-            { name: 'ForgotPasswordEmailSent', params: { email: trimmed } },
+            { name: 'ForgotPasswordVerifyCode', params: { email: trimmed } },
           ],
         })
       );
@@ -52,7 +62,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
   };
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.container} behavior="padding">
       <StatusBar style="dark" />
       <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()} activeOpacity={0.7} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
         <Text style={styles.backArrow}>←</Text>
@@ -60,7 +70,9 @@ export function ForgotPasswordScreen({ navigation }: Props) {
 
       <View style={styles.content}>
         <Text style={styles.title}>Recuperação de senha</Text>
-        <Text style={styles.subtitle}>Digite seu e-mail e enviaremos um link para redefinir sua senha.</Text>
+        <Text style={styles.subtitle}>
+          Digite seu e-mail. Enviaremos um código de 4 dígitos para você redefinir a senha.
+        </Text>
         <TextInput
           style={styles.input}
           placeholder="Email"
@@ -75,7 +87,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
 
       <View style={styles.footer}>
         <TouchableOpacity style={[styles.submitButton, loading && styles.submitButtonDisabled]} activeOpacity={0.8} onPress={handleSubmit} disabled={loading}>
-          {loading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.submitButtonText}>Enviar link de recuperação</Text>}
+          {loading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.submitButtonText}>Enviar código</Text>}
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>

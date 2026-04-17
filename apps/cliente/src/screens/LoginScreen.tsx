@@ -18,7 +18,10 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { assertClientePassengerOnlyAccount } from '../lib/clientePassengerOnlyGate';
+import { signInWithOAuthProvider } from '../lib/oauth';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import { syncClienteProfileFcmToken } from '../lib/clienteFcm';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
 
@@ -28,6 +31,7 @@ export function LoginScreen({ navigation }: Props) {
   const [password, setPassword] = useState('');
   const [hidePassword, setHidePassword] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   /** Sempre volta à entrada (Criar conta / Já tenho conta), não ao histórico anterior do stack. */
   const goBackToWelcome = () => {
@@ -113,6 +117,23 @@ export function LoginScreen({ navigation }: Props) {
         await supabase.auth.setSession(data.session);
       }
 
+      const { data: { session: activeSession } } = await supabase.auth.getSession();
+      if (!activeSession?.user) {
+        Keyboard.dismiss();
+        setLoading(false);
+        showAlert('Erro no login', 'Não foi possível obter a sessão. Tente novamente.');
+        return;
+      }
+      const gate = await assertClientePassengerOnlyAccount(activeSession.user.id);
+      if (!gate.ok) {
+        await supabase.auth.signOut();
+        Keyboard.dismiss();
+        setLoading(false);
+        showAlert('Acesso não permitido', gate.message);
+        return;
+      }
+
+      await syncClienteProfileFcmToken();
       navigation.reset({
         index: 0,
         routes: [{ name: 'Main' }],
@@ -130,10 +151,44 @@ export function LoginScreen({ navigation }: Props) {
     }
   };
 
-  const handleSocialSignIn = (_provider: 'google' | 'apple') => {
+  const handleGoogleSignIn = async () => {
+    if (!isSupabaseConfigured) {
+      showAlert('Configuração', 'Login não configurado. Verifique as variáveis do Supabase no .env.');
+      return;
+    }
+    setGoogleLoading(true);
+    try {
+      const { success, error } = await signInWithOAuthProvider('google');
+      if (!success) {
+        if (error && error !== 'Login cancelado.') {
+          showAlert('Google', error);
+        }
+        return;
+      }
+      const { data: { session: oauthSession } } = await supabase.auth.getSession();
+      if (!oauthSession?.user) {
+        showAlert('Google', 'Não foi possível obter a sessão. Tente novamente.');
+        return;
+      }
+      const gate = await assertClientePassengerOnlyAccount(oauthSession.user.id);
+      if (!gate.ok) {
+        await supabase.auth.signOut();
+        showAlert('Acesso não permitido', gate.message);
+        return;
+      }
+      await syncClienteProfileFcmToken();
+      navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
+    } catch (e) {
+      showAlert('Google', getUserErrorMessage(e, 'Não foi possível entrar com o Google.'));
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  const handleAppleSignIn = () => {
     showAlert(
       'Em desenvolvimento',
-      'Os logins com Google e Apple ainda estão em desenvolvimento. Por favor, use e-mail ou telefone com senha para continuar.'
+      'Login com Apple ainda está em desenvolvimento. Use e-mail ou telefone com senha, ou Google.'
     );
   };
 
@@ -141,7 +196,7 @@ export function LoginScreen({ navigation }: Props) {
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
       >
         <View style={styles.containerInner}>
           <StatusBar style="dark" />
@@ -216,17 +271,24 @@ export function LoginScreen({ navigation }: Props) {
       </View>
 
       <TouchableOpacity
-        style={styles.socialButton}
+        style={[styles.socialButton, (loading || googleLoading) && styles.continueButtonDisabled]}
         activeOpacity={0.8}
-        onPress={() => handleSocialSignIn('google')}
+        onPress={handleGoogleSignIn}
+        disabled={loading || googleLoading}
       >
-        <GoogleLogo size={22} style={styles.socialIconImage} />
-        <Text style={styles.socialButtonText}>Continuar com Google</Text>
+        {googleLoading ? (
+          <ActivityIndicator color="#111827" />
+        ) : (
+          <>
+            <GoogleLogo size={22} style={styles.socialIconImage} />
+            <Text style={styles.socialButtonText}>Continuar com Google</Text>
+          </>
+        )}
       </TouchableOpacity>
       <TouchableOpacity
         style={styles.socialButton}
         activeOpacity={0.8}
-        onPress={() => handleSocialSignIn('apple')}
+        onPress={handleAppleSignIn}
       >
         <Ionicons name="logo-apple" size={22} color="#000000" style={styles.socialIconImage} />
         <Text style={styles.socialButtonText}>Continuar com Apple</Text>

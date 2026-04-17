@@ -11,6 +11,7 @@ import type { MainTabParamList } from '../navigation/MainTabs';
 import { useRootNavigation } from '../navigation/RootNavigationContext';
 import { getRecentDestinations, formatRecentDestinationDisplay, type RecentDestination } from '../lib/recentDestinations';
 import { ALL_TIME_SLOTS, getAvailableTimeSlots, toISODate, formatDateDisplayLabel } from '../lib/dateTimeSlots';
+import { syncClienteProfileFcmToken } from '../lib/clienteFcm';
 
 // Tokens do Figma: neutral-100 white, black-500 #0d0d0d, neutral-300 #f1f1f1, neutral-400 #e2e2e2, neutral-700 #767676
 const COLORS = {
@@ -56,7 +57,12 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
     loadRecentDestinations();
   }, [loadRecentDestinations]);
 
-  useFocusEffect(loadRecentDestinations);
+  useFocusEffect(
+    useCallback(() => {
+      loadRecentDestinations();
+      void syncClienteProfileFcmToken();
+    }, [loadRecentDestinations]),
+  );
 
   useEffect(() => {
     if (!whenSheetVisible) return;

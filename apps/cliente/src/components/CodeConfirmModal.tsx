@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, TouchableOpacity, TextInput, StyleSheet, Modal } from 'react-native';
+import { View, TouchableOpacity, TextInput, StyleSheet, Modal, KeyboardAvoidingView } from 'react-native';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
 
@@ -48,6 +48,7 @@ export function CodeConfirmModal({
 
   return (
     <Modal visible={visible} transparent animationType="fade">
+      <KeyboardAvoidingView style={styles.keyboardRoot} behavior="padding">
       <View style={styles.overlay}>
         <View style={styles.box}>
           <TouchableOpacity style={styles.closeButton} onPress={handleClose} hitSlop={12}>
@@ -72,11 +73,13 @@ export function CodeConfirmModal({
           </TouchableOpacity>
         </View>
       </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  keyboardRoot: { flex: 1 },
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -112,6 +115,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: COLORS.black,
     marginBottom: 24,
+    textAlign: 'center',
   },
   primary: {
     paddingVertical: 16,

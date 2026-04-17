@@ -76,13 +76,39 @@ export function SignUpScreen({ navigation, route }: Props) {
 
     if (driverFirst) {
       if (!registrationType) return;
-      setDeferred({ email: email.trim(), password, driverType: registrationType });
-      if (registrationType === 'preparador_excursões') {
-        navigation.reset({ index: 0, routes: [{ name: 'CompletePreparadorExcursoes' }] });
-      } else if (registrationType === 'preparador_encomendas') {
-        navigation.reset({ index: 0, routes: [{ name: 'CompletePreparadorEncomendas' }] });
-      } else {
-        navigation.reset({ index: 0, routes: [{ name: 'CompleteDriverRegistration', params: { driverType: registrationType } }] });
+      setLoading(true);
+      try {
+        const { data: fnData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
+          body: { email: email.trim(), purpose: 'signup', checkEmailOnly: true },
+        });
+        const apiErrorMsg =
+          fnData && typeof fnData === 'object' && fnData !== null && 'error' in fnData
+            ? String((fnData as { error: unknown }).error)
+            : null;
+        if (apiErrorMsg) {
+          showAlert('Atenção', apiErrorMsg);
+          return;
+        }
+        if (fnError) {
+          const bodyError = await parseInvokeError(fnError);
+          if (bodyError) {
+            showAlert('Atenção', bodyError);
+            return;
+          }
+          throw fnError;
+        }
+        setDeferred({ email: email.trim(), password, driverType: registrationType });
+        if (registrationType === 'preparador_excursões') {
+          navigation.navigate('CompletePreparadorExcursoes');
+        } else if (registrationType === 'preparador_encomendas') {
+          navigation.navigate('CompletePreparadorEncomendas');
+        } else {
+          navigation.navigate('CompleteDriverRegistration', { driverType: registrationType });
+        }
+      } catch (err: unknown) {
+        showAlert('Atenção', getUserErrorMessage(err, 'Não foi possível validar o e-mail. Tente novamente.'));
+      } finally {
+        setLoading(false);
       }
       return;
     }
@@ -140,7 +166,7 @@ export function SignUpScreen({ navigation, route }: Props) {
   };
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.container} behavior="padding">
       <StatusBar style="dark" />
       <View style={[styles.header, { paddingTop: Math.max(12, insets.top) }]}>
         <TouchableOpacity style={styles.backButtonCircle} onPress={() => navigation.goBack()} activeOpacity={0.7}>

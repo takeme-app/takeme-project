@@ -289,10 +289,18 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
   const sectionTitle = (title: string) => <Text style={styles.sectionTitle}>{title}</Text>;
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.container} behavior="padding">
       <StatusBar style="dark" />
       <View style={[styles.header, { paddingTop: insets.top }]}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('SignUpType')} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={() =>
+            navigation.canGoBack()
+              ? navigation.goBack()
+              : navigation.navigate('SignUp', { registrationType: driverType })
+          }
+          activeOpacity={0.7}
+        >
           <MaterialIcons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Complete seu cadastro</Text>

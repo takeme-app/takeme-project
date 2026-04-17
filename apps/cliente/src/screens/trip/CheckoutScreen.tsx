@@ -31,7 +31,8 @@ import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
 import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
-import { formatVehicleDescription, formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
+import { formatVehicleDescription, formatDriverRatingLabel, formatTripFareBrl } from '../../lib/tripDriverDisplay';
+import { bookingCardChargeAmountCents } from '../../lib/bookingChargePreview';
 import { fetchResolvedPriceCentsForScheduledTrip } from '../../lib/clientScheduledTrips';
 import { MAPBOX_DESTINATION_MARKER_COLOR, MAPBOX_ORIGIN_MARKER_COLOR } from '@take-me/shared';
 import { flatPricingSnapshot, applyPromotionToSnapshot } from '../../lib/orderPricingSnapshot';
@@ -42,6 +43,13 @@ const supabasePublicUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 function resolveAvatarUri(avatarUrl: string | null | undefined): string | null {
   if (!avatarUrl?.trim()) return null;
   return avatarUrl.startsWith('http') ? avatarUrl : `${supabasePublicUrl}/storage/v1/object/public/avatars/${avatarUrl}`;
+}
+
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
 type Props = NativeStackScreenProps<TripStackParamList, 'Checkout'>;
@@ -89,6 +97,8 @@ export function CheckoutScreen({ navigation, route }: Props) {
     route.params?.scheduled_trip_id ? null : route.params?.driver?.amount_cents ?? null
   );
   const [fareLoading, setFareLoading] = useState(() => Boolean(route.params?.scheduled_trip_id));
+  /** Total debitado no cartão (rota − promo), alinhado ao PaymentIntent em charge-booking. */
+  const [cardChargePreviewCents, setCardChargePreviewCents] = useState<number | null>(null);
 
   const driver = route.params?.driver ?? DEFAULT_DRIVER;
   const origin = route.params?.origin;
@@ -97,14 +107,20 @@ export function CheckoutScreen({ navigation, route }: Props) {
   const bagsCount = route.params?.bags_count ?? driver.bags ?? 0;
   const scheduledTripId = route.params?.scheduled_trip_id;
   const immediateTrip = route.params?.immediateTrip === true;
-  const amountCents = resolvedFareCents ?? driver.amount_cents ?? null;
+  const routePriceCents = resolvedFareCents ?? driver.amount_cents ?? null;
+  const displayChargeCents = cardChargePreviewCents ?? routePriceCents;
   const fareFormatted =
-    amountCents != null
-      ? `R$ ${(amountCents / 100).toFixed(2)}`
+    displayChargeCents != null
+      ? formatTripFareBrl(displayChargeCents)
       : scheduledTripId
         ? 'Carregando preço…'
-        : 'R$ —';
+        : '—';
   const [tripDateLabel, setTripDateLabel] = useState<string | null>(null);
+  const [driverAvatarFailed, setDriverAvatarFailed] = useState(false);
+
+  useEffect(() => {
+    setDriverAvatarFailed(false);
+  }, [driver.avatar_url, driver.name]);
 
   useEffect(() => {
     if (!scheduledTripId) {
@@ -127,6 +143,40 @@ export function CheckoutScreen({ navigation, route }: Props) {
       cancelled = true;
     };
   }, [scheduledTripId, driver.amount_cents]);
+
+  useEffect(() => {
+    if (routePriceCents == null || routePriceCents < 1) {
+      setCardChargePreviewCents(null);
+      return;
+    }
+    setCardChargePreviewCents(bookingCardChargeAmountCents(routePriceCents, 0));
+    let cancelled = false;
+    void (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      let discount = 0;
+      if (user) {
+        try {
+          const { data: promoRows } = await supabase.rpc('apply_active_promotion', {
+            p_order_type: 'bookings',
+            p_user_id: user.id,
+            p_amount_cents: routePriceCents,
+          });
+          const pr = promoRows?.[0] as { promo_discount_cents?: number } | undefined;
+          if (pr?.promo_discount_cents != null) {
+            discount = Math.max(0, Math.floor(Number(pr.promo_discount_cents)));
+          }
+        } catch {
+          /* promo indisponível: mantém desconto 0 */
+        }
+      }
+      if (!cancelled) {
+        setCardChargePreviewCents(bookingCardChargeAmountCents(routePriceCents, discount));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [routePriceCents]);
 
   useEffect(() => {
     if (!scheduledTripId) {
@@ -216,7 +266,11 @@ export function CheckoutScreen({ navigation, route }: Props) {
         } catch { /* promoção não disponível, segue sem desconto */ }
 
         let bookingId = '';
-        let chargedAmountCents = pricing.amount_cents;
+        /** Igual ao PaymentIntent (rota − promo); não usar pricing.amount_cents (subtotal+taxa interna). */
+        let chargedAmountCents = bookingCardChargeAmountCents(
+          finalAmountCents,
+          pricing.promo_discount_cents || 0
+        );
 
         if (params.method === 'credito' || params.method === 'debito') {
           if (!params.paymentMethodId) {
@@ -465,10 +519,16 @@ export function CheckoutScreen({ navigation, route }: Props) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Motorista</Text>
           <View style={styles.driverRow}>
-            {resolveAvatarUri(driver.avatar_url) ? (
-              <Image source={{ uri: resolveAvatarUri(driver.avatar_url)! }} style={styles.driverAvatarImage} />
+            {resolveAvatarUri(driver.avatar_url) && !driverAvatarFailed ? (
+              <Image
+                source={{ uri: resolveAvatarUri(driver.avatar_url)! }}
+                style={styles.driverAvatarImage}
+                onError={() => setDriverAvatarFailed(true)}
+              />
             ) : (
-              <View style={styles.driverAvatar} />
+              <View style={[styles.driverAvatarImage, styles.driverAvatarFallback]}>
+                <Text style={styles.driverAvatarInitials}>{getInitials(driver.name)}</Text>
+              </View>
             )}
             <View style={styles.driverInfo}>
               <Text style={styles.driverName}>{driver.name}</Text>
@@ -521,7 +581,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
 
         <View style={styles.card}>
           <PaymentMethodSection
-            amountCents={amountCents ?? 0}
+            amountCents={displayChargeCents ?? 0}
             selectedMethod={selectedPaymentMethod}
             onSelectMethod={setSelectedPaymentMethod}
             confirmLabel="Confirmar pagamento"
@@ -571,6 +631,13 @@ const styles = StyleSheet.create({
   driverRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   driverAvatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: COLORS.neutral300, marginRight: 12 },
   driverAvatarImage: { width: 48, height: 48, borderRadius: 24, marginRight: 12 },
+  driverAvatarFallback: {
+    backgroundColor: COLORS.neutral300,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  driverAvatarInitials: { fontSize: 16, fontWeight: '700', color: COLORS.black },
   driverInfo: { flex: 1 },
   driverName: { fontSize: 16, fontWeight: '600', color: COLORS.black },
   driverRating: { fontSize: 14, color: COLORS.neutral700 },

@@ -33,11 +33,9 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
   const origin = route.params?.origin;
   const destination = route.params?.destination;
   const [bags, setBags] = useState(2);
-  const [passengers, setPassengers] = useState(2);
-  const [passengerData, setPassengerData] = useState<Record<number, { name: string; cpf: string }>>({
-    0: { name: '', cpf: '' },
-    1: { name: '', cpf: '' },
-  });
+  /** Passageiros *adicionais* (o solicitante já conta como 1 lugar). */
+  const [extraPassengers, setExtraPassengers] = useState(0);
+  const [passengerData, setPassengerData] = useState<Record<number, { name: string; cpf: string }>>({});
 
   const updatePassenger = (index: number, field: 'name' | 'cpf', value: string) => {
     setPassengerData((prev) => ({
@@ -54,7 +52,7 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
       </TouchableOpacity>
       <KeyboardAvoidingView
         style={styles.keyboardAvoid}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior="padding"
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
         <ScrollView
@@ -86,29 +84,37 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
         </View>
         <Text style={styles.hint}>Inclua quantas malas serão levadas</Text>
 
-        <Text style={[styles.sectionLabel, { marginTop: 24 }]}>Quantos passageiros vão com você?</Text>
+        <Text style={[styles.sectionLabel, { marginTop: 24 }]}>Quantos passageiros extras vão com você?</Text>
         <View style={styles.stepperRow}>
           <TouchableOpacity
             style={styles.stepperButton}
-            onPress={() => setPassengers((p) => Math.max(1, p - 1))}
+            onPress={() => setExtraPassengers((p) => Math.max(0, p - 1))}
             activeOpacity={0.8}
           >
             <Text style={styles.stepperSymbol}>−</Text>
           </TouchableOpacity>
-          <Text style={styles.stepperValue}>{passengers} pessoas</Text>
+          <Text style={styles.stepperValue}>
+            {extraPassengers === 0
+              ? 'Nenhum extra'
+              : extraPassengers === 1
+                ? '1 passageiro extra'
+                : `${extraPassengers} passageiros extras`}
+          </Text>
           <TouchableOpacity
             style={styles.stepperButton}
-            onPress={() => setPassengers((p) => p + 1)}
+            onPress={() => setExtraPassengers((p) => p + 1)}
             activeOpacity={0.8}
           >
             <Text style={styles.stepperSymbol}>+</Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.hint}>Adicione quem vai viajar com você</Text>
+        <Text style={styles.hint}>
+          Você já conta como passageiro principal; inclua aqui só quem viaja com você (nome e CPF).
+        </Text>
 
-        {Array.from({ length: passengers }, (_, i) => (
+        {Array.from({ length: extraPassengers }, (_, i) => (
           <View key={i} style={styles.passengerBlock}>
-            <Text style={styles.passengerTitle}>Dados do passageiro {i + 1}</Text>
+            <Text style={styles.passengerTitle}>Dados do passageiro adicional {i + 1}</Text>
             <TextInput
               style={styles.input}
               placeholder="Nome do passageiro"
@@ -131,15 +137,15 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
         <TouchableOpacity
           style={styles.confirmButton}
           onPress={() => {
-            for (let i = 0; i < passengers; i++) {
+            for (let i = 0; i < extraPassengers; i++) {
               const cpfRaw = passengerData[i]?.cpf ?? '';
               const cpfDigits = onlyDigits(cpfRaw);
               if (cpfDigits && !validateCpf(cpfDigits)) {
-                showAlert('CPF inválido', `O CPF do passageiro ${i + 1} não é válido. Verifique e tente novamente.`);
+                showAlert('CPF inválido', `O CPF do passageiro adicional ${i + 1} não é válido. Verifique e tente novamente.`);
                 return;
               }
             }
-            const passengerList: TripPassengerParam[] = Array.from({ length: passengers }, (_, i) => ({
+            const passengerList: TripPassengerParam[] = Array.from({ length: extraPassengers }, (_, i) => ({
               name: passengerData[i]?.name ?? '',
               cpf: passengerData[i]?.cpf ?? '',
               bags: '',

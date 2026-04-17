@@ -6,8 +6,8 @@ import {
   StyleSheet,
   ScrollView,
   KeyboardAvoidingView,
-  Platform,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -43,7 +43,6 @@ export function RecipientScreen({ navigation, route }: Props) {
   const { showAlert } = useAppAlert();
   const { origin, destination, whenOption, whenLabel, packageSize, packageSizeLabel } = route.params;
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [instructions, setInstructions] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
@@ -110,14 +109,9 @@ export function RecipientScreen({ navigation, route }: Props) {
 
   const handleFazerPedido = () => {
     const nameTrim = name.trim();
-    const emailTrim = email.trim();
     const phoneDigits = phone.replace(/\D/g, '');
     if (!nameTrim) {
       showAlert('Atenção', 'Preencha o nome do destinatário.');
-      return;
-    }
-    if (!emailTrim) {
-      showAlert('Atenção', 'Preencha o e-mail do destinatário.');
       return;
     }
     if (phoneDigits.length < 10) {
@@ -130,7 +124,6 @@ export function RecipientScreen({ navigation, route }: Props) {
     }
     const recipientPayload = {
       name: nameTrim,
-      email: emailTrim,
       phone: phoneDigits,
       instructions: instructions.trim() || undefined,
       photoUri: photoUri ?? undefined,
@@ -157,17 +150,10 @@ export function RecipientScreen({ navigation, route }: Props) {
           origin: { latitude: origin.latitude, longitude: origin.longitude },
           originAddress: origin.address,
         });
-        if (resolvedBaseId) {
-          navigation.navigate('ConfirmShipment', {
-            ...quoteParams,
-            resolvedBaseId,
-          });
-        } else {
-          navigation.navigate('SelectShipmentDriver', {
-            ...quoteParams,
-            resolvedBaseId: null,
-          });
-        }
+        navigation.navigate('SelectShipmentDriver', {
+          ...quoteParams,
+          resolvedBaseId: resolvedBaseId ?? null,
+        });
       } catch {
         showAlert('Erro', 'Não foi possível verificar a base da região. Tente de novo.');
       } finally {
@@ -179,7 +165,7 @@ export function RecipientScreen({ navigation, route }: Props) {
   return (
     <KeyboardAvoidingView
       style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior="padding"
       keyboardVerticalOffset={0}
     >
       <StatusBar style="dark" />
@@ -206,17 +192,6 @@ export function RecipientScreen({ navigation, route }: Props) {
           autoCapitalize="words"
         />
 
-        <Text style={styles.label}>Email</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="email@mail.com"
-          placeholderTextColor={COLORS.neutral700}
-          value={email}
-          onChangeText={setEmail}
-          keyboardType="email-address"
-          autoCapitalize="none"
-        />
-
         <Text style={styles.label}>Telefone do destinatário</Text>
         <TextInput
           style={styles.input}
@@ -240,16 +215,27 @@ export function RecipientScreen({ navigation, route }: Props) {
         />
 
         <Text style={styles.label}>Foto da encomenda (opcional)</Text>
-        <TouchableOpacity style={styles.photoBox} onPress={pickImage} activeOpacity={0.8}>
-          {photoUri ? (
-            <Text style={styles.photoPlaceholderText} numberOfLines={1}>Foto selecionada</Text>
-          ) : (
-            <>
-              <MaterialIcons name="camera-alt" size={32} color={COLORS.neutral700} />
-              <Text style={styles.photoPlaceholderText}>Toque para adicionar</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        {photoUri ? (
+          <View style={styles.photoPreviewOuter}>
+            <TouchableOpacity onPress={pickImage} activeOpacity={0.9} style={styles.photoPreviewTouchable}>
+              <Image source={{ uri: photoUri }} style={styles.photoThumb} resizeMode="cover" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.photoRemoveBtn}
+              onPress={() => setPhotoUri(null)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel="Remover foto"
+            >
+              <MaterialIcons name="close" size={22} color="#FFFFFF" />
+            </TouchableOpacity>
+            <Text style={styles.photoHint}>Toque na imagem para trocar · use ✕ para remover</Text>
+          </View>
+        ) : (
+          <TouchableOpacity style={styles.photoBox} onPress={pickImage} activeOpacity={0.8}>
+            <MaterialIcons name="camera-alt" size={32} color={COLORS.neutral700} />
+            <Text style={styles.photoPlaceholderText}>Toque para adicionar</Text>
+          </TouchableOpacity>
+        )}
 
         {quoteLoading ? (
           <View style={styles.quoteRow}>
@@ -313,6 +299,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 24,
   },
+  photoPreviewOuter: { marginBottom: 24, position: 'relative' },
+  photoPreviewTouchable: {
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: COLORS.neutral400,
+  },
+  photoThumb: { width: '100%', height: 200, backgroundColor: COLORS.neutral300 },
+  photoRemoveBtn: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoHint: { fontSize: 12, color: COLORS.neutral700, marginTop: 10 },
   photoPlaceholderText: { fontSize: 14, color: COLORS.neutral700, marginTop: 8 },
   quoteRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
   quoteHint: { fontSize: 13, color: COLORS.neutral700, marginBottom: 16 },

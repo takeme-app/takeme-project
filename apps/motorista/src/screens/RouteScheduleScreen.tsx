@@ -491,7 +491,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
       <Modal visible={transferModalVisible} transparent animationType="none" onRequestClose={closeTransferModal}>
         <KeyboardAvoidingView
           style={styles.modalContainer}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior="padding"
         >
           <Pressable style={StyleSheet.absoluteFillObject} onPress={closeTransferModal} />
           <Animated.View style={[styles.sheet, { transform: [{ translateY: Animated.add(transferSlideAnim, transferDragY) }] }]}>
@@ -540,7 +540,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
       <Modal visible={modalVisible} transparent animationType="none" onRequestClose={closeModal}>
         <KeyboardAvoidingView
           style={styles.modalContainer}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior="padding"
         >
           <Pressable style={StyleSheet.absoluteFillObject} onPress={closeModal} />
           <Animated.View style={[styles.sheet, { transform: [{ translateY: Animated.add(slideAnim, dragY) }] }]}>

@@ -14,6 +14,7 @@ import { AddCardScreen } from '../screens/AddCardScreen';
 import { CardRegisteredSuccessScreen } from '../screens/CardRegisteredSuccessScreen';
 import { ForgotPasswordScreen } from '../screens/ForgotPasswordScreen';
 import { ForgotPasswordEmailSentScreen } from '../screens/ForgotPasswordEmailSentScreen';
+import { ForgotPasswordVerifyCodeScreen } from '../screens/ForgotPasswordVerifyCodeScreen';
 import { ResetPasswordScreen } from '../screens/ResetPasswordScreen';
 import { ResetPasswordSuccessScreen } from '../screens/ResetPasswordSuccessScreen';
 import { TermsOfUseScreen } from '../screens/TermsOfUseScreen';
@@ -79,6 +80,7 @@ export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
           name="ForgotPasswordEmailSent"
           component={ForgotPasswordEmailSentScreen}
         />
+        <Stack.Screen name="ForgotPasswordVerifyCode" component={ForgotPasswordVerifyCodeScreen} />
         <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />
         <Stack.Screen
           name="ResetPasswordSuccess"

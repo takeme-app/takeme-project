@@ -1,5 +1,13 @@
 import { useState, useEffect } from 'react';
-import { View, TouchableOpacity, TextInput, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
+import {
+  View,
+  TouchableOpacity,
+  TextInput,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+} from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
@@ -123,7 +131,13 @@ export function RateTripScreen({ navigation, route }: Props) {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <KeyboardAvoidingView style={styles.keyboardAvoid} behavior="padding">
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
       <Text style={styles.title}>Viagem Concluída!</Text>
       <Text style={styles.subtitle}>Obrigado por utilizar o Take Me. Avalie sua experiência.</Text>
       <View style={styles.resumoBox}>
@@ -136,7 +150,7 @@ export function RateTripScreen({ navigation, route }: Props) {
           <Text style={styles.resumoValue}>{distanceLabel}</Text>
         </View>
         <View style={styles.resumoRow}>
-          <Text style={styles.resumoLabel}>Valor da viagem</Text>
+          <Text style={styles.resumoLabel}>Total pago</Text>
           <Text style={styles.resumoValue}>{totalPaidLabel}</Text>
         </View>
       </View>
@@ -184,12 +198,14 @@ export function RateTripScreen({ navigation, route }: Props) {
         <Text style={styles.secondaryButtonText}>Agora não</Text>
       </TouchableOpacity>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
+  keyboardAvoid: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingBottom: 40 },
   title: { fontSize: 22, fontWeight: '700', color: '#0d0d0d', marginTop: 24, marginBottom: 4, textAlign: 'center' },
   subtitle: { fontSize: 14, color: '#767676', marginBottom: 20, textAlign: 'center' },

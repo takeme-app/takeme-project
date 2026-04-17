@@ -21,6 +21,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+import { assertClientePassengerOnlyAccount } from '../lib/clientePassengerOnlyGate';
 import { getUserErrorMessage } from '../utils/errorMessage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'VerifyEmail'>;
@@ -33,14 +34,14 @@ const CONTENT_PADDING = 48; // 24 * 2
 function getOtpBoxSize(): number {
   const { width } = Dimensions.get('window');
   const available = width - CONTENT_PADDING;
-  const boxSize = (available - OTP_GAP * 3) / 4;
-  return Math.min(OTP_BOX_DESKTOP, Math.max(52, Math.floor(boxSize)));
+  const boxSize = (available - OTP_GAP * (CODE_LENGTH - 1)) / CODE_LENGTH;
+  return Math.min(OTP_BOX_DESKTOP, Math.max(34, Math.floor(boxSize)));
 }
 
 export function VerifyEmailScreen({ navigation, route }: Props) {
   const { email, password, fullName, phone } = route.params;
   const { showAlert } = useAppAlert();
-  const [digits, setDigits] = useState<string[]>(['', '', '', '']);
+  const [digits, setDigits] = useState<string[]>(() => Array.from({ length: CODE_LENGTH }, () => ''));
   const [focusedIndex, setFocusedIndex] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
@@ -133,7 +134,25 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
       }
 
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-      if (signInError) throw signInError;
+      if (signInError) {
+        const message = getUserErrorMessage(
+          signInError,
+          'Não foi possível entrar após confirmar o e-mail. Tente fazer login manualmente.'
+        );
+        setError(message);
+        showAlert('Login', message);
+        return;
+      }
+
+      const { data: { session: postVerifySession } } = await supabase.auth.getSession();
+      if (postVerifySession?.user) {
+        const gate = await assertClientePassengerOnlyAccount(postVerifySession.user.id);
+        if (!gate.ok) {
+          await supabase.auth.signOut();
+          showAlert('Acesso não permitido', gate.message);
+          return;
+        }
+      }
 
       navigation.navigate('AddPaymentPrompt');
     } catch (err: unknown) {
@@ -154,7 +173,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
         { body: { email } }
       );
       if (fnError) throw fnError;
-      setDigits(['', '', '', '']);
+      setDigits(Array.from({ length: CODE_LENGTH }, () => ''));
       setFocusedIndex(0);
       inputRefs.current[0]?.focus();
     } catch (err: unknown) {
@@ -170,7 +189,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+        behavior="padding"
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
       >
         <StatusBar style="dark" />
@@ -188,7 +207,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
             </Text>
 
             <View style={styles.otpWrapper}>
-              {[0, 1, 2, 3].map((index) => {
+              {Array.from({ length: CODE_LENGTH }, (_, index) => index).map((index) => {
                 const isFocused = focusedIndex === index;
                 return (
                   <TextInput

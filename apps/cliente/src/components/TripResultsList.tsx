@@ -9,7 +9,7 @@ import {
   type ClientScheduledTripItem,
 } from '../lib/clientScheduledTrips';
 import { parseTimeSlotRange, toISODateFromUtcIso } from '../lib/dateTimeSlots';
-import { formatDriverRatingLabel } from '../lib/tripDriverDisplay';
+import { formatDriverRatingLabel, formatTripFareBrl } from '../lib/tripDriverDisplay';
 import type { SelectedPlaces } from './AddressSelectionScreen';
 import type { WhenTimeResult } from '../hooks/useWhenTimeSelection';
 
@@ -212,6 +212,10 @@ export function TripResultsList({ places, when, onScheduleLater, onListFooterMet
                 <Text style={styles.timeValue}>{trip.arrival}</Text>
               </View>
             </View>
+            <View style={styles.fareRow}>
+              <Text style={styles.fareLabel}>Valor da corrida</Text>
+              <Text style={styles.fareValue}>{formatTripFareBrl(trip.amount_cents)}</Text>
+            </View>
             <View style={styles.divider} />
             <View style={styles.capacityRow}>
               <View style={styles.capacityItem}>
@@ -272,6 +276,14 @@ const styles = StyleSheet.create({
   timeCol: {},
   timeLabel: { fontSize: 12, color: COLORS.neutral700, marginBottom: 2 },
   timeValue: { fontSize: 15, fontWeight: '600', color: COLORS.black },
+  fareRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  fareLabel: { fontSize: 14, fontWeight: '600', color: COLORS.black },
+  fareValue: { fontSize: 16, fontWeight: '700', color: '#EA580C' },
   capacityRow: { flexDirection: 'row', gap: 20 },
   capacityItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   capacityText: { fontSize: 13, color: COLORS.neutral700 },

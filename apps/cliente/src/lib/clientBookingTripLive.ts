@@ -16,11 +16,11 @@ export type BookingTripLiveBooking = {
   bags_count: number;
   passenger_data: unknown;
   scheduled_trip_id: string;
+  pickup_code: string | null;
+  delivery_code: string | null;
 };
 
 export type BookingTripLiveTrip = {
-  pickup_code: string | null;
-  delivery_code: string | null;
   departure_at: string | null;
   arrival_at: string | null;
 };
@@ -45,7 +45,7 @@ export async function loadBookingTripLiveContext(bookingId: string): Promise<{
   const { data: booking, error: bErr } = await supabase
     .from('bookings')
     .select(
-      'id, status, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, passenger_count, bags_count, passenger_data, scheduled_trip_id'
+      'id, status, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, passenger_count, bags_count, passenger_data, scheduled_trip_id, pickup_code, delivery_code'
     )
     .eq('id', bookingId)
     .eq('user_id', user.id)
@@ -59,7 +59,7 @@ export async function loadBookingTripLiveContext(bookingId: string): Promise<{
   const b = booking as BookingTripLiveBooking;
   const { data: tripRow } = await supabase
     .from('scheduled_trips')
-    .select('pickup_code, delivery_code, departure_at, arrival_at')
+    .select('departure_at, arrival_at')
     .eq('id', b.scheduled_trip_id)
     .maybeSingle();
   const trip = tripRow as BookingTripLiveTrip | null;

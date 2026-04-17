@@ -17,6 +17,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../lib/supabase';
+import { unregisterClienteProfileFcmToken } from '../lib/clienteFcm';
 import { IconProfileGrid, IconNotifications, IconDependents, IconConversations } from '../components/ProfileGridIcons';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'ProfileMain'>;
@@ -83,6 +84,7 @@ export function ProfileScreen({ navigation }: Props) {
   );
 
   const handleLogout = async () => {
+    await unregisterClienteProfileFcmToken();
     await supabase.auth.signOut();
     const root = navigation.getParent()?.getParent();
     if (root) {

@@ -120,6 +120,11 @@ export function HomeScreen({ navigation }: Props) {
   const [mapUserLL, setMapUserLL] = useState<LatLng | null>(null);
   const homeMapRef = useRef<GoogleMapsMapRef>(null);
   const [promoModal, setPromoModal] = useState<{ id: string; title: string; gainPct: number; endAt: string } | null>(null);
+  /** Guia quando não há corrida ativa: fechado com "Entendi"; reabre após terminar uma viagem. */
+  const [noTripGuideDismissed, setNoTripGuideDismissed] = useState(false);
+  const hadActiveTripRef = useRef(false);
+  /** Viagem agendada vinculada a uma rota com horário (`route_id` + `departure_at`). */
+  const [hasScheduledRouteWithTime, setHasScheduledRouteWithTime] = useState(false);
 
   useEffect(() => {
     if (!LocationMod) return;
@@ -308,21 +313,59 @@ export function HomeScreen({ navigation }: Props) {
     const { data: tripIdsRows } = await supabase
       .from('scheduled_trips')
       .select('id')
-      .eq('driver_id', user.id);
+      .eq('driver_id', user.id)
+      .in('status', ['scheduled', 'active']);
     const myTripIds = (tripIdsRows ?? []).map((r) => (r as { id: string }).id);
     let sPending = 0;
+    let dPending = 0;
     if (myTripIds.length > 0) {
       const { count: sCount } = await supabase
         .from('shipments')
         .select('id', { count: 'exact', head: true })
         .in('scheduled_trip_id', myTripIds)
-        .is('base_id', null)
         .is('driver_id', null)
         .in('status', ['pending_review', 'confirmed']);
       sPending = sCount ?? 0;
+
+      const { count: depCount } = await supabase
+        .from('dependent_shipments')
+        .select('id', { count: 'exact', head: true })
+        .in('scheduled_trip_id', myTripIds)
+        .eq('status', 'pending_review');
+      dPending = depCount ?? 0;
     }
 
-    setPendingCount((bCount ?? 0) + sPending);
+    const { count: shipmentOfferCount } = await supabase
+      .from('shipments')
+      .select('id', { count: 'exact', head: true })
+      .eq('current_offer_driver_id', user.id)
+      .is('driver_id', null)
+      .in('status', ['pending_review', 'confirmed']);
+
+    const { count: shipmentPreferredWaitCount } = await supabase
+      .from('shipments')
+      .select('id', { count: 'exact', head: true })
+      .eq('client_preferred_driver_id', user.id)
+      .is('current_offer_driver_id', null)
+      .is('driver_id', null)
+      .in('status', ['pending_review', 'confirmed']);
+
+    setPendingCount(
+      (bCount ?? 0) +
+        sPending +
+        dPending +
+        (shipmentOfferCount ?? 0) +
+        (shipmentPreferredWaitCount ?? 0),
+    );
+
+    const { count: scheduledRouteCount } = await supabase
+      .from('scheduled_trips')
+      .select('id', { count: 'exact', head: true })
+      .eq('driver_id', user.id)
+      .not('route_id', 'is', null)
+      .not('departure_at', 'is', null)
+      .in('status', ['scheduled', 'active']);
+    setHasScheduledRouteWithTime((scheduledRouteCount ?? 0) > 0);
 
     setLoading(false);
   }, []);
@@ -355,6 +398,14 @@ export function HomeScreen({ navigation }: Props) {
       setPromoModal({ id: promo.id, title: promo.title, gainPct: promo.gain_pct_to_worker || 0, endAt: promo.end_at });
     })();
   }, [userId]));
+
+  useEffect(() => {
+    const has = Boolean(activeTrip);
+    if (hadActiveTripRef.current && !has) {
+      setNoTripGuideDismissed(false);
+    }
+    hadActiveTripRef.current = has;
+  }, [activeTrip]);
 
   const acceptPromotion = async () => {
     if (!promoModal || !userId) return;
@@ -391,6 +442,32 @@ export function HomeScreen({ navigation }: Props) {
   const goRoutes = () => navigation.navigate('Profile', { screen: 'WorkerRoutes', params: { fromHome: true } });
   const goSchedule = () => navigation.navigate('Profile', { screen: 'TripSchedule', params: { fromHome: true } });
   const goPending = () => navigation.navigate('PendingRequests');
+  const goActivities = () => navigation.navigate('Activities');
+
+  const dismissNoTripGuide = () => setNoTripGuideDismissed(true);
+
+  const goRoutesFromGuide = () => {
+    dismissNoTripGuide();
+    goRoutes();
+  };
+
+  const goScheduleFromGuide = () => {
+    dismissNoTripGuide();
+    goSchedule();
+  };
+
+  const goPendingFromGuide = () => {
+    dismissNoTripGuide();
+    goPending();
+  };
+
+  const goActivitiesFromGuide = () => {
+    dismissNoTripGuide();
+    goActivities();
+  };
+
+  const showNoTripGuideModal =
+    !activeTrip && !noTripGuideDismissed && !promoModal;
 
   const goDocumentsBanner = () => {
     if (!cnhOk || !cnhBackOk) {
@@ -532,6 +609,8 @@ export function HomeScreen({ navigation }: Props) {
                 style={styles.mapInner}
                 initialRegion={mapRegionForTrip(activeTrip)}
                 scrollEnabled={false}
+                pitchEnabled={false}
+                rotateEnabled={false}
               >
                 {activeTrip.origin_lat != null &&
                   activeTrip.origin_lng != null &&
@@ -574,7 +653,7 @@ export function HomeScreen({ navigation }: Props) {
             </View>
 
             <TouchableOpacity style={styles.mapBtn} activeOpacity={0.85} onPress={() => activeTrip && navigation.navigate('ActiveTrip', { tripId: activeTrip.id })}>
-              <Text style={styles.mapBtnText}>Ver rota no mapa</Text>
+              <Text style={styles.mapBtnText}>Continuar Viagem</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -612,6 +691,44 @@ export function HomeScreen({ navigation }: Props) {
             thumbColor="#FFFFFF"
           />
         </View>
+
+        {/* Sem viagem: próxima ação — rotas (sem slot agendado) ou Atividades (já há viagem com rota + horário) */}
+        {!activeTrip && (
+          <TouchableOpacity
+            style={styles.nextActionCard}
+            onPress={hasScheduledRouteWithTime ? goActivities : goRoutes}
+            activeOpacity={0.88}
+            accessibilityRole="button"
+            accessibilityLabel={
+              hasScheduledRouteWithTime
+                ? 'Próximo passo: abrir atividades para iniciar a viagem'
+                : 'Próximo passo: abrir rotas e valores'
+            }
+          >
+            <View style={styles.nextActionLeft}>
+              <View style={styles.nextActionIconWrap}>
+                <MaterialIcons
+                  name={hasScheduledRouteWithTime ? 'directions-car' : 'route'}
+                  size={26}
+                  color="#111827"
+                />
+              </View>
+              <View style={styles.nextActionTextCol}>
+                <Text style={styles.nextActionKicker}>Próximo passo</Text>
+                <Text style={styles.nextActionTitle}>
+                  {hasScheduledRouteWithTime ? 'Iniciar a viagem' : 'Rotas e valores'}
+                </Text>
+                <Text style={styles.nextActionSub}>
+                  {hasScheduledRouteWithTime
+                    ? 'Toque para abrir Atividades: veja o cronograma e inicie a viagem quando for a hora.'
+                    : 'Toque para cadastrar trechos, horários e preços — necessário para aparecer nas buscas.'}
+                </Text>
+              </View>
+            </View>
+            <MaterialIcons name="arrow-forward" size={22} color="#C9A227" />
+          </TouchableOpacity>
+        )}
+
         <View style={styles.divider} />
       </ScrollView>
 
@@ -649,11 +766,190 @@ export function HomeScreen({ navigation }: Props) {
           </View>
         </View>
       </Modal>
+
+      {/* Guia: sem corrida ativa — rotas, cronograma, disponibilidade */}
+      <Modal
+        visible={showNoTripGuideModal}
+        transparent
+        animationType="fade"
+        onRequestClose={dismissNoTripGuide}
+      >
+        <View style={styles.guideOverlay}>
+          <View style={styles.guideCard}>
+            <Text style={styles.guideTitle}>Como receber corridas</Text>
+            <Text style={styles.guideIntro}>
+              {hasScheduledRouteWithTime
+                ? 'Você já tem viagem com rota e horário. Abra Atividades para seguir o cronograma e iniciar quando for a hora.'
+                : 'Defina suas rotas e valores, acompanhe o cronograma e fique disponível para novas solicitações.'}
+            </Text>
+
+            {hasScheduledRouteWithTime ? (
+              <TouchableOpacity style={styles.guideRow} onPress={goActivitiesFromGuide} activeOpacity={0.75}>
+                <View style={styles.guideRowIcon}>
+                  <MaterialIcons name="directions-car" size={22} color="#111827" />
+                </View>
+                <View style={styles.guideRowText}>
+                  <Text style={styles.guideRowTitle}>Atividades — iniciar viagem</Text>
+                  <Text style={styles.guideRowSub}>Cronograma, detalhes da viagem e botão para iniciar.</Text>
+                </View>
+                <MaterialIcons name="chevron-right" size={22} color="#9CA3AF" />
+              </TouchableOpacity>
+            ) : null}
+
+            <TouchableOpacity style={styles.guideRow} onPress={goRoutesFromGuide} activeOpacity={0.75}>
+              <View style={styles.guideRowIcon}>
+                <MaterialIcons name="alt-route" size={22} color="#111827" />
+              </View>
+              <View style={styles.guideRowText}>
+                <Text style={styles.guideRowTitle}>Rotas e valores</Text>
+                <Text style={styles.guideRowSub}>Cadastre trechos, horários e preços por pessoa.</Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color="#9CA3AF" />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.guideRow} onPress={goScheduleFromGuide} activeOpacity={0.75}>
+              <View style={styles.guideRowIcon}>
+                <MaterialIcons name="calendar-today" size={22} color="#111827" />
+              </View>
+              <View style={styles.guideRowText}>
+                <Text style={styles.guideRowTitle}>Cronograma</Text>
+                <Text style={styles.guideRowSub}>Veja viagens agendadas e inicie quando for a hora.</Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color="#9CA3AF" />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.guideRow} onPress={goPendingFromGuide} activeOpacity={0.75}>
+              <View style={styles.guideRowIcon}>
+                <MaterialIcons name="notifications-active" size={22} color="#111827" />
+              </View>
+              <View style={styles.guideRowText}>
+                <Text style={styles.guideRowTitle}>Solicitações pendentes</Text>
+                <Text style={styles.guideRowSub}>Aceite ou recuse pedidos de passageiros e envios.</Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color="#9CA3AF" />
+            </TouchableOpacity>
+
+            <View style={styles.guideHint}>
+              <MaterialIcons name="toggle-on" size={20} color="#374151" />
+              <Text style={styles.guideHintText}>
+                Nesta tela, ative <Text style={styles.guideHintBold}>Em viagem</Text> para aparecer para novas corridas quando estiver pronto.
+              </Text>
+            </View>
+
+            <TouchableOpacity style={styles.guideBtn} onPress={dismissNoTripGuide} activeOpacity={0.85}>
+              <Text style={styles.guideBtnText}>Entendi</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  nextActionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F9FAFB',
+    borderWidth: 2,
+    borderColor: '#C9A227',
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    marginTop: 14,
+    marginBottom: 4,
+    gap: 12,
+  },
+  nextActionLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 14 },
+  nextActionIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nextActionTextCol: { flex: 1 },
+  nextActionKicker: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#92400E',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  nextActionTitle: { fontSize: 17, fontWeight: '700', color: '#111827', marginBottom: 4 },
+  nextActionSub: { fontSize: 13, color: '#6B7280', lineHeight: 18 },
+  guideOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    padding: 24,
+  },
+  guideCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    width: '100%',
+    maxWidth: 400,
+    gap: 4,
+  },
+  guideTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  guideIntro: {
+    fontSize: 14,
+    color: '#6B7280',
+    lineHeight: 20,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  guideRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F3F4F6',
+  },
+  guideRowIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  guideRowText: { flex: 1 },
+  guideRowTitle: { fontSize: 15, fontWeight: '700', color: '#111827' },
+  guideRowSub: { fontSize: 13, color: '#6B7280', marginTop: 2 },
+  guideHint: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginTop: 12,
+    paddingHorizontal: 4,
+    paddingVertical: 10,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+  },
+  guideHintText: { flex: 1, fontSize: 13, color: '#4B5563', lineHeight: 19 },
+  guideHintBold: { fontWeight: '700', color: '#111827' },
+  guideBtn: {
+    marginTop: 16,
+    backgroundColor: '#111827',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  guideBtnText: { fontSize: 16, fontWeight: '600', color: '#fff' },
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scroll: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 12 + SCREEN_TOP_EXTRA_PADDING },

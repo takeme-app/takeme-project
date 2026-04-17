@@ -15,6 +15,8 @@ import {
   Platform,
   TouchableWithoutFeedback,
   Alert,
+  Clipboard,
+  Share,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -108,7 +110,19 @@ type DetailRow = {
   tip_cents: number | null;
   rating: number | null;
   receiver_name: string | null;
+  pickup_code: string | null;
+  delivery_code: string | null;
 };
+
+/** Um dígito por chip (PIN no BD, em geral 4 dígitos). */
+function pinCharsForDisplay(code: string | null | undefined): string[] {
+  const s = (code ?? '').trim();
+  if (!s) return ['—', '—', '—', '—'];
+  const chars = s.split('');
+  const out: string[] = [];
+  for (let i = 0; i < 4; i += 1) out.push(chars[i] ?? '—');
+  return out;
+}
 
 export function DependentShipmentDetailScreen({ navigation, route }: Props) {
   const dependentShipmentId = route.params?.dependentShipmentId ?? '';
@@ -151,7 +165,9 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
       }
       const { data: row, error } = await supabase
         .from('dependent_shipments')
-        .select('id, user_id, dependent_id, full_name, contact_phone, bags_count, instructions, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, tip_cents, rating, receiver_name')
+        .select(
+          'id, user_id, dependent_id, full_name, contact_phone, bags_count, instructions, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, tip_cents, rating, receiver_name, pickup_code, delivery_code',
+        )
         .eq('id', dependentShipmentId)
         .eq('user_id', user.id)
         .single();
@@ -361,6 +377,31 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
     navigation.navigate('Chat', { contactName: 'Suporte Take Me', supportBackoffice: true });
   };
 
+  const copyPin = (label: string, code: string | null | undefined) => {
+    const t = (code ?? '').trim();
+    if (!t) {
+      Alert.alert(label, 'PIN ainda não disponível.');
+      return;
+    }
+    Clipboard.setString(t);
+    Alert.alert('Copiado', `${label}: ${t}`);
+  };
+
+  const sharePin = async (label: string, code: string | null | undefined) => {
+    const t = (code ?? '').trim();
+    if (!t) {
+      Alert.alert(label, 'PIN ainda não disponível para compartilhar.');
+      return;
+    }
+    try {
+      await Share.share({
+        message: `${label} (Take Me): ${t}`,
+      });
+    } catch {
+      Alert.alert('Compartilhar', 'Não foi possível abrir o compartilhamento.');
+    }
+  };
+
   const renderHeader = () => (
     <View style={styles.header}>
       <TouchableOpacity style={styles.closeButton} onPress={() => navigation.goBack()}>
@@ -435,6 +476,67 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
                 <MapboxMarker id="destination" coordinate={{ latitude: detail.destination_lat!, longitude: detail.destination_lng! }} anchor={{ x: 0.5, y: 0.5 }} icon={require('../../../assets/icons/icon-destino.png')} iconSize={14} />
               </MapboxMap>
             )}
+          </View>
+        </View>
+
+        {/* PINs logo após o mapa — visíveis sem rolar a tela inteira */}
+        <View style={[styles.pinSection, styles.pinSectionAfterMap]}>
+          <Text style={styles.pinLabel}>PIN de embarque do dependente</Text>
+          <Text style={styles.pinHint}>Mostre ou informe este código ao motorista na coleta (embarque).</Text>
+          <View style={styles.pinRow}>
+            <View style={styles.pinChipsWrap}>
+              {pinCharsForDisplay(detail.pickup_code).map((ch, i) => (
+                <View key={`dep-pc-${i}`} style={styles.pinChip}>
+                  <Text style={styles.pinChipText}>{ch}</Text>
+                </View>
+              ))}
+            </View>
+            <View style={styles.pinIconButtons}>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() => copyPin('PIN de embarque', detail.pickup_code)}
+              >
+                <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() => void sharePin('PIN de embarque do dependente', detail.pickup_code)}
+              >
+                <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.pinSection}>
+          <Text style={styles.pinLabel}>PIN de desembarque do dependente</Text>
+          <Text style={styles.pinHint}>Informe ao motorista na entrega (desembarque) no destino.</Text>
+          <View style={styles.pinRow}>
+            <View style={styles.pinChipsWrap}>
+              {pinCharsForDisplay(detail.delivery_code).map((ch, i) => (
+                <View key={`dep-dc-${i}`} style={styles.pinChip}>
+                  <Text style={styles.pinChipText}>{ch}</Text>
+                </View>
+              ))}
+            </View>
+            <View style={styles.pinIconButtons}>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() => copyPin('PIN de desembarque', detail.delivery_code)}
+              >
+                <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() => void sharePin('PIN de desembarque do dependente', detail.delivery_code)}
+              >
+                <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
 
@@ -633,7 +735,7 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
           <Animated.View style={[styles.sheetOverlayBg, { opacity: tipOverlayOpacity }]} pointerEvents="none" />
           <Pressable style={styles.sheetOverlayTouchable} onPress={closeTipSheet} />
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            behavior="padding"
             style={styles.sheetKeyboardAvoid}
             keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
           >
@@ -790,6 +892,31 @@ const styles = StyleSheet.create({
   dateText: { fontSize: 14, color: COLORS.neutral700, paddingHorizontal: 24, marginTop: 8 },
   priceStatus: { fontSize: 14, color: COLORS.neutral700, paddingHorizontal: 24, marginTop: 2 },
   statusGreen: { color: COLORS.green, fontWeight: '600' },
+
+  pinSection: { marginHorizontal: 24, marginTop: 20 },
+  pinSectionAfterMap: { marginTop: 16 },
+  pinLabel: { fontSize: 14, fontWeight: '700', color: COLORS.black, marginBottom: 6 },
+  pinHint: { fontSize: 12, color: COLORS.neutral700, marginBottom: 10, lineHeight: 17 },
+  pinRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  pinChipsWrap: { flexDirection: 'row', gap: 10, flexShrink: 1 },
+  pinChip: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pinChipText: { fontSize: 18, fontWeight: '700', color: COLORS.black },
+  pinIconButtons: { flexDirection: 'row', gap: 12, marginLeft: 8 },
+  pinIconBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: COLORS.neutral300,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   reciboChip: {
     flexDirection: 'row',

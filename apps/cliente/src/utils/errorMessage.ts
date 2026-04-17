@@ -22,7 +22,7 @@ const ERROR_PT: Array<[RegExp, string]> = [
   [/edge function|non-2xx/i, 'Serviço temporariamente indisponível. Tente novamente.'],
   [
     /\[NOT_FOUND\]|requested function was not found|function was not found/i,
-    'Cobrança de envio indisponível: a edge function chamada pelo app não existe neste projeto (nome/slug diferente do deploy). Use PIX ou peça ao suporte para alinhar o slug (ex.: charge-shipment vs charge-shipments).',
+    'A função no servidor não foi encontrada neste projeto Supabase (edge function sem deploy ou slug diferente). Publique a função no painel Edge Functions ou ajuste o nome no app.',
   ],
 
   // ── Stripe ──

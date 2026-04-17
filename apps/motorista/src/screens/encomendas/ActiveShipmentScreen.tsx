@@ -41,7 +41,13 @@ import {
 import { snapToRoutePolyline, trimPolylineFromSnap } from '../../lib/routeSnap';
 import { getRouteWithDuration, formatEta } from '../../lib/route';
 import { useAppAlert } from '../../contexts/AppAlertContext';
-import { coletaLetterFromShipmentId, shipmentCodesMatch } from '../../lib/preparerEncomendasBase';
+import {
+  assertPreparerShipmentsForShipment,
+  coletaLetterFromShipmentId,
+  resolveShipmentBaseIdForPreparerScreen,
+  shipmentCodesMatch,
+} from '../../lib/preparerEncomendasBase';
+import { onlyDigits } from '../../utils/formatCpf';
 import { closeShipmentConversation } from '../../lib/shipmentConversation';
 import { getUserErrorMessage, isShipmentDriverRatingsUnavailableError } from '../../utils/errorMessage';
 
@@ -65,16 +71,16 @@ type Shipment = {
   id: string;
   clientName: string;
   originAddress: string;
-  /** Destino final do cliente (informativo; rota do preparador não vai até aqui). */
+  /** Destino final do pacote (motorista entrega ao destinatário; preparador com base só vê na rota até a base). */
   finalDestinationAddress: string;
   baseAddress: string;
   baseName: string;
   originCoord: Coord;
   baseCoord: Coord;
   destinationCoord: Coord;
-  /** Com base preparadora: coleta na base; sem base: coleta na origem (cliente). */
+  /** 1ª parada: coleta (sempre no endereço de origem / cliente). */
   pickupCoord: Coord;
-  /** Sempre o destino da encomenda (entrega ao cliente). */
+  /** 2ª parada: com base Take Me, depósito na base; sem base, entrega no destino final. */
   deliveryCoord: Coord;
   hasPreparerBase: boolean;
   /** Coleta com coordenadas confiáveis (modal por proximidade na 1ª etapa). */
@@ -290,6 +296,26 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         setLoadError('Encomenda não encontrada.');
         return;
       }
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user?.id) {
+        setLoading(false);
+        setLoadError('Sessão inválida. Faça login novamente.');
+        return;
+      }
+
+      const access = await assertPreparerShipmentsForShipment({
+        userId: user.id,
+        shipmentBaseId: (data as { base_id?: string | null }).base_id ?? null,
+      });
+      if (!access.ok) {
+        setLoading(false);
+        setLoadError(access.message);
+        return;
+      }
+
       const row = data as {
         id: string;
         origin_address: string | null;
@@ -322,7 +348,15 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       const deliveryHasMapCoords = Boolean(
         dLL && isValidGlobeCoordinate(dLL.latitude, dLL.longitude),
       );
-      const hasPreparerBase = Boolean(row.base_id);
+
+      const { resolvedBaseId } = await resolveShipmentBaseIdForPreparerScreen({
+        shipmentBaseId: row.base_id,
+        originLat: oLL?.latitude ?? null,
+        originLng: oLL?.longitude ?? null,
+        workerBaseId: access.workerBaseId,
+      });
+      const effectiveBaseId = resolvedBaseId;
+      const hasPreparerBase = Boolean(effectiveBaseId);
 
       const routeOpts = {
         mapboxToken: getMapboxAccessToken(),
@@ -374,7 +408,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       const { data: baseRow } = await supabase
         .from('bases')
         .select('id, name, address, city, state, lat, lng')
-        .eq('id', row.base_id)
+        .eq('id', effectiveBaseId)
         .eq('is_active', true)
         .maybeSingle();
 
@@ -399,6 +433,9 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       );
       const baseCoord = baseLL ?? originCoord;
 
+      const pickupHasMapCoords = Boolean(
+        oLL && isValidGlobeCoordinate(oLL.latitude, oLL.longitude),
+      );
       const s: Shipment = {
         id: row.id,
         clientName: p?.full_name ?? 'Cliente',
@@ -409,12 +446,13 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         originCoord,
         baseCoord,
         destinationCoord,
-        pickupCoord: baseCoord,
-        deliveryCoord: destinationCoord,
+        pickupCoord: originCoord,
+        deliveryCoord: baseCoord,
         hasPreparerBase: true,
-        pickupHasMapCoords: baseHasMapCoords,
+        pickupHasMapCoords,
         baseHasMapCoords,
-        deliveryHasMapCoords,
+        /** Proximidade da 2ª etapa = depósito na base. */
+        deliveryHasMapCoords: baseHasMapCoords,
         amountCents: row.amount_cents ?? 0,
         confirmedAt: row.created_at,
         pickupCodeExpected: String(row.pickup_code ?? ''),
@@ -650,13 +688,16 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
 
   const confirmPickup = async () => {
     if (!pickupCode.trim() || !shipment) return;
-    const exp = shipment.pickupCodeExpected.trim();
-    if (exp && !shipmentCodesMatch(exp, pickupCode)) {
-      showAlert('Código incorreto', 'Confira o código de confirmação da coleta com o cliente.');
+    const expDigits = onlyDigits(shipment.pickupCodeExpected);
+    if (expDigits.length !== 4) {
+      showAlert(
+        'Código indisponível',
+        'Não foi possível carregar o código desta coleta. Atualize a tela ou entre em contato com o suporte.',
+      );
       return;
     }
-    if (!exp && pickupCode.trim().length < 4) {
-      showAlert('Código inválido', 'Informe ao menos 4 caracteres.');
+    if (!shipmentCodesMatch(shipment.pickupCodeExpected, pickupCode)) {
+      showAlert('Código incorreto', 'Confira o código de confirmação da coleta com o cliente.');
       return;
     }
     setPickupLoading(true);
@@ -689,24 +730,33 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
 
   const confirmDelivery = async () => {
     if (!deliveryCode.trim() || !shipment) return;
-    const exp = shipment.deliveryCodeExpected.trim();
-    if (exp && !shipmentCodesMatch(exp, deliveryCode)) {
-      showAlert('Código incorreto', 'Confira o código de confirmação da entrega.');
+    const expDigits = onlyDigits(shipment.deliveryCodeExpected);
+    if (expDigits.length !== 4) {
+      showAlert(
+        'Código indisponível',
+        'Não foi possível carregar o código desta entrega. Atualize a tela ou entre em contato com o suporte.',
+      );
       return;
     }
-    if (!exp && deliveryCode.trim().length < 4) {
-      showAlert('Código inválido', 'Informe ao menos 4 caracteres.');
+    if (!shipmentCodesMatch(shipment.deliveryCodeExpected, deliveryCode)) {
+      showAlert('Código incorreto', 'Confira o código de confirmação da entrega.');
       return;
     }
     setDeliveryLoading(true);
     try {
       const { error: upErr } = await supabase
         .from('shipments')
-        .update({
-          status: 'delivered',
-          delivery_notes: deliveryObs.trim() || null,
-          delivered_at: new Date().toISOString(),
-        } as never)
+        .update(
+          shipment.hasPreparerBase
+            ? ({
+                delivery_notes: deliveryObs.trim() || null,
+              } as never)
+            : ({
+                status: 'delivered',
+                delivery_notes: deliveryObs.trim() || null,
+                delivered_at: new Date().toISOString(),
+              } as never),
+        )
         .eq('id', shipment.id);
       if (upErr) {
         showAlert('Não foi possível registrar', upErr.message || 'Tente novamente.');
@@ -784,8 +834,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
 
   const currentAddress =
     step === 'to_pickup'
-      ? (shipment.hasPreparerBase ? shipment.baseAddress : shipment.originAddress)
-      : shipment.finalDestinationAddress;
+      ? shipment.originAddress
+      : shipment.hasPreparerBase
+        ? shipment.baseAddress
+        : shipment.finalDestinationAddress;
   const elapsedSec = Math.round((Date.now() - startTimeRef.current) / 1000);
   const totalKm = routeDistanceKm(
     fullRouteCoords.length > 1 ? fullRouteCoords : [shipment.pickupCoord, shipment.deliveryCoord],
@@ -842,7 +894,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         <MapMarker id="stop-pickup" coordinate={shipment.pickupCoord} anchor={{ x: 0.5, y: 0.5 }}>
           <View style={[styles.mapStopMarker, pickupDone ? styles.mapStopMarkerDone : { backgroundColor: GOLD }]}>
             <MaterialIcons
-              name={pickupDone ? 'check' : shipment.hasPreparerBase ? 'store' : 'inventory-2'}
+              name={pickupDone ? 'check' : 'inventory-2'}
               size={18}
               color="#fff"
             />
@@ -855,7 +907,11 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
               pickupDone ? { backgroundColor: GOLD } : styles.mapStopMarkerPending,
             ]}
           >
-            <MaterialIcons name="place" size={18} color={pickupDone ? '#fff' : '#6B7280'} />
+            <MaterialIcons
+              name={pickupDone ? 'place' : shipment.hasPreparerBase ? 'store' : 'place'}
+              size={18}
+              color={pickupDone ? '#fff' : '#6B7280'}
+            />
           </View>
         </MapMarker>
 
@@ -974,8 +1030,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
 
           <Text style={styles.miniSheetName} numberOfLines={1}>
             {step === 'to_pickup'
-              ? (shipment.hasPreparerBase ? `Coleta na base — ${shipment.baseName}` : `Coleta — ${shipment.clientName}`)
-              : 'Entrega ao destino'}
+              ? `Coleta — ${shipment.clientName}`
+              : shipment.hasPreparerBase
+                ? `Depósito na base — ${shipment.baseName}`
+                : 'Entrega ao destino'}
           </Text>
           <View style={styles.miniAddressRow}>
             <MaterialIcons name="location-on" size={14} color="#6B7280" />
@@ -1000,7 +1058,11 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             onPress={() => (step === 'to_pickup' ? setPickupVisible(true) : setDeliveryVisible(true))}
           >
             <Text style={styles.miniConfirmBtnText}>
-              {step === 'to_pickup' ? 'Confirmar coleta' : 'Confirmar entrega'}
+              {step === 'to_pickup'
+                ? 'Confirmar coleta'
+                : shipment.hasPreparerBase
+                  ? 'Confirmar na base'
+                  : 'Confirmar entrega'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -1013,7 +1075,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         animationType="slide"
         onRequestClose={() => !pickupLoading && setPickupVisible(false)}
       >
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kbav}>
+        <KeyboardAvoidingView behavior="padding" style={styles.kbav}>
           <View style={styles.modalOverlay}>
             <View style={styles.sheet}>
               <View style={styles.handle} />
@@ -1075,15 +1137,19 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         animationType="slide"
         onRequestClose={() => !deliveryLoading && setDeliveryVisible(false)}
       >
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kbav}>
+        <KeyboardAvoidingView behavior="padding" style={styles.kbav}>
           <View style={styles.modalOverlay}>
             <View style={styles.sheet}>
               <View style={styles.handle} />
               <View style={styles.sheetHeader}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.sheetTitle}>Confirmar entrega</Text>
+                  <Text style={styles.sheetTitle}>
+                    {shipment.hasPreparerBase ? 'Confirmar depósito na base' : 'Confirmar entrega'}
+                  </Text>
                   <Text style={styles.sheetSub}>
-                    Insira o código de confirmação da entrega{'\n'}para registrar a conclusão.
+                    {shipment.hasPreparerBase
+                      ? 'Confirme o código para registrar o depósito na base Take Me.\nA entrega ao destinatário é feita pelo motorista.'
+                      : `Insira o código de confirmação da entrega\npara registrar a conclusão.`}
                   </Text>
                 </View>
                 <TouchableOpacity style={styles.closeBtn} onPress={() => setDeliveryVisible(false)} activeOpacity={0.7}>
@@ -1123,7 +1189,11 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                 >
                   {deliveryLoading
                     ? <ActivityIndicator size="small" color="#FFF" />
-                    : <Text style={styles.primaryBtnText}>Confirmar entrega</Text>
+                    : (
+                      <Text style={styles.primaryBtnText}>
+                        {shipment.hasPreparerBase ? 'Confirmar depósito' : 'Confirmar entrega'}
+                      </Text>
+                    )
                   }
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.cancelBtn} onPress={() => setDeliveryVisible(false)} activeOpacity={0.7}>
@@ -1142,14 +1212,20 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         animationType="slide"
         onRequestClose={() => !summaryLoading && setSummaryVisible(false)}
       >
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kbav}>
+        <KeyboardAvoidingView behavior="padding" style={styles.kbav}>
           <View style={styles.modalOverlay}>
             <View style={styles.sheet}>
               <View style={styles.handle} />
               <View style={styles.sheetHeader}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.sheetTitle}>Entrega concluída!</Text>
-                  <Text style={styles.sheetSub}>Todas as entregas do dia foram{'\n'}registradas com sucesso.</Text>
+                  <Text style={styles.sheetTitle}>
+                    {shipment.hasPreparerBase ? 'Depósito na base concluído!' : 'Entrega concluída!'}
+                  </Text>
+                  <Text style={styles.sheetSub}>
+                    {shipment.hasPreparerBase
+                      ? 'Sua parte na coleta foi registrada. O motorista segue com a entrega ao destino final.'
+                      : `Todas as entregas do dia foram\nregistradas com sucesso.`}
+                  </Text>
                 </View>
                 <TouchableOpacity
                   style={styles.closeBtn}

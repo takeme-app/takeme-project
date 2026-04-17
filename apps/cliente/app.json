@@ -15,10 +15,12 @@
     "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "com.takeme.cliente",
+      "googleServicesFile": "./GoogleService-Info-cliente.plist",
       "supportsTablet": true
     },
     "android": {
       "package": "com.takeme.cliente",
+      "googleServicesFile": "./google-services-cliente.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/logo.png",
         "backgroundColor": "#000000"
@@ -27,6 +29,7 @@
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.RECORD_AUDIO",
+        "android.permission.POST_NOTIFICATIONS",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.RECORD_AUDIO"
@@ -44,6 +47,17 @@
       "autolinkingModuleResolution": true
     },
     "plugins": [
+      [
+        "@react-native-firebase/app",
+        {
+          "android": {
+            "googleServicesFile": "./google-services-cliente.json"
+          },
+          "ios": {
+            "googleServicesFile": "./GoogleService-Info-cliente.plist"
+          }
+        }
+      ],
       [
         "expo-splash-screen",
         {
@@ -78,7 +92,6 @@
           "merchantIdentifier": "merchant.com.takeme.cliente"
         }
       ],
-      "expo-web-browser",
       "@react-native-community/datetimepicker"
     ],
     "runtimeVersion": "1.0.0",

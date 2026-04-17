@@ -9,6 +9,7 @@ import {
   TextInput,
   Platform,
   Linking,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -63,6 +64,10 @@ type TripRow = {
   bagsUsed: number;
   /** Linhas em `shipments` vinculadas à viagem (frete). */
   shipmentCount: number;
+  /** Envios de dependentes na mesma `scheduled_trip` (não cancelados). */
+  dependentCount: number;
+  /** Soma de `bags_count` dos dependentes na viagem. */
+  dependentBagsSum: number;
   trunkPct: number;
   isConfirmed: boolean;
   driverJourneyStartedAt: string | null;
@@ -123,10 +128,13 @@ function buildTripRow(raw: RawTrip): TripRow {
   const confirmedBookings = rows.filter((b) => b.status === 'confirmed');
   const bagsAvailable = raw.bags_available ?? 0;
   const trunkPct = raw.trunk_occupancy_pct ?? 0;
-  // Passageiros e malas só contam após o motorista aceitar (confirmed).
-  // pending/paid ficam só em Solicitações pendentes até lá.
-  const passengerCount = confirmedBookings.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
-  const bagsUsed = confirmedBookings.reduce((s, b) => s + (b.bags_count ?? 0), 0);
+  /** Reservas ativas na viagem (exclui cancelada) — o cartão mostra totais mesmo em «Planejada». */
+  const activeBookings = rows.filter((b) => {
+    const s = String(b.status ?? '').toLowerCase();
+    return s !== 'cancelled';
+  });
+  const passengerCount = activeBookings.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
+  const bagsUsed = activeBookings.reduce((s, b) => s + (b.bags_count ?? 0), 0);
   const isConfirmed = confirmedBookings.length > 0;
 
   return {
@@ -140,6 +148,8 @@ function buildTripRow(raw: RawTrip): TripRow {
     passengerCount,
     bagsUsed,
     shipmentCount: 0,
+    dependentCount: 0,
+    dependentBagsSum: 0,
     trunkPct,
     isConfirmed,
     driverJourneyStartedAt: raw.driver_journey_started_at ?? null,
@@ -169,8 +179,10 @@ function TripCard({
   const isPlannedNoPassengers = !isConfirmed;
   const journeyStarted = Boolean(trip.driverJourneyStartedAt);
   const hasPassengers = trip.passengerCount > 0;
-  const hasLuggage = trip.bagsUsed > 0;
+  const totalMalas = trip.bagsUsed + trip.dependentBagsSum;
+  const hasLuggage = totalMalas > 0;
   const hasShipments = trip.shipmentCount > 0;
+  const hasDependents = trip.dependentCount > 0;
   const anotherTripInProgress =
     ongoingTripId != null && ongoingTripId !== trip.id;
 
@@ -224,7 +236,7 @@ function TripCard({
       ) : null}
 
       {/* Row 4: passageiros + malas na mesma linha; encomendas abaixo (largura total) */}
-      {(hasPassengers || hasLuggage || hasShipments) && (
+      {(hasPassengers || hasLuggage || hasShipments || hasDependents) && (
         <View style={styles.contentBlock}>
           {(hasPassengers || hasLuggage) ? (
             <View style={styles.contentRowTop}>
@@ -241,7 +253,7 @@ function TripCard({
                 <View style={[styles.contentItem, styles.contentItemTop]}>
                   <Text style={styles.contentLabel}>Malas</Text>
                   <Text style={styles.contentValue} numberOfLines={1}>
-                    {trip.bagsUsed === 1 ? '1 mala' : `${trip.bagsUsed} malas`}
+                    {totalMalas === 1 ? '1 mala' : `${totalMalas} malas`}
                   </Text>
                 </View>
               ) : null}
@@ -254,6 +266,16 @@ function TripCard({
                 {trip.shipmentCount === 1
                   ? '1 encomenda'
                   : `${trip.shipmentCount} encomendas`}
+              </Text>
+            </View>
+          ) : null}
+          {hasDependents ? (
+            <View style={styles.contentShipmentRow}>
+              <Text style={styles.contentLabel}>Dependentes</Text>
+              <Text style={styles.contentValueShipment}>
+                {trip.dependentCount === 1
+                  ? '1 envio de dependente'
+                  : `${trip.dependentCount} envios de dependentes`}
               </Text>
             </View>
           ) : null}
@@ -406,17 +428,34 @@ export function ActivitiesScreen({ navigation }: Props) {
         .from('shipments')
         .select('scheduled_trip_id')
         .in('scheduled_trip_id', tripIds)
-        .eq('driver_id', user.id)
-        .in('status', ['confirmed', 'in_progress'] as never);
+        .neq('status', 'cancelled');
       const countByTrip = new Map<string, number>();
       for (const s of shipRows ?? []) {
         const tid = (s as { scheduled_trip_id?: string }).scheduled_trip_id;
         if (!tid) continue;
         countByTrip.set(tid, (countByTrip.get(tid) ?? 0) + 1);
       }
+
+      const { data: depRows } = await supabase
+        .from('dependent_shipments')
+        .select('scheduled_trip_id, bags_count, status')
+        .in('scheduled_trip_id', tripIds)
+        .neq('status', 'cancelled');
+      const depCountByTrip = new Map<string, number>();
+      const depBagsByTrip = new Map<string, number>();
+      for (const d of depRows ?? []) {
+        const tid = (d as { scheduled_trip_id?: string }).scheduled_trip_id;
+        if (!tid) continue;
+        depCountByTrip.set(tid, (depCountByTrip.get(tid) ?? 0) + 1);
+        const bc = Math.max(0, Math.floor(Number((d as { bags_count?: number }).bags_count ?? 0)));
+        depBagsByTrip.set(tid, (depBagsByTrip.get(tid) ?? 0) + bc);
+      }
+
       rows = rows.map((r) => ({
         ...r,
         shipmentCount: countByTrip.get(r.id) ?? 0,
+        dependentCount: depCountByTrip.get(r.id) ?? 0,
+        dependentBagsSum: depBagsByTrip.get(r.id) ?? 0,
       }));
     }
 
@@ -757,6 +796,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         animationType="slide"
         onRequestClose={() => setFilterVisible(false)}
       >
+        <KeyboardAvoidingView style={styles.filterModalRoot} behavior="padding">
         <TouchableOpacity
           style={styles.modalOverlay}
           activeOpacity={1}
@@ -846,6 +886,7 @@ export function ActivitiesScreen({ navigation }: Props) {
             <Text style={styles.applyBtnText}>Aplicar filtro</Text>
           </TouchableOpacity>
         </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );
@@ -1107,6 +1148,7 @@ const styles = StyleSheet.create({
   },
 
   // Modal / bottom sheet
+  filterModalRoot: { flex: 1 },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',

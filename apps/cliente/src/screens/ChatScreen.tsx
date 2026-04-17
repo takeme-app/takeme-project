@@ -519,8 +519,8 @@ export function ChatScreen({ navigation, route }: Props) {
 
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+        behavior="padding"
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : insets.top + 56}
       >
         {resolveError ? (
           <View style={styles.center}>

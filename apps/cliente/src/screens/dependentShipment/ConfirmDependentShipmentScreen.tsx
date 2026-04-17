@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -19,6 +19,8 @@ import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
 import { flatPricingSnapshot } from '../../lib/orderPricingSnapshot';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
+import { fetchResolvedPriceCentsForScheduledTrip } from '../../lib/clientScheduledTrips';
+import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'ConfirmDependentShipment'>;
 
@@ -54,9 +56,31 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     dependentId,
     amountCents,
     photoUri,
+    driver,
+    scheduledTripDepartureAt,
   } = route.params;
+  const scheduledTripId = driver.id;
+  const [resolvedFareCents, setResolvedFareCents] = useState<number | null>(null);
+  const [fareLoading, setFareLoading] = useState(true);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setFareLoading(true);
+    fetchResolvedPriceCentsForScheduledTrip(scheduledTripId).then(({ cents, error }) => {
+      if (cancelled) return;
+      setFareLoading(false);
+      if (error) {
+        setResolvedFareCents(driver.amount_cents ?? null);
+        return;
+      }
+      setResolvedFareCents(cents ?? driver.amount_cents ?? null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [scheduledTripId, driver.amount_cents]);
 
   const uploadPhotoAndGetPath = useCallback(
     async (userId: string, localUri: string): Promise<string | null> => {
@@ -77,8 +101,16 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     [],
   );
 
-  const amountFormatted = `R$ ${(amountCents / 100).toFixed(2).replace('.', ',')}`;
+  const displayAmountCents = resolvedFareCents ?? amountCents;
+  const amountFormatted = fareLoading
+    ? 'Carregando preço…'
+    : `R$ ${(displayAmountCents / 100).toFixed(2).replace('.', ',')}`;
   const contactDisplay = formatPhoneDisplay(contactPhone);
+  const vehicleLabel = formatVehicleDescription(
+    driver.vehicle_model,
+    driver.vehicle_year,
+    driver.vehicle_plate
+  );
 
   const handleConfirmPayment = useCallback(
     async (params: { method: PaymentMethodType; paymentMethodId?: string }) => {
@@ -93,6 +125,21 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           setSubmitting(false);
           return;
         }
+        const { cents: dbCents, error: priceErr } = await fetchResolvedPriceCentsForScheduledTrip(scheduledTripId);
+        if (priceErr) {
+          showAlert('Preço', priceErr);
+          setSubmitting(false);
+          return;
+        }
+        const finalAmountCents = dbCents ?? driver.amount_cents ?? null;
+        if (finalAmountCents == null || finalAmountCents < 0) {
+          showAlert(
+            'Preço',
+            'Não foi possível determinar o valor desta viagem. Volte e escolha outro motorista ou tente mais tarde.',
+          );
+          setSubmitting(false);
+          return;
+        }
         const paymentMethodDb =
           params.method === 'credito'
             ? 'credito'
@@ -102,7 +149,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
                 ? 'pix'
                 : 'dinheiro';
         const status = 'pending_review';
-        const pricing = flatPricingSnapshot(amountCents);
+        const pricing = flatPricingSnapshot(finalAmountCents);
         let photoUrl: string | null = null;
         if (photoUri) {
           photoUrl = await uploadPhotoAndGetPath(user.id, photoUri);
@@ -123,7 +170,8 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
             destination_lat: destination.latitude,
             destination_lng: destination.longitude,
             when_option: whenOption,
-            scheduled_at: whenOption === 'later' ? null : null,
+            scheduled_at: scheduledTripDepartureAt,
+            scheduled_trip_id: scheduledTripId,
             payment_method: paymentMethodDb,
             ...pricing,
             status,
@@ -192,9 +240,13 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
       origin,
       destination,
       whenOption,
-      amountCents,
+      scheduledTripDepartureAt,
+      scheduledTripId,
+      driver.amount_cents,
+      photoUri,
       navigation,
       showAlert,
+      uploadPhotoAndGetPath,
     ]
   );
 
@@ -224,6 +276,14 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           <Text style={styles.summaryMeta}>Para: {destination.address}</Text>
           <Text style={styles.summaryMeta}>Quando: {whenOption === 'later' && whenLabel ? whenLabel : 'Agora'}</Text>
           <View style={styles.divider} />
+          <Text style={styles.summaryLabel}>Motorista</Text>
+          <Text style={styles.summaryText}>{driver.name}</Text>
+          <Text style={styles.summaryMeta}>
+            ★ {driver.rating > 0 ? driver.rating.toFixed(1) : '—'} · {driver.badge} · Saída {driver.departure} · Chegada{' '}
+            {driver.arrival}
+          </Text>
+          <Text style={styles.summaryMeta}>{vehicleLabel}</Text>
+          <View style={styles.divider} />
           <View style={styles.totalRow}>
             <Text style={styles.summaryLabel}>Total</Text>
             <Text style={styles.summaryPrice}>{amountFormatted}</Text>
@@ -231,7 +291,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         </View>
 
         <PaymentMethodSection
-          amountCents={amountCents}
+          amountCents={displayAmountCents}
           selectedMethod={selectedPaymentMethod}
           onSelectMethod={setSelectedPaymentMethod}
           onConfirmPayment={handleConfirmPayment}

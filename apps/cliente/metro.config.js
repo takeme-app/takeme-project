@@ -12,6 +12,10 @@ const config = getDefaultConfig(projectRoot);
 
 // Garante que o Metro use a pasta do app como raiz (build local / monorepo)
 config.projectRoot = projectRoot;
+// Mesma raiz HTTP que metro.config.js na raiz do monorepo: evita URL
+// .../apps/cliente/index.ts.bundle em um lugar e .../index.ts.bundle em outro
+// (Expo Dev Client pode cachear o caminho e falhar ao conectar).
+config.server = { ...(config.server ?? {}), unstable_serverRoot: monorepoRoot };
 config.watchFolders = [monorepoRoot];
 config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),

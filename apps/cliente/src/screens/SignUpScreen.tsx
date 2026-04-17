@@ -18,6 +18,7 @@ import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import { parseInvokeData, describeInvokeFailure } from '../utils/edgeFunctionResponse';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SignUp'>;
 
@@ -103,44 +104,22 @@ export function SignUpScreen({ navigation }: Props) {
     try {
       const { data: fnData, error: fnError } = await supabase.functions.invoke(
         'send-email-verification-code',
-        { body: { email: email.trim(), phone: phoneDigits } }
+        { body: { email: email.trim(), phone: phoneDigits, purpose: 'signup' } }
       );
-      const apiErrorMsg =
-        fnData && typeof fnData === 'object' && fnData !== null && 'error' in fnData
-          ? String((fnData as { error: unknown }).error)
-          : null;
-      if (apiErrorMsg) {
+      const payload = parseInvokeData(fnData);
+      if (payload?.error != null) {
+        const apiErrorMsg = String(payload.error);
         setError(apiErrorMsg);
         showAlert('Atenção', apiErrorMsg);
         setLoading(false);
         return;
       }
       if (fnError) {
-        const err = fnError as unknown as {
-          message?: string;
-          context?: { json?: () => Promise<unknown>; body?: unknown };
-        };
-        let bodyError: string | null = null;
-        if (err?.context && typeof (err.context as { json?: () => Promise<unknown> }).json === 'function') {
-          try {
-            const body = await (err.context as { json: () => Promise<Record<string, unknown>> }).json();
-            if (body && typeof body === 'object' && body !== null && 'error' in body) {
-              bodyError = String((body as { error: unknown }).error);
-            }
-          } catch (_) {
-            /* ignorar falha ao parsear */
-          }
-        }
-        if (!bodyError && err?.context?.body && typeof err.context.body === 'object' && err.context.body !== null && 'error' in (err.context.body as object)) {
-          bodyError = String((err.context.body as { error: unknown }).error);
-        }
-        if (bodyError) {
-          setError(bodyError);
-          showAlert('Atenção', bodyError);
-          setLoading(false);
-          return;
-        }
-        throw fnError;
+        const message = await describeInvokeFailure(fnData, fnError);
+        setError(message);
+        showAlert('Atenção', message);
+        setLoading(false);
+        return;
       }
 
       navigation.navigate('VerifyEmail', {
@@ -164,7 +143,7 @@ export function SignUpScreen({ navigation }: Props) {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior="padding"
     >
       <StatusBar style="dark" />
       <View style={[styles.header, { paddingTop: Math.max(12, insets.top) }]}>

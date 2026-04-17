@@ -19,6 +19,7 @@ import { createOrGetBookingConversation } from '../lib/bookingConversation';
 import { createOrGetShipmentConversation } from '../lib/shipmentConversation';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { storageUrl } from '../utils/storageUrl';
+import { getUserErrorMessage } from '../utils/errorMessage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PendingRequests'>;
 
@@ -26,7 +27,9 @@ const GOLD = '#C9A227';
 
 type RequestItem = {
   id: string;
-  kind: 'booking' | 'shipment' | 'shipment_offer';
+  kind: 'booking' | 'shipment' | 'shipment_offer' | 'dependent_shipment';
+  /** Oferta ainda não liberada no banco (`current_offer_driver_id` nulo); só atualizar / aguardar. */
+  shipmentOfferPendingSystem?: boolean;
   /** scheduledTripId — para navegar para TripDetail após aceitar */
   scheduledTripId: string;
   origin: string;
@@ -43,6 +46,8 @@ type RequestItem = {
   passengerCount: number;
   /** tamanho do pacote (apenas kind shipment) */
   packageSizeLabel: string;
+  /** malas declaradas no envio de dependente */
+  dependentBagsCount: number;
   /** 30min antes da partida */
   expiresAt: Date;
   rawId: string;
@@ -78,6 +83,15 @@ function packageSizeLabelDb(size: string | null | undefined): string {
   }
 }
 
+/** Prazo do assignment no banco; se ausente/inválido, usa o fallback (ex.: partida − 30 min). */
+function expiresAtFromAssignment(iso: string | null | undefined, fallback: Date): Date {
+  if (iso) {
+    const d = new Date(iso);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return fallback;
+}
+
 /** Countdown até o limite (ex.: 30 min antes da partida). HH:mm:ss; urgente nos últimos 5 min. */
 function formatCountdown(expiresAt: Date): { label: string; urgent: boolean } | null {
   const ms = expiresAt.getTime() - Date.now();
@@ -105,11 +119,31 @@ export function PendingRequestsScreen({ navigation }: Props) {
     return () => { if (tickRef.current) clearInterval(tickRef.current); };
   }, []);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
+    if (!silent) setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user?.id) { setItems([]); setLoading(false); return; }
+    if (!user?.id) {
+      setItems([]);
+      if (!silent) setLoading(false);
+      return;
+    }
     setUserId(user.id);
+
+    const { data: assignmentRows } = await supabase
+      .from('worker_assignments')
+      .select('entity_type, entity_id, expires_at')
+      .eq('worker_id', user.id)
+      .eq('status', 'assigned');
+
+    const assignmentExpiresAt = new Map<string, string | null>();
+    for (const row of (assignmentRows ?? []) as {
+      entity_type: string;
+      entity_id: string;
+      expires_at: string | null;
+    }[]) {
+      assignmentExpiresAt.set(`${row.entity_type}:${row.entity_id}`, row.expires_at);
+    }
 
     // Bookings pendentes nas viagens deste motorista
     const { data: bookings } = await supabase
@@ -137,8 +171,21 @@ export function PendingRequestsScreen({ navigation }: Props) {
         'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, current_offer_expires_at, scheduled_trip_id',
       )
       .eq('current_offer_driver_id', user.id)
-      .eq('status', 'confirmed')
+      .in('status', ['pending_review', 'confirmed'])
       .is('driver_id', null)
+      .limit(20);
+
+    const offerSeen = new Set((offerRows ?? []).map((r: { id: string }) => r.id));
+
+    const { data: preferredWaitRows } = await supabase
+      .from('shipments')
+      .select(
+        'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, current_offer_expires_at, scheduled_trip_id',
+      )
+      .eq('client_preferred_driver_id', user.id)
+      .is('current_offer_driver_id', null)
+      .is('driver_id', null)
+      .in('status', ['pending_review', 'confirmed'])
       .limit(20);
 
     for (const s of (offerRows ?? []) as {
@@ -153,8 +200,10 @@ export function PendingRequestsScreen({ navigation }: Props) {
       scheduled_trip_id: string | null;
     }[]) {
       const expIso = s.current_offer_expires_at;
-      if (!expIso) continue;
-      const expiresAt = new Date(expIso);
+      const expiresAt = expIso
+        ? new Date(expIso)
+        : new Date(new Date(s.created_at).getTime() + 30 * 60 * 1000);
+      const offerDeadlineIso = expIso ?? expiresAt.toISOString();
       const { data: prof } = await supabase
         .from('profiles')
         .select('full_name, avatar_url, rating')
@@ -168,8 +217,8 @@ export function PendingRequestsScreen({ navigation }: Props) {
         scheduledTripId: s.scheduled_trip_id ?? '',
         origin: s.origin_address,
         destination: s.destination_address,
-        departureAt: expIso,
-        timeLabel: formatTime(expIso),
+        departureAt: offerDeadlineIso,
+        timeLabel: formatTime(offerDeadlineIso),
         priceCents: s.amount_cents,
         userName: p?.full_name ?? 'Cliente',
         userAvatar: p?.avatar_url ?? null,
@@ -177,7 +226,55 @@ export function PendingRequestsScreen({ navigation }: Props) {
         minutesAgo: minutesAgoFn(s.created_at),
         passengerCount: 0,
         packageSizeLabel: packageSizeLabelDb(s.package_size),
+        dependentBagsCount: 0,
         expiresAt,
+        shipmentOfferPendingSystem: false,
+      });
+    }
+
+    for (const s of (preferredWaitRows ?? []) as {
+      id: string;
+      origin_address: string;
+      destination_address: string;
+      amount_cents: number;
+      created_at: string;
+      user_id: string;
+      package_size: string;
+      current_offer_expires_at: string | null;
+      scheduled_trip_id: string | null;
+    }[]) {
+      if (offerSeen.has(s.id)) continue;
+      offerSeen.add(s.id);
+      const expIso = s.current_offer_expires_at;
+      const expiresAt = expIso
+        ? new Date(expIso)
+        : new Date(new Date(s.created_at).getTime() + 30 * 60 * 1000);
+      const offerDeadlineIso = expIso ?? expiresAt.toISOString();
+      const { data: prof } = await supabase
+        .from('profiles')
+        .select('full_name, avatar_url, rating')
+        .eq('id', s.user_id)
+        .maybeSingle();
+      const p = prof as { full_name?: string; avatar_url?: string; rating?: number } | null;
+      all.push({
+        id: `shipment_offer_${s.id}`,
+        kind: 'shipment_offer',
+        rawId: s.id,
+        scheduledTripId: s.scheduled_trip_id ?? '',
+        origin: s.origin_address,
+        destination: s.destination_address,
+        departureAt: offerDeadlineIso,
+        timeLabel: formatTime(offerDeadlineIso),
+        priceCents: s.amount_cents,
+        userName: p?.full_name ?? 'Cliente',
+        userAvatar: p?.avatar_url ?? null,
+        userRating: p?.rating != null ? Number(p.rating) : null,
+        minutesAgo: minutesAgoFn(s.created_at),
+        passengerCount: 0,
+        packageSizeLabel: packageSizeLabelDb(s.package_size),
+        dependentBagsCount: 0,
+        expiresAt,
+        shipmentOfferPendingSystem: true,
       });
     }
 
@@ -192,7 +289,11 @@ export function PendingRequestsScreen({ navigation }: Props) {
         .from('profiles').select('full_name, avatar_url, rating').eq('id', row.user_id).maybeSingle();
       const p = prof as { full_name?: string; avatar_url?: string; rating?: number } | null;
       const depAt = row.scheduled_trips?.departure_at;
-      const expiresAt = new Date(new Date(depAt).getTime() - 30 * 60 * 1000);
+      const fallbackExp = new Date(new Date(depAt).getTime() - 30 * 60 * 1000);
+      const expiresAt = expiresAtFromAssignment(
+        assignmentExpiresAt.get(`booking:${row.id}`),
+        fallbackExp,
+      );
 
       all.push({
         id: `booking_${row.id}`,
@@ -210,6 +311,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
         minutesAgo: minutesAgoFn(row.created_at),
         passengerCount: row.passenger_count,
         packageSizeLabel: '',
+        dependentBagsCount: 0,
         expiresAt,
       });
     }
@@ -218,7 +320,8 @@ export function PendingRequestsScreen({ navigation }: Props) {
     const { data: myTrips } = await supabase
       .from('scheduled_trips')
       .select('id, departure_at')
-      .eq('driver_id', user.id);
+      .eq('driver_id', user.id)
+      .in('status', ['scheduled', 'active']);
     const tripRows = (myTrips ?? []) as { id: string; departure_at: string }[];
     const tripDeparture = new Map(tripRows.map((t) => [t.id, t.departure_at]));
     const tripIds = tripRows.map((t) => t.id);
@@ -230,7 +333,6 @@ export function PendingRequestsScreen({ navigation }: Props) {
           'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, scheduled_trip_id',
         )
         .in('scheduled_trip_id', tripIds)
-        .is('base_id', null)
         .is('driver_id', null)
         .in('status', ['pending_review', 'confirmed'])
         .limit(50);
@@ -253,7 +355,11 @@ export function PendingRequestsScreen({ navigation }: Props) {
           .eq('id', s.user_id)
           .maybeSingle();
         const p = prof as { full_name?: string; avatar_url?: string; rating?: number } | null;
-        const expiresAt = new Date(new Date(depAt).getTime() - 30 * 60 * 1000);
+        const fallbackExp = new Date(new Date(depAt).getTime() - 30 * 60 * 1000);
+        const expiresAt = expiresAtFromAssignment(
+          assignmentExpiresAt.get(`shipment:${s.id}`),
+          fallbackExp,
+        );
         all.push({
           id: `shipment_${s.id}`,
           kind: 'shipment',
@@ -270,6 +376,61 @@ export function PendingRequestsScreen({ navigation }: Props) {
           minutesAgo: minutesAgoFn(s.created_at),
           passengerCount: 0,
           packageSizeLabel: packageSizeLabelDb(s.package_size),
+          dependentBagsCount: 0,
+          expiresAt,
+        });
+      }
+
+      const { data: depRows } = await supabase
+        .from('dependent_shipments')
+        .select(
+          'id, origin_address, destination_address, amount_cents, created_at, user_id, bags_count, full_name, scheduled_trip_id, status',
+        )
+        .in('scheduled_trip_id', tripIds)
+        .eq('status', 'pending_review')
+        .limit(50);
+
+      for (const d of (depRows ?? []) as {
+        id: string;
+        origin_address: string;
+        destination_address: string;
+        amount_cents: number;
+        created_at: string;
+        user_id: string;
+        bags_count: number;
+        full_name: string;
+        scheduled_trip_id: string;
+      }[]) {
+        const depAt = tripDeparture.get(d.scheduled_trip_id);
+        if (!depAt) continue;
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('full_name, avatar_url, rating')
+          .eq('id', d.user_id)
+          .maybeSingle();
+        const p = prof as { full_name?: string; avatar_url?: string; rating?: number } | null;
+        const fallbackExp = new Date(new Date(depAt).getTime() - 30 * 60 * 1000);
+        const expiresAt = expiresAtFromAssignment(
+          assignmentExpiresAt.get(`dependent_shipment:${d.id}`),
+          fallbackExp,
+        );
+        all.push({
+          id: `dependent_${d.id}`,
+          kind: 'dependent_shipment',
+          rawId: d.id,
+          scheduledTripId: d.scheduled_trip_id,
+          origin: d.origin_address,
+          destination: d.destination_address,
+          departureAt: depAt,
+          timeLabel: formatTime(depAt),
+          priceCents: d.amount_cents,
+          userName: p?.full_name ?? 'Cliente',
+          userAvatar: p?.avatar_url ?? null,
+          userRating: p?.rating != null ? Number(p.rating) : null,
+          minutesAgo: minutesAgoFn(d.created_at),
+          passengerCount: 1,
+          packageSizeLabel: '',
+          dependentBagsCount: Math.max(0, Math.floor(Number(d.bags_count ?? 0))),
           expiresAt,
         });
       }
@@ -277,10 +438,109 @@ export function PendingRequestsScreen({ navigation }: Props) {
 
     all.sort((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime());
     setItems(all);
-    setLoading(false);
+    if (!silent) setLoading(false);
   }, []);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(useCallback(() => { void load(); }, [load]));
+
+  useEffect(() => {
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    const teardown = () => {
+      if (channel) {
+        void supabase.removeChannel(channel);
+        channel = null;
+      }
+    };
+
+    const subscribe = async (uid: string) => {
+      teardown();
+      channel = supabase
+        .channel(`pending-requests-${uid}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'worker_assignments',
+            filter: `worker_id=eq.${uid}`,
+          },
+          () => {
+            void load({ silent: true });
+          },
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'scheduled_trips',
+            filter: `driver_id=eq.${uid}`,
+          },
+          () => {
+            void load({ silent: true });
+          },
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'shipments',
+            filter: `current_offer_driver_id=eq.${uid}`,
+          },
+          () => {
+            void load({ silent: true });
+          },
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'shipments',
+            filter: `client_preferred_driver_id=eq.${uid}`,
+          },
+          () => {
+            void load({ silent: true });
+          },
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'dependent_shipments',
+          },
+          () => {
+            void load({ silent: true });
+          },
+        )
+        .subscribe();
+    };
+
+    void (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (cancelled || !user?.id) return;
+      await subscribe(user.id);
+    })();
+
+    const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange((_event, session) => {
+      void (async () => {
+        teardown();
+        if (!session?.user?.id) return;
+        await subscribe(session.user.id);
+        void load({ silent: true });
+      })();
+    });
+
+    return () => {
+      cancelled = true;
+      teardown();
+      authSub.unsubscribe();
+    };
+  }, [load]);
 
   const handleAction = async (item: RequestItem, accept: boolean) => {
     if (!userId) return;
@@ -289,6 +549,57 @@ export function PendingRequestsScreen({ navigation }: Props) {
     try {
       if (item.kind === 'shipment_offer') {
         if (accept) {
+          if (item.shipmentOfferPendingSystem) {
+            const { data: sess } = await supabase.auth.getSession();
+            if (!sess?.session) {
+              showAlert('Encomenda', 'Sessão expirada. Faça login de novo e tente aceitar.');
+              await load();
+              return;
+            }
+            await supabase.auth.refreshSession();
+            const { data: beginData, error: beginErr } = await supabase.rpc('shipment_begin_driver_offering', {
+              p_shipment_id: item.rawId,
+            });
+            const begin = beginData as {
+              ok?: boolean;
+              error?: string;
+              cancelled?: boolean;
+              skipped?: boolean;
+              reason?: string;
+              queue_length?: number;
+            } | null;
+            if (beginErr) {
+              showAlert('Encomenda', getUserErrorMessage(beginErr, 'Não foi possível liberar a solicitação. Tente de novo.'));
+              await load();
+              return;
+            }
+            if (begin && begin.ok === false && begin.error) {
+              showAlert(
+                'Encomenda',
+                begin.error === 'forbidden'
+                  ? 'Sem permissão para liberar este envio. Confirme que você é o motorista escolhido pelo cliente. Se sim, atualize o Supabase com as migrações mais recentes do repositório (função shipment_begin_driver_offering) ou fale com o suporte.'
+                  : `Não foi possível liberar a solicitação (${begin.error}).`,
+              );
+              await load();
+              return;
+            }
+            if (begin?.skipped === true && begin.reason === 'hub_preparer_first') {
+              showAlert(
+                'Encomenda',
+                'Este envio está configurado só para preparador (sem motorista de rota). Contacte o suporte.',
+              );
+              await load();
+              return;
+            }
+            if (begin?.cancelled) {
+              showAlert(
+                'Envio cancelado',
+                'Não há viagem sua nesta rota com vaga para vincular o envio. O pedido foi cancelado.',
+              );
+              await load();
+              return;
+            }
+          }
           const { data: accData, error: accErr } = await supabase.rpc('shipment_driver_accept_offer', {
             p_shipment_id: item.rawId,
           });
@@ -300,7 +611,9 @@ export function PendingRequestsScreen({ navigation }: Props) {
                 ? 'Esta oferta expirou.'
                 : acc?.error === 'no_matching_trip'
                   ? 'Não encontramos uma viagem sua nesta rota para vincular o envio.'
-                  : 'Não foi possível aceitar. Tente novamente.',
+                  : acc?.error === 'not_your_offer'
+                    ? 'Esta oferta ainda não está ativa para você. Atualize a lista em instantes.'
+                    : 'Não foi possível aceitar. Tente novamente.',
             );
             await load();
             return;
@@ -309,15 +622,23 @@ export function PendingRequestsScreen({ navigation }: Props) {
           setItems((prev) => prev.filter((i) => i.id !== item.id));
           const conv = await createOrGetShipmentConversation(item.rawId, userId);
           if (conv.error) showAlert('Chat', conv.error);
-          if (conv.conversationId) {
+          if (tripId) {
+            navigation.navigate('TripDetail', { tripId });
+          } else if (conv.conversationId) {
             navigation.navigate('DriverClientChat', {
               conversationId: conv.conversationId,
               participantName: item.userName,
               participantAvatar: item.userAvatar ?? undefined,
             });
-          } else if (tripId) {
-            navigation.navigate('TripDetail', { tripId });
           }
+          return;
+        }
+        if (item.shipmentOfferPendingSystem) {
+          showAlert(
+            'Encomenda',
+            'Ainda não há oferta ativa para recusar. Quando o sistema liberar, você poderá aceitar ou recusar.',
+          );
+          await load();
           return;
         }
         const { data: passData, error: passErr } = await supabase.rpc('shipment_driver_pass_offer', {
@@ -341,6 +662,32 @@ export function PendingRequestsScreen({ navigation }: Props) {
               : ({ status: 'cancelled' } as never),
           )
           .eq('id', item.rawId);
+      } else if (item.kind === 'dependent_shipment') {
+        await supabase
+          .from('dependent_shipments')
+          .update((accept ? { status: 'confirmed' } : { status: 'cancelled' }) as never)
+          .eq('id', item.rawId);
+        const { data: waDep } = await supabase
+          .from('worker_assignments')
+          .select('id')
+          .eq('worker_id', userId)
+          .eq('entity_type', 'dependent_shipment')
+          .eq('entity_id', item.rawId)
+          .maybeSingle();
+        if (waDep) {
+          await supabase
+            .from('worker_assignments')
+            .update(
+              accept
+                ? ({ status: 'accepted' } as never)
+                : ({
+                    status: 'rejected',
+                    rejected_at: now,
+                    rejection_reason: 'Recusado pelo motorista',
+                  } as never),
+            )
+            .eq('id', (waDep as { id: string }).id);
+        }
       } else {
         if (accept) {
           const { data: cur } = await supabase
@@ -390,18 +737,20 @@ export function PendingRequestsScreen({ navigation }: Props) {
             ? await createOrGetBookingConversation(item.rawId, userId)
             : item.kind === 'shipment'
               ? await createOrGetShipmentConversation(item.rawId, userId)
-              : { conversationId: null as string | null, error: null as string | null };
+              : item.kind === 'dependent_shipment'
+                ? { conversationId: null as string | null, error: null as string | null }
+                : { conversationId: null as string | null, error: null as string | null };
         if (conv.error) {
           showAlert('Chat', conv.error);
         }
-        if (conv.conversationId) {
+        if (item.scheduledTripId) {
+          navigation.navigate('TripDetail', { tripId: item.scheduledTripId });
+        } else if (conv.conversationId) {
           navigation.navigate('DriverClientChat', {
             conversationId: conv.conversationId,
             participantName: item.userName,
             participantAvatar: item.userAvatar ?? undefined,
           });
-        } else {
-          navigation.navigate('TripDetail', { tripId: item.scheduledTripId });
         }
       }
     } finally {
@@ -434,23 +783,50 @@ export function PendingRequestsScreen({ navigation }: Props) {
             const isActioning = actioning === item.id;
             const countdown = formatCountdown(item.expiresAt);
             const isShipmentKind = item.kind === 'shipment' || item.kind === 'shipment_offer';
+            const isDependentKind = item.kind === 'dependent_shipment';
 
             return (
               <View key={item.id} style={styles.card}>
                 {/* Header: badge Viagem + countdown */}
                 <View style={styles.badgeRow}>
-                  <View style={isShipmentKind ? styles.badgeShipment : styles.badge}>
+                  <View
+                    style={
+                      isDependentKind
+                        ? styles.badgeDependent
+                        : isShipmentKind
+                          ? styles.badgeShipment
+                          : styles.badge
+                    }
+                  >
                     <MaterialIcons
-                      name={isShipmentKind ? 'inventory-2' : 'directions-car'}
+                      name={
+                        isDependentKind
+                          ? 'child-care'
+                          : isShipmentKind
+                            ? 'inventory-2'
+                            : 'directions-car'
+                      }
                       size={13}
-                      color={isShipmentKind ? '#B45309' : '#1D4ED8'}
+                      color={isDependentKind ? '#6D28D9' : isShipmentKind ? '#B45309' : '#1D4ED8'}
                     />
-                    <Text style={isShipmentKind ? styles.badgeShipmentText : styles.badgeText}>
-                      {isShipmentKind
-                        ? item.kind === 'shipment_offer'
-                          ? 'Encomenda · convite'
-                          : 'Encomenda'
-                        : 'Viagem'}
+                    <Text
+                      style={
+                        isDependentKind
+                          ? styles.badgeDependentText
+                          : isShipmentKind
+                            ? styles.badgeShipmentText
+                            : styles.badgeText
+                      }
+                    >
+                      {isDependentKind
+                        ? 'Dependente'
+                        : isShipmentKind
+                          ? item.kind === 'shipment_offer'
+                            ? item.shipmentOfferPendingSystem
+                              ? 'Encomenda · aguardando'
+                              : 'Encomenda · convite'
+                            : 'Encomenda'
+                          : 'Viagem'}
                     </Text>
                   </View>
                   {countdown ? (
@@ -462,7 +838,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
                     </View>
                   ) : (
                     <View style={styles.expiredBadge}>
-                      <Text style={styles.expiredText}>Expirado</Text>
+                      <Text style={styles.expiredText}>Solicitação expirada</Text>
                     </View>
                   )}
                 </View>
@@ -488,14 +864,26 @@ export function PendingRequestsScreen({ navigation }: Props) {
                   </View>
                   <View style={styles.metaItem}>
                     <MaterialIcons
-                      name={isShipmentKind ? 'local-shipping' : 'people'}
+                      name={
+                        isDependentKind
+                          ? 'child-care'
+                          : isShipmentKind
+                            ? 'local-shipping'
+                            : 'people'
+                      }
                       size={14}
                       color="#6B7280"
                     />
                     <Text style={styles.metaText}>
-                      {isShipmentKind
-                        ? `Pacote ${item.packageSizeLabel}`
-                        : `${item.passengerCount} ${item.passengerCount === 1 ? 'passageiro' : 'passageiros'}`}
+                      {isDependentKind
+                        ? `1 dependente${
+                            item.dependentBagsCount > 0
+                              ? ` · ${item.dependentBagsCount} ${item.dependentBagsCount === 1 ? 'mala' : 'malas'}`
+                              : ''
+                          }`
+                        : isShipmentKind
+                          ? `Pacote ${item.packageSizeLabel}`
+                          : `${item.passengerCount} ${item.passengerCount === 1 ? 'passageiro' : 'passageiros'}`}
                     </Text>
                   </View>
                   <Text style={styles.price}>{formatCents(item.priceCents)}</Text>
@@ -590,6 +978,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 5,
   },
   badgeShipmentText: { fontSize: 13, fontWeight: '600', color: '#B45309' },
+  badgeDependent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#EDE9FE',
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  badgeDependentText: { fontSize: 13, fontWeight: '600', color: '#6D28D9' },
   countdownBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     backgroundColor: '#FEF3C7', borderRadius: 20,

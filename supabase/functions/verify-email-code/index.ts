@@ -45,6 +45,74 @@ function getDeferredDriverSecret(): string {
   if (c && c.trim().length >= 32) return c.trim().slice(0, 64);
   throw new Error("Defina DRIVER_DEFERRED_SIGNUP_SECRET ou SUPABASE_JWT_SECRET (mín. 16 caracteres)");
 }
+
+function getPasswordResetSecret(): string {
+  const a = Deno.env.get("PASSWORD_RESET_TOKEN_SECRET");
+  if (a && a.trim().length >= 16) return a.trim();
+  return getDeferredDriverSecret();
+}
+
+type AuthUserLike = {
+  id: string;
+  email?: string | null;
+  new_email?: string | null;
+  user_metadata?: Record<string, unknown> | null;
+  app_metadata?: Record<string, unknown> | null;
+  identities?: Array<{ email?: string | null; identity_data?: Record<string, unknown> }>;
+};
+
+function metaEmail(meta: Record<string, unknown> | null | undefined): string | undefined {
+  const e = meta?.email;
+  return typeof e === "string" ? e : undefined;
+}
+
+function authUserMatchesEmailNorm(u: AuthUserLike, emailNorm: string): boolean {
+  const set = new Set<string>();
+  const add = (raw: string | null | undefined) => {
+    const t = (raw ?? "").trim().toLowerCase();
+    if (t) set.add(t);
+  };
+  add(u.email ?? undefined);
+  add(u.new_email ?? undefined);
+  add(metaEmail(u.user_metadata ?? undefined));
+  add(metaEmail(u.app_metadata ?? undefined));
+  for (const id of u.identities ?? []) {
+    if (typeof id.email === "string") add(id.email);
+    const em = id.identity_data?.email;
+    if (typeof em === "string") add(em);
+  }
+  return set.has(emailNorm);
+}
+
+async function findAuthUserIdByEmailNorm(
+  admin: ReturnType<typeof createClient>,
+  emailNorm: string,
+): Promise<string | null> {
+  const { data: rpcId, error: rpcErr } = await admin.rpc("lookup_auth_user_id_by_normalized_email", {
+    p_email: emailNorm,
+  });
+  if (!rpcErr && rpcId != null && String(rpcId).length > 0) {
+    return String(rpcId);
+  }
+  if (rpcErr) {
+    console.warn("[verify-email-code] rpc lookup_auth_user_id_by_normalized_email", rpcErr);
+  }
+
+  const perPage = 1000;
+  const maxPages = 500;
+  for (let page = 1; page <= maxPages; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+    if (error) {
+      console.error("[verify-email-code] listUsers", { page, error });
+      return null;
+    }
+    const users = data?.users ?? [];
+    const hit = users.find((u) => authUserMatchesEmailNorm(u as AuthUserLike, emailNorm));
+    if (hit?.id) return hit.id;
+    if (users.length < perPage) return null;
+  }
+  return null;
+}
 // --- fim token ---
 
 const corsHeaders = {
@@ -102,11 +170,14 @@ Deno.serve(async (req) => {
       fullName?: string;
       phone?: string;
       defer_create?: boolean | string | number;
+      password_reset?: boolean | string | number;
     };
-    const { email, code, password, fullName, phone, defer_create } = body;
+    const { email, code, password, fullName, phone, defer_create, password_reset } = body;
     /** Aceita boolean ou string (alguns clientes serializam diferente). Motorista: só valida e-mail, sem criar auth. */
     const wantsDeferredDriverSignup =
       defer_create === true || defer_create === "true" || defer_create === 1;
+    const wantsPasswordReset =
+      password_reset === true || password_reset === "true" || password_reset === 1;
 
     if (!email || !code || typeof email !== "string" || typeof code !== "string") {
       return new Response(
@@ -114,7 +185,11 @@ Deno.serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-    if (!wantsDeferredDriverSignup && (!password || typeof password !== "string" || password.length < 6)) {
+    if (
+      !wantsDeferredDriverSignup &&
+      !wantsPasswordReset &&
+      (!password || typeof password !== "string" || password.length < 6)
+    ) {
       return new Response(
         JSON.stringify({ error: "Senha é obrigatória (mínimo 6 caracteres)" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -135,16 +210,22 @@ Deno.serve(async (req) => {
 
     const emailNorm = email.trim().toLowerCase();
     const nowIso = new Date().toISOString();
+    const purpose = wantsPasswordReset ? "password_reset" : "signup";
 
-    const { data: row, error: selectError } = await admin
+    /** Sempre comparar só dígitos: evita falha com coluna char/bpchar, padding e reenvios. */
+    const normalizeOtp = (raw: unknown) =>
+      String(raw ?? "")
+        .replace(/\D/g, "")
+        .slice(0, 4);
+
+    const { data: candidates, error: selectError } = await admin
       .from("email_verification_codes")
-      .select("id, code")
+      .select("id, code, user_id")
       .eq("email", emailNorm)
-      .eq("code", codeTrim)
+      .eq("purpose", purpose)
       .gt("expires_at", nowIso)
       .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(20);
 
     if (selectError) {
       console.error("[verify-email-code] select codes", selectError);
@@ -154,41 +235,65 @@ Deno.serve(async (req) => {
       );
     }
 
-    /** Fallback se o banco ainda tiver char(4) com padding (linhas antigas): comparar dígitos. */
-    let rowId = row?.id as string | undefined;
-    if (!rowId) {
-      const { data: candidates, error: listErr } = await admin
-        .from("email_verification_codes")
-        .select("id, code")
-        .eq("email", emailNorm)
-        .gt("expires_at", nowIso)
-        .order("created_at", { ascending: false })
-        .limit(5);
-      if (listErr) {
-        console.error("[verify-email-code] list codes fallback", listErr);
-      } else {
-        const match = (candidates ?? []).find(
-          (c: { id: string; code: string }) =>
-            String(c.code ?? "")
-              .replace(/\D/g, "")
-              .slice(0, 4) === codeTrim
-        );
-        rowId = match?.id;
-      }
-    }
+    const matched =
+      (candidates ?? []).find((c: { id: string; code: string }) => normalizeOtp(c.code) === codeTrim) ??
+      null;
 
-    if (!rowId) {
+    if (!matched?.id) {
       return new Response(
         JSON.stringify({ error: "Código inválido ou expirado" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
+    const rowId = matched.id;
+    const userIdFromCode = matched.user_id ?? undefined;
+
     await admin.from("email_verification_codes").delete().eq("id", rowId);
 
     const phoneDigits = typeof phone === "string" ? phone.replace(/\D/g, "").trim() || null : null;
 
     console.log("[verify-email-code] deferred driver signup:", wantsDeferredDriverSignup);
+    console.log("[verify-email-code] password reset:", wantsPasswordReset);
+
+    if (wantsPasswordReset) {
+      let uid: string | undefined = userIdFromCode ?? undefined;
+      if (!uid) {
+        uid = await findAuthUserIdByEmailNorm(admin, emailNorm) ?? undefined;
+      }
+      if (!uid) {
+        return new Response(JSON.stringify({ error: "Conta não encontrada." }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      try {
+        const secret = getPasswordResetSecret();
+        const exp = Math.floor(Date.now() / 1000) + 15 * 60;
+        const payloadJson = JSON.stringify({
+          sub: uid,
+          email: emailNorm,
+          exp,
+          typ: "pwd_reset",
+        });
+        const payloadB64 = _base64UrlEncode(_encoder.encode(payloadJson));
+        const sig = await _hmacSha256Hex(secret, payloadB64);
+        const token = `${payloadB64}.${sig}`;
+        return new Response(JSON.stringify({ ok: true, password_reset_token: token }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      } catch (e) {
+        console.error("[verify-email-code] password reset token", e);
+        return new Response(
+          JSON.stringify({
+            error:
+              "Configuração do servidor incompleta (token de redefinição). Defina PASSWORD_RESET_TOKEN_SECRET ou SUPABASE_JWT_SECRET.",
+          }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    }
 
     /** Motorista: não cria usuário em Auth aqui — só prova de e-mail (token HMAC para create-motorista-account). */
     if (wantsDeferredDriverSignup) {

@@ -21,8 +21,8 @@ export function PaymentConfirmedScreen({ navigation, route }: Props) {
   const immediateTrip = route.params?.immediateTrip === true;
 
   const destinationLabel = booking?.destination_address ?? 'destino';
-  const tripSummary = booking
-    ? `Saída ${booking.departure} · Chegada ${booking.arrival}. Motorista: ${booking.driver_name}. Valor: R$ ${(booking.amount_cents / 100).toFixed(2)}.`
+  const totalPaidFormatted = booking
+    ? `R$ ${(booking.amount_cents / 100).toFixed(2).replace('.', ',')}`
     : '';
 
   const goToMain = () => {
@@ -69,7 +69,15 @@ export function PaymentConfirmedScreen({ navigation, route }: Props) {
             <Text style={styles.modalText}>
               Sua viagem para {destinationLabel} foi solicitada ao motorista.
             </Text>
-            {tripSummary ? <Text style={styles.modalText}>{tripSummary}</Text> : null}
+            {booking ? (
+              <>
+                <Text style={styles.modalText}>
+                  Saída {booking.departure} · Chegada {booking.arrival}.
+                </Text>
+                <Text style={styles.modalText}>Motorista: {booking.driver_name}.</Text>
+                <Text style={styles.modalTotalPaid}>Valor total pago: {totalPaidFormatted}</Text>
+              </>
+            ) : null}
             <Text style={styles.modalText}>
               Você receberá a confirmação assim que o motorista aceitar a corrida.
             </Text>
@@ -147,6 +155,14 @@ const styles = StyleSheet.create({
   },
   modalTitle: { fontSize: 22, fontWeight: '700', color: '#0d0d0d', marginBottom: 16, textAlign: 'center' },
   modalText: { fontSize: 15, color: '#767676', marginBottom: 8, textAlign: 'center' },
+  modalTotalPaid: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0d0d0d',
+    marginBottom: 8,
+    marginTop: 4,
+    textAlign: 'center',
+  },
   modalButton: {
     backgroundColor: '#0d0d0d',
     paddingVertical: 16,

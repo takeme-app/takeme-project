@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
+  Platform,
 } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import {
@@ -19,9 +20,11 @@ import { StripeProvider } from './src/lib/stripeNativeBridge';
 import Mapbox from '@rnmapbox/maps';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { createSessionFromUrl } from './src/lib/oauth';
+import { assertClientePassengerOnlyAccount } from './src/lib/clientePassengerOnlyGate';
 import { AppAlertProvider } from './src/contexts/AppAlertContext';
 import { CurrentLocationProvider } from './src/contexts/CurrentLocationContext';
 import { supabase } from './src/lib/supabase';
+import { syncClienteProfileFcmToken } from './src/lib/clienteFcm';
 
 const SPLASH_MIN_MS = 500;
 const SPLASH_MAX_MS = 10000; // Se passar disso, esconde a splash de qualquer forma (evita travar no Android)
@@ -37,7 +40,13 @@ function useAuthDeepLink() {
     const handleUrl = async (url: string | null) => {
       if (!url || !url.includes('access_token')) return;
       try {
-        await createSessionFromUrl(url);
+        const session = await createSessionFromUrl(url);
+        if (session?.user) {
+          const gate = await assertClientePassengerOnlyAccount(session.user.id);
+          if (!gate.ok) {
+            await supabase.auth.signOut();
+          }
+        }
       } catch (_) {
         // ignore
       }
@@ -63,9 +72,33 @@ export default function App() {
 
   useAuthDeepLink();
 
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    let unsub: (() => void) | undefined;
+    void (async () => {
+      try {
+        const messaging = (await import('@react-native-firebase/messaging')).default;
+        unsub = messaging().onTokenRefresh(() => {
+          void syncClienteProfileFcmToken();
+        });
+      } catch (_) {
+        /* módulo nativo indisponível (ex.: web) */
+      }
+    })();
+    return () => {
+      unsub?.();
+    };
+  }, []);
+
   const runSessionInit = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession();
-    return session?.user ? 'Main' as const : 'Welcome' as const;
+    if (!session?.user) return 'Welcome' as const;
+    const gate = await assertClientePassengerOnlyAccount(session.user.id);
+    if (!gate.ok) {
+      await supabase.auth.signOut();
+      return 'Welcome' as const;
+    }
+    return 'Main' as const;
   }, []);
 
   // Se as fontes nunca carregarem nem derem erro (bug em alguns Androids), força sair da splash após 12s.

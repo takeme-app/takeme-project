@@ -92,7 +92,7 @@ async function handleRecoveryUrl(
   nav.dispatch(
     CommonActions.reset({
       index: 0,
-      routes: [{ name: 'ResetPassword' }],
+      routes: [{ name: 'ResetPassword', params: {} }],
     })
   );
   return true;

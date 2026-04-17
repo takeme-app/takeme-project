@@ -18,6 +18,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { signInWithOAuthProvider } from '../lib/oauth';
 import { checkMotoristaCanAccessApp, getMotoristaPendingCopy, subtypeToMainRoute } from '../lib/motoristaAccess';
 import { getUserErrorMessage } from '../utils/errorMessage';
 
@@ -29,6 +30,7 @@ export function LoginScreen({ navigation }: Props) {
   const [password, setPassword] = useState('');
   const [hidePassword, setHidePassword] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   /** Sempre volta à entrada (Criar conta / Já tenho conta), não ao histórico anterior do stack. */
   const goBackToWelcome = () => {
@@ -145,10 +147,32 @@ export function LoginScreen({ navigation }: Props) {
     }
   };
 
-  const handleSocialSignIn = () => {
+  const handleGoogleSignIn = async () => {
+    if (!isSupabaseConfigured) {
+      showAlert('Configuração', 'Login não configurado. Verifique as variáveis do Supabase no .env.');
+      return;
+    }
+    setGoogleLoading(true);
+    try {
+      const { success, error } = await signInWithOAuthProvider('google');
+      if (!success) {
+        if (error && error !== 'Login cancelado.') {
+          showAlert('Google', error);
+        }
+        return;
+      }
+      await navigateAccordingToMotoristaStatus();
+    } catch (e) {
+      showAlert('Google', getUserErrorMessage(e, 'Não foi possível entrar com o Google.'));
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  const handleAppleSignIn = () => {
     showAlert(
       'Em desenvolvimento',
-      'Login com Google e Apple em desenvolvimento. Use e-mail ou telefone com senha.'
+      'Login com Apple em desenvolvimento. Use e-mail, telefone com senha ou Google.'
     );
   };
 
@@ -156,7 +180,7 @@ export function LoginScreen({ navigation }: Props) {
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
       >
         <View style={styles.containerInner}>
           <StatusBar style="dark" />
@@ -228,11 +252,22 @@ export function LoginScreen({ navigation }: Props) {
             <View style={styles.dividerLine} />
           </View>
 
-          <TouchableOpacity style={styles.socialButton} activeOpacity={0.8} onPress={handleSocialSignIn}>
-            <GoogleLogo size={22} style={styles.socialIconImage} />
-            <Text style={styles.socialButtonText}>Continuar com Google</Text>
+          <TouchableOpacity
+            style={[styles.socialButton, (loading || googleLoading) && styles.continueButtonDisabled]}
+            activeOpacity={0.8}
+            onPress={handleGoogleSignIn}
+            disabled={loading || googleLoading}
+          >
+            {googleLoading ? (
+              <ActivityIndicator color="#111827" />
+            ) : (
+              <>
+                <GoogleLogo size={22} style={styles.socialIconImage} />
+                <Text style={styles.socialButtonText}>Continuar com Google</Text>
+              </>
+            )}
           </TouchableOpacity>
-          <TouchableOpacity style={styles.socialButton} activeOpacity={0.8} onPress={handleSocialSignIn}>
+          <TouchableOpacity style={styles.socialButton} activeOpacity={0.8} onPress={handleAppleSignIn}>
             <Ionicons name="logo-apple" size={22} color="#000000" style={styles.socialIconImage} />
             <Text style={styles.socialButtonText}>Continuar com Apple</Text>
           </TouchableOpacity>
