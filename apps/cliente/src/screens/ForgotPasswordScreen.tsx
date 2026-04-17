@@ -17,6 +17,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { setLastRecoveryEmail } from '../lib/lastRecoveryEmail';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import { parseInvokeData, parseInvokeError } from '../utils/edgeFunctionResponse';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPassword'>;
 
@@ -40,12 +41,19 @@ export function ForgotPasswordScreen({ navigation }: Props) {
     }
     setLoading(true);
     try {
-      const scheme = process.env.EXPO_PUBLIC_APP_SCHEME ?? 'take-me-cliente';
-      const redirectTo = `${scheme}://reset-password`;
-      const { error } = await supabase.auth.resetPasswordForEmail(trimmed, {
-        redirectTo,
+      const { data: sendData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
+        body: { email: trimmed, purpose: 'password_reset' },
       });
-      if (error) throw error;
+      const payload = parseInvokeData(sendData);
+      if (payload?.error != null) {
+        showAlert('Erro', String(payload.error));
+        return;
+      }
+      if (fnError) {
+        const bodyError = await parseInvokeError(fnError);
+        showAlert('Erro', bodyError ?? getUserErrorMessage(fnError, 'Não foi possível enviar o código.'));
+        return;
+      }
       await supabase.auth.signOut();
       setLastRecoveryEmail(trimmed);
       navigation.dispatch(
@@ -53,7 +61,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
           index: 1,
           routes: [
             { name: 'Welcome' },
-            { name: 'ForgotPasswordEmailSent', params: { email: trimmed } },
+            { name: 'ForgotPasswordVerifyCode', params: { email: trimmed } },
           ],
         })
       );
@@ -68,7 +76,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior="padding"
     >
       <StatusBar style="dark" />
       <TouchableOpacity
@@ -83,7 +91,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
       <View style={styles.content}>
         <Text style={styles.title}>Recuperação de senha</Text>
         <Text style={styles.subtitle}>
-          Digite seu e-mail e enviaremos um link para redefinir sua senha.
+          Digite seu e-mail. Enviaremos um código de 4 dígitos para você redefinir a senha.
         </Text>
 
         <TextInput
@@ -108,7 +116,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
           {loading ? (
             <ActivityIndicator color="#FFFFFF" />
           ) : (
-            <Text style={styles.submitButtonText}>Enviar link de recuperação</Text>
+            <Text style={styles.submitButtonText}>Enviar código</Text>
           )}
         </TouchableOpacity>
       </View>

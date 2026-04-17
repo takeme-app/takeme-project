@@ -348,7 +348,7 @@ Deno.serve(async (req) => {
         piParams.set("metadata[stripe_connect_destination]", connectAccountId);
       }
 
-      let pi: { id?: string; status?: string; last_payment_error?: { message?: string } };
+      let pi: { id?: string; status?: string; amount?: number; last_payment_error?: { message?: string } };
       try {
         pi = await stripeFetch(stripeSecret, "POST", "/payment_intents", piParams) as typeof pi;
       } catch (e) {
@@ -366,6 +366,16 @@ Deno.serve(async (req) => {
         });
       }
 
+      /** Valor efetivamente debitado (fonte de verdade = Stripe, em centavos). */
+      const billedCents =
+        typeof pi.amount === "number" && Number.isFinite(pi.amount) && Math.floor(pi.amount) >= 1
+          ? Math.floor(pi.amount)
+          : chargeAmountCents;
+      /** Integridade: amount_cents = pricing_subtotal_cents + platform_fee_cents (ver migration). */
+      let feeStored = Math.max(0, Math.floor(platformFeeCents));
+      if (feeStored > billedCents) feeStored = 0;
+      const subtotalStored = Math.max(0, billedCents - feeStored);
+
       const passengerDataJson = draft.passenger_data ?? [];
       const insertRow = {
         user_id: userId,
@@ -380,13 +390,13 @@ Deno.serve(async (req) => {
         bags_count: bags,
         passenger_data: passengerDataJson,
         price_route_base_cents: amountCents,
-        pricing_subtotal_cents: Math.max(0, amountCents - promoDiscountCents),
-        platform_fee_cents: platformFeeCents,
+        pricing_subtotal_cents: subtotalStored,
+        platform_fee_cents: feeStored,
         pricing_surcharges_cents: 0,
         promo_discount_cents: promoDiscountCents,
         promotion_id: promoId || null,
         admin_pct_applied: promoAdminPct || null,
-        amount_cents: chargeAmountCents,
+        amount_cents: billedCents,
         status: "paid",
         paid_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -423,7 +433,7 @@ Deno.serve(async (req) => {
       // (fn_create_payouts_on_trip_complete). Não criamos aqui no charge.
 
       return new Response(
-        JSON.stringify({ ok: true, booking_id: newBookingId, amount_cents: amountCents }),
+        JSON.stringify({ ok: true, booking_id: newBookingId, amount_cents: billedCents }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }

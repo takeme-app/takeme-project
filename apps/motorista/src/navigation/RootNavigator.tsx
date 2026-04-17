@@ -18,6 +18,7 @@ import { MotoristaPendingApprovalScreen } from '../screens/MotoristaPendingAppro
 import { StripeConnectSetupScreen } from '../screens/StripeConnectSetupScreen';
 import { ForgotPasswordScreen } from '../screens/ForgotPasswordScreen';
 import { ForgotPasswordEmailSentScreen } from '../screens/ForgotPasswordEmailSentScreen';
+import { ForgotPasswordVerifyCodeScreen } from '../screens/ForgotPasswordVerifyCodeScreen';
 import { ResetPasswordScreen } from '../screens/ResetPasswordScreen';
 import { ResetPasswordSuccessScreen } from '../screens/ResetPasswordSuccessScreen';
 import { TermsOfUseScreen } from '../screens/TermsOfUseScreen';
@@ -81,6 +82,7 @@ export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
           <Stack.Screen name="PaymentHistory" component={PaymentHistoryScreen} options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
           <Stack.Screen name="ForgotPasswordEmailSent" component={ForgotPasswordEmailSentScreen} />
+          <Stack.Screen name="ForgotPasswordVerifyCode" component={ForgotPasswordVerifyCodeScreen} />
           <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />
           <Stack.Screen name="ResetPasswordSuccess" component={ResetPasswordSuccessScreen} />
           <Stack.Screen name="TermsOfUse" component={TermsOfUseScreen} />

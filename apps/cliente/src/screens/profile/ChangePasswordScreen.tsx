@@ -96,7 +96,7 @@ export function ChangePasswordScreen({ navigation }: Props) {
       <StatusBar style="dark" />
       <KeyboardAvoidingView
         style={styles.keyboard}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
         keyboardVerticalOffset={0}
       >
         <ScrollView

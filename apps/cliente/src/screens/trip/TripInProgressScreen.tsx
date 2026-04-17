@@ -12,7 +12,7 @@ import {
   regionFromOriginDestination,
   isValidTripCoordinate,
 } from '../../components/mapbox';
-import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
+import { LiveDriverMapMarker } from '../../components/LiveDriverMapMarker';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripFollowStackParamList, TripLiveDriverDisplay } from '../../navigation/types';
@@ -230,10 +230,10 @@ export function TripInProgressScreen({ navigation, route }: Props) {
           setBagsNote(null);
           return;
         }
-        const { booking, trip } = data;
+        const { booking } = data;
         setSteps(buildStepsFromBooking(booking));
-        setPickupCode(trip?.pickup_code?.trim() || null);
-        setDeliveryCode(trip?.delivery_code?.trim() || null);
+        setPickupCode(booking.pickup_code?.trim() || null);
+        setDeliveryCode(booking.delivery_code?.trim() || null);
         setBagsNote(
           booking.bags_count != null
             ? `${booking.bags_count} ${booking.bags_count === 1 ? 'mala' : 'malas'}`
@@ -400,9 +400,9 @@ export function TripInProgressScreen({ navigation, route }: Props) {
             id="driver-live"
             coordinate={{ latitude: liveDriver.latitude, longitude: liveDriver.longitude }}
             title="Motorista"
-            anchor={{ x: 0.5, y: 1 }}
+            anchor={{ x: 0.5, y: 0.5 }}
           >
-            <DriverEtaMarkerIcon eta={liveDriverEta} />
+            <LiveDriverMapMarker eta={liveDriverEta} />
           </MapboxMarker>
         ) : null}
         {steps.map((step, i) => (
@@ -414,15 +414,32 @@ export function TripInProgressScreen({ navigation, route }: Props) {
             description={step.address}
             anchor={{ x: 0.5, y: 0.5 }}
           >
-            <View style={styles.markerWrap}>
+            <View style={styles.tripStopMarkerWrap}>
               {step.completed ? (
-                <MaterialIcons name="check-circle" size={32} color={COLORS.green} />
+                <View style={[styles.tripStopMarker, styles.tripStopMarkerDone]}>
+                  <MaterialIcons name="check" size={20} color="#fff" />
+                </View>
               ) : i === currentStepIndex ? (
-                <MaterialIcons name="play-circle-filled" size={32} color={COLORS.amber} />
-              ) : step.type === 'coleta' ? (
-                <MaterialIcons name="person" size={28} color={COLORS.black} />
+                <View
+                  style={[
+                    styles.tripStopMarker,
+                    step.type === 'coleta' ? styles.tripStopMarkerPickup : styles.tripStopMarkerDropoff,
+                  ]}
+                >
+                  <MaterialIcons
+                    name={step.type === 'coleta' ? 'person' : 'place'}
+                    size={20}
+                    color="#fff"
+                  />
+                </View>
               ) : (
-                <MaterialIcons name="inventory-2" size={28} color={COLORS.black} />
+                <View style={[styles.tripStopMarker, styles.tripStopMarkerPending]}>
+                  <MaterialIcons
+                    name={step.type === 'coleta' ? 'person' : 'place'}
+                    size={18}
+                    color="#6B7280"
+                  />
+                </View>
               )}
             </View>
           </MapboxMarker>
@@ -624,13 +641,8 @@ export function TripInProgressScreen({ navigation, route }: Props) {
           <MaterialIcons name="check-circle" size={24} color={COLORS.green} />
           <Text style={styles.statusConcluidoText}>Concluído</Text>
         </View>
-        <Text style={styles.detailLabel}>Anexar despesas (opcional)</Text>
-        <TouchableOpacity style={styles.uploadExpenseBox} activeOpacity={0.8}>
-          <MaterialIcons name="cloud-upload" size={32} color={COLORS.neutral700} />
-          <Text style={styles.uploadExpenseText}>Envie o comprovante</Text>
-        </TouchableOpacity>
         <TouchableOpacity style={styles.detailPrimaryButton} onPress={handleFinalizarViagem} activeOpacity={0.8}>
-          <Text style={styles.detailPrimaryButtonText}>Enviar e finalizar viagem</Text>
+          <Text style={styles.detailPrimaryButtonText}>Finalizar viagem</Text>
         </TouchableOpacity>
       </AnimatedBottomSheet>
 
@@ -676,7 +688,25 @@ const styles = StyleSheet.create({
   mapWrap: { height: 280, width: '100%' },
   mapWrapFocused: { flex: 1, minHeight: 0, width: '100%', overflow: 'hidden' },
   map: { width: '100%', height: '100%' },
-  markerWrap: { alignItems: 'center', justifyContent: 'center' },
+  tripStopMarkerWrap: { alignItems: 'center', justifyContent: 'center' },
+  tripStopMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  tripStopMarkerPickup: { backgroundColor: '#10B981' },
+  tripStopMarkerDropoff: { backgroundColor: '#3B82F6' },
+  tripStopMarkerDone: { backgroundColor: '#374151' },
+  tripStopMarkerPending: { backgroundColor: '#E5E7EB', borderColor: '#fff' },
   timeBadge: {
     position: 'absolute',
     backgroundColor: '#2563EB',
@@ -816,14 +846,4 @@ const styles = StyleSheet.create({
   finalizarValue: { fontSize: 14, fontWeight: '600', color: COLORS.black },
   statusConcluidoWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 16 },
   statusConcluidoText: { fontSize: 16, fontWeight: '700', color: COLORS.green },
-  uploadExpenseBox: {
-    borderWidth: 1,
-    borderColor: COLORS.neutral300,
-    borderStyle: 'dashed',
-    borderRadius: 12,
-    padding: 24,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  uploadExpenseText: { fontSize: 14, color: COLORS.neutral700 },
 });

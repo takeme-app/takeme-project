@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+import { assertClientePassengerOnlyAccount } from '../lib/clientePassengerOnlyGate';
 type Props = NativeStackScreenProps<RootStackParamList, 'Splash'>;
 
 const SPLASH_MIN_MS = 500;
@@ -22,7 +23,13 @@ export function SplashScreen({ navigation }: Props) {
 
       if (!mounted) return;
       if (session?.user) {
-        navigation.replace('Main');
+        const gate = await assertClientePassengerOnlyAccount(session.user.id);
+        if (!gate.ok) {
+          await supabase.auth.signOut();
+          navigation.replace('Welcome');
+        } else {
+          navigation.replace('Main');
+        }
       } else {
         navigation.replace('Welcome');
       }

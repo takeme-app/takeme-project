@@ -5,6 +5,7 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useState,
 } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { MapView, Camera, UserLocation } from '@rnmapbox/maps';
@@ -77,6 +78,9 @@ type GoogleMapsMapProps = {
   onMapIdle?: () => void;
   /** Pan/zoom manual no mapa (não inclui `setCamera` programático). Desliga “seguir GPS”, por exemplo. */
   onUserAdjustedMap?: () => void;
+  /** Desligar no preview estático (ex.: Home) reduz trabalho de gesto no GPU. */
+  pitchEnabled?: boolean;
+  rotateEnabled?: boolean;
   logoEnabled?: boolean;
   attributionEnabled?: boolean;
   compassEnabled?: boolean;
@@ -95,6 +99,8 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
     onDidFinishLoadingStyle,
     onMapIdle,
     onUserAdjustedMap,
+    pitchEnabled = true,
+    rotateEnabled = true,
     showsUserLocation = false,
   },
   ref,
@@ -106,6 +112,14 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
   const currentZoom = useRef(10);
   /** Evita recentralizar o mapa sempre que o pai recalcula `initialRegion` (ex.: paradas carregadas na viagem ativa). */
   const didApplyInitialCameraFromProps = useRef(false);
+  /** Rotas/markers só após o estilo carregar — evita `Layer … is not in style` com `streets-v12` etc. */
+  const [styleReady, setStyleReady] = useState(false);
+  const didNotifyParentLoadRef = useRef(false);
+
+  useEffect(() => {
+    setStyleReady(false);
+    didNotifyParentLoadRef.current = false;
+  }, [styleURL]);
 
   const safeRegion = useMemo(
     () => sanitizeMapRegion(initialRegion),
@@ -236,9 +250,13 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
     ],
   );
 
-  const onMapReady = useCallback(() => {
-    onDidFinishLoadingMap?.();
-    onDidFinishLoadingStyle?.();
+  const onMapStyleReady = useCallback(() => {
+    setStyleReady(true);
+    if (!didNotifyParentLoadRef.current) {
+      didNotifyParentLoadRef.current = true;
+      onDidFinishLoadingMap?.();
+      onDidFinishLoadingStyle?.();
+    }
   }, [onDidFinishLoadingMap, onDidFinishLoadingStyle]);
 
   const onRegionDidChange = useCallback(
@@ -265,8 +283,11 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
         style={StyleSheet.absoluteFill}
         styleURL={styleURL}
         scrollEnabled={scrollEnabled}
+        pitchEnabled={pitchEnabled}
+        rotateEnabled={rotateEnabled}
         scaleBarEnabled={false}
-        onDidFinishLoadingMap={onMapReady}
+        onDidFinishLoadingMap={onMapStyleReady}
+        onDidFinishLoadingStyle={onMapStyleReady}
         onMapIdle={onMapIdle}
         onRegionDidChange={onUserAdjustedMap ? onRegionDidChange : undefined}
       >
@@ -280,7 +301,7 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
         {showsUserLocation && UserLocation ? (
           <UserLocation visible androidRenderMode="normal" />
         ) : null}
-        {children}
+        {styleReady ? children : null}
       </MapView>
     </View>
   );

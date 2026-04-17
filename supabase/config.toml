@@ -8,6 +8,9 @@ verify_jwt = false
 [functions.verify-email-code]
 verify_jwt = false
 
+[functions.complete-password-reset]
+verify_jwt = false
+
 [functions.send-welcome-email]
 verify_jwt = false
 
@@ -45,4 +48,8 @@ verify_jwt = false
 
 # Exclusão de conta: cliente envia JWT; a função valida sessão e remove storage + Stripe + auth user.
 [functions.delete-account]
+verify_jwt = false
+
+# Webhook em public.notifications → envia FCM (validar x-webhook-secret se NOTIFICATION_FCM_WEBHOOK_SECRET estiver definido).
+[functions.dispatch-notification-fcm]
 verify_jwt = false

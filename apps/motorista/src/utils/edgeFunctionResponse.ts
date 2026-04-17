@@ -149,3 +149,12 @@ export async function describeInvokeFailure(
     'Confira também deploy, secrets (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) e JWT da função.',
   ].join(' ');
 }
+
+/** Resposta do gateway quando o slug da edge não existe no projeto (sem deploy). */
+export function isSupabaseFunctionNotFoundMessage(s: string | null | undefined): boolean {
+  if (s == null || !String(s).trim()) return false;
+  return /\[?\s*NOT_FOUND\s*\]?|function was not found|requested function was not found/i.test(String(s));
+}
+
+export const MSG_DEPLOY_COMPLETE_PASSWORD_RESET =
+  'A edge function "complete-password-reset" ainda não está publicada neste projeto. No Supabase: Edge Functions → faça deploy (código em supabase/functions/complete-password-reset). No terminal: supabase functions deploy complete-password-reset';

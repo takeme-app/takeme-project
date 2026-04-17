@@ -8,6 +8,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../navigation/ActivitiesStackTypes';
 import { supabase } from '../lib/supabase';
+import { formatActivityTotalPaidLine } from '../lib/tripDriverDisplay';
 import type { ActivitySectionBadge } from '../components/StatusBadge';
 import { SupportSheet } from '../components/SupportSheet';
 
@@ -26,6 +27,8 @@ export type ActivityItem = {
   sectionBadge: ActivitySectionBadge;
   bookingStatus?: string;
   created_at: string;
+  /** Resumo: passageiros, malas, encomendas na viagem, dependentes, tamanho do pacote, etc. */
+  summaryLine?: string;
   /** Label do badge para excursões (Em análise, Agendado, Concluída, etc.) */
   excursionStatusLabel?: string;
 };
@@ -37,6 +40,20 @@ const COLORS = {
   neutral400: '#e2e2e2',
   neutral700: '#767676',
 };
+
+/** Nível do pacote de encomenda (mesma lógica do fluxo de envio: pequeno / médio / grande). */
+function packageSizeSummaryLabel(size: string | null | undefined): string {
+  switch (size) {
+    case 'pequeno':
+      return 'pequena';
+    case 'medio':
+      return 'média';
+    case 'grande':
+      return 'grande';
+    default:
+      return size?.trim() ? size : '—';
+  }
+}
 
 function formatBookingDate(iso: string): string {
   const d = new Date(iso);
@@ -117,46 +134,97 @@ export function ActivitiesScreen({ navigation }: Props) {
     const [bookingsRes, shipmentsRes, dependentShipmentsRes, excursionsRes] = await Promise.all([
       supabase
         .from('bookings')
-        .select('id, origin_address, destination_address, amount_cents, status, created_at')
+        .select(
+          'id, origin_address, destination_address, amount_cents, status, created_at, passenger_count, bags_count, scheduled_trip_id',
+        )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
         .limit(50),
       supabase
         .from('shipments')
-        .select('id, origin_address, destination_address, amount_cents, status, created_at')
+        .select(
+          'id, origin_address, destination_address, amount_cents, status, created_at, package_size, scheduled_trip_id',
+        )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
         .limit(50),
       supabase
         .from('dependent_shipments')
-        .select('id, origin_address, destination_address, full_name, amount_cents, status, created_at')
+        .select(
+          'id, origin_address, destination_address, full_name, amount_cents, status, created_at, bags_count',
+        )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
         .limit(50),
       supabase
         .from('excursion_requests')
-        .select('id, destination, excursion_date, status, total_amount_cents, created_at')
+        .select(
+          'id, destination, excursion_date, status, total_amount_cents, created_at, people_count',
+        )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
         .limit(50),
     ]);
-    const bookingItems: ActivityItem[] = (bookingsRes.data ?? []).map((b) => {
+
+    const bookingRows = (bookingsRes.data ?? []) as {
+      id: string;
+      origin_address?: string;
+      destination_address?: string;
+      amount_cents?: number;
+      status?: string;
+      created_at: string;
+      passenger_count?: number;
+      bags_count?: number;
+      scheduled_trip_id?: string | null;
+    }[];
+
+    const tripIdsForShipments = [
+      ...new Set(bookingRows.map((b) => b.scheduled_trip_id).filter((id): id is string => Boolean(id))),
+    ];
+    const shipmentCountByTripId = new Map<string, number>();
+    if (tripIdsForShipments.length > 0) {
+      const { data: shipTripRows } = await supabase
+        .from('shipments')
+        .select('scheduled_trip_id')
+        .eq('user_id', user.id)
+        .in('scheduled_trip_id', tripIdsForShipments)
+        .neq('status', 'cancelled');
+      for (const row of shipTripRows ?? []) {
+        const tid = (row as { scheduled_trip_id?: string | null }).scheduled_trip_id;
+        if (!tid) continue;
+        shipmentCountByTripId.set(tid, (shipmentCountByTripId.get(tid) ?? 0) + 1);
+      }
+    }
+
+    const bookingItems: ActivityItem[] = bookingRows.map((b) => {
       const s = (b as { status?: string }).status?.toLowerCase() ?? '';
       const sectionBadge: ActivitySectionBadge =
         s === 'paid' || s === 'in_progress' || s === 'confirmed' ? 'confirmada' : 'planejada';
-      const dest = (b as { destination_address?: string }).destination_address ?? 'Viagem';
-      const origin = (b as { origin_address?: string }).origin_address;
+      const dest = b.destination_address ?? 'Viagem';
+      const origin = b.origin_address;
+      const pax = Math.max(1, Math.floor(Number(b.passenger_count ?? 1)));
+      const bags = Math.max(0, Math.floor(Number(b.bags_count ?? 0)));
+      const tripId = b.scheduled_trip_id;
+      const enc = tripId ? shipmentCountByTripId.get(tripId) ?? 0 : 0;
+      const summaryParts = [
+        `${pax} ${pax === 1 ? 'passageiro' : 'passageiros'}`,
+        `${bags} ${bags === 1 ? 'mala' : 'malas'}`,
+      ];
+      if (enc > 0) {
+        summaryParts.push(`${enc} ${enc === 1 ? 'encomenda' : 'encomendas'}`);
+      }
       return {
         id: b.id,
         type: 'viagem',
         title: dest,
         originAddress: origin,
-        dateTime: formatBookingDate((b as { created_at: string }).created_at),
-        priceFormatted: (b as { amount_cents?: number }).amount_cents != null ? `R$ ${((b as { amount_cents: number }).amount_cents / 100).toFixed(2)}` : 'R$ —',
+        dateTime: formatBookingDate(b.created_at),
+        priceFormatted: formatActivityTotalPaidLine(b.amount_cents),
         categoryLabel: 'Viagem',
         sectionBadge,
-        bookingStatus: (b as { status?: string }).status,
-        created_at: (b as { created_at: string }).created_at,
+        bookingStatus: b.status,
+        created_at: b.created_at,
+        summaryLine: summaryParts.join(' · '),
       };
     });
     const shipmentItems: ActivityItem[] = (shipmentsRes.data ?? []).map((s) => {
@@ -165,16 +233,19 @@ export function ActivitiesScreen({ navigation }: Props) {
         status === 'confirmed' || status === 'in_progress' || status === 'delivered' ? 'confirmada' : 'planejada';
       const dest = (s as { destination_address?: string }).destination_address ?? 'Envio';
       const origin = (s as { origin_address?: string }).origin_address;
+      const pkg = (s as { package_size?: string }).package_size;
+      const encLabel = packageSizeSummaryLabel(pkg);
       return {
         id: (s as { id: string }).id,
         type: 'envio',
         title: dest,
         originAddress: origin,
         dateTime: formatBookingDate((s as { created_at: string }).created_at),
-        priceFormatted: (s as { amount_cents?: number }).amount_cents != null ? `R$ ${((s as { amount_cents: number }).amount_cents / 100).toFixed(2)}` : 'R$ —',
+        priceFormatted: formatActivityTotalPaidLine((s as { amount_cents?: number }).amount_cents),
         categoryLabel: 'Envio',
         sectionBadge,
         created_at: (s as { created_at: string }).created_at,
+        summaryLine: `1 encomenda · tamanho ${encLabel}`,
       };
     });
     const dependentItems: ActivityItem[] = (dependentShipmentsRes.data ?? []).map((d) => {
@@ -185,16 +256,18 @@ export function ActivitiesScreen({ navigation }: Props) {
       const fullName = (d as { full_name?: string }).full_name;
       const title = fullName ? `Envio para ${fullName}` : dest;
       const origin = (d as { origin_address?: string }).origin_address;
+      const depBags = Math.max(0, Math.floor(Number((d as { bags_count?: number }).bags_count ?? 0)));
       return {
         id: (d as { id: string }).id,
         type: 'dependente',
         title,
         originAddress: origin,
         dateTime: formatBookingDate((d as { created_at: string }).created_at),
-        priceFormatted: (d as { amount_cents?: number }).amount_cents != null ? `R$ ${((d as { amount_cents: number }).amount_cents / 100).toFixed(2)}` : 'R$ —',
+        priceFormatted: formatActivityTotalPaidLine((d as { amount_cents?: number }).amount_cents),
         categoryLabel: 'Envio dependente',
         sectionBadge,
         created_at: (d as { created_at: string }).created_at,
+        summaryLine: `1 dependente · ${depBags} ${depBags === 1 ? 'mala' : 'malas'}`,
       };
     });
     const excursionItems: ActivityItem[] = (excursionsRes.data ?? []).map((e) => {
@@ -212,6 +285,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       const excursionDate = (e as { excursion_date?: string }).excursion_date;
       const createdAt = (e as { created_at: string }).created_at;
       const totalCents = (e as { total_amount_cents?: number | null }).total_amount_cents;
+      const people = Math.max(1, Math.floor(Number((e as { people_count?: number }).people_count ?? 1)));
       const dateTime = excursionDate
         ? (() => {
             const d = new Date(excursionDate + 'T00:00:00');
@@ -221,9 +295,8 @@ export function ActivitiesScreen({ navigation }: Props) {
             return `${day} ${month}`;
           })()
         : formatBookingDate(createdAt);
-      const priceFormatted = totalCents != null && totalCents > 0
-        ? `R$ ${(totalCents / 100).toFixed(2).replace('.', ',')}`
-        : 'R$ —';
+      const priceFormatted =
+        totalCents != null && totalCents > 0 ? formatActivityTotalPaidLine(totalCents) : '—';
       return {
         id: (e as { id: string }).id,
         type: 'excursao',
@@ -234,6 +307,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         sectionBadge,
         excursionStatusLabel,
         created_at: createdAt,
+        summaryLine: `${people} ${people === 1 ? 'pessoa' : 'pessoas'}`,
       };
     });
     const combined = [...bookingItems, ...shipmentItems, ...dependentItems, ...excursionItems].sort(
@@ -306,6 +380,9 @@ export function ActivitiesScreen({ navigation }: Props) {
             </TouchableOpacity>
           </View>
           <Text style={styles.activityDateTime}>{item.dateTime}</Text>
+          {item.summaryLine ? (
+            <Text style={styles.activitySummary} numberOfLines={2}>{item.summaryLine}</Text>
+          ) : null}
           <Text style={styles.activityPrice}>{item.priceFormatted} • {item.categoryLabel}</Text>
         </View>
       </TouchableOpacity>
@@ -474,6 +551,7 @@ const styles = StyleSheet.create({
   activityCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 },
   activityTitle: { fontSize: 15, fontWeight: '700', color: COLORS.black, flex: 1, marginRight: 8 },
   activityDateTime: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
+  activitySummary: { fontSize: 13, color: COLORS.black, marginTop: 4, lineHeight: 18 },
   activityPrice: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
   activityLink: { fontSize: 13, color: COLORS.black, textDecorationLine: 'underline' },
   activitySupportIcon: { width: 24, height: 24 },

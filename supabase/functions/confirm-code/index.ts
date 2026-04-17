@@ -122,7 +122,7 @@ Deno.serve(async (req) => {
       // Buscar o booking e a scheduled_trip vinculada
       const { data: booking, error: bookingErr } = await admin
         .from("bookings")
-        .select("id, scheduled_trip_id, status")
+        .select("id, scheduled_trip_id, status, pickup_code, delivery_code")
         .eq("id", entity_id)
         .single();
 
@@ -138,7 +138,7 @@ Deno.serve(async (req) => {
 
       const { data: trip, error: tripErr } = await admin
         .from("scheduled_trips")
-        .select("pickup_code, delivery_code, driver_id")
+        .select("driver_id")
         .eq("id", booking.scheduled_trip_id)
         .single();
 
@@ -164,7 +164,7 @@ Deno.serve(async (req) => {
       }
 
       const expectedCode =
-        step === "pickup" ? trip.pickup_code : trip.delivery_code;
+        step === "pickup" ? booking.pickup_code : booking.delivery_code;
       if (!expectedCode || codeTrim !== expectedCode.replace(/\D/g, "")) {
         return new Response(
           JSON.stringify({ error: "Código incorreto" }),

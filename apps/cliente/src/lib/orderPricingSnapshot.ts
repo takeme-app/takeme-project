@@ -70,9 +70,10 @@ export function applyPromotionToSnapshot(
   adjustedAdminPct: number,
 ): OrderPricingSnapshotInsert & { promotion_id?: string; admin_pct_applied?: number } {
   const discount = clampNonNegativeInt(Math.min(promoDiscountCents, snap.amount_cents));
-  const newAmount = Math.max(0, snap.amount_cents - discount);
   const newSubtotal = Math.max(0, snap.pricing_subtotal_cents - discount);
   const newFee = clampNonNegativeInt(Math.round(newSubtotal * adjustedAdminPct / 100));
+  // O Postgres exige amount_cents = pricing_subtotal_cents + platform_fee_cents (constraint em bookings).
+  const newAmount = newSubtotal + newFee;
   return {
     ...snap,
     promo_discount_cents: discount,

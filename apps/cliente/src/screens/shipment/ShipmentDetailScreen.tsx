@@ -758,7 +758,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
           <Animated.View style={[styles.sheetOverlayBg, { opacity: tipOverlayOpacity }]} pointerEvents="none" />
           <Pressable style={styles.sheetOverlayTouchable} onPress={closeTipSheet} />
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            behavior="padding"
             style={styles.sheetKeyboardAvoid}
             keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
           >

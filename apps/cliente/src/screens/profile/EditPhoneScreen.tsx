@@ -95,7 +95,7 @@ export function EditPhoneScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
-      <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.keyboard} behavior="padding">
         <View style={styles.dialog}>
           <View style={styles.headerRow}>
             <View style={styles.headerSpacer} />

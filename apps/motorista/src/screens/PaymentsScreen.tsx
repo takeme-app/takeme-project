@@ -249,7 +249,7 @@ export function PaymentsScreen({ navigation }: Props) {
       <Modal visible={editPixVisible} transparent animationType="slide">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior="padding"
         >
           <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setEditPixVisible(false)} />
           <View style={styles.sheet}>

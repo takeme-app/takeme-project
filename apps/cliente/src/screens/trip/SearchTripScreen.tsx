@@ -24,7 +24,7 @@ import {
   tripFitsPassengersAndBags,
   type ClientScheduledTripItem,
 } from '../../lib/clientScheduledTrips';
-import { formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
+import { formatDriverRatingLabel, formatTripFareBrl } from '../../lib/tripDriverDisplay';
 import { MAPBOX_DESTINATION_MARKER_COLOR, MAPBOX_ORIGIN_MARKER_COLOR } from '@take-me/shared';
 
 type Place = { address: string; latitude: number; longitude: number };
@@ -890,6 +890,10 @@ export function SearchTripScreen({ navigation, route }: Props) {
                       <Text style={styles.tripCardTimeValue}>{trip.arrival}</Text>
                     </View>
                   </View>
+                  <View style={styles.tripCardFareRow}>
+                    <Text style={styles.tripCardFareLabel}>Valor da corrida</Text>
+                    <Text style={styles.tripCardFareValue}>{formatTripFareBrl(trip.amount_cents)}</Text>
+                  </View>
                   <View style={styles.tripCardDivider} />
                   <View style={styles.tripCardCapacity}>
                     <View style={styles.tripCardCapacityItem}>
@@ -960,11 +964,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
 
       {/* Modal: editar ponto de partida e destino — mesma animação do sheet da Home */}
       <Modal visible={editModalVisible} transparent animationType="none" onRequestClose={closeEditModal}>
-        <KeyboardAvoidingView
-          style={styles.editModalOverlayContainer}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
-        >
+        <KeyboardAvoidingView style={styles.editModalOverlayContainer} behavior="padding">
           <Animated.View style={[styles.editModalOverlay, { opacity: editOverlayOpacity }]} />
           <Pressable style={StyleSheet.absoluteFill} onPress={closeEditModal} />
           <Animated.View
@@ -1412,6 +1412,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: COLORS.black,
+  },
+  tripCardFareRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  tripCardFareLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.black,
+  },
+  tripCardFareValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#EA580C',
   },
   tripCardCapacity: {
     flexDirection: 'row',

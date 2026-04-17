@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
-  Platform,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -69,7 +68,7 @@ export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) 
       <StatusBar style="dark" />
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
       >
         <View style={styles.handle} />
         <View style={styles.header}>

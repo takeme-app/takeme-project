@@ -18,7 +18,7 @@ import { loadBookingTripLiveContext, parsePassengerData } from '../../lib/client
 import { onlyDigits } from '../../utils/formatCpf';
 import { useScheduledTripLiveLocation } from '../../lib/useScheduledTripLiveLocation';
 import { getRouteWithDuration, formatDuration } from '../../lib/route';
-import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
+import { LiveDriverMapMarker } from '../../components/LiveDriverMapMarker';
 
 type Props = NativeStackScreenProps<TripFollowStackParamList, 'DriverOnTheWay'>;
 
@@ -133,8 +133,8 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
       setLoading(false);
       return;
     }
-    const { booking, trip } = data;
-    setPickupCode(trip?.pickup_code?.trim() || null);
+    const { booking } = data;
+    setPickupCode(booking.pickup_code?.trim() || null);
     setBagsCount(booking.bags_count);
     const passengers = parsePassengerData(booking.passenger_data);
     const lines =
@@ -173,19 +173,30 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
               id="pickup"
               coordinate={{ latitude: live.origin.latitude, longitude: live.origin.longitude }}
               title="Embarque"
-              anchor={{ x: 0.5, y: 1 }}
-            >
-              <MaterialIcons name="person-pin-circle" size={36} color={COLORS.black} />
-            </MapboxMarker>
+              anchor={{ x: 0.5, y: 0.5 }}
+              icon={require('../../../assets/icons/icon-partida.png')}
+              iconSize={17}
+            />
+          ) : null}
+          {live?.destination &&
+          isValidTripCoordinate(live.destination.latitude, live.destination.longitude) ? (
+            <MapboxMarker
+              id="destination"
+              coordinate={{ latitude: live.destination.latitude, longitude: live.destination.longitude }}
+              title="Destino"
+              anchor={{ x: 0.5, y: 0.5 }}
+              icon={require('../../../assets/icons/icon-destino.png')}
+              iconSize={14}
+            />
           ) : null}
           {liveDriver && isValidTripCoordinate(liveDriver.latitude, liveDriver.longitude) ? (
             <MapboxMarker
               id="driver-live"
               coordinate={{ latitude: liveDriver.latitude, longitude: liveDriver.longitude }}
               title="Motorista"
-              anchor={{ x: 0.5, y: 1 }}
+              anchor={{ x: 0.5, y: 0.5 }}
             >
-              <DriverEtaMarkerIcon eta={driverEtaText} />
+              <LiveDriverMapMarker eta={driverEtaText} />
             </MapboxMarker>
           ) : null}
         </MapboxMap>

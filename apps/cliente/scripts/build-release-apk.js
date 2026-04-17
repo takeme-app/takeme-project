@@ -6,31 +6,21 @@
 const path = require('path');
 const fs = require('fs');
 const { spawnSync } = require('child_process');
+const { trySetJavaHomeFromAndroidStudio, candidateJavaHomes } = require('./resolve-java-home');
 
 const appDir = path.resolve(__dirname, '..');
 const androidDir = path.join(appDir, 'android');
 const gradlew = path.join(androidDir, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
 const packagePath = path.join(appDir, 'package.json');
 
-// JAVA_HOME (mesma lógica do run-android-dev.js)
-if (!process.env.JAVA_HOME) {
-  const candidates = [
-    'C:\\Program Files\\Android\\Android Studio\\jbr',
-    'C:\\Program Files\\Android\\Android Studio\\jre',
-    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Android Studio', 'jbr'),
-  ].filter(Boolean);
-  for (const p of candidates) {
-    try {
-      if (p && fs.existsSync(path.join(p, 'bin', 'java.exe'))) {
-        process.env.JAVA_HOME = p;
-        break;
-      }
-    } catch (_) {}
-  }
-  if (!process.env.JAVA_HOME) {
-    console.error('JAVA_HOME não definido. Defina ou instale o JDK (ex.: Android Studio).');
-    process.exit(1);
-  }
+if (!trySetJavaHomeFromAndroidStudio()) {
+  console.error('JAVA_HOME não definido e nenhum JDK encontrado nos caminhos usuais do Android Studio:');
+  candidateJavaHomes().forEach((c) => console.error('  -', c));
+  console.error('\nDefina JAVA_HOME, por exemplo (macOS + Android Studio na pasta Aplicativos):');
+  console.error(
+    '  export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"'
+  );
+  process.exit(1);
 }
 
 if (!fs.existsSync(gradlew)) {

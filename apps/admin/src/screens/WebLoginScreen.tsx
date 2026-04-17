@@ -44,6 +44,32 @@ export default function WebLoginScreen() {
     }
   };
 
+  const handleGoogleSignIn = async () => {
+    setEmailError('');
+    setPasswordError('');
+    if (typeof window === 'undefined') return;
+    if (!isSupabaseConfigured) {
+      setEmailError('Configure EXPO_PUBLIC_SUPABASE_URL e EXPO_PUBLIC_SUPABASE_ANON_KEY.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/`,
+        },
+      });
+      if (error) {
+        setEmailError(error.message || 'Não foi possível iniciar o login com Google.');
+        setLoading(false);
+      }
+    } catch {
+      setEmailError('Não foi possível iniciar o login com Google.');
+      setLoading(false);
+    }
+  };
+
   // Login — estrutura e estilos do export Figma (autohtml-project)
   const logoSrc = getLogoSrc();
   const logoEl = logoSrc
@@ -97,6 +123,12 @@ export default function WebLoginScreen() {
                   disabled: loading,
                   onClick: handleLogin,
                 }, loading ? 'Entrando...' : 'Continuar'),
+                React.createElement('button', {
+                  type: 'button',
+                  style: { ...webStyles.secondaryBtn, marginTop: 10, background: 'var(--brand-light-neutral-300, #f1f1f1)', border: 'none' },
+                  disabled: loading,
+                  onClick: handleGoogleSignIn,
+                }, 'Continuar com Google'),
                 React.createElement('button', {
                   type: 'button',
                   style: webStyles.secondaryBtn,

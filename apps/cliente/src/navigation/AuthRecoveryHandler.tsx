@@ -4,6 +4,7 @@ import { CommonActions } from '@react-navigation/native';
 import type { NavigationContainerRef } from '@react-navigation/native';
 import type { RootStackParamList } from './types';
 import { supabase } from '../lib/supabase';
+import { assertClientePassengerOnlyAccount } from '../lib/clientePassengerOnlyGate';
 
 function getCurrentUrl(): string | null {
   if (typeof window !== 'undefined' && window.location?.href) {
@@ -72,7 +73,7 @@ async function handleRecoveryUrl(
   const { access_token, refresh_token, type } = parseAuthParamsFromUrl(url);
   const hasTokens = Boolean(access_token);
 
-  if (hasTokens) {
+  if (hasTokens && access_token) {
     try {
       await supabase.auth.setSession({ access_token, refresh_token: refresh_token ?? '' });
       clearAuthParamsFromUrl();
@@ -83,6 +84,15 @@ async function handleRecoveryUrl(
 
   // Só redireciona para troca de senha quando o link for de recovery; confirmação de e-mail só atualiza a sessão
   if (type !== 'recovery') {
+    if (hasTokens) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        const gate = await assertClientePassengerOnlyAccount(session.user.id);
+        if (!gate.ok) {
+          await supabase.auth.signOut();
+        }
+      }
+    }
     return hasTokens;
   }
 
@@ -93,7 +103,7 @@ async function handleRecoveryUrl(
   nav.dispatch(
     CommonActions.reset({
       index: 0,
-      routes: [{ name: 'ResetPassword' }],
+      routes: [{ name: 'ResetPassword', params: {} }],
     })
   );
   return true;

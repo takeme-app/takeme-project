@@ -19,3 +19,18 @@ export function formatDriverRatingLabel(rating: number): string {
   if (rating > 0 && rating <= 5) return rating.toFixed(1);
   return '—';
 }
+
+/** Preço da corrida em centavos → texto pt-BR (lista de viagens / checkout). */
+export function formatTripFareBrl(cents: number | null | undefined): string {
+  if (cents == null || cents < 0) return '—';
+  return `R$ ${(cents / 100).toFixed(2).replace('.', ',')}`;
+}
+
+/**
+ * Lista Atividades / resumos: `bookings.amount_cents` (e equivalentes) é o total pago pelo cliente.
+ * Evita confusão com preço de rota, repasse ao motorista ou subtotais internos.
+ */
+export function formatActivityTotalPaidLine(cents: number | null | undefined): string {
+  if (cents == null || cents < 0) return '—';
+  return `Total pago · ${formatTripFareBrl(cents)}`;
+}

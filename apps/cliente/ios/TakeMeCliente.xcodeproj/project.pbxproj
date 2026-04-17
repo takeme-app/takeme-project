@@ -15,6 +15,7 @@
 		9E5A40758A7A3618726FDB0C /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2AA26667C78B5F63E099024B /* PrivacyInfo.xcprivacy */; };
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
+		E04D441D2B0C4F1A00FCMFIRE /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = E04D441C2B0C4F1A00FCMFIRE /* GoogleService-Info.plist */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -22,6 +23,7 @@
 		13B07F961A680F5B00A75B9A /* TakeMeCliente.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TakeMeCliente.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = TakeMeCliente/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = TakeMeCliente/Info.plist; sourceTree = "<group>"; };
+		E04D441C2B0C4F1A00FCMFIRE /* GoogleService-Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = "GoogleService-Info.plist"; path = "TakeMeCliente/GoogleService-Info.plist"; sourceTree = "<group>"; };
 		1E7393A829B4D624737F400E /* libPods-TakeMeCliente.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-TakeMeCliente.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		2AA26667C78B5F63E099024B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = TakeMeCliente/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		843EA82AB74DE52D16F5F781 /* Pods-TakeMeCliente.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TakeMeCliente.debug.xcconfig"; path = "Target Support Files/Pods-TakeMeCliente/Pods-TakeMeCliente.debug.xcconfig"; sourceTree = "<group>"; };
@@ -54,6 +56,7 @@
 				BB2F792B24A3F905000567C9 /* Supporting */,
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
+				E04D441C2B0C4F1A00FCMFIRE /* GoogleService-Info.plist */,
 				AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */,
 				003A5598F6184B61B3AB0E31 /* noop-file.swift */,
 				2AA26667C78B5F63E099024B /* PrivacyInfo.xcprivacy */,
@@ -200,6 +203,7 @@
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */,
 				9E5A40758A7A3618726FDB0C /* PrivacyInfo.xcprivacy in Resources */,
+				E04D441D2B0C4F1A00FCMFIRE /* GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

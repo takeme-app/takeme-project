@@ -13,6 +13,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { getLastRecoveryEmail, setLastRecoveryEmail, loadLastRecoveryEmail } from '../lib/lastRecoveryEmail';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import { parseInvokeData, parseInvokeError } from '../utils/edgeFunctionResponse';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPasswordEmailSent'>;
 
@@ -60,15 +61,22 @@ export function ForgotPasswordEmailSentScreen({ navigation, route }: Props) {
     }
     setResendLoading(true);
     try {
-      const scheme = process.env.EXPO_PUBLIC_APP_SCHEME ?? 'take-me-cliente';
-      const redirectTo = `${scheme}://reset-password`;
-      const { error } = await supabase.auth.resetPasswordForEmail(emailToUse, {
-        redirectTo,
+      const { data: sendData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
+        body: { email: emailToUse, purpose: 'password_reset' },
       });
-      if (error) throw error;
+      const payload = parseInvokeData(sendData);
+      if (payload?.error != null) {
+        showAlert('Erro', String(payload.error));
+        return;
+      }
+      if (fnError) {
+        const bodyError = await parseInvokeError(fnError);
+        showAlert('Erro', bodyError ?? getUserErrorMessage(fnError, 'Não foi possível reenviar o código.'));
+        return;
+      }
       setLastRecoveryEmail(emailToUse);
       setCountdown(RESEND_COOLDOWN_SEC);
-      showAlert('E-mail reenviado', 'Um novo link de recuperação foi enviado para seu e-mail.');
+      showAlert('Código reenviado', 'Um novo código de 4 dígitos foi enviado para seu e-mail.');
     } catch (e: unknown) {
       const message = getUserErrorMessage(e, 'Não foi possível reenviar o e-mail. Tente novamente.');
       showAlert('Erro', message);

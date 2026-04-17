@@ -9,6 +9,9 @@ import {
   Platform,
   Modal,
   TextInput,
+  Alert,
+  Clipboard,
+  Share,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { AnimatedBottomSheet } from '../../components/AnimatedBottomSheet';
@@ -20,20 +23,21 @@ import {
   MapboxMap,
   MapboxMarker,
   MapboxPolyline,
-  regionFromOriginDestination,
   isValidTripCoordinate,
+  sanitizeMapRegion,
 } from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
 import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib/route';
-import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
+import { LiveDriverMapMarker } from '../../components/LiveDriverMapMarker';
+import { useScheduledTripLiveLocation } from '../../lib/useScheduledTripLiveLocation';
 import { getAvailableTimeSlots, ALL_TIME_SLOTS, toISODate } from '../../lib/dateTimeSlots';
 import { StatusBadge, clientViagemStatusBadge } from '../../components/StatusBadge';
 import type { TripLiveDriverDisplay } from '../../navigation/types';
 import { parsePassengerData } from '../../lib/clientBookingTripLive';
-import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
+import { formatVehicleDescription, formatTripFareBrl } from '../../lib/tripDriverDisplay';
 import { onlyDigits } from '../../utils/formatCpf';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'TripDetail'>;
@@ -44,6 +48,7 @@ const COLORS = {
   neutral300: '#f1f1f1',
   neutral400: '#e2e2e2',
   neutral700: '#767676',
+  accent: '#EAB308',
 };
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
@@ -69,6 +74,16 @@ function formatDetailDate(iso: string): string {
   const hours = d.getHours().toString().padStart(2, '0');
   const minutes = d.getMinutes().toString().padStart(2, '0');
   return `${day} ${month} • ${hours}:${minutes}`;
+}
+
+/** Um dígito por chip (PIN no BD, normalmente 4 dígitos) — mesmo padrão de `ShipmentDetailScreen`. */
+function pinCharsForDisplay(code: string | null | undefined): string[] {
+  const s = (code ?? '').trim();
+  if (!s) return ['—', '—', '—', '—'];
+  const chars = s.split('');
+  const out: string[] = [];
+  for (let i = 0; i < 4; i += 1) out.push(chars[i] ?? '—');
+  return out;
 }
 
 type BookingDetail = {
@@ -97,6 +112,8 @@ type BookingDetail = {
   vehicle_model: string | null;
   vehicle_year: number | null;
   vehicle_plate: string | null;
+  pickup_code: string | null;
+  delivery_code: string | null;
 };
 
 type TripShipmentRow = {
@@ -104,6 +121,14 @@ type TripShipmentRow = {
   package_size: string;
   status: string;
   recipient_name: string;
+};
+
+type TripDependentShipmentRow = {
+  id: string;
+  full_name: string;
+  pickup_code: string | null;
+  delivery_code: string | null;
+  status: string;
 };
 
 type PassengerBookingRating = { rating: number; comment: string | null };
@@ -118,6 +143,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
   const bookingId = route.params?.bookingId ?? '';
   const [detail, setDetail] = useState<BookingDetail | null>(null);
   const [tripShipments, setTripShipments] = useState<TripShipmentRow[]>([]);
+  const [tripDependentShipments, setTripDependentShipments] = useState<TripDependentShipmentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
   const [routeDuration, setRouteDuration] = useState<string | null>(null);
@@ -150,6 +176,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (!bookingId) {
       setTripShipments([]);
+      setTripDependentShipments([]);
       setLoading(false);
       return;
     }
@@ -165,13 +192,14 @@ export function TripDetailScreen({ navigation, route }: Props) {
       const { data: booking, error: bookErr } = await supabase
         .from('bookings')
         .select(
-          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, scheduled_trip_id, passenger_count, bags_count, passenger_data'
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, scheduled_trip_id, passenger_count, bags_count, passenger_data, pickup_code, delivery_code'
         )
         .eq('id', bookingId)
         .eq('user_id', user.id)
         .single();
       if (cancelled || bookErr || !booking) {
         if (!cancelled) setTripShipments([]);
+        if (!cancelled) setTripDependentShipments([]);
         if (!cancelled) setPassengerBookingRating(null);
         setLoading(false);
         return;
@@ -243,6 +271,8 @@ export function TripDetailScreen({ navigation, route }: Props) {
         vehicle_model: vehicleModel,
         vehicle_year: vehicleYear,
         vehicle_plate: vehiclePlate,
+        pickup_code: (booking as { pickup_code?: string | null }).pickup_code ?? null,
+        delivery_code: (booking as { delivery_code?: string | null }).delivery_code ?? null,
       });
       const tripId = b.scheduled_trip_id ?? null;
       if (tripId && !cancelled) {
@@ -254,8 +284,17 @@ export function TripDetailScreen({ navigation, route }: Props) {
         if (!cancelled) {
           setTripShipments((shipRows ?? []) as TripShipmentRow[]);
         }
+        const { data: depRows } = await supabase
+          .from('dependent_shipments')
+          .select('id, full_name, pickup_code, delivery_code, status')
+          .eq('scheduled_trip_id', tripId)
+          .eq('user_id', user.id);
+        if (!cancelled) {
+          setTripDependentShipments((depRows ?? []) as TripDependentShipmentRow[]);
+        }
       } else if (!cancelled) {
         setTripShipments([]);
+        setTripDependentShipments([]);
       }
       if (!cancelled && booking.id) {
         const { data: br } = await supabase
@@ -299,18 +338,6 @@ export function TripDetailScreen({ navigation, route }: Props) {
     };
   }, [detail?.origin_lat, detail?.origin_lng, detail?.destination_lat, detail?.destination_lng]);
 
-  const mapRegion = useMemo(() => {
-    if (!detail) return null;
-    return regionFromOriginDestination(
-      detail.origin_lat,
-      detail.origin_lng,
-      detail.destination_lat,
-      detail.destination_lng,
-    );
-  }, [detail]);
-
-  const hasValidMapCoords = mapRegion != null;
-
   const b = (detail?.status ?? '').toLowerCase();
   const t = (detail?.trip_status ?? '').toLowerCase();
   const isBookingCancelled = b === 'cancelled' || b === 'canceled';
@@ -323,13 +350,82 @@ export function TripDetailScreen({ navigation, route }: Props) {
     ['pending', 'paid', 'confirmed'].includes(b);
   const isInProgress = Boolean(detail && allowsClientTripActions);
   const isCompleted = Boolean(detail && isTripCompleted && !isBookingCancelled);
-  const driverOnWay =
-    Boolean(detail) &&
-    !isBookingCancelled &&
-    !isTripCancelled &&
-    !isTripCompleted &&
-    t === 'active' &&
-    ['confirmed', 'in_progress'].includes(b);
+  const driverOnWay = useMemo(() => {
+    if (!detail) return false;
+    const bs = (detail.status ?? '').toLowerCase();
+    const ts = (detail.trip_status ?? '').toLowerCase();
+    if (bs === 'cancelled' || bs === 'canceled') return false;
+    if (ts === 'cancelled' || ts === 'canceled' || ts === 'completed') return false;
+    return ts === 'active' && ['confirmed', 'in_progress'].includes(bs);
+  }, [detail]);
+
+  const { coords: liveDriver } = useScheduledTripLiveLocation(
+    driverOnWay && detail?.scheduled_trip_id ? detail.scheduled_trip_id : null,
+  );
+
+  const [driverToPickupCoords, setDriverToPickupCoords] = useState<RoutePoint[] | null>(null);
+  const [driverPickupEtaLabel, setDriverPickupEtaLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (
+      !driverOnWay ||
+      !detail ||
+      !liveDriver ||
+      !isValidTripCoordinate(detail.origin_lat, detail.origin_lng) ||
+      !isValidTripCoordinate(liveDriver.latitude, liveDriver.longitude)
+    ) {
+      setDriverToPickupCoords(null);
+      setDriverPickupEtaLabel(null);
+      return;
+    }
+    let cancelled = false;
+    void getRouteWithDuration(
+      { latitude: liveDriver.latitude, longitude: liveDriver.longitude },
+      { latitude: detail.origin_lat, longitude: detail.origin_lng },
+    ).then((rt) => {
+      if (cancelled) return;
+      if (rt?.coordinates?.length) {
+        setDriverToPickupCoords(rt.coordinates);
+        setDriverPickupEtaLabel(rt.durationSeconds > 0 ? formatDuration(rt.durationSeconds) : null);
+      } else {
+        setDriverToPickupCoords(null);
+        setDriverPickupEtaLabel(null);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [driverOnWay, detail, liveDriver?.latitude, liveDriver?.longitude]);
+
+  const mapRegion = useMemo(() => {
+    if (!detail) return null;
+    if (
+      !isValidTripCoordinate(detail.origin_lat, detail.origin_lng) ||
+      !isValidTripCoordinate(detail.destination_lat, detail.destination_lng)
+    ) {
+      return null;
+    }
+    const pts: { latitude: number; longitude: number }[] = [
+      { latitude: detail.origin_lat, longitude: detail.origin_lng },
+      { latitude: detail.destination_lat, longitude: detail.destination_lng },
+    ];
+    if (driverOnWay && liveDriver && isValidTripCoordinate(liveDriver.latitude, liveDriver.longitude)) {
+      pts.push({ latitude: liveDriver.latitude, longitude: liveDriver.longitude });
+    }
+    const latMin = Math.min(...pts.map((p) => p.latitude));
+    const latMax = Math.max(...pts.map((p) => p.latitude));
+    const lngMin = Math.min(...pts.map((p) => p.longitude));
+    const lngMax = Math.max(...pts.map((p) => p.longitude));
+    const pad = 0.012;
+    return sanitizeMapRegion({
+      latitude: (latMin + latMax) / 2,
+      longitude: (lngMin + lngMax) / 2,
+      latitudeDelta: Math.max(0.04, latMax - latMin + pad * 2),
+      longitudeDelta: Math.max(0.04, lngMax - lngMin + pad * 2),
+    });
+  }, [detail, driverOnWay, liveDriver?.latitude, liveDriver?.longitude]);
+
+  const hasValidMapCoords = mapRegion != null;
 
   const tripLiveParams = useMemo((): TripLiveDriverDisplay | null => {
     if (!detail) return null;
@@ -357,6 +453,31 @@ export function TripDetailScreen({ navigation, route }: Props) {
     !isBookingCancelled &&
     !isTripCancelled &&
     !isTripCompleted;
+
+  const copyPin = (label: string, code: string | null | undefined) => {
+    const t = (code ?? '').trim();
+    if (!t) {
+      Alert.alert(label, 'PIN ainda não disponível.');
+      return;
+    }
+    Clipboard.setString(t);
+    Alert.alert('Copiado', `${label}: ${t}`);
+  };
+
+  const sharePin = async (label: string, code: string | null | undefined) => {
+    const t = (code ?? '').trim();
+    if (!t) {
+      Alert.alert(label, 'PIN ainda não disponível para compartilhar.');
+      return;
+    }
+    try {
+      await Share.share({
+        message: `${label} (Take Me): ${t}`,
+      });
+    } catch {
+      Alert.alert('Compartilhar', 'Não foi possível abrir o compartilhamento.');
+    }
+  };
 
   const passengerRows = useMemo(() => {
     if (!detail) return [];
@@ -439,34 +560,45 @@ export function TripDetailScreen({ navigation, route }: Props) {
           ) : (
             <>
               <View style={styles.mapClip}>
-                <MapboxMap style={styles.map} initialRegion={mapRegion!} scrollEnabled={false} showControls={false}>
+                <MapboxMap
+                  style={styles.map}
+                  initialRegion={mapRegion!}
+                  scrollEnabled={false}
+                  showControls
+                  zoomOnly
+                >
                   {routeCoords && routeCoords.length > 0 && (
                     <MapboxPolyline coordinates={routeCoords} strokeWidth={4} />
                   )}
-                  {driverOnWay ? (
-                    <MapboxMarker
-                      id="origin"
-                      coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }}
-                      anchor={{ x: 0.5, y: 0.5 }}
-                    >
-                      <DriverEtaMarkerIcon eta={routeDuration ?? undefined} />
-                    </MapboxMarker>
-                  ) : (
-                    <MapboxMarker
-                      id="origin"
-                      coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }}
-                      anchor={{ x: 0.5, y: 0.5 }}
-                    >
-                      <View style={styles.markerOrigin} />
-                    </MapboxMarker>
-                  )}
+                  {driverOnWay && driverToPickupCoords && driverToPickupCoords.length >= 2 ? (
+                    <MapboxPolyline coordinates={driverToPickupCoords} strokeColor="#C9A227" strokeWidth={4} />
+                  ) : null}
+                  <MapboxMarker
+                    id="origin"
+                    coordinate={{ latitude: detail.origin_lat, longitude: detail.origin_lng }}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                    icon={require('../../../assets/icons/icon-partida.png')}
+                    iconSize={17}
+                  />
                   <MapboxMarker
                     id="destination"
                     coordinate={{ latitude: detail.destination_lat, longitude: detail.destination_lng }}
                     anchor={{ x: 0.5, y: 0.5 }}
-                  >
-                    <View style={styles.markerDest} />
-                  </MapboxMarker>
+                    icon={require('../../../assets/icons/icon-destino.png')}
+                    iconSize={14}
+                  />
+                  {driverOnWay &&
+                  liveDriver &&
+                  isValidTripCoordinate(liveDriver.latitude, liveDriver.longitude) ? (
+                    <MapboxMarker
+                      id="driver-live"
+                      coordinate={{ latitude: liveDriver.latitude, longitude: liveDriver.longitude }}
+                      title="Motorista"
+                      anchor={{ x: 0.5, y: 0.5 }}
+                    >
+                      <LiveDriverMapMarker eta={driverPickupEtaLabel ?? undefined} />
+                    </MapboxMarker>
+                  ) : null}
                 </MapboxMap>
               </View>
               <TouchableOpacity
@@ -517,7 +649,10 @@ export function TripDetailScreen({ navigation, route }: Props) {
             )}
           </View>
           <View style={styles.cardStatusRow}>
-            <Text style={styles.cardPrice}>R$ {(detail.amount_cents / 100).toFixed(2)}</Text>
+            <View>
+              <Text style={styles.cardPriceCaption}>Total pago na reserva</Text>
+              <Text style={styles.cardPrice}>{formatTripFareBrl(detail.amount_cents)}</Text>
+            </View>
           </View>
           <TouchableOpacity style={styles.receiptButton} activeOpacity={0.8}>
             <MaterialIcons name="receipt" size={20} color={COLORS.neutral700} />
@@ -588,6 +723,136 @@ export function TripDetailScreen({ navigation, route }: Props) {
           </View>
         </View>
 
+        <View style={styles.pinSection}>
+          <Text style={styles.pinLabel}>PIN de embarque</Text>
+          <Text style={styles.pinHint}>Informe ao motorista ao entrar no veículo.</Text>
+          <View style={styles.pinRow}>
+            <View style={styles.pinChipsWrap}>
+              {pinCharsForDisplay(detail.pickup_code).map((ch, i) => (
+                <View key={`trip-pc-${i}`} style={styles.pinChip}>
+                  <Text style={styles.pinChipText}>{ch}</Text>
+                </View>
+              ))}
+            </View>
+            <View style={styles.pinIconButtons}>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() => copyPin('PIN de embarque', detail.pickup_code)}
+              >
+                <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() => void sharePin('PIN de embarque', detail.pickup_code)}
+              >
+                <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.pinSection}>
+          <Text style={styles.pinLabel}>PIN de desembarque</Text>
+          <Text style={styles.pinHint}>Informe ao motorista ao chegar ao destino.</Text>
+          <View style={styles.pinRow}>
+            <View style={styles.pinChipsWrap}>
+              {pinCharsForDisplay(detail.delivery_code).map((ch, i) => (
+                <View key={`trip-dc-${i}`} style={styles.pinChip}>
+                  <Text style={styles.pinChipText}>{ch}</Text>
+                </View>
+              ))}
+            </View>
+            <View style={styles.pinIconButtons}>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() => copyPin('PIN de desembarque', detail.delivery_code)}
+              >
+                <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() => void sharePin('PIN de desembarque', detail.delivery_code)}
+              >
+                <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+
+        {tripDependentShipments.length > 0 ? (
+          <>
+            <Text style={[styles.sectionHeading, styles.dependentSectionHeading]}>Envio de dependente na viagem</Text>
+            {tripDependentShipments.map((dep) => (
+              <View key={dep.id} style={styles.dependentPinBlock}>
+                <Text style={styles.dependentPinName}>{dep.full_name}</Text>
+                <Text style={styles.dependentPinStatus}>Status: {dep.status}</Text>
+                <View style={[styles.pinSection, styles.pinSectionNested]}>
+                  <Text style={styles.pinLabel}>PIN de embarque (dependente)</Text>
+                  <Text style={styles.pinHint}>Informe ao motorista no embarque do dependente.</Text>
+                  <View style={styles.pinRow}>
+                    <View style={styles.pinChipsWrap}>
+                      {pinCharsForDisplay(dep.pickup_code).map((ch, i) => (
+                        <View key={`td-${dep.id}-pc-${i}`} style={styles.pinChip}>
+                          <Text style={styles.pinChipText}>{ch}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    <View style={styles.pinIconButtons}>
+                      <TouchableOpacity
+                        style={styles.pinIconBtn}
+                        activeOpacity={0.8}
+                        onPress={() => copyPin('PIN de embarque (dependente)', dep.pickup_code)}
+                      >
+                        <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.pinIconBtn}
+                        activeOpacity={0.8}
+                        onPress={() => void sharePin('PIN de embarque do dependente', dep.pickup_code)}
+                      >
+                        <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+                <View style={[styles.pinSection, styles.pinSectionNested]}>
+                  <Text style={styles.pinLabel}>PIN de desembarque (dependente)</Text>
+                  <Text style={styles.pinHint}>Informe ao motorista no desembarque no destino.</Text>
+                  <View style={styles.pinRow}>
+                    <View style={styles.pinChipsWrap}>
+                      {pinCharsForDisplay(dep.delivery_code).map((ch, i) => (
+                        <View key={`td-${dep.id}-dc-${i}`} style={styles.pinChip}>
+                          <Text style={styles.pinChipText}>{ch}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    <View style={styles.pinIconButtons}>
+                      <TouchableOpacity
+                        style={styles.pinIconBtn}
+                        activeOpacity={0.8}
+                        onPress={() => copyPin('PIN de desembarque (dependente)', dep.delivery_code)}
+                      >
+                        <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.pinIconBtn}
+                        activeOpacity={0.8}
+                        onPress={() => void sharePin('PIN de desembarque do dependente', dep.delivery_code)}
+                      >
+                        <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              </View>
+            ))}
+          </>
+        ) : null}
+
         <Text style={styles.sectionHeading}>Passageiros</Text>
         <View style={styles.placeholderSection}>
           {passengerRows.length === 0 ? (
@@ -624,18 +889,12 @@ export function TripDetailScreen({ navigation, route }: Props) {
           )}
         </View>
 
-        <Text style={styles.sectionHeading}>Despesas</Text>
-        <TouchableOpacity style={styles.uploadExpenseBox} activeOpacity={0.8}>
-          <MaterialIcons name="cloud-upload" size={32} color={COLORS.neutral700} />
-          <Text style={styles.uploadExpenseText}>Envie o comprovante da despesa</Text>
-        </TouchableOpacity>
-
         {isCompleted && (
           <View style={styles.resumoSection}>
             <Text style={styles.sectionHeading}>Resumo final</Text>
             <View style={styles.resumoCard}>
-              <Text style={styles.resumoLabel}>Total recebido</Text>
-              <Text style={styles.resumoValue}>R$ {(detail.amount_cents / 100).toFixed(2)}</Text>
+              <Text style={styles.resumoLabel}>Total pago pelo passageiro</Text>
+              <Text style={styles.resumoValue}>{formatTripFareBrl(detail.amount_cents)}</Text>
             </View>
             <Text style={styles.resumoMeta}>Duração: —</Text>
             <Text style={styles.resumoMeta}>Distância: —</Text>
@@ -804,23 +1063,6 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   mapLoadingText: { fontSize: 13, color: COLORS.neutral700 },
-  /** Mesmos marcadores que `TripDetailScreen` no app motorista. */
-  markerOrigin: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: '#111827',
-    borderWidth: 2.5,
-    borderColor: '#FFFFFF',
-  },
-  markerDest: {
-    width: 14,
-    height: 14,
-    borderRadius: 3,
-    backgroundColor: '#111827',
-    borderWidth: 2.5,
-    borderColor: '#FFFFFF',
-  },
   trackButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -862,6 +1104,7 @@ const styles = StyleSheet.create({
   driverAvatarInitials: { fontSize: 16, fontWeight: '700', color: COLORS.black },
   cardDate: { fontSize: 14, color: COLORS.neutral700, marginTop: 12 },
   cardStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  cardPriceCaption: { fontSize: 12, fontWeight: '500', color: COLORS.neutral700, marginBottom: 2 },
   cardPrice: { fontSize: 16, fontWeight: '700', color: COLORS.black },
   cardStatus: { fontSize: 14, fontWeight: '600' },
   cardStatusCompleted: { color: '#16a34a' },
@@ -877,24 +1120,21 @@ const styles = StyleSheet.create({
   tripId: { fontSize: 22, fontWeight: '700', color: COLORS.black, marginTop: 8 },
   cardSummary: { fontSize: 14, color: COLORS.neutral700, marginTop: 4 },
   sectionHeading: { fontSize: 16, fontWeight: '700', color: COLORS.black, marginHorizontal: 24, marginTop: 20, marginBottom: 8 },
+  dependentSectionHeading: { marginTop: 28 },
+  dependentPinBlock: {
+    marginHorizontal: 24,
+    marginBottom: 16,
+    padding: 14,
+    backgroundColor: COLORS.neutral300,
+    borderRadius: 12,
+  },
+  dependentPinName: { fontSize: 15, fontWeight: '700', color: COLORS.black, marginBottom: 4 },
+  dependentPinStatus: { fontSize: 12, color: COLORS.neutral700, marginBottom: 4 },
+  pinSectionNested: { marginHorizontal: 0, marginTop: 8 },
   placeholderSection: { marginHorizontal: 24, paddingVertical: 12, paddingHorizontal: 14, backgroundColor: COLORS.neutral300, borderRadius: 10 },
   placeholderSectionText: { fontSize: 14, color: COLORS.neutral700 },
   shipmentRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10 },
   shipmentMeta: { fontSize: 12, color: COLORS.neutral700, marginTop: 2 },
-  uploadExpenseBox: {
-    marginHorizontal: 24,
-    marginTop: 4,
-    paddingVertical: 24,
-    paddingHorizontal: 16,
-    borderWidth: 2,
-    borderStyle: 'dashed',
-    borderColor: COLORS.neutral400,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  uploadExpenseText: { fontSize: 14, color: COLORS.neutral700 },
   resumoSection: { marginHorizontal: 24, marginTop: 20 },
   resumoCard: { backgroundColor: COLORS.neutral300, padding: 16, borderRadius: 12, marginBottom: 8 },
   resumoLabel: { fontSize: 14, color: COLORS.neutral700 },
@@ -920,6 +1160,29 @@ const styles = StyleSheet.create({
   },
   routeAddress: { flex: 1, fontSize: 14, color: COLORS.black },
   routeTime: { fontSize: 14, fontWeight: '600', color: COLORS.black },
+  pinSection: { marginHorizontal: 24, marginTop: 20 },
+  pinLabel: { fontSize: 14, fontWeight: '700', color: COLORS.black, marginBottom: 6 },
+  pinHint: { fontSize: 12, color: COLORS.neutral700, marginBottom: 10 },
+  pinRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  pinChipsWrap: { flexDirection: 'row', gap: 10 },
+  pinChip: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pinChipText: { fontSize: 18, fontWeight: '700', color: COLORS.black },
+  pinIconButtons: { flexDirection: 'row', gap: 12 },
+  pinIconBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: COLORS.neutral300,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   actionsSection: { marginHorizontal: 24, marginTop: 24, gap: 12 },
   actionRow: {
     flexDirection: 'row',

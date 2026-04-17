@@ -8,10 +8,16 @@ import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import {
+  parseInvokeData,
+  parseInvokeError,
+  isSupabaseFunctionNotFoundMessage,
+  MSG_DEPLOY_COMPLETE_PASSWORD_RESET,
+} from '../utils/edgeFunctionResponse';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ResetPassword'>;
 
-export function ResetPasswordScreen({ navigation }: Props) {
+export function ResetPasswordScreen({ navigation, route }: Props) {
   const { showAlert } = useAppAlert();
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -34,18 +40,46 @@ export function ResetPasswordScreen({ navigation }: Props) {
     }
     setLoading(true);
     try {
-      const { error } = await supabase.auth.updateUser({ password });
-      if (error) throw error;
+      const token = route.params?.passwordResetToken;
+      if (token) {
+        const { data: fnData, error: fnError } = await supabase.functions.invoke('complete-password-reset', {
+          body: { token, password },
+        });
+        const payload = parseInvokeData(fnData);
+        if (payload?.error != null) {
+          showAlert('Erro', String(payload.error));
+          return;
+        }
+        if (fnError) {
+          const bodyError = await parseInvokeError(fnError);
+          const fnMsg =
+            fnError && typeof fnError === 'object' && typeof (fnError as { message?: string }).message === 'string'
+              ? (fnError as { message: string }).message
+              : '';
+          if (isSupabaseFunctionNotFoundMessage(bodyError) || isSupabaseFunctionNotFoundMessage(fnMsg)) {
+            showAlert('Serviço indisponível', MSG_DEPLOY_COMPLETE_PASSWORD_RESET);
+            return;
+          }
+          showAlert('Erro', bodyError ?? getUserErrorMessage(fnError, 'Não foi possível atualizar a senha.'));
+          return;
+        }
+      } else {
+        const { error } = await supabase.auth.updateUser({ password });
+        if (error) throw error;
+      }
       navigation.navigate('ResetPasswordSuccess');
     } catch (e: unknown) {
-      showAlert('Erro', getUserErrorMessage(e, 'Não foi possível atualizar a senha. Abra o link do e-mail novamente.'));
+      showAlert(
+        'Erro',
+        getUserErrorMessage(e, 'Não foi possível atualizar a senha. Solicite um novo código ou abra o link do e-mail.'),
+      );
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.container} behavior="padding">
       <StatusBar style="dark" />
       <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()} activeOpacity={0.7} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
         <Text style={styles.backArrow}>←</Text>

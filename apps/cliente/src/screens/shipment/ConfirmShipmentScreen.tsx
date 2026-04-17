@@ -70,6 +70,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  /** Há base na região: coleta pode ser na base (motorista vê no mapa / paradas) após aceitar. */
   const hubColetaNaBase = Boolean(resolvedBaseIdParam);
 
   const showFeeBreakdown = true;
@@ -177,7 +178,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
             scheduled_at: whenOption === 'later' ? null : null,
             package_size: packageSize,
             recipient_name: recipient.name,
-            recipient_email: recipient.email,
+            recipient_email: (recipient.email?.trim() || user.email || '').trim() || 'nao-informado@take-me.local',
             recipient_phone: recipient.phone,
             instructions: recipient.instructions ?? null,
             photo_url: photoUrl,
@@ -245,13 +246,12 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           stripeCardCharged = charged?.ok === true;
         }
 
-        if (
-          shipmentId &&
-          status === 'confirmed' &&
-          packageSize !== 'grande' &&
-          clientPreferredDriverId &&
-          !baseIdForInsert
-        ) {
+        const canStartDriverOfferQueue =
+          Boolean(shipmentId) &&
+          Boolean(clientPreferredDriverId) &&
+          (status === 'confirmed' || (packageSize === 'grande' && status === 'pending_review'));
+
+        if (canStartDriverOfferQueue && shipmentId) {
           const { data: beginData, error: beginErr } = await supabase.rpc('shipment_begin_driver_offering', {
             p_shipment_id: shipmentId,
           });

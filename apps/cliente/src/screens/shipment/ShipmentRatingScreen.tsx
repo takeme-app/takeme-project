@@ -1,5 +1,14 @@
 import { useState } from 'react';
-import { View, TouchableOpacity, TextInput, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import {
+  View,
+  TouchableOpacity,
+  TextInput,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+} from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
@@ -53,7 +62,13 @@ export function ShipmentRatingScreen({ navigation, route }: Props) {
         <View style={styles.headerSpacer} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <KeyboardAvoidingView style={styles.keyboardAvoid} behavior="padding">
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
         <Text style={styles.title}>Como foi o envio?</Text>
         <Text style={styles.hint}>(1 = muito insatisfeito, 5 = muito satisfeito)</Text>
         <View style={styles.starsRow}>
@@ -98,12 +113,14 @@ export function ShipmentRatingScreen({ navigation, route }: Props) {
           <Text style={styles.secondaryButtonText}>Agora não</Text>
         </TouchableOpacity>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
+  keyboardAvoid: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

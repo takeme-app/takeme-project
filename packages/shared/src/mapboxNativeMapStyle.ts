@@ -1,10 +1,11 @@
 /**
  * Estilo Mapbox GL nativo compartilhado entre os apps cliente e motorista.
- * Alinhado ao painel admin (`light-v11`): mapa claro minimal.
+ * `streets-v12`: mapa rodoviário **colorido** (ruas, áreas verdes, água legíveis em navegação).
+ * Evita `light-v11`, que é quase monocromático e parece “preto e branco” no telemóvel.
  *
  * @see https://docs.mapbox.com/api/maps/styles/
  */
-export const MAPBOX_NATIVE_MAP_STYLE_URL = 'mapbox://styles/mapbox/light-v11';
+export const MAPBOX_NATIVE_MAP_STYLE_URL = 'mapbox://styles/mapbox/streets-v12';
 
 /** Trajeto no mapa — motorista (`MapPolyline`) e admin (overlay de rota). */
 export const MAPBOX_ROUTE_STROKE_COLOR = '#C9A227';

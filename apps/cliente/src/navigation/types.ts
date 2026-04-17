@@ -13,7 +13,8 @@ export type RootStackParamList = {
   Main: undefined;
   ForgotPassword: undefined;
   ForgotPasswordEmailSent: { email: string };
-  ResetPassword: undefined;
+  ForgotPasswordVerifyCode: { email: string };
+  ResetPassword: { passwordResetToken?: string };
   ResetPasswordSuccess: undefined;
   TermsOfUse: undefined;
   PrivacyPolicy: undefined;
@@ -66,7 +67,8 @@ export type ShipmentRecipientQuoteParams = {
 /** Destinatário do envio */
 export type ShipmentRecipientParam = {
   name: string;
-  email: string;
+  /** Opcional: no insert usa e-mail da conta quando ausente (DB exige recipient_email). */
+  email?: string;
   phone: string;
   instructions?: string;
   photoUri?: string;
@@ -84,7 +86,10 @@ export type ShipmentStackParamList = {
   };
   SelectShipmentDriver: ShipmentRecipientQuoteParams;
   ConfirmShipment: ShipmentRecipientQuoteParams & {
-    /** Ausente quando o envio tem base (coleta por preparador até a base). */
+    /**
+     * Motorista de viagem escolhido pelo cliente (oferta em `shipments`; `base_id` pode existir para coleta na base).
+     * Ausente no fluxo “só hub” / continuar sem motorista de rota.
+     */
     clientPreferredDriverId?: string;
     orderId?: string;
     shipmentId?: string;
@@ -94,40 +99,6 @@ export type ShipmentStackParamList = {
     shipmentId?: string;
     isLargePackage: boolean;
     paymentProcessed: boolean;
-  };
-};
-
-/** Params do formulário de envio de dependente (nome, contato, bagagens, instruções) */
-export type DependentShipmentFormParams = {
-  fullName: string;
-  contactPhone: string;
-  bagsCount: number;
-  instructions?: string;
-  dependentId?: string;
-  photoUri?: string;
-};
-
-export type DependentShipmentStackParamList = {
-  DependentShipmentForm: undefined;
-  AddDependent: undefined;
-  DependentSuccess: undefined;
-  DefineDependentTrip: DependentShipmentFormParams;
-  ConfirmDependentShipment: {
-    origin: ShipmentPlaceParam;
-    destination: ShipmentPlaceParam;
-    whenOption: 'now' | 'later';
-    whenLabel?: string;
-    fullName: string;
-    contactPhone: string;
-    bagsCount: number;
-    instructions?: string;
-    dependentId?: string;
-    amountCents: number;
-    photoUri?: string;
-  };
-  DependentShipmentSuccess: {
-    orderId: string;
-    shipmentId?: string;
   };
 };
 
@@ -149,6 +120,42 @@ export type TripDriverParam = {
   vehicle_year?: number | null;
   vehicle_plate?: string | null;
   avatar_url?: string | null;
+};
+
+/** Params do formulário de envio de dependente (nome, contato, bagagens, instruções) */
+export type DependentShipmentFormParams = {
+  fullName: string;
+  contactPhone: string;
+  bagsCount: number;
+  instructions?: string;
+  dependentId?: string;
+  photoUri?: string;
+};
+
+/** Origem, destino e janela após «Definir viagem» (antes de escolher motorista). */
+export type DependentTripLegParams = DependentShipmentFormParams & {
+  origin: ShipmentPlaceParam;
+  destination: ShipmentPlaceParam;
+  whenOption: 'now' | 'later';
+  whenLabel?: string;
+};
+
+export type DependentShipmentStackParamList = {
+  DependentShipmentForm: undefined;
+  AddDependent: undefined;
+  DependentSuccess: undefined;
+  DefineDependentTrip: DependentShipmentFormParams;
+  SelectDependentTripDriver: DependentTripLegParams;
+  ConfirmDependentShipment: DependentTripLegParams & {
+    driver: TripDriverParam;
+    amountCents: number;
+    /** `scheduled_trips.departure_at` (ISO) para `dependent_shipments.scheduled_at`. */
+    scheduledTripDepartureAt: string;
+  };
+  DependentShipmentSuccess: {
+    orderId: string;
+    shipmentId?: string;
+  };
 };
 
 /** Ponto de partida ou destino para exibir no mapa (Checkout) */

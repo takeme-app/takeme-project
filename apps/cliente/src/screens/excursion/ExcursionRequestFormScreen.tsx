@@ -212,7 +212,7 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
         <Text style={styles.headerTitle}>Excursões</Text>
         <View style={styles.headerSpacer} />
       </View>
-      <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.keyboard} behavior="padding">
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}

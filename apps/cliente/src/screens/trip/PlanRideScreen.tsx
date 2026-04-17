@@ -26,7 +26,7 @@ import {
   compareTripsByDepartureAndBadge,
   tripFitsPassengersAndBags,
 } from '../../lib/clientScheduledTrips';
-import { formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
+import { formatDriverRatingLabel, formatTripFareBrl } from '../../lib/tripDriverDisplay';
 import type { ScheduledTripItem } from './SearchTripScreen';
 
 function getInitials(name: string): string {
@@ -481,6 +481,10 @@ export function PlanRideScreen({ navigation, route }: Props) {
                 <Text style={styles.tripCardTimeValue}>{trip.arrival}</Text>
               </View>
             </View>
+            <View style={styles.tripCardFareRow}>
+              <Text style={styles.tripCardFareLabel}>Valor da corrida</Text>
+              <Text style={styles.tripCardFareValue}>{formatTripFareBrl(trip.amount_cents)}</Text>
+            </View>
             <View style={styles.tripCardDivider} />
             <View style={styles.tripCardCapacity}>
               <View style={styles.tripCardCapacityItem}>
@@ -908,6 +912,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: COLORS.black,
+  },
+  tripCardFareRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  tripCardFareLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.black,
+  },
+  tripCardFareValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#EA580C',
   },
   tripCardCapacity: {
     flexDirection: 'row',

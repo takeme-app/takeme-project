@@ -4,7 +4,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  Modal,
   TextInput,
   ScrollView,
   Animated,
@@ -13,6 +12,8 @@ import {
   useWindowDimensions,
   Alert,
   Image,
+  KeyboardAvoidingView,
+  BackHandler,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -36,17 +37,28 @@ import {
 import { supabase } from '../lib/supabase';
 import { tripDisplayEarningsCents } from '../lib/driverTripEarnings';
 import { closeConversationsForScheduledTrip } from '../lib/closeTripConversations';
-import { useTripStops, type TripStop, STOP_TYPE_COLORS } from '../hooks/useTripStops';
+import {
+  useTripStops,
+  type TripStop,
+  STOP_TYPE_COLORS,
+  computeFirstIncompleteStopIndex,
+  isSyntheticTripStopId,
+  normalizeTripStopTypeFromDb,
+  dependentShipmentIdFromSyntheticStopId,
+  fetchDependentShipmentEntityAliasKeys,
+} from '../hooks/useTripStops';
 import { Text } from '../components/Text';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getRouteWithDuration, getMultiPointRoute, formatEta } from '../lib/route';
 import { getGoogleMapsApiKey, getMapboxAccessToken } from '../lib/googleMapsConfig';
 import { getUserErrorMessage, isTripRatingsUnavailableError } from '../utils/errorMessage';
+import { onlyDigits } from '../utils/formatCpf';
 import { insertPlannedRouteSlotAfterComplete } from '../lib/insertPlannedRouteSlotAfterComplete';
 import {
   buildNavigationPadding,
   computeNextNavigationCamera,
   createInitialBearingState,
+  haversineMeters,
   type DriverFix,
   type NavigationBearingState,
 } from '../lib/navigationCamera';
@@ -58,20 +70,49 @@ try { Location = require('expo-location'); } catch { /* not available yet */ }
 
 /** Distância máxima para projetar o GPS na polyline (map matching simples). */
 const NAV_ROUTE_SNAP_MAX_M = 68;
+
+function trimRoutePolylineFromDriverSnap(driverPos: LatLng, poly: LatLng[]): LatLng[] {
+  if (poly.length < 2) return poly;
+  const snapD = snapToRoutePolyline(driverPos, poly, NAV_ROUTE_SNAP_MAX_M);
+  if (snapD.distanceM > NAV_ROUTE_SNAP_MAX_M) return poly;
+  let td = trimPolylineFromSnap(poly, snapD.segmentIndex, snapD.snapped);
+  if (td.length < 2 && poly.length >= 2) {
+    td = [snapD.snapped, poly[poly.length - 1]];
+  }
+  return td.length >= 2 ? td : poly;
+}
 /**
- * Metros à frente do PIN para o centro da câmera.
- * Muito alto + card no rodapé esconde o ícone; ~78–85 equilibra via à frente e PIN acima do card.
+ * Metros à frente do PIN para o centro da câmera (só com polyline de rota).
+ * O centro “à frente” empurra o ícone do motorista para baixo na tela; manter moderado.
  */
-const NAV_LOOK_AHEAD_M = 68;
-/** Reserva para o mini-sheet sobre o mapa — se o PIN ainda encostar no card, subir este valor. */
-const NAV_MAP_EXTRA_BOTTOM_FOR_MINI_CARD_PX = 268;
+const NAV_LOOK_AHEAD_M = 44;
+/** Reserva para o mini-sheet sobre o mapa — padding inferior da câmera “seguir GPS”. */
+const NAV_MAP_EXTRA_BOTTOM_FOR_MINI_CARD_PX = 400;
+/**
+ * O centro da câmera fica NAV_LOOK_AHEAD_M à frente do GPS → o PIN fica mais baixo que o centro visual.
+ * Padding extra inferior para o ícone ficar acima do card flutuante ao tocar “minha localização”.
+ */
+const NAV_LOOKAHEAD_ICON_BOTTOM_CLEARANCE_PX = 200;
+/** Salto GPS entre leituras acima disso não entra no odômetro (ruído / teletransporte). */
+const ODOM_MAX_SEGMENT_M = 450;
 /** Câmera em modo seguir: 0 = sem animação entre fixes (evita “voar”/atraso vs. GPS). */
 const NAV_CAMERA_ANIMATION_MS = 0;
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ActiveTrip'>;
 
-const GOLD = '#C9A227';
 const DARK = '#111827';
+const GOLD = '#C9A227';
+/** Trecho imediato no mapa (GPS → próxima etapa): preto, distinto do ouro contínuo. */
+const ROUTE_IMMEDIATE_LEG_COLOR = DARK;
+/** `mapbox://styles/mapbox/streets-v12` — camada viária alta o suficiente para a rota não ficar por baixo das ruas. */
+const MAPBOX_STREETS_ROUTE_ABOVE_LAYER_ID = 'road-motorway-trunk';
+/**
+ * Traço da rota imediata “mais próxima” (Mapbox): [traço, intervalo] em múltiplos da espessura da linha.
+ * Valores um pouco maiores leem melhor no ecrã.
+ */
+const NEAREST_ROUTE_LINE_DASH: [number, number] = [4, 3];
+/** Reduz rajadas de `getRoute` quando o GPS muda antes da resposta (cancelava o `.then` e a linha sumia). */
+const NEAREST_DASHED_ROUTE_FETCH_DEBOUNCE_MS = 450;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -80,11 +121,34 @@ const DARK = '#111827';
 type Stop = TripStop;
 
 /** Helper — stop é coleta (embarque / pick-up) */
-function isPickup(s: Stop) { return s.stopType === 'passenger_pickup' || s.stopType === 'package_pickup'; }
+function isPickup(s: Stop) {
+  return (
+    s.stopType === 'passenger_pickup' ||
+    s.stopType === 'dependent_pickup' ||
+    s.stopType === 'package_pickup'
+  );
+}
 /** Helper — stop é de passageiro */
 function isPassenger(s: Stop) { return s.stopType === 'passenger_pickup' || s.stopType === 'passenger_dropoff'; }
+/** Envio de dependente na viagem (embarque/desembarque do dependente). */
+function isDependent(s: Stop) {
+  return s.stopType === 'dependent_pickup' || s.stopType === 'dependent_dropoff';
+}
+
+function looksLikeUuid(s: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s.trim());
+}
 /** Helper — stop é de encomenda */
 function isPackage(s: Stop) { return s.stopType === 'package_pickup' || s.stopType === 'package_dropoff'; }
+
+/** Embarque/desembarque (passageiro ou dependente) ou coleta/entrega de encomenda: PIN de 4 dígitos. */
+function requiresDriverEnteredPin(s: Stop): boolean {
+  return isPackage(s) || isPassenger(s) || isDependent(s);
+}
+
+function isPackagePickupAtBase(s: Stop | null | undefined): boolean {
+  return !!s && s.stopType === 'package_pickup' && s.packageDriverLeg === 'base_pickup';
+}
 
 function isRouteWaypointStop(s: Stop) {
   return s.stopType === 'excursion_stop' || s.stopType === 'trip_destination';
@@ -105,11 +169,20 @@ function StopKindMarkerIcon({
   if (completed) {
     return <MaterialIcons name="check" size={size} color={color} />;
   }
+  if (isDependent(stop)) {
+    return <MaterialIcons name="child-care" size={size} color={color} />;
+  }
   if (isPassenger(stop)) {
     return <MaterialIcons name="person" size={size} color={color} />;
   }
   if (isPackage(stop)) {
-    return <MaterialIcons name="inventory-2" size={size} color={color} />;
+    return (
+      <MaterialIcons
+        name={isPackagePickupAtBase(stop) ? 'store' : 'inventory-2'}
+        size={size}
+        color={color}
+      />
+    );
   }
   if (stop.stopType === 'trip_destination') {
     return <MaterialIcons name="flag" size={size} color={color} />;
@@ -127,8 +200,12 @@ function stopPhaseShortLabel(s: Stop): string {
       return 'Embarque';
     case 'passenger_dropoff':
       return 'Desembarque';
+    case 'dependent_pickup':
+      return 'Embarque dependente';
+    case 'dependent_dropoff':
+      return 'Desembarque dependente';
     case 'package_pickup':
-      return 'Coleta';
+      return isPackagePickupAtBase(s) ? 'Retirada' : 'Coleta';
     case 'package_dropoff':
       return 'Entrega';
     case 'excursion_stop':
@@ -149,8 +226,12 @@ function detailSheetTitle(stop: Stop | null): string {
       return 'Detalhes do embarque';
     case 'passenger_dropoff':
       return 'Detalhes do desembarque';
+    case 'dependent_pickup':
+      return 'Embarque do dependente';
+    case 'dependent_dropoff':
+      return 'Desembarque do dependente';
     case 'package_pickup':
-      return 'Detalhes da coleta';
+      return isPackagePickupAtBase(stop) ? 'Retirada na base' : 'Detalhes da coleta';
     case 'package_dropoff':
       return `Entrega para ${stop.label}`;
     case 'excursion_stop':
@@ -166,21 +247,39 @@ function detailSheetTitle(stop: Stop | null): string {
 
 function confirmPickupTitle(stop: Stop | null | undefined): string {
   if (!stop) return 'Confirmar';
-  if (stop.stopType === 'passenger_dropoff') return 'Confirmar desembarque';
+  if (stop.stopType === 'passenger_dropoff' || stop.stopType === 'dependent_dropoff') {
+    return 'Confirmar desembarque';
+  }
   if (stop.stopType === 'trip_destination') return 'Concluir chegada';
   if (stop.stopType === 'excursion_stop') return 'Concluir parada';
-  if (stop.stopType === 'package_pickup') return 'Confirmar coleta';
+  if (stop.stopType === 'package_pickup') {
+    return isPackagePickupAtBase(stop) ? 'Confirmar retirada na base' : 'Confirmar coleta';
+  }
   return 'Confirmar embarque';
 }
 
 function confirmPickupSubtitle(stop: Stop | null | undefined): string {
   if (!stop) return '';
   if (stop.stopType === 'package_pickup') {
+    if (isPackagePickupAtBase(stop)) {
+      return 'Insira o código de 4 dígitos (o mesmo do depósito na base ou o informado pela equipe da base).';
+    }
     return 'Insira o código informado pelo passageiro para confirmar a coleta.';
   }
   if (stop.stopType === 'package_dropoff') return '';
   if (isPackage(stop)) return 'Insira o código de 4 dígitos informado pelo remetente.';
-  if (stop.stopType === 'passenger_dropoff') return 'Confirme que o passageiro desembarcou neste ponto.';
+  if (stop.stopType === 'passenger_pickup') {
+    return 'Insira o código de 4 dígitos exibido no app do passageiro para confirmar o embarque.';
+  }
+  if (stop.stopType === 'passenger_dropoff') {
+    return 'Insira o código de 4 dígitos exibido no app do passageiro para confirmar o desembarque.';
+  }
+  if (stop.stopType === 'dependent_pickup') {
+    return 'Insira o código de 4 dígitos exibido no app do responsável para confirmar o embarque do dependente.';
+  }
+  if (stop.stopType === 'dependent_dropoff') {
+    return 'Insira o código de 4 dígitos exibido no app do responsável para confirmar o desembarque do dependente.';
+  }
   if (stop.stopType === 'trip_destination') return 'Confirme a chegada ao destino da viagem.';
   if (stop.stopType === 'excursion_stop') return 'Confirme que esta parada na rota foi concluída.';
   return 'Confirme o embarque do passageiro.';
@@ -188,9 +287,13 @@ function confirmPickupSubtitle(stop: Stop | null | undefined): string {
 
 function confirmPickupButtonLabel(stop: Stop | null | undefined): string {
   if (!stop) return 'Confirmar';
-  if (stop.stopType === 'passenger_dropoff') return 'Confirmar desembarque';
+  if (stop.stopType === 'passenger_dropoff' || stop.stopType === 'dependent_dropoff') {
+    return 'Confirmar desembarque';
+  }
   if (isRouteWaypointStop(stop)) return 'Concluir';
-  if (stop.stopType === 'package_pickup') return 'Confirmar coleta';
+  if (stop.stopType === 'package_pickup') {
+    return isPackagePickupAtBase(stop) ? 'Confirmar retirada' : 'Confirmar coleta';
+  }
   return 'Confirmar embarque';
 }
 
@@ -199,6 +302,8 @@ type TripRow = {
   origin_address: string;
   destination_address: string;
   departure_at: string;
+  /** Quando o motorista de fato iniciou a viagem (preferir para “tempo total”). */
+  driver_journey_started_at?: string | null;
   origin_lat: number | null;
   origin_lng: number | null;
   destination_lat: number | null;
@@ -213,6 +318,26 @@ type TripRow = {
   price_per_person_cents?: number | null;
   bookings?: { amount_cents: number; status: string }[] | null;
 };
+
+/** Destino final no sheet ao tocar na bandeira da lateral (quando o destino não está como parada em `trip_stops`). */
+function buildSidebarTripDestinationStop(trip: TripRow, tripDestLL: LatLng): Stop {
+  const addr = trip.destination_address || '';
+  const line = addr.split('\n')[0]?.trim();
+  return {
+    id: 'sidebar-trip-destination',
+    scheduledTripId: trip.id,
+    stopType: 'trip_destination',
+    entityId: trip.id,
+    label: line || 'Destino da viagem',
+    address: addr,
+    lat: trip.destination_lat ?? tripDestLL.latitude,
+    lng: trip.destination_lng ?? tripDestLL.longitude,
+    sequenceOrder: 999_999,
+    status: 'pending',
+    notes: null,
+    code: null,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -287,6 +412,96 @@ function collectRemainingStopPoints(stopsList: TripStop[], fromIndex: number): L
   return pts;
 }
 
+/** Distância em metros (aprox., esfera). */
+function distanceMetersApprox(a: LatLng, b: LatLng): number {
+  const R = 6371000;
+  const dLat = ((b.latitude - a.latitude) * Math.PI) / 180;
+  const dLon = ((b.longitude - a.longitude) * Math.PI) / 180;
+  const lat1 = (a.latitude * Math.PI) / 180;
+  const lat2 = (b.latitude * Math.PI) / 180;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/**
+ * Se duas paradas têm distância parecida ao GPS, prefere a que vem **antes** no roteiro
+ * (evita “saltar” etapa só por ruído de posição).
+ */
+const GEO_NAV_TIE_METERS = 35;
+
+type GeoNavTarget = {
+  kind: 'stop' | 'trip_dest';
+  /** Índice em `stops` quando `kind === 'stop'`; -1 quando só o destino da viagem (fora das paradas). */
+  stopIndex: number;
+  coord: LatLng;
+  label: string;
+  address: string | null;
+};
+
+function stopLatLngForGeographicNav(s: TripStop): LatLng | null {
+  if (s.stopType === 'driver_origin') return null;
+  if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
+    return { latitude: s.lat, longitude: s.lng };
+  }
+  const c = pickStopCoord(s.lat, s.lng);
+  return c && isValidGlobeCoordinate(c.latitude, c.longitude) ? c : null;
+}
+
+function collectGeographicNavTargets(
+  stopsList: TripStop[],
+  fromIndex: number,
+  tripDest: LatLng | undefined | null,
+  tripDestAddress: string | null | undefined,
+): GeoNavTarget[] {
+  const out: GeoNavTarget[] = [];
+  for (let i = fromIndex; i < stopsList.length; i++) {
+    const s = stopsList[i];
+    const coord = stopLatLngForGeographicNav(s);
+    if (!coord) continue;
+    out.push({
+      kind: 'stop',
+      stopIndex: i,
+      coord,
+      label: s.label,
+      address: s.address ?? null,
+    });
+  }
+  if (tripDest && isValidGlobeCoordinate(tripDest.latitude, tripDest.longitude)) {
+    const dup = out.some((t) => distanceMetersApprox(t.coord, tripDest) < 18);
+    if (!dup) {
+      const label =
+        typeof tripDestAddress === 'string' && tripDestAddress.trim()
+          ? tripDestAddress.trim()
+          : 'Destino da viagem';
+      out.push({
+        kind: 'trip_dest',
+        stopIndex: -1,
+        coord: tripDest,
+        label,
+        address: tripDestAddress ?? null,
+      });
+    }
+  }
+  return out;
+}
+
+function pickGeographicNearestNavTarget(
+  driver: LatLng,
+  targets: GeoNavTarget[],
+): GeoNavTarget | null {
+  if (targets.length === 0) return null;
+  const routeRank = (x: GeoNavTarget) => (x.kind === 'stop' ? x.stopIndex : 1_000_000);
+  const sorted = [...targets].sort((a, b) => {
+    const da = distanceMetersApprox(driver, a.coord);
+    const db = distanceMetersApprox(driver, b.coord);
+    if (Math.abs(da - db) > GEO_NAV_TIE_METERS) return da - db;
+    return routeRank(a) - routeRank(b);
+  });
+  return sorted[0] ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Main screen
 // ---------------------------------------------------------------------------
@@ -300,19 +515,34 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // Data
   const [trip, setTrip] = useState<TripRow | null>(null);
   const [tripLoading, setTripLoading] = useState(true);
-  const { stops, loading: stopsLoading } = useTripStops(tripId);
+  const { stops, loading: stopsLoading, reload: reloadTripStops } = useTripStops(tripId);
   const loading = tripLoading || stopsLoading;
 
-  // State machine
+  // State machine — alinhado ao `trip_stops.status` no primeiro carregamento
   const [currentStopIndex, setCurrentStopIndex] = useState(0);
+  const didInitialStopIndexSync = useRef(false);
+  useEffect(() => {
+    didInitialStopIndexSync.current = false;
+  }, [tripId]);
+
+  useEffect(() => {
+    if (loading || stops.length === 0) return;
+    if (didInitialStopIndexSync.current) return;
+    didInitialStopIndexSync.current = true;
+    setCurrentStopIndex(computeFirstIncompleteStopIndex(stops));
+  }, [loading, stops, tripId]);
 
   // Routes
-  const [driverRouteCoords, setDriverRouteCoords] = useState<LatLng[]>([]);
+  /** Trecho imediato no mapa: GPS → alvo geograficamente mais próximo entre paradas restantes (e destino da viagem). */
+  const [nearestDashedCoords, setNearestDashedCoords] = useState<LatLng[]>([]);
+  const [nearestTargetCoord, setNearestTargetCoord] = useState<LatLng | null>(null);
   const [stopsRouteCoords, setStopsRouteCoords] = useState<LatLng[]>([]);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
 
   // Driver position
   const [driverPosition, setDriverPosition] = useState<LatLng | null>(null);
+  const driverPositionRef = useRef<LatLng | null>(null);
+  driverPositionRef.current = driverPosition;
   const locationSub = useRef<any>(null);
   const mapRef = useRef<GoogleMapsMapRef>(null);
   const hasFramedDriverOnMap = useRef(false);
@@ -329,8 +559,29 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   /** Polyline usada para snap + bearing da via (prioridade: rota dourada, senão trecho escuro). */
   const routeForSnapRef = useRef<LatLng[]>([]);
 
+  /** Distância percorrida nesta tela (soma dos trechos GPS; não é o tamanho da polyline planejada). */
+  const odometerLastFixRef = useRef<{ lat: number; lng: number } | null>(null);
+  const [traveledMeters, setTraveledMeters] = useState(0);
+
+  const accumulateTripOdometer = useCallback((lat: number, lng: number) => {
+    if (!isValidGlobeCoordinate(lat, lng)) return;
+    const prev = odometerLastFixRef.current;
+    odometerLastFixRef.current = { lat, lng };
+    if (!prev) return;
+    const d = haversineMeters(prev.lat, prev.lng, lat, lng);
+    if (d < 2 || d > ODOM_MAX_SEGMENT_M) return;
+    setTraveledMeters((m) => m + d);
+  }, []);
+
+  useEffect(() => {
+    odometerLastFixRef.current = null;
+    setTraveledMeters(0);
+  }, [tripId]);
+
   // UI state
   const [detailVisible, setDetailVisible] = useState(false);
+  /** Parada mostrada no sheet de detalhe ao tocar na lateral; `null` = mesma que `currentStopIndex`. */
+  const [detailViewStop, setDetailViewStop] = useState<Stop | null>(null);
   const [confirmPickupVisible, setConfirmPickupVisible] = useState(false);
   const [confirmDeliveryVisible, setConfirmDeliveryVisible] = useState(false);
   const [finalizeVisible, setFinalizeVisible] = useState(false);
@@ -339,6 +590,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // Confirm modal inputs
   const [confirmCode, setConfirmCode] = useState('');
   const [confirmError, setConfirmError] = useState('');
+  /** Snapshot da parada ao abrir o sheet — o modal NÃO deve usar `currentStop` (realtime pode alterar a lista/índice). */
+  const [confirmUiStop, setConfirmUiStop] = useState<Stop | null>(null);
 
   // Finalize — comprovantes (fotos) enviados ao storage ao concluir a viagem
   const [tripExpenseFiles, setTripExpenseFiles] = useState<{ uri: string; mimeType: string; name: string }[]>([]);
@@ -355,6 +608,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   /** Coleta/entrega: só um sheet de código visível por vez — um único translateY. */
   const confirmSheetSlide = useRef(new Animated.Value(600)).current;
   const completedSlide = useRef(new Animated.Value(600)).current;
+  /**
+   * Parada fixada ao abrir o sheet de confirmação. Evita falha silenciosa quando Realtime
+   * recarrega `stops` e `currentStop` (índice) deixa de bater com a parada confirmada.
+   */
+  const confirmTargetStopRef = useRef<Stop | null>(null);
 
   // ---------------------------------------------------------------------------
   // Câmera heading-up (navegação tipo Waze)
@@ -386,18 +644,23 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         roadCourseDeg = snap.segmentBearingDeg;
       }
     }
+    /** Sem rota desenhada: centra no veículo (0 m à frente) para o PIN não descer em direção ao card. */
+    const lookAheadM = guide.length >= 2 ? NAV_LOOK_AHEAD_M : 0;
     const miniCardLiftFromScreenBottom = Platform.OS === 'ios' ? 28 : 20;
     const padding = buildNavigationPadding({
       windowHeight,
       safeTop: insets.top,
       safeBottom: insets.bottom,
-      extraBottomOverlayPx: miniCardLiftFromScreenBottom + NAV_MAP_EXTRA_BOTTOM_FOR_MINI_CARD_PX,
+      extraBottomOverlayPx:
+        miniCardLiftFromScreenBottom +
+        NAV_MAP_EXTRA_BOTTOM_FOR_MINI_CARD_PX +
+        (lookAheadM > 0 ? NAV_LOOKAHEAD_ICON_BOTTOM_CLEARANCE_PX : 0),
     });
     const out = computeNextNavigationCamera({
       fix,
       compassHeadingDeg: compassHeadingRef.current,
       state: navBearingStateRef.current,
-      lookAheadMeters: NAV_LOOK_AHEAD_M,
+      lookAheadMeters: lookAheadM,
       roadCourseDeg,
     });
     navBearingStateRef.current = out.state;
@@ -476,6 +739,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         if (active) {
           const la = current.coords.latitude;
           const lo = current.coords.longitude;
+          accumulateTripOdometer(la, lo);
           setDriverPosition({ latitude: la, longitude: lo });
           latestDriverFixRef.current = {
             latitude: la,
@@ -493,14 +757,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         }
         locationSub.current = await Location.watchPositionAsync(
           {
-            accuracy: Location.Accuracy?.High ?? Location.Accuracy.Balanced,
-            distanceInterval: 4,
-            timeInterval: 1000,
+            accuracy: Location.Accuracy?.Balanced ?? Location.Accuracy.High,
+            distanceInterval: 8,
+            timeInterval: 4000,
           },
           (loc: any) => {
             if (!active) return;
             const la = loc.coords.latitude;
             const lo = loc.coords.longitude;
+            accumulateTripOdometer(la, lo);
             setDriverPosition({ latitude: la, longitude: lo });
             latestDriverFixRef.current = {
               latitude: la,
@@ -529,7 +794,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       active = false;
       locationSub.current?.remove?.();
     };
-  }, [showAlert, scheduleNavFrame]);
+  }, [showAlert, scheduleNavFrame, accumulateTripOdometer]);
 
   /** Publica posição para o app do passageiro (`scheduled_trip_live_locations`) enquanto a viagem está ativa. */
   useEffect(() => {
@@ -548,7 +813,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       );
     };
     publish();
-    const id = setInterval(publish, 8000);
+    const id = setInterval(publish, 2000);
     return () => clearInterval(id);
   }, [tripId, trip?.status]);
 
@@ -596,7 +861,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         .from('scheduled_trips')
         .select(
           [
-            'id, origin_address, destination_address, departure_at, origin_lat, origin_lng,',
+            'id, origin_address, destination_address, departure_at, driver_journey_started_at, origin_lat, origin_lng,',
             'destination_lat, destination_lng, amount_cents, status,',
             'route_id, day_of_week, departure_time, arrival_time, capacity, price_per_person_cents,',
             'bookings(amount_cents, status)',
@@ -619,33 +884,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // ---------------------------------------------------------------------------
 
   const currentStop = stops[currentStopIndex] ?? null;
+  const detailSheetStop = detailViewStop ?? currentStop;
+  const confirmSheetStop =
+    confirmPickupVisible || confirmDeliveryVisible ? (confirmUiStop ?? currentStop) : null;
   const totalStops = stops.length;
   const allDone = currentStopIndex >= totalStops && totalStops > 0;
-
-  /**
-   * Dados do card inferior.
-   * Se há paradas, usa a parada atual.
-   * Se não há paradas (viagem direta sem passageiros/encomendas no roteiro),
-   * mostra o destino da viagem como destino único.
-   */
-  const cardInfo = useMemo((): Stop | null => {
-    if (currentStop) return currentStop;
-    if (!trip) return null;
-    return {
-      id: 'trip-dest',
-      scheduledTripId: trip.id,
-      stopType: 'passenger_dropoff',
-      entityId: trip.id,
-      label: trip.destination_address,
-      address: trip.destination_address,
-      lat: trip.destination_lat ?? null,
-      lng: trip.destination_lng ?? null,
-      sequenceOrder: 0,
-      status: 'pending',
-      notes: null,
-      code: null,
-    };
-  }, [currentStop, trip]);
 
   const completedTripEarningsLabel = useMemo(() => {
     if (!trip) return '—';
@@ -653,11 +896,20 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     return cents > 0 ? `R$ ${(cents / 100).toFixed(2).replace('.', ',')}` : '—';
   }, [trip]);
 
-  /** Mesma heurística do sheet “Finalizar viagem” (polyline em pontos). */
-  const tripDistanceApproxLabel = useMemo(
-    () => (stopsRouteCoords.length >= 2 ? `~${Math.round(stopsRouteCoords.length * 0.02)} km` : '—'),
-    [stopsRouteCoords.length],
-  );
+  /** Tempo desde o início real da viagem (`driver_journey_started_at`), senão horário agendado `departure_at`. */
+  const tripElapsedLabel = useMemo(() => {
+    if (!trip) return '—';
+    const startIso = trip.driver_journey_started_at ?? trip.departure_at;
+    if (!startIso) return '—';
+    return formatDuration(startIso, new Date());
+  }, [trip]);
+
+  /** Odômetro aproximado (GPS nesta sessão); só exibe após deslocamento mínimo. */
+  const tripTraveledDistanceLabel = useMemo(() => {
+    if (traveledMeters < 40) return '—';
+    const km = traveledMeters / 1000;
+    return `~${km.toFixed(1).replace('.', ',')} km`;
+  }, [traveledMeters]);
 
   /** Último ponto válido do roteiro (entrega final / última parada) ou destino da viagem. */
   const finalDestination = useMemo((): LatLng | null => {
@@ -675,10 +927,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     return pickStopCoord(trip.destination_lat, trip.destination_lng) ?? null;
   }, [stops, trip]);
 
-  const fallbackNavDest = useMemo(
-    () => resolveNavigationDestination(stops, currentStopIndex, finalDestination),
-    [stops, currentStopIndex, finalDestination],
-  );
+  const fallbackNavDest = useMemo(() => {
+    if (
+      nearestTargetCoord &&
+      isValidGlobeCoordinate(nearestTargetCoord.latitude, nearestTargetCoord.longitude)
+    ) {
+      return nearestTargetCoord;
+    }
+    return resolveNavigationDestination(stops, currentStopIndex, finalDestination);
+  }, [nearestTargetCoord, stops, currentStopIndex, finalDestination]);
 
   /** ~100m de resolução: atualiza rota dourada “você → destino” sem spammar Directions a cada tick de GPS. */
   const driverPositionKey = useMemo(() => {
@@ -695,6 +952,63 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     () => (trip ? pickStopCoord(trip.destination_lat, trip.destination_lng) : undefined),
     [trip?.destination_lat, trip?.destination_lng, trip?.id],
   );
+
+  /** Alvo “mais próximo” no mapa/card (mesma base que `nearestDashedCoords` / trecho tracejado). */
+  const nearestGeographicNavPick = useMemo((): GeoNavTarget | null => {
+    if (
+      !driverPosition ||
+      !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) ||
+      stops.length === 0
+    ) {
+      return null;
+    }
+    const targets = collectGeographicNavTargets(
+      stops,
+      currentStopIndex,
+      tripDestLL ?? null,
+      trip?.destination_address,
+    );
+    return pickGeographicNearestNavTarget(driverPosition, targets);
+  }, [driverPosition, stops, currentStopIndex, tripDestLL, trip?.destination_address, trip?.id]);
+
+  const nearestNavStopIndex = useMemo((): number | null => {
+    const pick = nearestGeographicNavPick;
+    if (pick?.kind === 'stop') return pick.stopIndex;
+    return null;
+  }, [nearestGeographicNavPick]);
+
+  /** Índice destacado no mapa e na barra lateral: com GPS = parada geograficamente mais próxima; senão = sequencial. */
+  const mapHighlightStopIndex = nearestNavStopIndex ?? currentStopIndex;
+
+  /**
+   * Card inferior: com GPS, a parada geograficamente mais próxima (rota imediata);
+   * sem GPS, próxima parada sequencial; sem paradas no roteiro, destino da viagem.
+   */
+  const cardInfo = useMemo((): Stop | null => {
+    const pick = nearestGeographicNavPick;
+    if (pick?.kind === 'stop') {
+      return stops[pick.stopIndex] ?? currentStop ?? null;
+    }
+    if (pick?.kind === 'trip_dest' && trip) {
+      return buildSidebarTripDestinationStop(trip, pick.coord);
+    }
+    if (currentStop) return currentStop;
+    if (!trip) return null;
+    return {
+      id: 'trip-dest',
+      scheduledTripId: trip.id,
+      stopType: 'passenger_dropoff',
+      entityId: trip.id,
+      label: trip.destination_address,
+      address: trip.destination_address,
+      lat: trip.destination_lat ?? null,
+      lng: trip.destination_lng ?? null,
+      sequenceOrder: 0,
+      status: 'pending',
+      notes: null,
+      code: null,
+    };
+  }, [nearestGeographicNavPick, stops, currentStop, trip]);
 
   /** Evita dois botões com bandeira: parada trip_destination ou mesmo lugar do destino da viagem. */
   const showSidebarTripEndFlag = useMemo(() => {
@@ -767,40 +1081,94 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     };
   }, [loading, stops, finalDestination, driverPositionKey, currentStopIndex]);
 
-  // Trecho escuro: GPS → próximo alvo útil na lista de paradas.
+  // Trecho imediato: GPS → alvo geograficamente mais próximo (paradas restantes + destino da viagem).
   useEffect(() => {
+    if (loading) return;
     if (
       !driverPosition ||
       !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
     ) {
+      setNearestDashedCoords([]);
+      setNearestTargetCoord(null);
+      setEtaSeconds(null);
       return;
     }
 
-    const dest =
-      stops.length > 0
-        ? resolveNavigationDestination(stops, currentStopIndex, finalDestination)
-        : finalDestination;
+    const targets = collectGeographicNavTargets(
+      stops,
+      currentStopIndex,
+      tripDestLL ?? null,
+      trip?.destination_address,
+    );
+    const nearest = pickGeographicNearestNavTarget(driverPosition, targets);
+    if (!nearest || !isValidGlobeCoordinate(nearest.coord.latitude, nearest.coord.longitude)) {
+      setNearestDashedCoords([]);
+      setNearestTargetCoord(null);
+      setEtaSeconds(null);
+      return;
+    }
 
-    if (!dest) return;
+    setNearestTargetCoord(nearest.coord);
 
-    getRouteWithDuration(driverPosition, dest, {
+    const straightFrom = (dp: LatLng): LatLng[] => [
+      { latitude: dp.latitude, longitude: dp.longitude },
+      nearest.coord,
+    ];
+    const straightFallback = straightFrom(driverPosition);
+    setNearestDashedCoords(straightFallback);
+    setEtaSeconds(null);
+
+    let cancelled = false;
+    const routeOpts = {
       mapboxToken: getMapboxAccessToken(),
       googleMapsApiKey: getGoogleMapsApiKey(),
-    })
-      .then((result) => {
-        if (result) {
-          setDriverRouteCoords(result.coordinates);
-          setEtaSeconds(result.durationSeconds);
-        }
-      })
-      .catch(() => {});
-  }, [driverPosition, currentStopIndex, stops, finalDestination]);
+    };
+
+    const timer = setTimeout(() => {
+      const dp = driverPositionRef.current;
+      if (
+        cancelled ||
+        !dp ||
+        !isValidGlobeCoordinate(dp.latitude, dp.longitude)
+      ) {
+        return;
+      }
+      getRouteWithDuration(dp, nearest.coord, routeOpts)
+        .then((result) => {
+          if (cancelled) return;
+          const coords = result?.coordinates;
+          if (coords && coords.length >= 2) {
+            setNearestDashedCoords(coords);
+            setEtaSeconds(result.durationSeconds ?? null);
+          } else {
+            setNearestDashedCoords(straightFrom(dp));
+            setEtaSeconds(null);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            const d2 = driverPositionRef.current;
+            if (d2 && isValidGlobeCoordinate(d2.latitude, d2.longitude)) {
+              setNearestDashedCoords(straightFrom(d2));
+            } else {
+              setNearestDashedCoords(straightFallback);
+            }
+            setEtaSeconds(null);
+          }
+        });
+    }, NEAREST_DASHED_ROUTE_FETCH_DEBOUNCE_MS);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [loading, driverPositionKey, currentStopIndex, stops, trip?.id, trip?.destination_address, tripDestLL]);
 
   useEffect(() => {
     if (stopsRouteCoords.length >= 2) routeForSnapRef.current = stopsRouteCoords;
-    else if (driverRouteCoords.length >= 2) routeForSnapRef.current = driverRouteCoords;
+    else if (nearestDashedCoords.length >= 2) routeForSnapRef.current = nearestDashedCoords;
     else routeForSnapRef.current = [];
-  }, [stopsRouteCoords, driverRouteCoords]);
+  }, [stopsRouteCoords, nearestDashedCoords]);
 
   // Região inicial: paradas relevantes + destino (sem priorizar origem cadastrada da viagem).
   const mapInitialRegion = useMemo((): MapRegion => {
@@ -831,7 +1199,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
    */
   const navRoutePresentation = useMemo(() => {
     const goldBase = stopsRouteCoords;
-    const darkBase = driverRouteCoords;
+    const darkBase = nearestDashedCoords;
     const guide =
       goldBase.length >= 2 ? goldBase : darkBase.length >= 2 ? darkBase : [];
 
@@ -842,18 +1210,14 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     ) {
       return {
         goldLine: goldBase,
-        darkLine: darkBase,
         showGold: goldBase.length >= 2,
-        showDark: darkBase.length >= 2,
         snappedForFallback: null as LatLng | null,
       };
     }
     if (guide.length < 2) {
       return {
         goldLine: goldBase,
-        darkLine: darkBase,
         showGold: goldBase.length >= 2,
-        showDark: darkBase.length >= 2,
         snappedForFallback: null,
       };
     }
@@ -861,9 +1225,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     if (snap.distanceM > NAV_ROUTE_SNAP_MAX_M) {
       return {
         goldLine: goldBase,
-        darkLine: darkBase,
         showGold: goldBase.length >= 2,
-        showDark: darkBase.length >= 2,
         snappedForFallback: null,
       };
     }
@@ -874,20 +1236,95 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     if (goldBase.length >= 2) {
       return {
         goldLine: trimmed.length >= 2 ? trimmed : goldBase,
-        darkLine: [] as LatLng[],
         showGold: trimmed.length >= 2,
-        showDark: false,
         snappedForFallback: snap.snapped,
       };
     }
     return {
       goldLine: goldBase,
-      darkLine: trimmed.length >= 2 ? trimmed : darkBase,
       showGold: false,
-      showDark: trimmed.length >= 2,
       snappedForFallback: snap.snapped,
     };
-  }, [followMyLocation, driverPosition, stopsRouteCoords, driverRouteCoords]);
+  }, [followMyLocation, driverPosition, stopsRouteCoords, nearestDashedCoords]);
+
+  /** Trecho imediato (tracejado): GPS → alvo geograficamente mais próximo; trim no modo seguir. */
+  const nearestDashedDisplayLine = useMemo((): LatLng[] => {
+    const base = nearestDashedCoords;
+    if (base.length < 2) return [];
+    if (
+      !followMyLocation ||
+      !driverPosition ||
+      !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
+    ) {
+      return base;
+    }
+    return trimRoutePolylineFromDriverSnap(
+      { latitude: driverPosition.latitude, longitude: driverPosition.longitude },
+      base,
+    );
+  }, [nearestDashedCoords, followMyLocation, driverPosition]);
+
+  /**
+   * Trecho imediato (**tracejado** no mapa): polyline Directions GPS → alvo mais próximo quando existir;
+   * senão reta GPS → mesmo alvo geográfico ou `resolveNavigationDestination`.
+   */
+  const immediateLegLineForMap = useMemo((): LatLng[] => {
+    if (nearestDashedDisplayLine.length >= 2) return nearestDashedDisplayLine;
+    if (
+      !driverPosition ||
+      !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
+    ) {
+      return [];
+    }
+    const targets = collectGeographicNavTargets(
+      stops,
+      currentStopIndex,
+      tripDestLL ?? null,
+      trip?.destination_address,
+    );
+    const geo = pickGeographicNearestNavTarget(driverPosition, targets);
+    const nav =
+      geo?.coord ??
+      resolveNavigationDestination(stops, currentStopIndex, finalDestination);
+    if (!nav || !isValidGlobeCoordinate(nav.latitude, nav.longitude)) return [];
+    return [
+      { latitude: driverPosition.latitude, longitude: driverPosition.longitude },
+      nav,
+    ];
+  }, [
+    nearestDashedDisplayLine,
+    driverPosition,
+    stops,
+    currentStopIndex,
+    finalDestination,
+    tripDestLL,
+    trip?.destination_address,
+  ]);
+
+  /** Rota sólida no mapa: itinerário completo ou fallback reta. */
+  const goldLineForMap = useMemo((): LatLng[] | null => {
+    if (navRoutePresentation.goldLine.length >= 2) {
+      return navRoutePresentation.goldLine;
+    }
+    if (
+      stopsRouteCoords.length < 2 &&
+      driverPosition &&
+      isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) &&
+      fallbackNavDest
+    ) {
+      return [navRoutePresentation.snappedForFallback ?? driverPosition, fallbackNavDest];
+    }
+    return null;
+  }, [navRoutePresentation.goldLine, navRoutePresentation.snappedForFallback, stopsRouteCoords.length, driverPosition, fallbackNavDest]);
+
+  /** Troca de trecho (parada / destino sequencial): remonta a polyline para o Mapbox não “arrastar” geometria antiga. */
+  const dashedRouteSegmentKey = useMemo(() => {
+    const t = nearestTargetCoord;
+    if (!t || !isValidGlobeCoordinate(t.latitude, t.longitude)) {
+      return String(currentStopIndex);
+    }
+    return `${currentStopIndex}-${t.latitude.toFixed(5)}-${t.longitude.toFixed(5)}`;
+  }, [currentStopIndex, nearestTargetCoord]);
 
   /**
    * Pin do motorista no mapa: em modo seguir, usa o mesmo snap da polyline (fica na linha/rua),
@@ -899,47 +1336,14 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     }
     if (!followMyLocation) return driverPosition;
     const goldBase = stopsRouteCoords;
-    const darkBase = driverRouteCoords;
+    const darkBase = nearestDashedCoords;
     const guide =
       goldBase.length >= 2 ? goldBase : darkBase.length >= 2 ? darkBase : [];
     if (guide.length < 2) return driverPosition;
     const snap = snapToRoutePolyline(driverPosition, guide, NAV_ROUTE_SNAP_MAX_M);
     if (snap.distanceM > NAV_ROUTE_SNAP_MAX_M) return driverPosition;
     return snap.snapped;
-  }, [driverPosition, followMyLocation, stopsRouteCoords, driverRouteCoords]);
-
-  const focusStopOnMap = useCallback(
-    (idx: number) => {
-      const stop = stops[idx];
-      if (!stop) return;
-      setFollowMyLocation(false);
-      const hasCoord =
-        stop.lat != null && stop.lng != null && isValidGlobeCoordinate(stop.lat, stop.lng);
-      const baseLat = mapInitialRegion.latitude;
-      const baseLng = mapInitialRegion.longitude;
-      const lat = hasCoord ? stop.lat! : baseLat + idx * 0.002;
-      const lng = hasCoord ? stop.lng! : baseLng + idx * 0.002;
-      mapRef.current?.animateToRegion(
-        { latitude: lat, longitude: lng, latitudeDelta: 0.045, longitudeDelta: 0.045 },
-        400,
-      );
-    },
-    [stops, mapInitialRegion.latitude, mapInitialRegion.longitude],
-  );
-
-  const focusTripDestinationOnMap = useCallback(() => {
-    if (!tripDestLL) return;
-    setFollowMyLocation(false);
-    mapRef.current?.animateToRegion(
-      {
-        latitude: tripDestLL.latitude,
-        longitude: tripDestLL.longitude,
-        latitudeDelta: 0.045,
-        longitudeDelta: 0.045,
-      },
-      400,
-    );
-  }, [tripDestLL]);
+  }, [driverPosition, followMyLocation, stopsRouteCoords, nearestDashedCoords]);
 
   /** Sem GPS e sem nenhuma coordenada de viagem/paradas → não confundir com mapa “real” centrado no BR. */
   const activeTripMapReady = useMemo(() => {
@@ -984,30 +1388,38 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const openDetail = () => {
     detailSlide.setValue(600);
     setDetailVisible(true);
-    Animated.spring(detailSlide, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+    // translateY + useNativeDriver:true desloca o hit-test dos botões no Android (toques “mortos”).
+    Animated.spring(detailSlide, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
+  };
+
+  const openDetailFromMiniSheet = () => {
+    if (cardInfo) setDetailViewStop(cardInfo);
+    openDetail();
   };
 
   const closeDetail = () => {
-    Animated.timing(detailSlide, { toValue: 600, duration: 250, useNativeDriver: true }).start(() =>
-      setDetailVisible(false),
-    );
+    Animated.timing(detailSlide, { toValue: 600, duration: 250, useNativeDriver: false }).start(() => {
+      setDetailVisible(false);
+      setDetailViewStop(null);
+    });
   };
 
   /** Fecha o sheet sem animar — use quando o modal de detalhe já está invisível (ex.: fluxo só com modal de confirmação). Animar `detailSlide` com Modal desmontado trava no iOS. */
   const syncCloseDetailOnly = () => {
     detailSlide.setValue(600);
     setDetailVisible(false);
+    setDetailViewStop(null);
   };
 
   const openFinalize = () => {
     setTripExpenseFiles([]);
     finalizeSlide.setValue(600);
     setFinalizeVisible(true);
-    Animated.spring(finalizeSlide, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+    Animated.spring(finalizeSlide, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
   };
 
   const closeFinalize = () => {
-    Animated.timing(finalizeSlide, { toValue: 600, duration: 250, useNativeDriver: true }).start(() => {
+    Animated.timing(finalizeSlide, { toValue: 600, duration: 250, useNativeDriver: false }).start(() => {
       setFinalizeVisible(false);
       setTripExpenseFiles([]);
     });
@@ -1047,6 +1459,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
    * Fechamos o sheet e abrimos só o modal de confirmação; ao voltar, reabrimos o sheet.
    */
   const hideDetailAndOpenConfirmPickup = () => {
+    const stopForFlow = detailViewStop ?? currentStop;
+    confirmTargetStopRef.current = stopForFlow;
+    setConfirmUiStop(stopForFlow);
     setConfirmCode('');
     setConfirmError('');
     detailSlide.setValue(600);
@@ -1056,13 +1471,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     requestAnimationFrame(() => {
       Animated.spring(confirmSheetSlide, {
         toValue: 0,
-        useNativeDriver: true,
+        // translateY + useNativeDriver desalinha hit-test de botões no Android (toque “morto”).
+        useNativeDriver: false,
         bounciness: 0,
       }).start();
     });
   };
 
   const hideDetailAndOpenConfirmDelivery = () => {
+    const stopForFlow = detailViewStop ?? currentStop;
+    confirmTargetStopRef.current = stopForFlow;
+    setConfirmUiStop(stopForFlow);
     setConfirmCode('');
     setConfirmError('');
     detailSlide.setValue(600);
@@ -1072,27 +1491,39 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     requestAnimationFrame(() => {
       Animated.spring(confirmSheetSlide, {
         toValue: 0,
-        useNativeDriver: true,
+        useNativeDriver: false,
         bounciness: 0,
       }).start();
     });
   };
 
   const dismissConfirmPickupBackToDetail = () => {
+    const backStop = confirmUiStop ?? confirmTargetStopRef.current;
+    confirmTargetStopRef.current = null;
+    setConfirmUiStop(null);
     setConfirmCode('');
     setConfirmError('');
-    Animated.timing(confirmSheetSlide, { toValue: 600, duration: 250, useNativeDriver: true }).start(() => {
+    Animated.timing(confirmSheetSlide, { toValue: 600, duration: 250, useNativeDriver: false }).start(() => {
       setConfirmPickupVisible(false);
-      setTimeout(() => openDetail(), 320);
+      setTimeout(() => {
+        if (backStop) setDetailViewStop(backStop);
+        openDetail();
+      }, 320);
     });
   };
 
   const dismissConfirmDeliveryBackToDetail = () => {
+    const backStop = confirmUiStop ?? confirmTargetStopRef.current;
+    confirmTargetStopRef.current = null;
+    setConfirmUiStop(null);
     setConfirmCode('');
     setConfirmError('');
-    Animated.timing(confirmSheetSlide, { toValue: 600, duration: 250, useNativeDriver: true }).start(() => {
+    Animated.timing(confirmSheetSlide, { toValue: 600, duration: 250, useNativeDriver: false }).start(() => {
       setConfirmDeliveryVisible(false);
-      setTimeout(() => openDetail(), 320);
+      setTimeout(() => {
+        if (backStop) setDetailViewStop(backStop);
+        openDetail();
+      }, 320);
     });
   };
 
@@ -1100,66 +1531,235 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // Actions
   // ---------------------------------------------------------------------------
 
-  const handleConfirmStop = async () => {
-    if (!currentStop) return;
+  const confirmStopInFlightRef = useRef(false);
 
+  const handleConfirmStop = async () => {
+    if (confirmStopInFlightRef.current) return;
+    confirmStopInFlightRef.current = true;
     try {
-      if (isPackage(currentStop)) {
-        if (confirmCode.trim().length !== 4) {
+      const stop = confirmTargetStopRef.current ?? stops[currentStopIndex] ?? null;
+      if (!stop) {
+        showAlert(
+          'Paradas',
+          'Não foi possível identificar esta parada (a lista foi atualizada). Toque em Voltar e abra de novo.',
+        );
+        return;
+      }
+
+      if (requiresDriverEnteredPin(stop)) {
+        const digitsIn = onlyDigits(confirmCode);
+        if (digitsIn.length !== 4) {
           setConfirmError('O código deve ter 4 dígitos.');
           return;
         }
-        if (currentStop.code && confirmCode.trim() !== currentStop.code) {
-          setConfirmError('Código incorreto. Verifique com o cliente.');
+        const expectedDigits = onlyDigits(stop.code ?? '');
+        if (expectedDigits.length === 4 && digitsIn !== expectedDigits) {
+          setConfirmError(
+            isPassenger(stop)
+              ? 'Código incorreto. Verifique com o passageiro.'
+              : isDependent(stop)
+                ? 'Código incorreto. Verifique com o responsável pelo dependente.'
+                : 'Código incorreto. Verifique com o cliente.',
+          );
           return;
-        }
-        const now = new Date().toISOString();
-        if (isPickup(currentStop)) {
-          const { error } = await supabase
-            .from('shipments')
-            .update({ picked_up_at: now } as never)
-            .eq('id', currentStop.entityId);
-          if (error) throw error;
-        } else {
-          const { error } = await supabase
-            .from('shipments')
-            .update({ delivered_at: now } as never)
-            .eq('id', currentStop.entityId);
-          if (error) throw error;
         }
       }
 
-    } catch (e: unknown) {
-      showAlert('Erro', getUserErrorMessage(e));
-      return;
-    }
+      let stopId = stop.id;
+      if (isSyntheticTripStopId(stopId)) {
+        // Dependentes: em vários deploys `generate_trip_stops` recria `trip_stops` sem `dependent_*`
+        // e apaga linhas já inseridas por `ensure_dependent_trip_stops` — não chamar generate nesse ramo.
+        const isDepSynthetic = /^dependent-(pickup|dropoff)-/i.test(stopId);
+        if (isDepSynthetic) {
+          const fbRaw = String(stop.entityId ?? '').trim();
+          const fbUuid = looksLikeUuid(fbRaw) ? fbRaw : null;
+          const { data: depResolved, error: depResErr } = await supabase.rpc(
+            'resolve_dependent_trip_stop_row' as never,
+            {
+              p_scheduled_trip_id: tripId,
+              p_client_stop_id: stopId,
+              p_fallback_entity_id: fbUuid,
+            } as never,
+          );
+          if (!depResErr && depResolved != null) {
+            const rid = String(depResolved).trim();
+            if (looksLikeUuid(rid) && !isSyntheticTripStopId(rid)) {
+              stopId = rid;
+            }
+          }
+        }
 
-    // Best-effort em background — await aqui pode deixar o botão “morto” se a rede travar ou RLS demorar.
-    if (!currentStop.id.startsWith('booking-') && !currentStop.id.startsWith('shipment-')) {
-      void supabase
-        .from('trip_stops')
-        .update({ status: 'completed' } as never)
-        .eq('id', currentStop.id)
-        .then(() => {})
-        .catch(() => {});
-    }
+        if (isSyntheticTripStopId(stopId)) {
+        const runEnsure = () =>
+          supabase.rpc('ensure_dependent_trip_stops' as never, { p_trip_id: tripId } as never);
 
-    setConfirmError('');
-    setConfirmCode('');
-    confirmSheetSlide.setValue(600);
-    setConfirmPickupVisible(false);
-    setConfirmDeliveryVisible(false);
-    syncCloseDetailOnly();
-    const next = currentStopIndex + 1;
-    setCurrentStopIndex(next);
-    if (next >= totalStops) {
-      setTimeout(() => openFinalize(), 120);
+        await runEnsure();
+
+        if (!isDepSynthetic) {
+          let genErr =
+            (await supabase.rpc('generate_trip_stops' as never, { p_trip_id: tripId } as never)).error ?? null;
+          if (genErr) {
+            const second = await supabase.rpc('generate_trip_stops' as never, { trip_id: tripId } as never);
+            genErr = second.error ?? null;
+          }
+          if (!genErr) {
+            await runEnsure();
+          }
+        } else {
+          await runEnsure();
+        }
+
+        const stopEntityKeys = new Set<string>();
+        const se = String(stop.entityId ?? '').trim().toLowerCase();
+        if (se) stopEntityKeys.add(se);
+        const depSyn = dependentShipmentIdFromSyntheticStopId(stop.id);
+        if (depSyn) stopEntityKeys.add(depSyn);
+        if (depSyn) {
+          const am = await fetchDependentShipmentEntityAliasKeys(tripId, [depSyn]);
+          for (const a of am.get(depSyn) ?? []) stopEntityKeys.add(a);
+        }
+
+        const matchStop = (list: TripStop[]) =>
+          list.find((s) => {
+            const sKeys = new Set<string>();
+            const sEnt = String(s.entityId ?? '').trim().toLowerCase();
+            if (sEnt) sKeys.add(sEnt);
+            const sDep = dependentShipmentIdFromSyntheticStopId(s.id);
+            if (sDep) sKeys.add(sDep);
+            const entityOk = [...stopEntityKeys].some((k) => sKeys.has(k));
+            return entityOk && s.stopType === stop.stopType;
+          });
+
+        let afterGen = await reloadTripStops();
+        let resolved = matchStop(afterGen);
+        if (!resolved || isSyntheticTripStopId(resolved.id)) {
+          await runEnsure();
+          afterGen = await reloadTripStops();
+          resolved = matchStop(afterGen);
+        }
+
+        if (resolved && !isSyntheticTripStopId(resolved.id)) {
+          stopId = resolved.id;
+        } else {
+          const wantT = stop.stopType;
+          const wantEntityKeys = new Set<string>();
+          const we = String(stop.entityId ?? '').trim().toLowerCase();
+          if (we) wantEntityKeys.add(we);
+          const fromSynthetic = dependentShipmentIdFromSyntheticStopId(stop.id);
+          if (fromSynthetic) wantEntityKeys.add(fromSynthetic);
+          if (fromSynthetic && (wantT === 'dependent_pickup' || wantT === 'dependent_dropoff')) {
+            const am = await fetchDependentShipmentEntityAliasKeys(tripId, [fromSynthetic]);
+            for (const a of am.get(fromSynthetic) ?? []) wantEntityKeys.add(a);
+          }
+          const { data: rawRows, error: rawErr } = await supabase
+            .from('trip_stops')
+            .select('id, entity_id, stop_type')
+            .eq('scheduled_trip_id', tripId);
+          if (!rawErr && rawRows?.length) {
+            for (const row of rawRows) {
+              const r = row as { id: string; entity_id?: string | null; stop_type?: string | null };
+              const eid = String(r.entity_id ?? '').trim().toLowerCase();
+              const mapped = normalizeTripStopTypeFromDb(String(r.stop_type ?? ''));
+              if (wantEntityKeys.has(eid) && mapped === wantT) {
+                stopId = String(r.id);
+                break;
+              }
+            }
+            // Linha com `entity_id` certo mas `stop_type` não normaliza para o enum (ex.: label do generate).
+            if (isSyntheticTripStopId(stopId) && (wantT === 'dependent_pickup' || wantT === 'dependent_dropoff')) {
+              for (const row of rawRows) {
+                const r = row as { id: string; entity_id?: string | null; stop_type?: string | null };
+                const eid = String(r.entity_id ?? '').trim().toLowerCase();
+                if (!wantEntityKeys.has(eid)) continue;
+                const rawT = String(r.stop_type ?? '');
+                const c = rawT.replace(/\s+/g, '_').toLowerCase();
+                if (!c.includes('dependent')) continue;
+                const legOk =
+                  wantT === 'dependent_pickup'
+                    ? c.includes('pickup') || c.includes('embark') || c.includes('board') || c.includes('collect')
+                    : c.includes('dropoff') ||
+                      c.includes('drop_off') ||
+                      c.includes('delivery') ||
+                      c.includes('debark');
+                if (!legOk) continue;
+                stopId = String(r.id);
+                break;
+              }
+            }
+          }
+        }
+
+        if (isSyntheticTripStopId(stopId)) {
+          showAlert('Paradas', 'Não foi possível sincronizar as paradas com o servidor. Tente novamente.');
+          return;
+        }
+        }
+      }
+
+      try {
+        const { data: rpcData, error: rpcError } = await supabase.rpc(
+          'complete_trip_stop' as never,
+          {
+            p_trip_stop_id: stopId,
+            p_confirmation_code: requiresDriverEnteredPin(stop) ? confirmCode.trim() : null,
+          } as never,
+        );
+
+        if (rpcError) {
+          showAlert('Erro', getUserErrorMessage(rpcError));
+          return;
+        }
+
+        const payload = rpcData as { ok?: boolean; error?: string } | null;
+        if (payload && payload.ok === false) {
+          const err = String(payload.error ?? '');
+          const msg =
+            err === 'invalid_code'
+              ? isPassenger(stop) || isDependent(stop)
+                ? 'Código incorreto. Confira o código no app do passageiro ou do responsável.'
+                : 'Código incorreto. Verifique com o cliente.'
+              : err === 'code_length'
+                ? 'O código deve ter 4 dígitos.'
+              : err === 'missing_code'
+                ? isDependent(stop)
+                  ? 'Código do envio de dependente não encontrado. Atualize a viagem ou fale com o suporte.'
+                  : 'Código da encomenda não encontrado no sistema. Atualize a viagem ou fale com o suporte.'
+                : err === 'forbidden'
+                  ? 'Sem permissão para concluir esta parada.'
+                  : err === 'stop_not_found'
+                    ? 'Parada não encontrada.'
+                    : 'Não foi possível concluir a parada.';
+          showAlert('Erro', msg);
+          return;
+        }
+      } catch (e: unknown) {
+        showAlert('Erro', getUserErrorMessage(e));
+        return;
+      }
+
+      const fresh = await reloadTripStops();
+      confirmTargetStopRef.current = null;
+      setConfirmUiStop(null);
+      setConfirmError('');
+      setConfirmCode('');
+      confirmSheetSlide.setValue(600);
+      setConfirmPickupVisible(false);
+      setConfirmDeliveryVisible(false);
+      syncCloseDetailOnly();
+
+      const nextIndex = computeFirstIncompleteStopIndex(fresh);
+      setCurrentStopIndex(nextIndex);
+      if (nextIndex >= fresh.length) {
+        setTimeout(() => openFinalize(), 120);
+      }
+    } finally {
+      confirmStopInFlightRef.current = false;
     }
   };
 
   /** Fecha o sheet “Viagem concluída” e volta ao tab principal (após avaliação ou fallback). */
   const goHomeFromCompletedRating = useCallback(() => {
-    Animated.timing(completedSlide, { toValue: 600, duration: 280, useNativeDriver: true }).start(() => {
+    Animated.timing(completedSlide, { toValue: 600, duration: 280, useNativeDriver: false }).start(() => {
       setCompletedVisible(false);
       completedSlide.setValue(600);
       requestAnimationFrame(() => {
@@ -1243,7 +1843,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     completedSlide.setValue(600);
     setCompletedVisible(true);
     requestAnimationFrame(() => {
-      Animated.spring(completedSlide, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+      Animated.spring(completedSlide, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
     });
   };
 
@@ -1292,6 +1892,52 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     goHomeFromCompletedRating();
   };
 
+  // Modal nativo por cima de MapView (SurfaceView) no Android não recebe toques; usamos overlay em View.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const stackOpen =
+      detailVisible ||
+      confirmPickupVisible ||
+      confirmDeliveryVisible ||
+      finalizeVisible ||
+      completedVisible;
+    if (!stackOpen) return;
+
+    const onHardwareBack = () => {
+      if (completedVisible) return true;
+      if (finalizeVisible) {
+        closeFinalize();
+        return true;
+      }
+      if (confirmDeliveryVisible) {
+        dismissConfirmDeliveryBackToDetail();
+        return true;
+      }
+      if (confirmPickupVisible) {
+        dismissConfirmPickupBackToDetail();
+        return true;
+      }
+      if (detailVisible) {
+        closeDetail();
+        return true;
+      }
+      return false;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+    return () => sub.remove();
+  }, [
+    completedVisible,
+    detailVisible,
+    confirmPickupVisible,
+    confirmDeliveryVisible,
+    finalizeVisible,
+    closeDetail,
+    closeFinalize,
+    dismissConfirmDeliveryBackToDetail,
+    dismissConfirmPickupBackToDetail,
+  ]);
+
   // ---------------------------------------------------------------------------
   // Loading
   // ---------------------------------------------------------------------------
@@ -1337,31 +1983,57 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           }
         }}
       >
-        {/* Route from driver to current stop (dark) — oculto no seguir se a rota dourada cobre o trajeto. */}
-        {navRoutePresentation.showDark && navRoutePresentation.darkLine.length >= 2 && (
-          <MapPolyline id="driver" coordinates={navRoutePresentation.darkLine} strokeColor={DARK} strokeWidth={3} />
-        )}
-
-        {/* Rota dourada: no modo seguir, aparada a partir do snap na via. */}
-        {navRoutePresentation.showGold && navRoutePresentation.goldLine.length >= 2 && (
-          <MapPolyline id="stops" coordinates={navRoutePresentation.goldLine} strokeColor={GOLD} strokeWidth={5} />
-        )}
-
-        {/* Fallback: linha reta só entre pontos válidos (nunca 0,0) se Directions/OSRM falharem */}
-        {stopsRouteCoords.length < 2 &&
-          driverPosition &&
-          isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) &&
-          fallbackNavDest && (
-          <MapPolyline
-            id="fallback"
-            coordinates={[
-              navRoutePresentation.snappedForFallback ?? driverPosition,
-              fallbackNavDest,
-            ]}
-            strokeColor={GOLD}
-            strokeWidth={4}
-          />
-        )}
+        {(goldLineForMap?.length ?? 0) >= 2 || immediateLegLineForMap.length >= 2 ? (
+          <>
+            {goldLineForMap && goldLineForMap.length >= 2 && (
+              <MapPolyline
+                id="trip-gold"
+                coordinates={goldLineForMap}
+                strokeColor={GOLD}
+                strokeWidth={5}
+                lineOpacity={1}
+                aboveLayerID={MAPBOX_STREETS_ROUTE_ABOVE_LAYER_ID}
+              />
+            )}
+            {immediateLegLineForMap.length >= 2 && (
+              <>
+                <MapPolyline
+                  key={`trip-immediate-under-${dashedRouteSegmentKey}`}
+                  id="trip-immediate-under"
+                  coordinates={immediateLegLineForMap}
+                  strokeColor="#0a0a0a"
+                  strokeWidth={16}
+                  lineOpacity={0.55}
+                  aboveLayerID={
+                    (goldLineForMap?.length ?? 0) >= 2 ? 'trip-gold-layer' : MAPBOX_STREETS_ROUTE_ABOVE_LAYER_ID
+                  }
+                  layerIndex={982}
+                />
+                <MapPolyline
+                  key={`trip-immediate-core-${dashedRouteSegmentKey}`}
+                  id="trip-immediate-core"
+                  coordinates={immediateLegLineForMap}
+                  strokeColor="#000000"
+                  strokeWidth={6}
+                  lineOpacity={0.95}
+                  aboveLayerID="trip-immediate-under-layer"
+                  layerIndex={983}
+                />
+                <MapPolyline
+                  key={`trip-immediate-${dashedRouteSegmentKey}`}
+                  id="trip-immediate"
+                  coordinates={immediateLegLineForMap}
+                  strokeColor="#000000"
+                  strokeWidth={11}
+                  lineOpacity={1}
+                  lineDasharray={NEAREST_ROUTE_LINE_DASH}
+                  aboveLayerID="trip-immediate-core-layer"
+                  layerIndex={984}
+                />
+              </>
+            )}
+          </>
+        ) : null}
 
         {/* Stop markers */}
         {stops.map((stop, idx) => {
@@ -1375,6 +2047,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           const lng = hasCoord ? stop.lng! : baseLng + idx * 0.002;
           const isCompleted = idx < currentStopIndex;
           const markerBg = isCompleted ? '#374151' : STOP_TYPE_COLORS[stop.stopType];
+          const isActiveSequentialStop = idx === mapHighlightStopIndex && !allDone;
           return (
             <MapMarker
               key={stop.id}
@@ -1382,8 +2055,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               coordinate={{ latitude: lat, longitude: lng }}
               anchor={{ x: 0.5, y: 0.5 }}
             >
-              <View style={[styles.mapMarker, { backgroundColor: markerBg }]}>
-                <StopKindMarkerIcon stop={stop} completed={isCompleted} color="#fff" />
+              <View
+                style={[
+                  styles.mapMarkerOuter,
+                  isActiveSequentialStop && styles.mapMarkerOuterGpsNext,
+                ]}
+              >
+                <View style={[styles.mapMarker, { backgroundColor: markerBg }]}>
+                  <StopKindMarkerIcon stop={stop} completed={isCompleted} color="#fff" />
+                </View>
               </View>
             </MapMarker>
           );
@@ -1471,29 +2151,25 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
             {stops.map((stop, idx) => {
               const isCompleted = idx < currentStopIndex;
-              const isCurrent = idx === currentStopIndex;
+              const isCurrent = idx === mapHighlightStopIndex;
               const btnBg = isCompleted ? '#9CA3AF' : isCurrent ? STOP_TYPE_COLORS[stop.stopType] : '#E5E7EB';
               const iconColor = isCompleted || isCurrent ? '#fff' : '#6B7280';
               return (
-                <TouchableOpacity
+                <View
                   key={stop.id}
                   style={[styles.sidebarBtn, { backgroundColor: btnBg }]}
-                  onPress={() => focusStopOnMap(idx)}
-                  activeOpacity={0.8}
+                  accessibilityRole="image"
+                  accessibilityLabel={stopPhaseShortLabel(stop)}
                 >
                   <StopKindMarkerIcon stop={stop} completed={isCompleted} color={iconColor} />
-                </TouchableOpacity>
+                </View>
               );
             })}
 
             {showSidebarTripEndFlag && (
-              <TouchableOpacity
-                style={[styles.sidebarBtn, styles.sidebarDestBtn]}
-                onPress={focusTripDestinationOnMap}
-                activeOpacity={0.85}
-              >
+              <View style={[styles.sidebarBtn, styles.sidebarDestBtn]} accessibilityRole="image">
                 <MaterialIcons name="flag" size={18} color={DARK} />
-              </TouchableOpacity>
+              </View>
             )}
           </View>
         )}
@@ -1502,13 +2178,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         {cardInfo && !detailVisible && !allDone && (
           <TouchableOpacity
             style={styles.miniSheet}
-            onPress={currentStop ? openDetail : undefined}
-            activeOpacity={currentStop ? 0.95 : 1}
+            onPress={openDetailFromMiniSheet}
+            activeOpacity={0.95}
           >
+            <View style={styles.navNextBannerIntro}>
+              <Text style={styles.navNextBannerKicker}>A partir da sua posição…</Text>
+            </View>
+
             <View style={styles.miniSheetTopRow}>
               <View style={[
                 styles.stopTypePill,
-                isPassenger(cardInfo) && styles.stopTypePillTrip,
+                (isPassenger(cardInfo) || isDependent(cardInfo)) && styles.stopTypePillTrip,
               ]}>
                 <View style={styles.stopTypeDot} />
                 <Text style={styles.stopTypePillText}>
@@ -1555,11 +2235,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         )}
       </SafeAreaView>
 
-      {/* ── Detail bottom sheet ─────────────────────────────── */}
-      <Modal visible={detailVisible} transparent animationType="none" onRequestClose={closeDetail}>
-        <View style={styles.modalRoot}>
+      {/* ── Detail bottom sheet (View overlay: Modal + MapView quebra toques no Android) ─ */}
+      {detailVisible ? (
+        <View style={styles.fullScreenMapOverlay} accessibilityViewIsModal>
+        <KeyboardAvoidingView style={styles.modalRoot} behavior="padding">
           <Pressable style={styles.overlayBackdrop} onPress={closeDetail} />
           <Animated.View
+            collapsable={false}
             style={[styles.detailSheet, styles.sheetAboveBackdrop, { transform: [{ translateY: detailSlide }] }]}
           >
           <View style={styles.handle} />
@@ -1569,7 +2251,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               <MaterialIcons name="close" size={20} color={DARK} />
             </TouchableOpacity>
             <Text style={styles.detailTitle}>
-              {detailSheetTitle(currentStop)}
+              {detailSheetTitle(detailSheetStop)}
             </Text>
             <TouchableOpacity style={styles.iconCircleBtn} activeOpacity={0.7}>
               <MaterialIcons name="phone" size={20} color={DARK} />
@@ -1577,24 +2259,30 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.detailScroll}>
-            {currentStop && isPickup(currentStop) ? (
+            {detailSheetStop && isPickup(detailSheetStop) ? (
               <>
                 <View style={styles.avatarCenter}>
                   <View style={styles.avatarCircle}>
-                    <Text style={styles.avatarInitials}>{getInitials(currentStop?.label ?? '?')}</Text>
+                    <Text style={styles.avatarInitials}>{getInitials(detailSheetStop?.label ?? '?')}</Text>
                   </View>
                 </View>
-                <Text style={styles.detailName}>{currentStop?.label}</Text>
+                <Text style={styles.detailName}>{detailSheetStop?.label}</Text>
                 <View style={styles.detailMetaRow}>
                 </View>
                 <Text style={styles.detailLabel}>
-                  {currentStop.stopType === 'package_pickup' ? 'Endereço da coleta' : 'Endereço do embarque'}
+                  {detailSheetStop.stopType === 'package_pickup'
+                    ? isPackagePickupAtBase(detailSheetStop)
+                      ? 'Endereço da base'
+                      : 'Endereço da coleta'
+                    : detailSheetStop.stopType === 'dependent_pickup'
+                      ? 'Endereço do embarque do dependente'
+                      : 'Endereço do embarque'}
                 </Text>
-                <Text style={styles.detailValue}>{currentStop?.address}</Text>
-                {currentStop?.notes ? (
+                <Text style={styles.detailValue}>{detailSheetStop?.address}</Text>
+                {detailSheetStop?.notes ? (
                   <>
                     <Text style={styles.detailLabel}>Observações</Text>
-                    <Text style={styles.detailValue}>{currentStop.notes}</Text>
+                    <Text style={styles.detailValue}>{detailSheetStop.notes}</Text>
                   </>
                 ) : null}
                 <TouchableOpacity
@@ -1603,29 +2291,47 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   activeOpacity={0.85}
                 >
                   <Text style={styles.actionBtnText}>
-                    {currentStop.stopType === 'package_pickup' ? 'Iniciar coleta' : 'Iniciar embarque'}
+                    {detailSheetStop.stopType === 'package_pickup'
+                      ? isPackagePickupAtBase(detailSheetStop)
+                        ? 'Iniciar retirada na base'
+                        : 'Iniciar coleta'
+                      : detailSheetStop.stopType === 'dependent_pickup'
+                        ? 'Iniciar embarque do dependente'
+                        : 'Iniciar embarque'}
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.cancelBtn} activeOpacity={0.7}>
                   <Text style={styles.cancelBtnText}>
-                    {currentStop.stopType === 'package_pickup' ? 'Cancelar coleta' : 'Cancelar embarque'}
+                    {detailSheetStop.stopType === 'package_pickup'
+                      ? isPackagePickupAtBase(detailSheetStop)
+                        ? 'Cancelar retirada'
+                        : 'Cancelar coleta'
+                      : detailSheetStop.stopType === 'dependent_pickup'
+                        ? 'Cancelar embarque do dependente'
+                        : 'Cancelar embarque'}
                   </Text>
                 </TouchableOpacity>
               </>
-            ) : currentStop && currentStop.stopType === 'passenger_dropoff' ? (
+            ) : detailSheetStop &&
+              (detailSheetStop.stopType === 'passenger_dropoff' ||
+                detailSheetStop.stopType === 'dependent_dropoff') ? (
               <>
                 <View style={styles.avatarCenter}>
                   <View style={styles.avatarCircle}>
-                    <Text style={styles.avatarInitials}>{getInitials(currentStop?.label ?? '?')}</Text>
+                    <Text style={styles.avatarInitials}>{getInitials(detailSheetStop?.label ?? '?')}</Text>
                   </View>
                 </View>
-                <Text style={styles.detailName}>{currentStop.label}</Text>
-                <Text style={styles.detailLabel}>Endereço do desembarque</Text>
-                <Text style={styles.detailValue}>{currentStop.address}</Text>
-                {currentStop.notes ? (
+                <Text style={styles.detailName}>{detailSheetStop.label}</Text>
+                <Text style={styles.detailLabel}>
+                  {detailSheetStop.stopType === 'dependent_dropoff'
+                    ? 'Endereço do desembarque do dependente'
+                    : 'Endereço do desembarque'}
+                </Text>
+                <Text style={styles.detailValue}>{detailSheetStop.address}</Text>
+                {detailSheetStop.notes ? (
                   <>
                     <Text style={styles.detailLabel}>Observações</Text>
-                    <Text style={styles.detailValue}>{currentStop.notes}</Text>
+                    <Text style={styles.detailValue}>{detailSheetStop.notes}</Text>
                   </>
                 ) : null}
                 <TouchableOpacity
@@ -1636,29 +2342,29 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   <Text style={styles.actionBtnText}>Confirmar desembarque</Text>
                 </TouchableOpacity>
               </>
-            ) : currentStop && isRouteWaypointStop(currentStop) ? (
+            ) : detailSheetStop && isRouteWaypointStop(detailSheetStop) ? (
               <>
                 <View style={styles.avatarCenter}>
                   <View
                     style={[
                       styles.avatarCircle,
-                      { backgroundColor: STOP_TYPE_COLORS[currentStop.stopType] },
+                      { backgroundColor: STOP_TYPE_COLORS[detailSheetStop.stopType] },
                     ]}
                   >
                     <MaterialIcons
-                      name={currentStop.stopType === 'trip_destination' ? 'flag' : 'place'}
+                      name={detailSheetStop.stopType === 'trip_destination' ? 'flag' : 'place'}
                       size={26}
                       color="#fff"
                     />
                   </View>
                 </View>
-                <Text style={styles.detailName}>{currentStop.label}</Text>
+                <Text style={styles.detailName}>{detailSheetStop.label}</Text>
                 <Text style={styles.detailLabel}>Local</Text>
-                <Text style={styles.detailValue}>{currentStop.address}</Text>
-                {currentStop.notes ? (
+                <Text style={styles.detailValue}>{detailSheetStop.address}</Text>
+                {detailSheetStop.notes ? (
                   <>
                     <Text style={styles.detailLabel}>Observações</Text>
-                    <Text style={styles.detailValue}>{currentStop.notes}</Text>
+                    <Text style={styles.detailValue}>{detailSheetStop.notes}</Text>
                   </>
                 ) : null}
                 <TouchableOpacity
@@ -1667,7 +2373,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   activeOpacity={0.85}
                 >
                   <Text style={styles.actionBtnText}>
-                    {currentStop.stopType === 'trip_destination' ? 'Concluir chegada' : 'Concluir parada'}
+                    {detailSheetStop.stopType === 'trip_destination' ? 'Concluir chegada' : 'Concluir parada'}
                   </Text>
                 </TouchableOpacity>
               </>
@@ -1681,15 +2387,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 <View style={styles.deliveryArrowRow}>
                   <Text style={styles.deliveryNameText}>
                     {'Destinatário: '}
-                    <Text style={{ fontWeight: '700' }}>{currentStop?.label}</Text>
+                    <Text style={{ fontWeight: '700' }}>{detailSheetStop?.label}</Text>
                   </Text>
                 </View>
                 <Text style={styles.detailLabel}>Local de entrega</Text>
-                <Text style={styles.detailValue}>{currentStop?.address}</Text>
-                {currentStop?.notes ? (
+                <Text style={styles.detailValue}>{detailSheetStop?.address}</Text>
+                {detailSheetStop?.notes ? (
                   <>
                     <Text style={styles.detailLabel}>Observações</Text>
-                    <Text style={styles.detailValue}>{currentStop.notes}</Text>
+                    <Text style={styles.detailValue}>{detailSheetStop.notes}</Text>
                   </>
                 ) : null}
                 <TouchableOpacity
@@ -1703,21 +2409,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             )}
           </ScrollView>
         </Animated.View>
+        </KeyboardAvoidingView>
         </View>
-      </Modal>
+      ) : null}
 
       {/* ── Confirmar coleta / entrega (um bottom sheet, um translateY) ─ */}
-      <Modal
-        visible={confirmPickupVisible || confirmDeliveryVisible}
-        transparent
-        animationType="none"
-        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
-        statusBarTranslucent={Platform.OS === 'android'}
-        onRequestClose={
-          confirmDeliveryVisible ? dismissConfirmDeliveryBackToDetail : dismissConfirmPickupBackToDetail
-        }
-      >
-        <View style={styles.modalRoot}>
+      {confirmPickupVisible || confirmDeliveryVisible ? (
+        <View style={styles.fullScreenMapOverlay} accessibilityViewIsModal>
+        <KeyboardAvoidingView
+          style={styles.modalRoot}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
           <Pressable
             style={styles.overlayBackdrop}
             onPress={
@@ -1725,6 +2427,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             }
           />
           <Animated.View
+            collapsable={false}
             style={[
               styles.detailSheet,
               styles.sheetAboveBackdrop,
@@ -1762,10 +2465,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   maxLength={4}
                   placeholder="Ex: 1234"
                   placeholderTextColor="#9CA3AF"
-                  textAlign="center"
                 />
                 {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
-                <TouchableOpacity style={styles.actionBtn} onPress={handleConfirmStop} activeOpacity={0.85}>
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  onPress={() => void handleConfirmStop()}
+                  activeOpacity={0.85}
+                >
                   <Text style={styles.actionBtnText}>Confirmar entrega</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -1780,7 +2486,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               <>
                 <View style={styles.confirmSheetHeaderRow}>
                   <Text style={styles.confirmSheetTitle} numberOfLines={2}>
-                    {confirmPickupTitle(currentStop)}
+                    {confirmPickupTitle(confirmSheetStop)}
                   </Text>
                   <TouchableOpacity
                     style={styles.iconCircleBtn}
@@ -1790,12 +2496,24 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                     <MaterialIcons name="close" size={20} color={DARK} />
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.confirmSheetSubtitle}>{confirmPickupSubtitle(currentStop)}</Text>
+                <Text style={styles.confirmSheetSubtitle}>{confirmPickupSubtitle(confirmSheetStop)}</Text>
                 <View style={styles.confirmSheetDivider} />
-                {currentStop && isPackage(currentStop) ? (
+                {confirmSheetStop && requiresDriverEnteredPin(confirmSheetStop) ? (
                   <>
                     <Text style={styles.fieldLabel}>
-                      {currentStop.stopType === 'package_pickup' ? 'Código de coleta' : 'Código'}
+                      {confirmSheetStop.stopType === 'passenger_pickup'
+                        ? 'Código de embarque'
+                        : confirmSheetStop.stopType === 'passenger_dropoff'
+                          ? 'Código de desembarque'
+                          : confirmSheetStop.stopType === 'dependent_pickup'
+                            ? 'Código de embarque do dependente'
+                            : confirmSheetStop.stopType === 'dependent_dropoff'
+                              ? 'Código de desembarque do dependente'
+                          : confirmSheetStop.stopType === 'package_pickup'
+                            ? isPackagePickupAtBase(confirmSheetStop)
+                              ? 'Código na base'
+                              : 'Código de coleta'
+                            : 'Código'}
                     </Text>
                     <TextInput
                       style={styles.codeInput}
@@ -1808,13 +2526,16 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                       maxLength={4}
                       placeholder="Ex: 1234"
                       placeholderTextColor="#9CA3AF"
-                      textAlign="center"
                     />
                   </>
                 ) : null}
                 {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
-                <TouchableOpacity style={styles.actionBtn} onPress={handleConfirmStop} activeOpacity={0.85}>
-                  <Text style={styles.actionBtnText}>{confirmPickupButtonLabel(currentStop)}</Text>
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  onPress={() => void handleConfirmStop()}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.actionBtnText}>{confirmPickupButtonLabel(confirmSheetStop)}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.sheetBackBtn}
@@ -1826,14 +2547,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               </>
             )}
           </Animated.View>
+        </KeyboardAvoidingView>
         </View>
-      </Modal>
+      ) : null}
 
       {/* ── Finalize Trip sheet ─────────────────────────────── */}
-      <Modal visible={finalizeVisible} transparent animationType="none" onRequestClose={closeFinalize}>
-        <View style={styles.modalRoot}>
+      {finalizeVisible ? (
+        <View style={styles.fullScreenMapOverlay} accessibilityViewIsModal>
+        <KeyboardAvoidingView style={styles.modalRoot} behavior="padding">
           <Pressable style={styles.overlayBackdrop} onPress={closeFinalize} />
           <Animated.View
+            collapsable={false}
             style={[styles.detailSheet, styles.sheetAboveBackdrop, { transform: [{ translateY: finalizeSlide }] }]}
           >
           <View style={styles.handle} />
@@ -1849,13 +2573,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             <View style={styles.finalizeSummaryRow}>
               <Text style={styles.finalizeSummaryLabel}>Tempo total</Text>
               <Text style={styles.finalizeSummaryValue}>
-                {trip?.departure_at ? formatDuration(trip.departure_at, new Date()) : '—'}
+                {tripElapsedLabel}
               </Text>
             </View>
             <View style={styles.finalizeDivider} />
             <View style={styles.finalizeSummaryRow}>
               <Text style={styles.finalizeSummaryLabel}>Distância</Text>
-              <Text style={styles.finalizeSummaryValue}>{tripDistanceApproxLabel}</Text>
+              <Text style={styles.finalizeSummaryValue}>{tripTraveledDistanceLabel}</Text>
             </View>
             <View style={styles.finalizeDivider} />
             <View style={styles.finalizeSummaryRow}>
@@ -1915,21 +2639,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             )}
           </TouchableOpacity>
         </Animated.View>
+        </KeyboardAvoidingView>
         </View>
-      </Modal>
+      ) : null}
 
       {/* ── Viagem concluída + avaliação (bottom sheet sobre o mapa) ─ */}
-      <Modal
-        visible={completedVisible}
-        transparent
-        animationType="none"
-        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
-        statusBarTranslucent={Platform.OS === 'android'}
-        onRequestClose={() => {}}
-      >
-        <View style={styles.modalRoot}>
+      {completedVisible ? (
+        <View style={styles.fullScreenMapOverlay} accessibilityViewIsModal>
+        <KeyboardAvoidingView style={styles.modalRoot} behavior="padding">
           <View style={styles.overlayBackdrop} />
           <Animated.View
+            collapsable={false}
             style={[
               styles.completedBottomSheet,
               styles.sheetAboveBackdrop,
@@ -1954,13 +2674,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               <View style={styles.completedStatsRow}>
                 <View style={styles.completedStatItem}>
                   <Text style={styles.completedStatValue}>
-                    {trip?.departure_at ? formatDuration(trip.departure_at, new Date()) : '—'}
+                    {tripElapsedLabel}
                   </Text>
                   <Text style={styles.completedStatLabel}>Tempo total</Text>
                 </View>
                 <View style={styles.completedStatDivider} />
                 <View style={styles.completedStatItem}>
-                  <Text style={styles.completedStatValue}>{tripDistanceApproxLabel}</Text>
+                  <Text style={styles.completedStatValue}>{tripTraveledDistanceLabel}</Text>
                   <Text style={styles.completedStatLabel}>Distância percorrida</Text>
                 </View>
                 <View style={styles.completedStatDivider} />
@@ -2013,8 +2733,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               </TouchableOpacity>
             </ScrollView>
           </Animated.View>
+        </KeyboardAvoidingView>
         </View>
-      </Modal>
+      ) : null}
     </View>
   );
 }
@@ -2025,6 +2746,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
+  /**
+   * Cobre o mapa na mesma árvore RN (acima do MapView).
+   * `Modal` transparente sobre Mapbox/SurfaceView no Android costuma não receber toques nos botões.
+   */
+  fullScreenMapOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 9000,
+    ...(Platform.OS === 'android' ? { elevation: 9000 } : {}),
+  },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' },
   mapCoordsLoading: {
     ...StyleSheet.absoluteFillObject,
@@ -2049,6 +2779,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 4,
     elevation: 4,
+  },
+  mapMarkerOuter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapMarkerOuterGpsNext: {
+    padding: 4,
+    borderRadius: 28,
+    borderWidth: 3,
+    borderColor: ROUTE_IMMEDIATE_LEG_COLOR,
+    backgroundColor: 'rgba(255,255,255,0.96)',
   },
 
   // Driver marker
@@ -2143,6 +2884,20 @@ const styles = StyleSheet.create({
   },
 
   // ── Mini bottom sheet — card flutuante ────────────────────
+  navNextBannerIntro: {
+    marginBottom: 12,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E7EB',
+  },
+  navNextBannerKicker: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: ROUTE_IMMEDIATE_LEG_COLOR,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+
   miniSheet: {
     position: 'absolute',
     bottom: Platform.OS === 'ios' ? 28 : 20,
@@ -2343,6 +3098,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: 'center',
+    justifyContent: 'center',
     marginTop: 20,
   },
   /** Em ScrollView com `alignItems: 'center'`, força o botão à largura útil do sheet. */
@@ -2381,7 +3137,11 @@ const styles = StyleSheet.create({
   },
 
   fieldLabel: { fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 8, marginTop: 4 },
+  /** Sem letterSpacing alto: no RN isso empurra o cursor para a direita mesmo com textAlign center. */
   codeInput: {
+    alignSelf: 'center',
+    width: 220,
+    maxWidth: '100%',
     borderWidth: 1.5,
     borderColor: '#D1D5DB',
     borderRadius: 12,
@@ -2390,9 +3150,10 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '700',
     color: DARK,
-    letterSpacing: 8,
+    letterSpacing: 0,
     backgroundColor: '#F9FAFB',
     marginBottom: 4,
+    textAlign: 'center',
   },
   errorText: { fontSize: 13, color: '#EF4444', marginTop: 4, marginBottom: 4, textAlign: 'center' },
 

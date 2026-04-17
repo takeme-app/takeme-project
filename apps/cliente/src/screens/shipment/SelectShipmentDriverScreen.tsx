@@ -103,10 +103,10 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
           <MaterialIcons name="arrow-back" size={24} color={COLORS.black} />
         </TouchableOpacity>
-        <Text style={styles.title}>Motorista da entrega</Text>
+        <Text style={styles.title}>Escolher motorista</Text>
       </View>
       <Text style={styles.subtitle}>
-        Escolha o motorista que fará esta rota. Se ele não aceitar a tempo, a oferta passa ao próximo na mesma rota.
+        Selecione o motorista cadastrado para esta rota que fará a entrega. Se ele não aceitar a tempo, a oferta pode passar ao próximo na mesma rota.
       </Text>
 
       {loading ? (
@@ -123,6 +123,15 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
       ) : items.length === 0 ? (
         <View style={styles.centered}>
           <Text style={styles.errText}>Nenhum motorista disponível nesta rota no momento.</Text>
+          {resolvedBaseId ? (
+            <TouchableOpacity
+              style={styles.secondaryContinue}
+              onPress={() => navigation.navigate('ConfirmShipment', { ...confirmParams })}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.secondaryContinueText}>Continuar para pagamento sem motorista de rota</Text>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity style={styles.retryBtn} onPress={() => navigation.goBack()}>
             <Text style={styles.retryBtnText}>Voltar</Text>
           </TouchableOpacity>
@@ -137,8 +146,6 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
                 : t.driverAvatarUrl
                   ? `${supabaseUrl}/storage/v1/object/public/avatars/${t.driverAvatarUrl}`
                   : null;
-              const price =
-                t.amount_cents != null ? `R$ ${(t.amount_cents / 100).toFixed(2).replace('.', ',')}` : '—';
               return (
                 <TouchableOpacity
                   key={t.id}
@@ -159,7 +166,6 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
                       <Text style={styles.meta}>{t.departure} → {t.arrival} · {t.badge}</Text>
                       <Text style={styles.vehicle}>{formatVehicleDescription(t.vehicle_model, t.vehicle_year, t.vehicle_plate)}</Text>
                     </View>
-                    <Text style={styles.price}>{price}</Text>
                   </View>
                 </TouchableOpacity>
               );
@@ -191,6 +197,17 @@ const styles = StyleSheet.create({
   errText: { fontSize: 15, color: COLORS.neutral700, textAlign: 'center' },
   retryBtn: { marginTop: 16, paddingVertical: 12, paddingHorizontal: 20 },
   retryBtnText: { fontSize: 16, fontWeight: '600', color: COLORS.black },
+  secondaryContinue: {
+    marginTop: 20,
+    marginBottom: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.black,
+    maxWidth: '100%',
+  },
+  secondaryContinueText: { fontSize: 15, fontWeight: '600', color: COLORS.black, textAlign: 'center' },
   card: {
     borderWidth: 1,
     borderColor: COLORS.neutral300,
@@ -207,7 +224,6 @@ const styles = StyleSheet.create({
   driverName: { fontSize: 16, fontWeight: '700', color: COLORS.black },
   meta: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
   vehicle: { fontSize: 12, color: COLORS.neutral700, marginTop: 2 },
-  price: { fontSize: 16, fontWeight: '700', color: COLORS.black },
   primary: {
     marginHorizontal: 24,
     paddingVertical: 16,

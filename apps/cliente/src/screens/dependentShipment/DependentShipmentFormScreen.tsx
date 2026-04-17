@@ -137,7 +137,7 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
           <Text style={styles.navbarTitle} numberOfLines={1}>Viagem de dependente</Text>
         </View>
       </View>
-      <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.keyboard} behavior="padding">
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
