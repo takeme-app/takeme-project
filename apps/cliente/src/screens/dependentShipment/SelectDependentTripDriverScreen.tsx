@@ -12,12 +12,12 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { ShipmentStackParamList } from '../../navigation/types';
+import type { DependentShipmentStackParamList, TripDriverParam } from '../../navigation/types';
 import { loadShipmentDriversForRoute } from '../../lib/loadShipmentDriversForRoute';
 import type { ClientScheduledTripItem } from '../../lib/clientScheduledTrips';
 import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
 
-type Props = NativeStackScreenProps<ShipmentStackParamList, 'SelectShipmentDriver'>;
+type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'SelectDependentTripDriver'>;
 
 const COLORS = {
   background: '#FFFFFF',
@@ -26,26 +26,56 @@ const COLORS = {
   neutral700: '#767676',
 };
 
+const PLACEHOLDER_AMOUNT_CENTS = 5000;
+
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 
-export function SelectShipmentDriverScreen({ navigation, route }: Props) {
+function toTripDriverParam(sel: ClientScheduledTripItem): TripDriverParam {
+  return {
+    id: sel.id,
+    driver_id: sel.driver_id,
+    name: sel.driverName,
+    rating: sel.rating,
+    badge: sel.badge,
+    departure: sel.departure,
+    arrival: sel.arrival,
+    seats: sel.seats,
+    bags: sel.bags,
+    amount_cents: sel.amount_cents ?? undefined,
+    vehicle_model: sel.vehicle_model,
+    vehicle_year: sel.vehicle_year,
+    vehicle_plate: sel.vehicle_plate,
+    avatar_url: sel.driverAvatarUrl,
+  };
+}
+
+export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const {
     origin,
     destination,
     whenOption,
     whenLabel,
-    packageSize,
-    packageSizeLabel,
-    recipient,
-    amountCents,
-    pricingSubtotalCents,
-    platformFeeCents,
-    priceRouteBaseCents,
-    pricingRouteId,
-    adminPctApplied,
-    resolvedBaseId,
+    fullName,
+    contactPhone,
+    bagsCount,
+    instructions,
+    dependentId,
+    photoUri,
   } = route.params;
+
+  const legParams = {
+    origin,
+    destination,
+    whenOption,
+    whenLabel,
+    fullName,
+    contactPhone,
+    bagsCount,
+    instructions,
+    dependentId,
+    photoUri,
+  };
 
   const [items, setItems] = useState<ClientScheduledTripItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -70,29 +100,15 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
     void load();
   }, [load]);
 
-  const confirmParams = {
-    origin,
-    destination,
-    whenOption,
-    whenLabel,
-    packageSize,
-    packageSizeLabel,
-    recipient,
-    amountCents,
-    pricingSubtotalCents,
-    platformFeeCents,
-    priceRouteBaseCents,
-    pricingRouteId,
-    adminPctApplied,
-    resolvedBaseId,
-  };
-
   const handleContinue = () => {
     const sel = items.find((i) => i.id === selectedId);
     if (!sel) return;
-    navigation.navigate('ConfirmShipment', {
-      ...confirmParams,
-      clientPreferredDriverId: sel.driver_id,
+    const driver = toTripDriverParam(sel);
+    navigation.navigate('ConfirmDependentShipment', {
+      ...legParams,
+      driver,
+      amountCents: sel.amount_cents ?? PLACEHOLDER_AMOUNT_CENTS,
+      scheduledTripDepartureAt: sel.departure_at,
     });
   };
 
@@ -106,7 +122,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
         <Text style={styles.title}>Escolher motorista</Text>
       </View>
       <Text style={styles.subtitle}>
-        Selecione o motorista cadastrado para esta rota que fará a entrega. Se ele não aceitar a tempo, a oferta pode passar ao próximo na mesma rota.
+        Selecione o motorista da rota que fará o transporte do dependente. Se ele não aceitar a tempo, a oferta pode passar ao próximo na mesma rota.
       </Text>
 
       {loading ? (
@@ -154,7 +170,9 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
                     )}
                     <View style={styles.cardBody}>
                       <Text style={styles.driverName}>{t.driverName}</Text>
-                      <Text style={styles.meta}>{t.departure} → {t.arrival} · {t.badge}</Text>
+                      <Text style={styles.meta}>
+                        {t.departure} → {t.arrival} · {t.badge}
+                      </Text>
                       <Text style={styles.vehicle}>{formatVehicleDescription(t.vehicle_model, t.vehicle_year, t.vehicle_plate)}</Text>
                     </View>
                   </View>
@@ -197,20 +215,21 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.background,
   },
   cardSelected: { borderColor: COLORS.black, borderWidth: 2 },
-  cardRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  avatar: { width: 52, height: 52, borderRadius: 26, backgroundColor: COLORS.neutral300 },
-  avatarPh: { alignItems: 'center', justifyContent: 'center' },
+  cardRow: { flexDirection: 'row', alignItems: 'center' },
+  avatar: { width: 52, height: 52, borderRadius: 26, marginRight: 12 },
+  avatarPh: { backgroundColor: COLORS.neutral300, justifyContent: 'center', alignItems: 'center' },
   cardBody: { flex: 1 },
   driverName: { fontSize: 16, fontWeight: '700', color: COLORS.black },
   meta: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
-  vehicle: { fontSize: 12, color: COLORS.neutral700, marginTop: 2 },
+  vehicle: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
   primary: {
     marginHorizontal: 24,
+    marginTop: 8,
+    backgroundColor: COLORS.black,
     paddingVertical: 16,
     borderRadius: 12,
-    backgroundColor: COLORS.black,
     alignItems: 'center',
   },
   primaryDisabled: { opacity: 0.45 },
-  primaryText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
+  primaryText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });

@@ -93,6 +93,7 @@ export type Database = {
         Row: {
           amount_cents: number
           bags_count: number
+          cancellation_reason: string | null
           created_at: string
           destination_address: string
           destination_lat: number
@@ -114,6 +115,7 @@ export type Database = {
         Insert: {
           amount_cents: number
           bags_count: number
+          cancellation_reason?: string | null
           created_at?: string
           destination_address: string
           destination_lat: number
@@ -135,6 +137,7 @@ export type Database = {
         Update: {
           amount_cents?: number
           bags_count?: number
+          cancellation_reason?: string | null
           created_at?: string
           destination_address?: string
           destination_lat?: number
@@ -189,6 +192,7 @@ export type Database = {
         Row: {
           amount_cents: number
           bags_count: number
+          cancellation_reason: string | null
           contact_phone: string
           created_at: string
           dependent_id: string | null
@@ -214,6 +218,7 @@ export type Database = {
         Insert: {
           amount_cents: number
           bags_count?: number
+          cancellation_reason?: string | null
           contact_phone: string
           created_at?: string
           dependent_id?: string | null
@@ -239,6 +244,7 @@ export type Database = {
         Update: {
           amount_cents?: number
           bags_count?: number
+          cancellation_reason?: string | null
           contact_phone?: string
           created_at?: string
           dependent_id?: string | null
@@ -523,6 +529,7 @@ export type Database = {
           id: string
           message: string | null
           read_at: string | null
+          target_app_slug: string
           title: string
           user_id: string
         }
@@ -532,6 +539,7 @@ export type Database = {
           id?: string
           message?: string | null
           read_at?: string | null
+          target_app_slug?: string
           title: string
           user_id: string
         }
@@ -541,6 +549,7 @@ export type Database = {
           id?: string
           message?: string | null
           read_at?: string | null
+          target_app_slug?: string
           title?: string
           user_id?: string
         }
@@ -806,6 +815,7 @@ export type Database = {
         Row: {
           amount_cents: number
           base_id: string | null
+          cancellation_reason: string | null
           created_at: string
           delivered_at: string | null
           delivery_code: string | null
@@ -839,6 +849,7 @@ export type Database = {
         Insert: {
           amount_cents: number
           base_id?: string | null
+          cancellation_reason?: string | null
           created_at?: string
           delivered_at?: string | null
           delivery_code?: string | null
@@ -872,6 +883,7 @@ export type Database = {
         Update: {
           amount_cents?: number
           base_id?: string | null
+          cancellation_reason?: string | null
           created_at?: string
           delivered_at?: string | null
           delivery_code?: string | null

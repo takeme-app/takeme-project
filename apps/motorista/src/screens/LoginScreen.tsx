@@ -21,6 +21,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { signInWithOAuthProvider } from '../lib/oauth';
 import { checkMotoristaCanAccessApp, getMotoristaPendingCopy, subtypeToMainRoute } from '../lib/motoristaAccess';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import { syncMotoristaProfileFcmToken } from '../lib/motoristaFcm';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
 
@@ -64,6 +65,7 @@ export function LoginScreen({ navigation }: Props) {
     }
     if (gate.kind === 'pending') {
       const c = getMotoristaPendingCopy(gate.status);
+      await syncMotoristaProfileFcmToken();
       showAlert(c.title, c.message, {
         onClose: () => {
           navigation.reset({ index: 0, routes: [{ name: 'MotoristaPendingApproval' }] });
@@ -72,9 +74,11 @@ export function LoginScreen({ navigation }: Props) {
       return;
     }
     if (gate.kind === 'needs_stripe_connect') {
+      await syncMotoristaProfileFcmToken();
       navigation.reset({ index: 0, routes: [{ name: 'StripeConnectSetup', params: { subtype: gate.subtype } }] });
       return;
     }
+    await syncMotoristaProfileFcmToken();
     navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(gate.subtype) }] });
   };
 

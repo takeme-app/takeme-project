@@ -14,12 +14,14 @@
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		CBEF332B502454E00FDE38B7 /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEA3F349220AAAF09C15A49E /* ExpoModulesProvider.swift */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
+		F11M00TOR1A68108700A75B9C /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = F11M00TOR1A68108700A75B9B /* GoogleService-Info.plist */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		13B07F961A680F5B00A75B9A /* TakeMeMotorista.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TakeMeMotorista.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = TakeMeMotorista/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = TakeMeMotorista/Info.plist; sourceTree = "<group>"; };
+		F11M00TOR1A68108700A75B9B /* GoogleService-Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = "GoogleService-Info.plist"; path = "TakeMeMotorista/GoogleService-Info.plist"; sourceTree = "<group>"; };
 		38A6AB54FF98F0D2D43B5D2B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = TakeMeMotorista/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		7ACC4ED3BB55CF81261A1C72 /* libPods-TakeMeMotorista.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-TakeMeMotorista.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = TakeMeMotorista/SplashScreen.storyboard; sourceTree = "<group>"; };
@@ -52,6 +54,7 @@
 				BB2F792B24A3F905000567C9 /* Supporting */,
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
+				F11M00TOR1A68108700A75B9B /* GoogleService-Info.plist */,
 				AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */,
 				38A6AB54FF98F0D2D43B5D2B /* PrivacyInfo.xcprivacy */,
 			);
@@ -197,6 +200,7 @@
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */,
 				273625F11780DDF041AD59F7 /* PrivacyInfo.xcprivacy in Resources */,
+				F11M00TOR1A68108700A75B9C /* GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

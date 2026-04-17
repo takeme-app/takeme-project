@@ -104,6 +104,7 @@ type BookingDetail = {
   driver_id: string | null;
   /** `scheduled_trips.status` — active | completed | cancelled */
   trip_status: string | null;
+  cancellation_reason: string | null;
   scheduled_trip_id: string | null;
   passenger_count: number;
   bags_count: number;
@@ -192,7 +193,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
       const { data: booking, error: bookErr } = await supabase
         .from('bookings')
         .select(
-          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, scheduled_trip_id, passenger_count, bags_count, passenger_data, pickup_code, delivery_code'
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, scheduled_trip_id, passenger_count, bags_count, passenger_data, pickup_code, delivery_code, cancellation_reason'
         )
         .eq('id', bookingId)
         .eq('user_id', user.id)
@@ -263,6 +264,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
         driver_avatar_url: driverAvatarUrl,
         driver_id: trip?.driver_id ?? null,
         trip_status: (trip as { status?: string } | null)?.status ?? null,
+        cancellation_reason: (booking as { cancellation_reason?: string | null }).cancellation_reason ?? null,
         scheduled_trip_id: b.scheduled_trip_id ?? null,
         passenger_count: Number(b.passenger_count ?? 0),
         bags_count: Number(b.bags_count ?? 0),
@@ -620,7 +622,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
 
         <View style={styles.card}>
           <View style={styles.cardStatusRow}>
-            <StatusBadge variant={clientViagemStatusBadge(detail.status, detail.trip_status)} />
+            <StatusBadge variant={clientViagemStatusBadge(detail.status, detail.trip_status, detail.cancellation_reason)} />
           </View>
           <Text style={styles.tripId}>VG{detail.id.slice(-6).toUpperCase()}</Text>
           <Text style={styles.cardDate}>{formatDetailDate(detail.created_at)}</Text>
@@ -753,36 +755,6 @@ export function TripDetailScreen({ navigation, route }: Props) {
           </View>
         </View>
 
-        <View style={styles.pinSection}>
-          <Text style={styles.pinLabel}>PIN de desembarque</Text>
-          <Text style={styles.pinHint}>Informe ao motorista ao chegar ao destino.</Text>
-          <View style={styles.pinRow}>
-            <View style={styles.pinChipsWrap}>
-              {pinCharsForDisplay(detail.delivery_code).map((ch, i) => (
-                <View key={`trip-dc-${i}`} style={styles.pinChip}>
-                  <Text style={styles.pinChipText}>{ch}</Text>
-                </View>
-              ))}
-            </View>
-            <View style={styles.pinIconButtons}>
-              <TouchableOpacity
-                style={styles.pinIconBtn}
-                activeOpacity={0.8}
-                onPress={() => copyPin('PIN de desembarque', detail.delivery_code)}
-              >
-                <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.pinIconBtn}
-                activeOpacity={0.8}
-                onPress={() => void sharePin('PIN de desembarque', detail.delivery_code)}
-              >
-                <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-
         {tripDependentShipments.length > 0 ? (
           <>
             <Text style={[styles.sectionHeading, styles.dependentSectionHeading]}>Envio de dependente na viagem</Text>
@@ -813,35 +785,6 @@ export function TripDetailScreen({ navigation, route }: Props) {
                         style={styles.pinIconBtn}
                         activeOpacity={0.8}
                         onPress={() => void sharePin('PIN de embarque do dependente', dep.pickup_code)}
-                      >
-                        <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                </View>
-                <View style={[styles.pinSection, styles.pinSectionNested]}>
-                  <Text style={styles.pinLabel}>PIN de desembarque (dependente)</Text>
-                  <Text style={styles.pinHint}>Informe ao motorista no desembarque no destino.</Text>
-                  <View style={styles.pinRow}>
-                    <View style={styles.pinChipsWrap}>
-                      {pinCharsForDisplay(dep.delivery_code).map((ch, i) => (
-                        <View key={`td-${dep.id}-dc-${i}`} style={styles.pinChip}>
-                          <Text style={styles.pinChipText}>{ch}</Text>
-                        </View>
-                      ))}
-                    </View>
-                    <View style={styles.pinIconButtons}>
-                      <TouchableOpacity
-                        style={styles.pinIconBtn}
-                        activeOpacity={0.8}
-                        onPress={() => copyPin('PIN de desembarque (dependente)', dep.delivery_code)}
-                      >
-                        <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.pinIconBtn}
-                        activeOpacity={0.8}
-                        onPress={() => void sharePin('PIN de desembarque do dependente', dep.delivery_code)}
                       >
                         <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
                       </TouchableOpacity>

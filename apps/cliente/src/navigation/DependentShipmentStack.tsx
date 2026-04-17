@@ -5,6 +5,7 @@ import { DependentShipmentFormScreen } from '../screens/dependentShipment/Depend
 import { AddDependentScreen } from '../screens/profile/AddDependentScreen';
 import { DependentSuccessScreen } from '../screens/profile/DependentSuccessScreen';
 import { DefineDependentTripScreen } from '../screens/dependentShipment/DefineDependentTripScreen';
+import { SelectDependentTripDriverScreen } from '../screens/dependentShipment/SelectDependentTripDriverScreen';
 import { ConfirmDependentShipmentScreen } from '../screens/dependentShipment/ConfirmDependentShipmentScreen';
 import { DependentShipmentSuccessScreen } from '../screens/dependentShipment/DependentShipmentSuccessScreen';
 
@@ -35,6 +36,7 @@ export function DependentShipmentStack() {
       <Stack.Screen name="AddDependent" component={AddDependentInFlowScreen} />
       <Stack.Screen name="DependentSuccess" component={DependentSuccessScreen} />
       <Stack.Screen name="DefineDependentTrip" component={DefineDependentTripScreen} />
+      <Stack.Screen name="SelectDependentTripDriver" component={SelectDependentTripDriverScreen} />
       <Stack.Screen name="ConfirmDependentShipment" component={ConfirmDependentShipmentScreen} />
       <Stack.Screen name="DependentShipmentSuccess" component={DependentShipmentSuccessScreen} />
     </Stack.Navigator>

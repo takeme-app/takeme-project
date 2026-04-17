@@ -7,9 +7,6 @@ import {
 } from '../../components/AddressSelectionScreen';
 import type { WhenTimeResult } from '../../hooks/useWhenTimeSelection';
 
-/** Valor placeholder em centavos para envio de dependente (ex.: R$ 50,00). */
-const PLACEHOLDER_AMOUNT_CENTS = 5000;
-
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'DefineDependentTrip'>;
 
 export function DefineDependentTripScreen({ navigation, route }: Props) {
@@ -27,7 +24,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
         latitude: places.destination.latitude,
         longitude: places.destination.longitude,
       };
-      navigation.navigate('ConfirmDependentShipment', {
+      navigation.navigate('SelectDependentTripDriver', {
         origin,
         destination,
         whenOption: when.whenOption,
@@ -37,7 +34,6 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
         bagsCount,
         instructions,
         dependentId,
-        amountCents: PLACEHOLDER_AMOUNT_CENTS,
         photoUri,
       });
     },
@@ -49,7 +45,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
       title="Definir viagem"
       onConfirm={handleConfirm}
       onGoBack={() => navigation.goBack()}
-      showRecentDestinations={false}
+      showRecentDestinations
       destinationPlaceholder="Para onde vai o dependente?"
       whenTitle="Para quando é a viagem?"
       nowSubtitle="Solicitar imediatamente"
