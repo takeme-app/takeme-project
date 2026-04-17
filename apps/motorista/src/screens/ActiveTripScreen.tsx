@@ -1193,6 +1193,46 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
   const overlayTop = insets.top + 56;
 
+  /** Centraliza o mapa na parada correspondente ao ícone da lateral (mesmo fallback de coord. dos markers). */
+  const focusMapOnSidebarStop = useCallback(
+    (stop: TripStop, idx: number) => {
+      if (!mapRef.current) return;
+      setFollowMyLocation(false);
+      const p = pickStopCoord(stop.lat, stop.lng);
+      const lat = p?.latitude ?? mapInitialRegion.latitude + idx * 0.002;
+      const lng = p?.longitude ?? mapInitialRegion.longitude + idx * 0.002;
+      if (!isValidGlobeCoordinate(lat, lng)) return;
+      const d = MY_LOCATION_NAV_DELTA * 6;
+      mapRef.current.animateToRegion(
+        {
+          latitude: lat,
+          longitude: lng,
+          latitudeDelta: d,
+          longitudeDelta: d,
+        },
+        450,
+      );
+    },
+    [mapInitialRegion.latitude, mapInitialRegion.longitude],
+  );
+
+  const focusMapOnSidebarTripDestination = useCallback(() => {
+    if (!mapRef.current || !tripDestLL) return;
+    setFollowMyLocation(false);
+    const { latitude: lat, longitude: lng } = tripDestLL;
+    if (!isValidGlobeCoordinate(lat, lng)) return;
+    const d = MY_LOCATION_NAV_DELTA * 6;
+    mapRef.current.animateToRegion(
+      {
+        latitude: lat,
+        longitude: lng,
+        latitudeDelta: d,
+        longitudeDelta: d,
+      },
+      450,
+    );
+  }, [tripDestLL]);
+
   /**
    * Modo seguir: apara a polyline a partir do ponto colado na via (linha começa no “carro”).
    * Fora do modo seguir: mantém as polylines completas.
@@ -2002,7 +2042,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   id="trip-immediate-under"
                   coordinates={immediateLegLineForMap}
                   strokeColor="#0a0a0a"
-                  strokeWidth={16}
+                  strokeWidth={12}
                   lineOpacity={0.55}
                   aboveLayerID={
                     (goldLineForMap?.length ?? 0) >= 2 ? 'trip-gold-layer' : MAPBOX_STREETS_ROUTE_ABOVE_LAYER_ID
@@ -2014,7 +2054,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   id="trip-immediate-core"
                   coordinates={immediateLegLineForMap}
                   strokeColor="#000000"
-                  strokeWidth={6}
+                  strokeWidth={4}
                   lineOpacity={0.95}
                   aboveLayerID="trip-immediate-under-layer"
                   layerIndex={983}
@@ -2024,7 +2064,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   id="trip-immediate"
                   coordinates={immediateLegLineForMap}
                   strokeColor="#000000"
-                  strokeWidth={11}
+                  strokeWidth={8}
                   lineOpacity={1}
                   lineDasharray={NEAREST_ROUTE_LINE_DASH}
                   aboveLayerID="trip-immediate-core-layer"
@@ -2155,21 +2195,29 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               const btnBg = isCompleted ? '#9CA3AF' : isCurrent ? STOP_TYPE_COLORS[stop.stopType] : '#E5E7EB';
               const iconColor = isCompleted || isCurrent ? '#fff' : '#6B7280';
               return (
-                <View
+                <TouchableOpacity
                   key={stop.id}
                   style={[styles.sidebarBtn, { backgroundColor: btnBg }]}
-                  accessibilityRole="image"
+                  accessibilityRole="button"
                   accessibilityLabel={stopPhaseShortLabel(stop)}
+                  activeOpacity={0.85}
+                  onPress={() => focusMapOnSidebarStop(stop, idx)}
                 >
                   <StopKindMarkerIcon stop={stop} completed={isCompleted} color={iconColor} />
-                </View>
+                </TouchableOpacity>
               );
             })}
 
             {showSidebarTripEndFlag && (
-              <View style={[styles.sidebarBtn, styles.sidebarDestBtn]} accessibilityRole="image">
+              <TouchableOpacity
+                style={[styles.sidebarBtn, styles.sidebarDestBtn]}
+                accessibilityRole="button"
+                accessibilityLabel="Destino da viagem"
+                activeOpacity={0.85}
+                onPress={focusMapOnSidebarTripDestination}
+              >
                 <MaterialIcons name="flag" size={18} color={DARK} />
-              </View>
+              </TouchableOpacity>
             )}
           </View>
         )}

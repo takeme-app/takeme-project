@@ -56,7 +56,7 @@ export function TravelHistoryScreen({ navigation }: Props) {
     }
     const { data: bookings } = await supabase
       .from('bookings')
-      .select('id, origin_address, destination_address, status, created_at, scheduled_trips(status)')
+      .select('id, origin_address, destination_address, status, created_at, cancellation_reason, scheduled_trips(status)')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(100);
@@ -69,11 +69,12 @@ export function TravelHistoryScreen({ navigation }: Props) {
         destination_address?: string;
         status?: string;
         created_at: string;
+        cancellation_reason?: string | null;
         scheduled_trips?: { status?: string } | { status?: string }[] | null;
       };
       const st = b.scheduled_trips;
       const tripStatus = Array.isArray(st) ? st[0]?.status : st?.status;
-      const badgeVariant = clientViagemStatusBadge(b.status, tripStatus ?? null);
+      const badgeVariant = clientViagemStatusBadge(b.status, tripStatus ?? null, b.cancellation_reason);
       const item: HistoryItem = {
         id: b.id,
         type: 'viagem',
@@ -82,7 +83,7 @@ export function TravelHistoryScreen({ navigation }: Props) {
         detailLine: '1 passageiro',
         badgeVariant,
       };
-      if (badgeVariant === 'cancelada') cancelledList.push(item);
+      if (badgeVariant === 'cancelada' || badgeVariant === 'reembolsada') cancelledList.push(item);
       else if (badgeVariant === 'concluida') completedList.push(item);
       else activeList.push(item);
     });

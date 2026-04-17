@@ -219,6 +219,36 @@ export function useTripStops(tripId: string | null) {
         },
         scheduleSilentReload,
       )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'bookings',
+          filter: `scheduled_trip_id=eq.${tripId}`,
+        },
+        scheduleSilentReload,
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'shipments',
+          filter: `scheduled_trip_id=eq.${tripId}`,
+        },
+        scheduleSilentReload,
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'dependent_shipments',
+          filter: `scheduled_trip_id=eq.${tripId}`,
+        },
+        scheduleSilentReload,
+      )
       .subscribe();
 
     return () => {
@@ -520,7 +550,7 @@ async function buildDependentStopsOnly(tripId: string): Promise<TripStop[]> {
       'id, full_name, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, instructions, status, pickup_code, delivery_code',
     )
     .eq('scheduled_trip_id', tripId)
-    .in('status', ['pending_review', 'confirmed', 'in_progress']);
+    .in('status', ['confirmed', 'in_progress']);
 
   const out: TripStop[] = [];
   for (const d of (rows ?? []) as DependentShipmentRow[]) {
@@ -800,7 +830,7 @@ async function enrichDependentStopsFromRows(tripId: string, stops: TripStop[]): 
     .from('dependent_shipments')
     .select('id, origin_lat, origin_lng, destination_lat, destination_lng')
     .eq('scheduled_trip_id', tripId)
-    .in('status', ['pending_review', 'confirmed', 'in_progress']);
+    .in('status', ['confirmed', 'in_progress', 'delivered']);
 
   const byId = new Map<
     string,
@@ -1083,8 +1113,104 @@ async function enrichDependentShipmentCodes(stops: TripStop[]): Promise<TripStop
   });
 }
 
+/**
+ * Remove paradas de entidades ainda não aceitas pelo motorista (reserva paid/pending,
+ * encomenda sem `driver_id`, dependente em `pending_review`). `trip_stops` remoto pode
+ * incluir essas linhas antes do aceite em Solicitações pendentes.
+ */
+async function filterStopsExcludedUntilDriverAccepted(tripId: string, stops: TripStop[]): Promise<TripStop[]> {
+  if (stops.length === 0) return stops;
+
+  const { data: tripRow } = await supabase
+    .from('scheduled_trips')
+    .select('driver_id')
+    .eq('id', tripId)
+    .maybeSingle();
+  const driverId = String((tripRow as { driver_id?: string | null } | null)?.driver_id ?? '').trim();
+  if (!driverId) return stops;
+
+  const bookingIds = new Set<string>();
+  const shipmentIds = new Set<string>();
+  const dependentIds = new Set<string>();
+  for (const s of stops) {
+    const eid = String(s.entityId ?? '').trim();
+    if (!eid) continue;
+    if (s.stopType === 'passenger_pickup' || s.stopType === 'passenger_dropoff') bookingIds.add(eid);
+    if (s.stopType === 'package_pickup' || s.stopType === 'package_dropoff') shipmentIds.add(eid);
+    if (s.stopType === 'dependent_pickup' || s.stopType === 'dependent_dropoff') dependentIds.add(eid);
+  }
+
+  const excludedBookings = new Set<string>();
+  if (bookingIds.size > 0) {
+    const { data } = await supabase.from('bookings').select('id, status').in('id', [...bookingIds]);
+    const statusById = new Map(
+      (data ?? []).map((r) => {
+        const row = r as { id: string; status?: string | null };
+        return [String(row.id), String(row.status ?? '').toLowerCase()] as const;
+      }),
+    );
+    for (const id of bookingIds) {
+      const st = statusById.get(id);
+      if (st !== 'confirmed' && st !== 'in_progress') excludedBookings.add(id);
+    }
+  }
+
+  const excludedShipments = new Set<string>();
+  if (shipmentIds.size > 0) {
+    const { data } = await supabase.from('shipments').select('id, status, driver_id').in('id', [...shipmentIds]);
+    const rowById = new Map(
+      (data ?? []).map((r) => {
+        const row = r as { id: string; status?: string | null; driver_id?: string | null };
+        return [String(row.id), row] as const;
+      }),
+    );
+    for (const id of shipmentIds) {
+      const row = rowById.get(id);
+      if (!row) {
+        excludedShipments.add(id);
+        continue;
+      }
+      const st = String(row.status ?? '').toLowerCase();
+      const driverOk = String(row.driver_id ?? '').trim() === driverId;
+      const statusOk = st === 'confirmed' || st === 'in_progress' || st === 'delivered';
+      if (!driverOk || !statusOk) excludedShipments.add(id);
+    }
+  }
+
+  const excludedDependents = new Set<string>();
+  if (dependentIds.size > 0) {
+    const { data } = await supabase.from('dependent_shipments').select('id, status').in('id', [...dependentIds]);
+    const statusById = new Map(
+      (data ?? []).map((r) => {
+        const row = r as { id: string; status?: string | null };
+        return [String(row.id), String(row.status ?? '').toLowerCase()] as const;
+      }),
+    );
+    for (const id of dependentIds) {
+      const st = statusById.get(id);
+      if (st !== 'confirmed' && st !== 'in_progress' && st !== 'delivered') excludedDependents.add(id);
+    }
+  }
+
+  return stops.filter((s) => {
+    const eid = String(s.entityId ?? '').trim();
+    if (!eid) return true;
+    if (s.stopType === 'passenger_pickup' || s.stopType === 'passenger_dropoff') {
+      return !excludedBookings.has(eid);
+    }
+    if (s.stopType === 'package_pickup' || s.stopType === 'package_dropoff') {
+      return !excludedShipments.has(eid);
+    }
+    if (s.stopType === 'dependent_pickup' || s.stopType === 'dependent_dropoff') {
+      return !excludedDependents.has(eid);
+    }
+    return true;
+  });
+}
+
 async function finalizeStopsForTrip(tripId: string, stops: TripStop[]): Promise<TripStop[]> {
-  const replaced = await replaceShipmentPackageStopsWithManual(tripId, stops);
+  const acceptedOnly = await filterStopsExcludedUntilDriverAccepted(tripId, stops);
+  const replaced = await replaceShipmentPackageStopsWithManual(tripId, acceptedOnly);
   const mergedShip = await mergeMissingShipmentStopsIntoList(tripId, replaced);
   const mergedDep = await mergeMissingDependentStopsIntoList(tripId, mergedShip);
   const withoutOrigin = omitDriverOriginStops(mergedDep);

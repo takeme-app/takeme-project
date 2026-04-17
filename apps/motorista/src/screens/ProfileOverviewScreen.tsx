@@ -19,6 +19,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../navigation/types';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../lib/supabase';
+import { unregisterMotoristaProfileFcmToken } from '../lib/motoristaFcm';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { getRootStackNavigation } from '../navigation/getRootStackNavigation';
 import { SingleFieldModal } from '../components/profile/SingleFieldModal';
@@ -121,6 +122,7 @@ export function ProfileOverviewScreen({ navigation }: Props) {
   const rootNav = getRootStackNavigation(navigation);
 
   const handleLogout = async () => {
+    await unregisterMotoristaProfileFcmToken();
     await supabase.auth.signOut();
     const root = navigation.getParent()?.getParent();
     if (root) {

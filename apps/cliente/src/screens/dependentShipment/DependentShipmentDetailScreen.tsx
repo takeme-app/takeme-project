@@ -510,36 +510,6 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
           </View>
         </View>
 
-        <View style={styles.pinSection}>
-          <Text style={styles.pinLabel}>PIN de desembarque do dependente</Text>
-          <Text style={styles.pinHint}>Informe ao motorista na entrega (desembarque) no destino.</Text>
-          <View style={styles.pinRow}>
-            <View style={styles.pinChipsWrap}>
-              {pinCharsForDisplay(detail.delivery_code).map((ch, i) => (
-                <View key={`dep-dc-${i}`} style={styles.pinChip}>
-                  <Text style={styles.pinChipText}>{ch}</Text>
-                </View>
-              ))}
-            </View>
-            <View style={styles.pinIconButtons}>
-              <TouchableOpacity
-                style={styles.pinIconBtn}
-                activeOpacity={0.8}
-                onPress={() => copyPin('PIN de desembarque', detail.delivery_code)}
-              >
-                <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.pinIconBtn}
-                activeOpacity={0.8}
-                onPress={() => void sharePin('PIN de desembarque do dependente', detail.delivery_code)}
-              >
-                <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-
         {/* Título + Avatar */}
         <View style={styles.infoHeader}>
           <View style={styles.infoHeaderText}>

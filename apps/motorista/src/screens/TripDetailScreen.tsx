@@ -19,6 +19,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+import { invokeRefundJourneyStartNotAccepted } from '../lib/refundJourneyStartNotAccepted';
 import { closeConversationsForScheduledTrip } from '../lib/closeTripConversations';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import {
@@ -394,6 +395,11 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const load = useCallback(async () => {
     setLoadingTrip(true);
 
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const uid = user?.id ?? null;
+
     const [{ data: tripData }, { data: bookingsData }, { data: shipmentsData }] =
       await Promise.all([
         supabase
@@ -409,13 +415,16 @@ export function TripDetailScreen({ route, navigation }: Props) {
             'id, passenger_count, bags_count, status, amount_cents, profiles(full_name, avatar_url, rating)'
           )
           .eq('scheduled_trip_id', tripId)
-          .in('status', ['pending', 'paid', 'confirmed']),
-        supabase
-          .from('shipments')
-          .select(
-            'id, instructions, package_size, origin_address, destination_address, recipient_name'
-          )
-          .eq('scheduled_trip_id', tripId),
+          .in('status', ['confirmed', 'in_progress']),
+        uid
+          ? supabase
+              .from('shipments')
+              .select(
+                'id, instructions, package_size, origin_address, destination_address, recipient_name',
+              )
+              .eq('scheduled_trip_id', tripId)
+              .eq('driver_id', uid)
+          : Promise.resolve({ data: [] as Shipment[], error: null }),
       ]);
 
     if (tripData) setTrip(tripData as Trip);
@@ -475,6 +484,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
         Alert.alert('Erro', 'Não foi possível iniciar a viagem. Tente novamente.');
         return;
       }
+      void invokeRefundJourneyStartNotAccepted(trip.id);
       setTrip((prev) => (prev ? { ...prev, status: 'active', driver_journey_started_at: now } : prev));
       navigation.navigate('ActiveTrip', { tripId: trip.id });
     } finally {

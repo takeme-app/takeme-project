@@ -9,7 +9,15 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../navigation/ActivitiesStackTypes';
 import { supabase } from '../lib/supabase';
 import { formatActivityTotalPaidLine } from '../lib/tripDriverDisplay';
-import type { ActivitySectionBadge } from '../components/StatusBadge';
+import {
+  StatusBadge,
+  clientViagemStatusBadge,
+  clientDependentActivityStatusBadge,
+  clientShipmentActivityStatusBadge,
+  excursionRequestStatusToBadge,
+  type ActivitySectionBadge,
+  type TripStatusBadge,
+} from '../components/StatusBadge';
 import { SupportSheet } from '../components/SupportSheet';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ActivitiesList'>;
@@ -31,6 +39,10 @@ export type ActivityItem = {
   summaryLine?: string;
   /** Label do badge para excursões (Em análise, Agendado, Concluída, etc.) */
   excursionStatusLabel?: string;
+  /** Status exibido no cartão (cores alinhadas a `StatusBadge` / Histórico de viagens). */
+  statusBadgeVariant: TripStatusBadge;
+  /** Sobrescreve o texto padrão do variant (ex.: excursões). */
+  statusBadgeLabel?: string;
 };
 
 const COLORS = {
@@ -135,7 +147,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('bookings')
         .select(
-          'id, origin_address, destination_address, amount_cents, status, created_at, passenger_count, bags_count, scheduled_trip_id',
+          'id, origin_address, destination_address, amount_cents, status, created_at, passenger_count, bags_count, scheduled_trip_id, cancellation_reason, scheduled_trips(status)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -143,7 +155,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('shipments')
         .select(
-          'id, origin_address, destination_address, amount_cents, status, created_at, package_size, scheduled_trip_id',
+          'id, origin_address, destination_address, amount_cents, status, created_at, package_size, scheduled_trip_id, driver_id, cancellation_reason, scheduled_trips(status)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -151,7 +163,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('dependent_shipments')
         .select(
-          'id, origin_address, destination_address, full_name, amount_cents, status, created_at, bags_count',
+          'id, origin_address, destination_address, full_name, amount_cents, status, created_at, bags_count, scheduled_trip_id, cancellation_reason, scheduled_trips(status)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -176,6 +188,8 @@ export function ActivitiesScreen({ navigation }: Props) {
       passenger_count?: number;
       bags_count?: number;
       scheduled_trip_id?: string | null;
+      cancellation_reason?: string | null;
+      scheduled_trips?: { status?: string } | { status?: string }[] | null;
     }[];
 
     const tripIdsForShipments = [
@@ -200,6 +214,10 @@ export function ActivitiesScreen({ navigation }: Props) {
       const s = (b as { status?: string }).status?.toLowerCase() ?? '';
       const sectionBadge: ActivitySectionBadge =
         s === 'paid' || s === 'in_progress' || s === 'confirmed' ? 'confirmada' : 'planejada';
+      const st = b.scheduled_trips;
+      const tripStatus = Array.isArray(st) ? st[0]?.status : st?.status;
+      const cr = (b as { cancellation_reason?: string | null }).cancellation_reason;
+      const statusBadgeVariant = clientViagemStatusBadge(b.status, tripStatus ?? null, cr);
       const dest = b.destination_address ?? 'Viagem';
       const origin = b.origin_address;
       const pax = Math.max(1, Math.floor(Number(b.passenger_count ?? 1)));
@@ -225,16 +243,26 @@ export function ActivitiesScreen({ navigation }: Props) {
         bookingStatus: b.status,
         created_at: b.created_at,
         summaryLine: summaryParts.join(' · '),
+        statusBadgeVariant,
       };
     });
     const shipmentItems: ActivityItem[] = (shipmentsRes.data ?? []).map((s) => {
-      const status = (s as { status?: string }).status?.toLowerCase() ?? '';
+      const rawStatus = (s as { status?: string }).status;
+      const status = rawStatus?.toLowerCase() ?? '';
       const sectionBadge: ActivitySectionBadge =
         status === 'confirmed' || status === 'in_progress' || status === 'delivered' ? 'confirmada' : 'planejada';
       const dest = (s as { destination_address?: string }).destination_address ?? 'Envio';
       const origin = (s as { origin_address?: string }).origin_address;
       const pkg = (s as { package_size?: string }).package_size;
       const encLabel = packageSizeSummaryLabel(pkg);
+      const stShip = (s as { scheduled_trips?: { status?: string } | { status?: string }[] | null }).scheduled_trips;
+      const tripStatusShip = Array.isArray(stShip) ? stShip[0]?.status : stShip?.status;
+      const statusBadgeVariant = clientShipmentActivityStatusBadge(
+        rawStatus,
+        (s as { cancellation_reason?: string | null }).cancellation_reason,
+        (s as { driver_id?: string | null }).driver_id ?? null,
+        tripStatusShip ?? null,
+      );
       return {
         id: (s as { id: string }).id,
         type: 'envio',
@@ -246,10 +274,12 @@ export function ActivitiesScreen({ navigation }: Props) {
         sectionBadge,
         created_at: (s as { created_at: string }).created_at,
         summaryLine: `1 encomenda · tamanho ${encLabel}`,
+        statusBadgeVariant,
       };
     });
     const dependentItems: ActivityItem[] = (dependentShipmentsRes.data ?? []).map((d) => {
-      const status = (d as { status?: string }).status?.toLowerCase() ?? '';
+      const rawStatus = (d as { status?: string }).status;
+      const status = rawStatus?.toLowerCase() ?? '';
       const sectionBadge: ActivitySectionBadge =
         status === 'confirmed' || status === 'in_progress' || status === 'delivered' ? 'confirmada' : 'planejada';
       const dest = (d as { destination_address?: string }).destination_address ?? 'Envio dependente';
@@ -257,6 +287,13 @@ export function ActivitiesScreen({ navigation }: Props) {
       const title = fullName ? `Envio para ${fullName}` : dest;
       const origin = (d as { origin_address?: string }).origin_address;
       const depBags = Math.max(0, Math.floor(Number((d as { bags_count?: number }).bags_count ?? 0)));
+      const stDep = (d as { scheduled_trips?: { status?: string } | { status?: string }[] | null }).scheduled_trips;
+      const tripStatusDep = Array.isArray(stDep) ? stDep[0]?.status : stDep?.status;
+      const statusBadgeVariant = clientDependentActivityStatusBadge(
+        rawStatus,
+        (d as { cancellation_reason?: string | null }).cancellation_reason,
+        tripStatusDep ?? null,
+      );
       return {
         id: (d as { id: string }).id,
         type: 'dependente',
@@ -268,6 +305,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         sectionBadge,
         created_at: (d as { created_at: string }).created_at,
         summaryLine: `1 dependente · ${depBags} ${depBags === 1 ? 'mala' : 'malas'}`,
+        statusBadgeVariant,
       };
     });
     const excursionItems: ActivityItem[] = (excursionsRes.data ?? []).map((e) => {
@@ -308,6 +346,8 @@ export function ActivitiesScreen({ navigation }: Props) {
         excursionStatusLabel,
         created_at: createdAt,
         summaryLine: `${people} ${people === 1 ? 'pessoa' : 'pessoas'}`,
+        statusBadgeVariant: excursionRequestStatusToBadge(status),
+        statusBadgeLabel: excursionStatusLabel,
       };
     });
     const combined = [...bookingItems, ...shipmentItems, ...dependentItems, ...excursionItems].sort(
@@ -378,6 +418,9 @@ export function ActivitiesScreen({ navigation }: Props) {
             >
               <Image source={require('../../assets/icons/icon-chat.png')} style={styles.activitySupportIcon} />
             </TouchableOpacity>
+          </View>
+          <View style={styles.activityStatusRow}>
+            <StatusBadge variant={item.statusBadgeVariant} label={item.statusBadgeLabel} />
           </View>
           <Text style={styles.activityDateTime}>{item.dateTime}</Text>
           {item.summaryLine ? (
@@ -550,6 +593,7 @@ const styles = StyleSheet.create({
   activityContent: { flex: 1 },
   activityCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 },
   activityTitle: { fontSize: 15, fontWeight: '700', color: COLORS.black, flex: 1, marginRight: 8 },
+  activityStatusRow: { marginTop: 6, marginBottom: 2, alignSelf: 'flex-start' },
   activityDateTime: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
   activitySummary: { fontSize: 13, color: COLORS.black, marginTop: 4, lineHeight: 18 },
   activityPrice: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },

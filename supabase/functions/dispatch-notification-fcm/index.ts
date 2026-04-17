@@ -92,13 +92,16 @@ Deno.serve(async (req) => {
       return json(400, { error: "No user_id on notification record", error_id });
     }
 
+    const rawTarget = record.target_app_slug as string | undefined;
+    const targetAppSlug = rawTarget === "motorista" ? "motorista" : "cliente";
+
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
     const { data: tokenRows, error: tokErr } = await supabase
       .from("profile_fcm_tokens")
       .select("fcm_token")
       .eq("profile_id", userId)
-      .eq("app_slug", "cliente");
+      .eq("app_slug", targetAppSlug);
 
     if (tokErr) {
       return json(500, { error: `Tokens query: ${tokErr.message}`, error_id });
@@ -108,7 +111,12 @@ Deno.serve(async (req) => {
       .map((r: { fcm_token: string }) => r.fcm_token)
       .filter(Boolean);
     if (tokens.length === 0) {
-      return json(204, { ok: true, info: "No FCM tokens for profile", error_id });
+      return json(204, {
+        ok: true,
+        info: "No FCM tokens for profile",
+        target_app_slug: targetAppSlug,
+        error_id,
+      });
     }
 
     let accessToken: string;
@@ -127,6 +135,7 @@ Deno.serve(async (req) => {
     const customData: Record<string, string> = {
       notification_id: String(record.id ?? ""),
       category: String(record.category ?? ""),
+      target_app_slug: targetAppSlug,
       read_at: record.read_at != null ? String(record.read_at) : "",
       created_at: String(record.created_at ?? ""),
     };

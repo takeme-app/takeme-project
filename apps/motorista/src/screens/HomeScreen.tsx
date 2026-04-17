@@ -19,6 +19,7 @@ import type { CompositeScreenProps } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+import { syncMotoristaProfileFcmToken } from '../lib/motoristaFcm';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import {
   GoogleMapsMap,
@@ -303,22 +304,25 @@ export function HomeScreen({ navigation }: Props) {
       setActiveTrip(null);
     }
 
-    // Solicitações aguardando aceite: reservas (pending/paid) + encomendas sem base na rota (sem driver_id)
-    const { count: bCount } = await supabase
-      .from('bookings')
-      .select('id, scheduled_trips!inner(driver_id)', { count: 'exact', head: true })
-      .in('status', ['pending', 'paid'])
-      .eq('scheduled_trips.driver_id', user.id);
-
+    // Solicitações aguardando aceite: só viagens scheduled/active (corrida concluída → zera)
     const { data: tripIdsRows } = await supabase
       .from('scheduled_trips')
       .select('id')
       .eq('driver_id', user.id)
       .in('status', ['scheduled', 'active']);
     const myTripIds = (tripIdsRows ?? []).map((r) => (r as { id: string }).id);
+
+    let bCount = 0;
     let sPending = 0;
     let dPending = 0;
     if (myTripIds.length > 0) {
+      const { count: bCnt } = await supabase
+        .from('bookings')
+        .select('id', { count: 'exact', head: true })
+        .in('status', ['pending', 'paid'])
+        .in('scheduled_trip_id', myTripIds);
+      bCount = bCnt ?? 0;
+
       const { count: sCount } = await supabase
         .from('shipments')
         .select('id', { count: 'exact', head: true })
@@ -335,27 +339,38 @@ export function HomeScreen({ navigation }: Props) {
       dPending = depCount ?? 0;
     }
 
-    const { count: shipmentOfferCount } = await supabase
+    const tripIdSet = new Set(myTripIds);
+    const { data: offerCountRows } = await supabase
       .from('shipments')
-      .select('id', { count: 'exact', head: true })
+      .select('id, scheduled_trip_id')
       .eq('current_offer_driver_id', user.id)
       .is('driver_id', null)
       .in('status', ['pending_review', 'confirmed']);
+    const shipmentOfferCount = (offerCountRows ?? []).filter((r) => {
+      const tid = (r as { scheduled_trip_id?: string | null }).scheduled_trip_id;
+      if (tid == null || tid === '') return true;
+      return tripIdSet.has(tid);
+    }).length;
 
-    const { count: shipmentPreferredWaitCount } = await supabase
+    const { data: prefCountRows } = await supabase
       .from('shipments')
-      .select('id', { count: 'exact', head: true })
+      .select('id, scheduled_trip_id')
       .eq('client_preferred_driver_id', user.id)
       .is('current_offer_driver_id', null)
       .is('driver_id', null)
       .in('status', ['pending_review', 'confirmed']);
+    const shipmentPreferredWaitCount = (prefCountRows ?? []).filter((r) => {
+      const tid = (r as { scheduled_trip_id?: string | null }).scheduled_trip_id;
+      if (tid == null || tid === '') return true;
+      return tripIdSet.has(tid);
+    }).length;
 
     setPendingCount(
-      (bCount ?? 0) +
+      bCount +
         sPending +
         dPending +
-        (shipmentOfferCount ?? 0) +
-        (shipmentPreferredWaitCount ?? 0),
+        shipmentOfferCount +
+        shipmentPreferredWaitCount,
     );
 
     const { count: scheduledRouteCount } = await supabase
@@ -370,7 +385,12 @@ export function HomeScreen({ navigation }: Props) {
     setLoading(false);
   }, []);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(
+    useCallback(() => {
+      load();
+      void syncMotoristaProfileFcmToken();
+    }, [load]),
+  );
 
   // Check for active promotions targeting drivers
   useFocusEffect(useCallback(() => {

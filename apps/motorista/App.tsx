@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   LogBox,
+  Platform,
 } from 'react-native';
 
 // @rnmapbox/maps v10 + Fabric: aviso não fatal sobre nós de texto — suprime overlay vermelho.
@@ -26,6 +27,7 @@ import { RegistrationFormProvider } from './src/contexts/RegistrationFormContext
 import { DeferredDriverSignupProvider } from './src/contexts/DeferredDriverSignupContext';
 import { supabase } from './src/lib/supabase';
 import { checkMotoristaCanAccessApp, subtypeToMainRoute } from './src/lib/motoristaAccess';
+import { syncMotoristaProfileFcmToken } from './src/lib/motoristaFcm';
 
 /** Igual ao cliente: nomes literais em process.env para o Metro embutir o valor no bundle. */
 const mapboxToken =
@@ -87,6 +89,22 @@ export default function App() {
   const [splashTimedOut, setSplashTimedOut] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const startTimeRef = useRef<number>(Date.now());
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    let unsub: (() => void) | undefined;
+    void (async () => {
+      try {
+        const messaging = (await import('@react-native-firebase/messaging')).default;
+        unsub = messaging().onTokenRefresh(() => {
+          void syncMotoristaProfileFcmToken();
+        });
+      } catch (_) {}
+    })();
+    return () => {
+      unsub?.();
+    };
+  }, []);
 
   const runSessionInit = useCallback(async (): Promise<InitialRouteName> => {
     const {

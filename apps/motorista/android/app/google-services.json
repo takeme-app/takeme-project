@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "426272900403",
+    "project_id": "takeme-app-69229",
+    "storage_bucket": "takeme-app-69229.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:426272900403:android:beefbeefbeefbeefbeefbe",
+        "android_client_info": {
+          "package_name": "com.takeme.motorista"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDO2OOm5dKjmOL7PFow3aEmAM0hx57LmPU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

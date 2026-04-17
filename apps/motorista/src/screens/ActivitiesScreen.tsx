@@ -22,6 +22,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { getOrCreateActiveSupportConversationId } from '@take-me/shared';
 import { supabase } from '../lib/supabase';
+import { invokeRefundJourneyStartNotAccepted } from '../lib/refundJourneyStartNotAccepted';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { useAppAlert } from '../contexts/AppAlertContext';
 
@@ -125,17 +126,16 @@ function formatDateDisplay(dateStr: string): string {
 
 function buildTripRow(raw: RawTrip): TripRow {
   const rows = raw.bookings ?? [];
-  const confirmedBookings = rows.filter((b) => b.status === 'confirmed');
   const bagsAvailable = raw.bags_available ?? 0;
   const trunkPct = raw.trunk_occupancy_pct ?? 0;
-  /** Reservas ativas na viagem (exclui cancelada) — o cartão mostra totais mesmo em «Planejada». */
-  const activeBookings = rows.filter((b) => {
+  /** Reservas já aceitas (`confirmed` / `in_progress`); `paid`/`pending` só em Solicitações pendentes. */
+  const acceptedBookings = rows.filter((b) => {
     const s = String(b.status ?? '').toLowerCase();
-    return s !== 'cancelled';
+    return s === 'confirmed' || s === 'in_progress';
   });
-  const passengerCount = activeBookings.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
-  const bagsUsed = activeBookings.reduce((s, b) => s + (b.bags_count ?? 0), 0);
-  const isConfirmed = confirmedBookings.length > 0;
+  const passengerCount = acceptedBookings.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
+  const bagsUsed = acceptedBookings.reduce((s, b) => s + (b.bags_count ?? 0), 0);
+  const isConfirmed = acceptedBookings.length > 0;
 
   return {
     id: raw.id,
@@ -144,7 +144,7 @@ function buildTripRow(raw: RawTrip): TripRow {
     departure_at: raw.departure_at,
     bags_available: bagsAvailable,
     status: raw.status,
-    confirmedBookings,
+    confirmedBookings: acceptedBookings,
     passengerCount,
     bagsUsed,
     shipmentCount: 0,
@@ -428,7 +428,8 @@ export function ActivitiesScreen({ navigation }: Props) {
         .from('shipments')
         .select('scheduled_trip_id')
         .in('scheduled_trip_id', tripIds)
-        .neq('status', 'cancelled');
+        .eq('driver_id', user.id)
+        .in('status', ['confirmed', 'in_progress', 'delivered']);
       const countByTrip = new Map<string, number>();
       for (const s of shipRows ?? []) {
         const tid = (s as { scheduled_trip_id?: string }).scheduled_trip_id;
@@ -440,7 +441,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         .from('dependent_shipments')
         .select('scheduled_trip_id, bags_count, status')
         .in('scheduled_trip_id', tripIds)
-        .neq('status', 'cancelled');
+        .in('status', ['confirmed', 'in_progress', 'delivered']);
       const depCountByTrip = new Map<string, number>();
       const depBagsByTrip = new Map<string, number>();
       for (const d of depRows ?? []) {
@@ -451,12 +452,17 @@ export function ActivitiesScreen({ navigation }: Props) {
         depBagsByTrip.set(tid, (depBagsByTrip.get(tid) ?? 0) + bc);
       }
 
-      rows = rows.map((r) => ({
-        ...r,
-        shipmentCount: countByTrip.get(r.id) ?? 0,
-        dependentCount: depCountByTrip.get(r.id) ?? 0,
-        dependentBagsSum: depBagsByTrip.get(r.id) ?? 0,
-      }));
+      rows = rows.map((r) => {
+        const sc = countByTrip.get(r.id) ?? 0;
+        const dc = depCountByTrip.get(r.id) ?? 0;
+        return {
+          ...r,
+          shipmentCount: sc,
+          dependentCount: dc,
+          dependentBagsSum: depBagsByTrip.get(r.id) ?? 0,
+          isConfirmed: r.isConfirmed || sc > 0 || dc > 0,
+        };
+      });
     }
 
     let filtered = rows;
@@ -579,6 +585,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         showAlert('Erro', 'Não foi possível iniciar a viagem. Tente novamente.');
         return;
       }
+      void invokeRefundJourneyStartNotAccepted(tripId);
       await load();
       navigation.navigate('ActiveTrip', { tripId });
     },

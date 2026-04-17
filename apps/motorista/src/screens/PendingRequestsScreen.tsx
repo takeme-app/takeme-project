@@ -92,6 +92,19 @@ function expiresAtFromAssignment(iso: string | null | undefined, fallback: Date)
   return fallback;
 }
 
+/** Só listar pedidos cuja viagem ainda está aberta (corrida concluída/cancelada → some da fila). */
+function tripStatusAllowsPendingRequests(status: string | null | undefined): boolean {
+  const s = String(status ?? '').trim().toLowerCase();
+  return s === 'scheduled' || s === 'active';
+}
+
+function nestedScheduledTripStatus(
+  st: { status?: string | null } | { status?: string | null }[] | null | undefined,
+): string | null {
+  if (!st) return null;
+  return Array.isArray(st) ? (st[0]?.status ?? null) : (st.status ?? null);
+}
+
 /** Countdown até o limite (ex.: 30 min antes da partida). HH:mm:ss; urgente nos últimos 5 min. */
 function formatCountdown(expiresAt: Date): { label: string; urgent: boolean } | null {
   const ms = expiresAt.getTime() - Date.now();
@@ -145,18 +158,22 @@ export function PendingRequestsScreen({ navigation }: Props) {
       assignmentExpiresAt.set(`${row.entity_type}:${row.entity_id}`, row.expires_at);
     }
 
-    // Bookings pendentes nas viagens deste motorista
+    // Bookings pendentes nas viagens deste motorista (apenas viagem scheduled/active)
     const { data: bookings } = await supabase
       .from('bookings')
       .select(
-        'id, origin_address, destination_address, passenger_count, amount_cents, created_at, scheduled_trip_id, user_id, scheduled_trips!inner(departure_at, driver_id)'
+        'id, origin_address, destination_address, passenger_count, amount_cents, created_at, scheduled_trip_id, user_id, scheduled_trips!inner(departure_at, driver_id, status)',
       )
       .in('status', ['pending', 'paid'])
       .limit(50);
 
     const filtered = ((bookings ?? []) as unknown[]).filter((b: unknown) => {
-      const row = b as { scheduled_trips?: { driver_id?: string } };
-      return row.scheduled_trips?.driver_id === user.id;
+      const row = b as {
+        scheduled_trips?: { driver_id?: string; status?: string } | { driver_id?: string; status?: string }[];
+      };
+      const trip = Array.isArray(row.scheduled_trips) ? row.scheduled_trips[0] : row.scheduled_trips;
+      if (trip?.driver_id !== user.id) return false;
+      return tripStatusAllowsPendingRequests(trip?.status);
     });
 
     const all: RequestItem[] = [];
@@ -165,28 +182,48 @@ export function PendingRequestsScreen({ navigation }: Props) {
 
     // Ofertas já vêm filtradas por current_offer_driver_id; não exigir cidade do perfil
     // (motorista sem city / origem com grafia diferente ocultava a solicitação indevidamente).
-    const { data: offerRows } = await supabase
+    const { data: offerRowsRaw } = await supabase
       .from('shipments')
       .select(
-        'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, current_offer_expires_at, scheduled_trip_id',
+        'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, current_offer_expires_at, scheduled_trip_id, scheduled_trips(status)',
       )
       .eq('current_offer_driver_id', user.id)
       .in('status', ['pending_review', 'confirmed'])
       .is('driver_id', null)
       .limit(20);
 
+    const offerRows = ((offerRowsRaw ?? []) as unknown[]).filter((row: unknown) => {
+      const r = row as {
+        scheduled_trip_id?: string | null;
+        scheduled_trips?: { status?: string | null } | { status?: string | null }[] | null;
+      };
+      const tid = r.scheduled_trip_id;
+      if (tid == null || tid === '') return true;
+      return tripStatusAllowsPendingRequests(nestedScheduledTripStatus(r.scheduled_trips));
+    });
+
     const offerSeen = new Set((offerRows ?? []).map((r: { id: string }) => r.id));
 
-    const { data: preferredWaitRows } = await supabase
+    const { data: preferredWaitRaw } = await supabase
       .from('shipments')
       .select(
-        'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, current_offer_expires_at, scheduled_trip_id',
+        'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, current_offer_expires_at, scheduled_trip_id, scheduled_trips(status)',
       )
       .eq('client_preferred_driver_id', user.id)
       .is('current_offer_driver_id', null)
       .is('driver_id', null)
       .in('status', ['pending_review', 'confirmed'])
       .limit(20);
+
+    const preferredWaitRows = ((preferredWaitRaw ?? []) as unknown[]).filter((row: unknown) => {
+      const r = row as {
+        scheduled_trip_id?: string | null;
+        scheduled_trips?: { status?: string | null } | { status?: string | null }[] | null;
+      };
+      const tid = r.scheduled_trip_id;
+      if (tid == null || tid === '') return true;
+      return tripStatusAllowsPendingRequests(nestedScheduledTripStatus(r.scheduled_trips));
+    });
 
     for (const s of (offerRows ?? []) as {
       id: string;

@@ -15,10 +15,12 @@
     "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "com.takeme.motorista",
+      "googleServicesFile": "./GoogleService-Info-motorista.plist",
       "supportsTablet": true
     },
     "android": {
       "package": "com.takeme.motorista",
+      "googleServicesFile": "./google-services-motorista.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/logo.png",
         "backgroundColor": "#000000"
@@ -26,7 +28,8 @@
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -38,6 +41,17 @@
       }
     },
     "plugins": [
+      [
+        "@react-native-firebase/app",
+        {
+          "android": {
+            "googleServicesFile": "./google-services-motorista.json"
+          },
+          "ios": {
+            "googleServicesFile": "./GoogleService-Info-motorista.plist"
+          }
+        }
+      ],
       "@react-native-community/datetimepicker",
       [
         "@rnmapbox/maps",

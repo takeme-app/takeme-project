@@ -30,6 +30,10 @@ verify_jwt = false
 [functions.refund-shipment-no-driver]
 verify_jwt = false
 
+# Motorista inicia viagem: estorna pedidos cancelados pelo trigger (JWT validado na função).
+[functions.refund-journey-start-not-accepted]
+verify_jwt = false
+
 [functions.stripe-webhook]
 verify_jwt = false
 
