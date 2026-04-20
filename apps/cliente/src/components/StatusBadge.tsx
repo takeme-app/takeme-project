@@ -116,6 +116,7 @@ export function clientShipmentActivityStatusBadge(
   cancellationReason: string | null | undefined,
   driverId: string | null | undefined,
   tripStatus: string | undefined | null,
+  options?: { skipDriverIdConfirmedCheck?: boolean },
 ): TripStatusBadge {
   const s = String(status ?? '').trim().toLowerCase();
   const t = String(tripStatus ?? '').trim().toLowerCase();
@@ -125,18 +126,29 @@ export function clientShipmentActivityStatusBadge(
   }
   if (t === 'active') {
     if (s === 'pending_review') return 'aguardando_motorista';
-    if (s === 'confirmed' && !String(driverId ?? '').trim()) return 'aguardando_motorista';
+    if (
+      !options?.skipDriverIdConfirmedCheck &&
+      s === 'confirmed' &&
+      !String(driverId ?? '').trim()
+    ) {
+      return 'aguardando_motorista';
+    }
   }
   return shipmentStatusToBadge(status);
 }
 
-/** Dependente: sem `driver_id` na tabela; `pending_review` + viagem ativa → aguardando motorista. */
+/**
+ * Dependente: não há `driver_id` na linha de `dependent_shipments` (motorista vem de `scheduled_trips`).
+ * Sem `skipDriverIdConfirmedCheck`, `confirmed` + viagem ativa cairia sempre em «aguardando motorista».
+ */
 export function clientDependentActivityStatusBadge(
   status: string | undefined,
   cancellationReason: string | null | undefined,
   tripStatus: string | undefined | null,
 ): TripStatusBadge {
-  return clientShipmentActivityStatusBadge(status, cancellationReason, null, tripStatus);
+  return clientShipmentActivityStatusBadge(status, cancellationReason, null, tripStatus, {
+    skipDriverIdConfirmedCheck: true,
+  });
 }
 
 /** Mapeia status do backend para variante do badge (shipments.status). Inclui awaiting_driver para quando o app motorista existir. */

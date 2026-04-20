@@ -29,6 +29,7 @@ import {
   normalizeRouteTimeForSchedule,
   computeNextDepartureArrivalFromWeekday,
 } from '../lib/routeScheduleTimes';
+import { ensureWorkerRouteHasCoordinates } from '../lib/ensureWorkerRouteCoordinates';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'RouteSchedule'>;
 
@@ -163,6 +164,26 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
           await load();
           return;
         }
+        const geoOk = await ensureWorkerRouteHasCoordinates(supabase, routeId);
+        if (!geoOk.ok) {
+          showAlert('Mapa', geoOk.message);
+          await load();
+          return;
+        }
+        const { data: routeGeoRow } = await supabase
+          .from('worker_routes')
+          .select('origin_lat, origin_lng, destination_lat, destination_lng, origin_address, destination_address')
+          .eq('id', routeId)
+          .single();
+        const geo = coordsForScheduledTripFromRoute(
+          (routeGeoRow ?? {}) as {
+            origin_lat?: number | null;
+            origin_lng?: number | null;
+            destination_lat?: number | null;
+            destination_lng?: number | null;
+          },
+        );
+
         for (const row of rowsToEnable) {
           const { departureAt, arrivalAt } = computeNextDepartureArrivalFromWeekday(
             dayNum,
@@ -177,6 +198,10 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
                 status: 'active',
                 departure_at: departureAt.toISOString(),
                 arrival_at: arrivalAt.toISOString(),
+                origin_lat: geo.origin_lat,
+                origin_lng: geo.origin_lng,
+                destination_lat: geo.destination_lat,
+                destination_lng: geo.destination_lng,
                 updated_at: new Date().toISOString(),
               } as never,
             )
@@ -274,6 +299,12 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user?.id) throw new Error('Não autenticado.');
+
+      const ensured = await ensureWorkerRouteHasCoordinates(supabase, routeId);
+      if (!ensured.ok) {
+        showAlert('Mapa', ensured.message);
+        return;
+      }
 
       const { data: routeData, error: routeErr } = await supabase
         .from('worker_routes')

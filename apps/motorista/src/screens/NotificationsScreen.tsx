@@ -6,6 +6,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Switch,
+  Platform,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -16,6 +17,10 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
+import {
+  applyNotificationDeeplink,
+  parseNotificationDeeplink,
+} from '../lib/notificationDeeplink';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'Notifications'>;
 
@@ -39,9 +44,19 @@ const PREF_KEYS = [
     desc: 'Pedidos e atualizações de excursões (preparador de excursões).',
   },
   {
+    key: 'first_steps_hints',
+    title: 'Notificações de primeiros passos',
+    desc: 'Mostra o card "Próximo passo" na Home e o modal de dicas "Como receber corridas".',
+  },
+  {
     key: 'payments_pending',
     title: 'Pagamentos pendentes',
     desc: 'Lembretes sobre repasses e valores em aberto.',
+  },
+  {
+    key: 'payments_received',
+    title: 'Pagamentos recebidos',
+    desc: 'Confirmação quando um repasse for efetivado (status paid).',
   },
   {
     key: 'payment_receipts',
@@ -70,6 +85,7 @@ type NotifRow = {
   read_at: string | null;
   created_at: string;
   category: string | null;
+  data: Record<string, unknown> | null;
 };
 
 function formatDate(iso: string): string {
@@ -89,31 +105,63 @@ export function NotificationsScreen({ navigation }: Props) {
   const [tab, setTab] = useState<Tab>('list');
   const [notifications, setNotifications] = useState<NotifRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [listLoadError, setListLoadError] = useState<string | null>(null);
   const [prefs, setPrefs] = useState<Record<string, boolean>>({});
   const [prefsLoading, setPrefsLoading] = useState(true);
 
   const loadNotifications = useCallback(async () => {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user?.id) {
-      setNotifications([]);
-      setLoading(false);
-      return;
-    }
-    const { data, error } = await supabase
-      .from('notifications')
-      .select('id, title, message, read_at, created_at, category')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(50);
+    setListLoadError(null);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) {
+        setNotifications([]);
+        return;
+      }
 
-    if (error) {
-      console.warn('[NotificationsScreen]', error.message);
+      /**
+       * Ordem correta do cliente Supabase: `.select()` logo após `.from()`.
+       * Colocar `.eq()` antes de `.select()` pode deixar a Promise pendurada
+       * (spinner infinito).
+       *
+       * Se a coluna `data` ainda não existe no remoto, a primeira query falha —
+       * repetimos sem `data` (deeplink indisponível até migrar).
+       */
+      const fetchList = (columns: string) =>
+        supabase
+          .from('notifications')
+          .select(columns)
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+      let res = await fetchList('id, title, message, read_at, created_at, category, data');
+
+      if (res.error) {
+        res = await fetchList('id, title, message, read_at, created_at, category');
+      }
+
+      if (res.error) {
+        console.warn('[NotificationsScreen]', res.error.message);
+        setListLoadError(res.error.message);
+        setNotifications([]);
+      } else {
+        const rows = (res.data ?? []) as (Omit<NotifRow, 'data'> & { data?: NotifRow['data'] })[];
+        setNotifications(
+          rows.map((r) => ({
+            ...r,
+            data: r.data ?? null,
+          })),
+        );
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn('[NotificationsScreen] loadNotifications', msg);
+      setListLoadError(msg);
       setNotifications([]);
-    } else {
-      setNotifications((data ?? []) as NotifRow[]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   useFocusEffect(
@@ -151,6 +199,21 @@ export function NotificationsScreen({ navigation }: Props) {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read_at: now } : n)));
     await supabase.from('notifications').update({ read_at: now } as never).eq('id', id);
   };
+
+  /**
+   * Toque em item do inbox: marca como lida e, havendo payload `data`, navega
+   * para a tela indicada (deeplink) — mesma resolução usada pelos pushes FCM.
+   */
+  const handleNotificationPress = useCallback(
+    (n: NotifRow) => {
+      void markRead(n.id);
+      const link = parseNotificationDeeplink(n.data);
+      if (link) {
+        applyNotificationDeeplink(navigation, link);
+      }
+    },
+    [navigation],
+  );
 
   const setPref = useCallback(async (key: string, enabled: boolean) => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -192,10 +255,26 @@ export function NotificationsScreen({ navigation }: Props) {
           </View>
         ) : notifications.length === 0 ? (
           <View style={styles.center}>
-            <Text style={styles.emptyText}>Nenhuma notificação ainda.</Text>
-            <Text style={styles.emptyHint}>
-              Avisos importantes aparecem aqui. Novas solicitações e eventos podem gerar registros via servidor.
-            </Text>
+            {listLoadError ? (
+              <>
+                <Text style={styles.emptyText}>Não foi possível carregar as notificações.</Text>
+                <Text style={styles.emptyHint}>
+                  Verifique a conexão e tente puxar a lista de novo (volte e entre de novo nesta tela).
+                  Se o erro persistir, confira no Supabase se a migration que adiciona a coluna de
+                  deeplink em notificações já foi aplicada.
+                </Text>
+                <Text style={styles.emptyHintMono} numberOfLines={4}>
+                  {listLoadError}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.emptyText}>Nenhuma notificação ainda.</Text>
+                <Text style={styles.emptyHint}>
+                  Avisos importantes aparecem aqui. Novas solicitações e eventos podem gerar registros via servidor.
+                </Text>
+              </>
+            )}
           </View>
         ) : (
           <ScrollView showsVerticalScrollIndicator={false}>
@@ -205,7 +284,7 @@ export function NotificationsScreen({ navigation }: Props) {
                 <TouchableOpacity
                   key={n.id}
                   style={styles.notifRow}
-                  onPress={() => void markRead(n.id)}
+                  onPress={() => handleNotificationPress(n)}
                   activeOpacity={0.7}
                 >
                   {unread ? <View style={styles.unreadDot} /> : null}
@@ -233,7 +312,7 @@ export function NotificationsScreen({ navigation }: Props) {
         <ScrollView contentContainerStyle={styles.configScroll} showsVerticalScrollIndicator={false}>
           <View style={styles.prefGroup}>
             <Text style={styles.prefGroupTitle}>Atividades e status</Text>
-            {PREF_KEYS.slice(0, 3).map((item, i) => (
+            {PREF_KEYS.slice(0, 4).map((item, i) => (
               <View key={item.key}>
                 <View style={styles.prefRow}>
                   <View style={styles.prefText}>
@@ -247,14 +326,14 @@ export function NotificationsScreen({ navigation }: Props) {
                     thumbColor="#FFFFFF"
                   />
                 </View>
-                {i < 2 ? <View style={styles.prefSep} /> : null}
+                {i < 3 ? <View style={styles.prefSep} /> : null}
               </View>
             ))}
           </View>
 
           <View style={styles.prefGroup}>
             <Text style={styles.prefGroupTitle}>Pagamentos</Text>
-            {PREF_KEYS.slice(3, 5).map((item, i) => (
+            {PREF_KEYS.slice(4, 7).map((item, i, arr) => (
               <View key={item.key}>
                 <View style={styles.prefRow}>
                   <View style={styles.prefText}>
@@ -268,14 +347,14 @@ export function NotificationsScreen({ navigation }: Props) {
                     thumbColor="#FFFFFF"
                   />
                 </View>
-                {i < 1 ? <View style={styles.prefSep} /> : null}
+                {i < arr.length - 1 ? <View style={styles.prefSep} /> : null}
               </View>
             ))}
           </View>
 
           <View style={styles.prefGroup}>
             <Text style={styles.prefGroupTitle}>Recomendações e novidades</Text>
-            {PREF_KEYS.slice(5, 7).map((item, i) => (
+            {PREF_KEYS.slice(7, 9).map((item, i) => (
               <View key={item.key}>
                 <View style={styles.prefRow}>
                   <View style={styles.prefText}>
@@ -296,7 +375,7 @@ export function NotificationsScreen({ navigation }: Props) {
 
           <View style={styles.prefGroup}>
             <Text style={styles.prefGroupTitle}>Ações gerais</Text>
-            {PREF_KEYS.slice(7, 8).map((item) => (
+            {PREF_KEYS.slice(9, 10).map((item) => (
               <View key={item.key} style={styles.prefRow}>
                 <Text style={styles.prefLabel}>{item.title}</Text>
                 <Switch
@@ -319,6 +398,15 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
   emptyText: { color: '#9CA3AF', fontSize: 15, textAlign: 'center' },
   emptyHint: { color: '#D1D5DB', fontSize: 13, textAlign: 'center', marginTop: 10, lineHeight: 18 },
+  emptyHintMono: {
+    color: '#9CA3AF',
+    fontSize: 11,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    textAlign: 'center',
+    marginTop: 14,
+    lineHeight: 15,
+    paddingHorizontal: 12,
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

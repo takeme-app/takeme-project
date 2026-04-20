@@ -62,7 +62,24 @@ class ReactNativeDelegate: ExpoReactNativeFactoryDelegate {
 
   override func bundleURL() -> URL? {
 #if DEBUG
-    return RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: ".expo/.virtual-metro-entry")
+    let bundleRoot = ".expo/.virtual-metro-entry"
+    let settings = RCTBundleURLProvider.sharedSettings()
+    // Default path asks Metro for /status first; that check sometimes fails in the simulator
+    // (proxy, IPv6/localhost, timing) and returns nil → "No script URL provided".
+    if let url = settings.jsBundleURL(forBundleRoot: bundleRoot) {
+      return url
+    }
+#if targetEnvironment(simulator)
+    return RCTBundleURLProvider.jsBundleURL(
+      forBundleRoot: bundleRoot,
+      packagerHost: "127.0.0.1:8081",
+      enableDev: true,
+      enableMinification: false,
+      inlineSourceMap: false
+    )
+#else
+    return nil
+#endif
 #else
     return Bundle.main.url(forResource: "main", withExtension: "jsbundle")
 #endif

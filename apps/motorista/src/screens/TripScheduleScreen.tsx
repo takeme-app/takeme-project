@@ -19,6 +19,9 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
+import { useAppAlert } from '../contexts/AppAlertContext';
+import { ensureWorkerRouteHasCoordinates } from '../lib/ensureWorkerRouteCoordinates';
+import { coordsForScheduledTripFromRoute } from '../lib/routeScheduleTimes';
 
 if (Platform.OS === 'android') {
   UIManager.setLayoutAnimationEnabledExperimental?.(true);
@@ -31,6 +34,7 @@ const DAYS = ['Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', '
 
 type TripRow = {
   id: string;
+  route_id: string | null;
   route_origin: string | null;
   route_destination: string | null;
   departure_time: string | null;
@@ -74,6 +78,7 @@ function formatTripTime(time: string | null | undefined, at: string | null | und
 }
 
 export function TripScheduleScreen({ navigation, route }: Props) {
+  const { showAlert } = useAppAlert();
   const [trips, setTrips] = useState<TripRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<number | null>(0);
@@ -85,7 +90,7 @@ export function TripScheduleScreen({ navigation, route }: Props) {
     const { data: { user } } = await supabase.auth.getUser();
     if (user?.id) {
       const baseSelect = `
-          id, day_of_week, departure_time, arrival_time, departure_at, arrival_at,
+          id, route_id, day_of_week, departure_time, arrival_time, departure_at, arrival_at,
           is_active, status,
           origin_address, destination_address
         `;
@@ -119,6 +124,7 @@ export function TripScheduleScreen({ navigation, route }: Props) {
 
       const raw = (data ?? []) as {
         id: string;
+        route_id: string | null;
         day_of_week: number | null;
         departure_time: string | null;
         arrival_time: string | null;
@@ -137,6 +143,7 @@ export function TripScheduleScreen({ navigation, route }: Props) {
         if (ed === null) continue;
         rows.push({
           id: row.id,
+          route_id: row.route_id ?? null,
           effective_day_of_week: ed,
           departure_time: row.departure_time,
           arrival_time: row.arrival_time,
@@ -203,22 +210,85 @@ export function TripScheduleScreen({ navigation, route }: Props) {
         statusActive: is_active,
       },
     }));
-    await Promise.all(
-      ids.map((id) =>
-        supabase
-          .from('scheduled_trips')
-          .update(
-            {
-              is_active,
+    try {
+      if (is_active) {
+        const touched = trips.filter((t) => ids.includes(t.id));
+        const routeIds = [...new Set(touched.map((t) => t.route_id).filter((x): x is string => Boolean(x)))];
+        const geoByRoute = new Map<
+          string,
+          { origin_lat: number; origin_lng: number; destination_lat: number; destination_lng: number }
+        >();
+        for (const rid of routeIds) {
+          const ok = await ensureWorkerRouteHasCoordinates(supabase, rid);
+          if (!ok.ok) {
+            showAlert('Mapa', ok.message);
+            await load();
+            return;
+          }
+          const { data: wr } = await supabase
+            .from('worker_routes')
+            .select('origin_lat, origin_lng, destination_lat, destination_lng')
+            .eq('id', rid)
+            .single();
+          if (wr) {
+            geoByRoute.set(
+              rid,
+              coordsForScheduledTripFromRoute(wr as {
+                origin_lat?: number | null;
+                origin_lng?: number | null;
+                destination_lat?: number | null;
+                destination_lng?: number | null;
+              }),
+            );
+          }
+        }
+        const updActive = await Promise.all(
+          ids.map((id) => {
+            const trip = trips.find((t) => t.id === id);
+            const rid = trip?.route_id;
+            const geo = rid ? geoByRoute.get(rid) : undefined;
+            const patch: Record<string, unknown> = {
+              is_active: true,
               updated_at: new Date().toISOString(),
-              ...(is_active ? {} : { driver_journey_started_at: null }),
-            } as never,
-          )
-          .eq('id', id),
-      ),
-    );
-    setTrips((prev) => prev.map((t) => (ids.includes(t.id) ? { ...t, is_active } : t)));
-    setSaving(null);
+            };
+            if (geo) {
+              patch.origin_lat = geo.origin_lat;
+              patch.origin_lng = geo.origin_lng;
+              patch.destination_lat = geo.destination_lat;
+              patch.destination_lng = geo.destination_lng;
+            }
+            return supabase.from('scheduled_trips').update(patch as never).eq('id', id);
+          }),
+        );
+        for (const res of updActive) {
+          if (res.error) throw res.error;
+        }
+      } else {
+        const updOff = await Promise.all(
+          ids.map((id) =>
+            supabase
+              .from('scheduled_trips')
+              .update(
+                {
+                  is_active: false,
+                  updated_at: new Date().toISOString(),
+                  driver_journey_started_at: null,
+                } as never,
+              )
+              .eq('id', id),
+          ),
+        );
+        for (const res of updOff) {
+          if (res.error) throw res.error;
+        }
+      }
+      setTrips((prev) => prev.map((t) => (ids.includes(t.id) ? { ...t, is_active } : t)));
+    } catch {
+      showAlert('Erro', 'Não foi possível atualizar o status das viagens.');
+      await load();
+    } finally {
+      setSaving(null);
+    }
   };
 
   const dayTrips = (dayIdx: number) => {

@@ -9,6 +9,11 @@ export type RouteFormEntry = {
   suggestedPrice: string;
   originResolved?: boolean;
   destinationResolved?: boolean;
+  /** Preenchidos ao escolher origem/destino nas sugestões (Google). */
+  origin_lat?: number | null;
+  origin_lng?: number | null;
+  destination_lat?: number | null;
+  destination_lng?: number | null;
 };
 
 export type RegistrationFormData = {

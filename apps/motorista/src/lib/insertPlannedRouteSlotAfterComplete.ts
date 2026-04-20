@@ -4,6 +4,7 @@ import {
   computeNextDepartureArrivalFromWeekday,
   normalizeRouteTimeForSchedule,
 } from './routeScheduleTimes';
+import { ensureWorkerRouteHasCoordinates } from './ensureWorkerRouteCoordinates';
 
 export type CompletedRouteTripSnapshot = {
   route_id: string;
@@ -42,6 +43,12 @@ export async function insertPlannedRouteSlotAfterComplete(
     departureAt = next.departureAt;
     arrivalAt = next.arrivalAt;
   } catch {
+    return;
+  }
+
+  const ensured = await ensureWorkerRouteHasCoordinates(client, snap.route_id);
+  if (!ensured.ok) {
+    console.warn('[insertPlannedRouteSlotAfterComplete] geocode:', ensured.message);
     return;
   }
 
