@@ -20,6 +20,8 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { syncMotoristaProfileFcmToken } from '../lib/motoristaFcm';
+import { hasSeenHomeNoTripGuide, markHomeNoTripGuideSeen } from '../lib/homeNoTripGuide';
+import { useNotificationPreference } from '../hooks/useNotificationPreference';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import {
   GoogleMapsMap,
@@ -121,9 +123,24 @@ export function HomeScreen({ navigation }: Props) {
   const [mapUserLL, setMapUserLL] = useState<LatLng | null>(null);
   const homeMapRef = useRef<GoogleMapsMapRef>(null);
   const [promoModal, setPromoModal] = useState<{ id: string; title: string; gainPct: number; endAt: string } | null>(null);
-  /** Guia quando não há corrida ativa: fechado com "Entendi"; reabre após terminar uma viagem. */
-  const [noTripGuideDismissed, setNoTripGuideDismissed] = useState(false);
-  const hadActiveTripRef = useRef(false);
+  /**
+   * Guia quando não há corrida ativa. Aparece apenas uma vez por
+   * usuário (persistido em AsyncStorage): depois que o motorista toca em
+   * "Entendi" não reabrimos mais automaticamente em cada foco da Home,
+   * evitando a sensação de lentidão ao abrir o app.
+   *
+   * Estados:
+   *  - `null`  → ainda não sabemos (carregando de AsyncStorage).
+   *  - `true`  → já dispensado (não mostrar).
+   *  - `false` → primeira vez deste usuário; pode mostrar.
+   */
+  const [noTripGuideSeen, setNoTripGuideSeen] = useState<boolean | null>(null);
+  /**
+   * Preferência do usuário em "Configurar notificações" para o grupo
+   * "Notificações de primeiros passos": controla a exibição tanto do card
+   * "Próximo passo" quanto do modal "Como receber corridas".
+   */
+  const firstStepsHintsEnabled = useNotificationPreference('first_steps_hints', true);
   /** Viagem agendada vinculada a uma rota com horário (`route_id` + `departure_at`). */
   const [hasScheduledRouteWithTime, setHasScheduledRouteWithTime] = useState(false);
 
@@ -420,12 +437,16 @@ export function HomeScreen({ navigation }: Props) {
   }, [userId]));
 
   useEffect(() => {
-    const has = Boolean(activeTrip);
-    if (hadActiveTripRef.current && !has) {
-      setNoTripGuideDismissed(false);
-    }
-    hadActiveTripRef.current = has;
-  }, [activeTrip]);
+    if (!userId) return;
+    let cancelled = false;
+    void (async () => {
+      const seen = await hasSeenHomeNoTripGuide(userId);
+      if (!cancelled) setNoTripGuideSeen(seen);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   const acceptPromotion = async () => {
     if (!promoModal || !userId) return;
@@ -464,7 +485,10 @@ export function HomeScreen({ navigation }: Props) {
   const goPending = () => navigation.navigate('PendingRequests');
   const goActivities = () => navigation.navigate('Activities');
 
-  const dismissNoTripGuide = () => setNoTripGuideDismissed(true);
+  const dismissNoTripGuide = useCallback(() => {
+    setNoTripGuideSeen(true);
+    if (userId) void markHomeNoTripGuideSeen(userId);
+  }, [userId]);
 
   const goRoutesFromGuide = () => {
     dismissNoTripGuide();
@@ -487,7 +511,7 @@ export function HomeScreen({ navigation }: Props) {
   };
 
   const showNoTripGuideModal =
-    !activeTrip && !noTripGuideDismissed && !promoModal;
+    !activeTrip && noTripGuideSeen === false && !promoModal && firstStepsHintsEnabled;
 
   const goDocumentsBanner = () => {
     if (!cnhOk || !cnhBackOk) {
@@ -713,7 +737,7 @@ export function HomeScreen({ navigation }: Props) {
         </View>
 
         {/* Sem viagem: próxima ação — rotas (sem slot agendado) ou Atividades (já há viagem com rota + horário) */}
-        {!activeTrip && (
+        {!activeTrip && firstStepsHintsEnabled && (
           <TouchableOpacity
             style={styles.nextActionCard}
             onPress={hasScheduledRouteWithTime ? goActivities : goRoutes}

@@ -176,7 +176,6 @@ function TripCard({
   ongoingTripId: string | null;
 }) {
   const isConfirmed = trip.isConfirmed;
-  const isPlannedNoPassengers = !isConfirmed;
   const journeyStarted = Boolean(trip.driverJourneyStartedAt);
   const hasPassengers = trip.passengerCount > 0;
   const totalMalas = trip.bagsUsed + trip.dependentBagsSum;
@@ -317,7 +316,8 @@ function TripCard({
       !trip.offerPaused &&
       trip.status !== 'cancelled' &&
       trip.status !== 'completed' &&
-      !anotherTripInProgress ? (
+      !anotherTripInProgress &&
+      (hasPassengers || hasShipments || hasDependents) ? (
         <TouchableOpacity
           onPress={onStartTrip}
           activeOpacity={0.85}
@@ -365,7 +365,7 @@ function TripCard({
         style={styles.linkBtn}
       >
         <Text style={styles.linkText}>
-          {journeyStarted ? 'Abrir mapa da viagem' : isPlannedNoPassengers ? 'Editar rota' : 'Ver detalhes'}
+          {journeyStarted ? 'Abrir mapa da viagem' : 'Ver mais'}
         </Text>
       </TouchableOpacity>
     </View>

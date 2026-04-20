@@ -32,6 +32,8 @@ import {
 } from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
+import type { TripLiveDriverDisplay } from '../../navigation/types';
+import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
 import { supabase } from '../../lib/supabase';
 import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib/route';
 import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
@@ -112,6 +114,17 @@ type DetailRow = {
   receiver_name: string | null;
   pickup_code: string | null;
   delivery_code: string | null;
+  scheduled_trip_id: string | null;
+};
+
+type DependentTripFollowMeta = {
+  tripStatus: string;
+  driverId: string | null;
+  driverName: string;
+  driverRating: number;
+  vehicleModel: string | null;
+  vehicleYear: number | null;
+  vehiclePlate: string | null;
 };
 
 /** Um dígito por chip (PIN no BD, em geral 4 dígitos). */
@@ -146,6 +159,7 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
   const [ratingStars, setRatingStars] = useState(0);
   const [ratingComment, setRatingComment] = useState('');
   const [ratingSubmitting, setRatingSubmitting] = useState(false);
+  const [tripFollowMeta, setTripFollowMeta] = useState<DependentTripFollowMeta | null>(null);
   const tipOverlayOpacity = useRef(new Animated.Value(0)).current;
   const tipSheetTranslateY = useRef(new Animated.Value(SHEET_SLIDE_DISTANCE)).current;
   const ratingOverlayOpacity = useRef(new Animated.Value(0)).current;
@@ -166,7 +180,7 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
       const { data: row, error } = await supabase
         .from('dependent_shipments')
         .select(
-          'id, user_id, dependent_id, full_name, contact_phone, bags_count, instructions, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, tip_cents, rating, receiver_name, pickup_code, delivery_code',
+          'id, user_id, dependent_id, full_name, contact_phone, bags_count, instructions, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, tip_cents, rating, receiver_name, pickup_code, delivery_code, scheduled_trip_id',
         )
         .eq('id', dependentShipmentId)
         .eq('user_id', user.id)
@@ -221,6 +235,68 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
     return () => { cancelled = true; };
   }, [detail?.origin_lat, detail?.origin_lng, detail?.destination_lat, detail?.destination_lng]);
 
+  useEffect(() => {
+    const tripId = detail?.scheduled_trip_id;
+    if (!tripId) {
+      setTripFollowMeta(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data: trip, error: tripErr } = await supabase
+        .from('scheduled_trips')
+        .select('driver_id, status')
+        .eq('id', tripId)
+        .maybeSingle();
+      if (cancelled || tripErr || !trip) {
+        if (!cancelled) setTripFollowMeta(null);
+        return;
+      }
+      const driverId = (trip as { driver_id?: string | null }).driver_id ?? null;
+      const tripStatus = String((trip as { status?: string }).status ?? '');
+      let driverName = 'Motorista';
+      let driverRating = 0;
+      let vehicleModel: string | null = null;
+      let vehicleYear: number | null = null;
+      let vehiclePlate: string | null = null;
+      if (driverId) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('full_name, rating')
+          .eq('id', driverId)
+          .maybeSingle();
+        if (cancelled) return;
+        const p = profile as { full_name?: string | null; rating?: number | null } | null;
+        if (p?.full_name?.trim()) driverName = p.full_name.trim();
+        driverRating = Number(p?.rating ?? 0);
+        const { data: vehicle } = await supabase
+          .from('vehicles')
+          .select('model, year, plate')
+          .eq('worker_id', driverId)
+          .maybeSingle();
+        if (cancelled) return;
+        const v = vehicle as { model?: string | null; year?: number | null; plate?: string | null } | null;
+        vehicleModel = v?.model ?? null;
+        vehicleYear = v?.year ?? null;
+        vehiclePlate = v?.plate ?? null;
+      }
+      if (!cancelled) {
+        setTripFollowMeta({
+          tripStatus,
+          driverId,
+          driverName,
+          driverRating,
+          vehicleModel,
+          vehicleYear,
+          vehiclePlate,
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [detail?.scheduled_trip_id, detail?.id]);
+
   const mapRegion = useMemo(() => {
     if (!detail) return null;
     if (
@@ -238,6 +314,42 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
   }, [detail]);
 
   const hasValidDependentShipmentMapCoords = mapRegion != null;
+
+  const dependentTripLiveParams = useMemo((): TripLiveDriverDisplay | null => {
+    if (!detail || !tripFollowMeta) return null;
+    return {
+      driverName: tripFollowMeta.driverName,
+      rating: tripFollowMeta.driverRating,
+      vehicleLabel: formatVehicleDescription(
+        tripFollowMeta.vehicleModel,
+        tripFollowMeta.vehicleYear,
+        tripFollowMeta.vehiclePlate,
+      ),
+      amountCents: detail.amount_cents,
+      scheduledTripId: detail.scheduled_trip_id ?? undefined,
+      origin: isValidTripCoordinate(detail.origin_lat, detail.origin_lng)
+        ? { latitude: detail.origin_lat!, longitude: detail.origin_lng!, address: detail.origin_address }
+        : undefined,
+      destination: isValidTripCoordinate(detail.destination_lat, detail.destination_lng)
+        ? {
+            latitude: detail.destination_lat!,
+            longitude: detail.destination_lng!,
+            address: detail.destination_address,
+          }
+        : undefined,
+      mapFocused: true,
+    };
+  }, [detail, tripFollowMeta]);
+
+  const canOpenDependentLive = useMemo(() => {
+    if (!dependentTripLiveParams || !tripFollowMeta?.driverId) return false;
+    if (!hasValidDependentShipmentMapCoords || !detail) return false;
+    const ds = (detail.status ?? '').toLowerCase();
+    const ts = (tripFollowMeta.tripStatus ?? '').toLowerCase();
+    if (ds === 'cancelled' || ds === 'delivered') return false;
+    if (ts === 'cancelled' || ts === 'canceled' || ts === 'completed') return false;
+    return ts === 'active' && ['confirmed', 'in_progress'].includes(ds);
+  }, [dependentTripLiveParams, tripFollowMeta, hasValidDependentShipmentMapCoords, detail]);
 
   const canCancel = detail?.status && ['pending_review', 'confirmed'].includes(detail.status);
   const driverOnWay = detail?.status && ['confirmed', 'in_progress'].includes(detail.status);
@@ -477,6 +589,19 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
               </MapboxMap>
             )}
           </View>
+          <TouchableOpacity
+            style={[styles.trackButton, !canOpenDependentLive && styles.trackButtonDisabled]}
+            activeOpacity={0.8}
+            disabled={!canOpenDependentLive}
+            onPress={() => {
+              if (dependentTripLiveParams && canOpenDependentLive) {
+                navigation.navigate('TripInProgress', dependentTripLiveParams);
+              }
+            }}
+          >
+            <MaterialIcons name="explore" size={20} color={COLORS.neutral700} />
+            <Text style={styles.trackButtonText}>Acompanhar em tempo real</Text>
+          </TouchableOpacity>
         </View>
 
         {/* PINs logo após o mapa — visíveis sem rolar a tela inteira */}
@@ -837,6 +962,20 @@ const styles = StyleSheet.create({
   mapLoading: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
   mapLoadingText: { fontSize: 13, color: COLORS.neutral700 },
   map: { width: '100%', height: '100%' },
+  trackButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 12,
+    marginHorizontal: 24,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    backgroundColor: COLORS.neutral300,
+    borderRadius: 24,
+  },
+  trackButtonDisabled: { opacity: 0.45 },
+  trackButtonText: { fontSize: 14, fontWeight: '500', color: COLORS.neutral700 },
 
   infoHeader: {
     flexDirection: 'row',

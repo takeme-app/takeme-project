@@ -46,6 +46,7 @@ import {
   normalizeTripStopTypeFromDb,
   dependentShipmentIdFromSyntheticStopId,
   fetchDependentShipmentEntityAliasKeys,
+  ensureAllTripStopsRemote,
 } from '../hooks/useTripStops';
 import { Text } from '../components/Text';
 import { useAppAlert } from '../contexts/AppAlertContext';
@@ -138,12 +139,111 @@ function isDependent(s: Stop) {
 function looksLikeUuid(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s.trim());
 }
+
+/**
+ * RPC `resolve_*_trip_stop_row` por prefixo: converte id sintético do app
+ * (`booking-…`, `shipment-…`, `dependent-…`) em UUID real de `trip_stops`.
+ */
+type SyntheticPrefix = 'booking' | 'shipment' | 'dependent';
+
+function detectSyntheticPrefix(stopId: string): SyntheticPrefix | null {
+  const m = /^(booking|shipment|dependent)-(pickup|dropoff)-/i.exec(stopId);
+  return m ? (m[1].toLowerCase() as SyntheticPrefix) : null;
+}
+
+async function rpcResolveTripStopRow(
+  prefix: SyntheticPrefix,
+  scheduledTripId: string,
+  clientStopId: string,
+  fallbackEntityId: string | null,
+): Promise<string | null> {
+  const rpcName =
+    prefix === 'dependent'
+      ? 'resolve_dependent_trip_stop_row'
+      : prefix === 'shipment'
+        ? 'resolve_shipment_trip_stop_row'
+        : 'resolve_passenger_trip_stop_row';
+  const { data, error } = await supabase.rpc(
+    rpcName as never,
+    {
+      p_scheduled_trip_id: scheduledTripId,
+      p_client_stop_id: clientStopId,
+      p_fallback_entity_id: fallbackEntityId,
+    } as never,
+  );
+  if (error) return null;
+  const v = String(data ?? '').trim();
+  return looksLikeUuid(v) && !isSyntheticTripStopId(v) ? v : null;
+}
+
+/**
+ * Fallback por entidade + tipo, quando a RPC de resolve falha em deploys antigos.
+ * Lê direto `trip_stops` e casa `entity_id` + `stop_type` normalizado.
+ */
+async function findRealTripStopIdByEntity(
+  scheduledTripId: string,
+  stop: TripStop,
+): Promise<string | null> {
+  const wantT = stop.stopType;
+  const wantEntityKeys = new Set<string>();
+  const we = String(stop.entityId ?? '').trim().toLowerCase();
+  if (we) wantEntityKeys.add(we);
+  const depSyn = dependentShipmentIdFromSyntheticStopId(stop.id);
+  if (depSyn) wantEntityKeys.add(depSyn);
+  if (depSyn && (wantT === 'dependent_pickup' || wantT === 'dependent_dropoff')) {
+    const am = await fetchDependentShipmentEntityAliasKeys(scheduledTripId, [depSyn]);
+    for (const a of am.get(depSyn) ?? []) wantEntityKeys.add(a);
+  }
+  if (wantEntityKeys.size === 0) return null;
+
+  const { data, error } = await supabase
+    .from('trip_stops')
+    .select('id, entity_id, stop_type')
+    .eq('scheduled_trip_id', scheduledTripId);
+  if (error || !data?.length) return null;
+
+  for (const row of data as { id: string; entity_id?: string | null; stop_type?: string | null }[]) {
+    const eid = String(row.entity_id ?? '').trim().toLowerCase();
+    if (!wantEntityKeys.has(eid)) continue;
+    const mapped = normalizeTripStopTypeFromDb(String(row.stop_type ?? ''));
+    if (mapped === wantT) return String(row.id);
+  }
+  return null;
+}
+
+/** Reconcilia um id sintético → UUID real, materializando paradas no servidor se preciso. */
+async function resolveSyntheticTripStopId(
+  scheduledTripId: string,
+  stop: TripStop,
+): Promise<string | null> {
+  const prefix = detectSyntheticPrefix(stop.id);
+  if (!prefix) return null;
+  const fallbackEntityId = looksLikeUuid(String(stop.entityId ?? '')) ? String(stop.entityId) : null;
+
+  // 1ª tentativa: RPC específica do tipo (materializa internamente se faltar).
+  let real = await rpcResolveTripStopRow(prefix, scheduledTripId, stop.id, fallbackEntityId);
+  if (real) return real;
+
+  // 2ª: garante que todas as paradas (passageiro/encomenda/dependente) estejam materializadas.
+  await ensureAllTripStopsRemote(scheduledTripId);
+  real = await rpcResolveTripStopRow(prefix, scheduledTripId, stop.id, fallbackEntityId);
+  if (real) return real;
+
+  // 3ª: busca direta em trip_stops por entity_id + stop_type.
+  return findRealTripStopIdByEntity(scheduledTripId, stop);
+}
 /** Helper — stop é de encomenda */
 function isPackage(s: Stop) { return s.stopType === 'package_pickup' || s.stopType === 'package_dropoff'; }
 
-/** Embarque/desembarque (passageiro ou dependente) ou coleta/entrega de encomenda: PIN de 4 dígitos. */
+/**
+ * Paradas que exigem PIN de 4 dígitos no app do motorista:
+ *   - encomenda: coleta e entrega (o código é a prova de posse).
+ *   - passageiro: apenas embarque (desembarque é livre).
+ *   - dependente: apenas embarque (desembarque é livre).
+ */
 function requiresDriverEnteredPin(s: Stop): boolean {
-  return isPackage(s) || isPassenger(s) || isDependent(s);
+  if (isPackage(s)) return true;
+  return s.stopType === 'passenger_pickup' || s.stopType === 'dependent_pickup';
 }
 
 function isPackagePickupAtBase(s: Stop | null | undefined): boolean {
@@ -272,13 +372,13 @@ function confirmPickupSubtitle(stop: Stop | null | undefined): string {
     return 'Insira o código de 4 dígitos exibido no app do passageiro para confirmar o embarque.';
   }
   if (stop.stopType === 'passenger_dropoff') {
-    return 'Insira o código de 4 dígitos exibido no app do passageiro para confirmar o desembarque.';
+    return 'Confirme que o passageiro desembarcou neste ponto.';
   }
   if (stop.stopType === 'dependent_pickup') {
     return 'Insira o código de 4 dígitos exibido no app do responsável para confirmar o embarque do dependente.';
   }
   if (stop.stopType === 'dependent_dropoff') {
-    return 'Insira o código de 4 dígitos exibido no app do responsável para confirmar o desembarque do dependente.';
+    return 'Confirme que o dependente foi entregue no destino.';
   }
   if (stop.stopType === 'trip_destination') return 'Confirme a chegada ao destino da viagem.';
   if (stop.stopType === 'excursion_stop') return 'Confirme que esta parada na rota foi concluída.';
@@ -1607,132 +1707,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
       let stopId = stop.id;
       if (isSyntheticTripStopId(stopId)) {
-        // Dependentes: em vários deploys `generate_trip_stops` recria `trip_stops` sem `dependent_*`
-        // e apaga linhas já inseridas por `ensure_dependent_trip_stops` — não chamar generate nesse ramo.
-        const isDepSynthetic = /^dependent-(pickup|dropoff)-/i.test(stopId);
-        if (isDepSynthetic) {
-          const fbRaw = String(stop.entityId ?? '').trim();
-          const fbUuid = looksLikeUuid(fbRaw) ? fbRaw : null;
-          const { data: depResolved, error: depResErr } = await supabase.rpc(
-            'resolve_dependent_trip_stop_row' as never,
-            {
-              p_scheduled_trip_id: tripId,
-              p_client_stop_id: stopId,
-              p_fallback_entity_id: fbUuid,
-            } as never,
-          );
-          if (!depResErr && depResolved != null) {
-            const rid = String(depResolved).trim();
-            if (looksLikeUuid(rid) && !isSyntheticTripStopId(rid)) {
-              stopId = rid;
-            }
-          }
-        }
-
-        if (isSyntheticTripStopId(stopId)) {
-        const runEnsure = () =>
-          supabase.rpc('ensure_dependent_trip_stops' as never, { p_trip_id: tripId } as never);
-
-        await runEnsure();
-
-        if (!isDepSynthetic) {
-          let genErr =
-            (await supabase.rpc('generate_trip_stops' as never, { p_trip_id: tripId } as never)).error ?? null;
-          if (genErr) {
-            const second = await supabase.rpc('generate_trip_stops' as never, { trip_id: tripId } as never);
-            genErr = second.error ?? null;
-          }
-          if (!genErr) {
-            await runEnsure();
-          }
+        const resolvedId = await resolveSyntheticTripStopId(tripId, stop);
+        if (resolvedId) {
+          stopId = resolvedId;
         } else {
-          await runEnsure();
-        }
-
-        const stopEntityKeys = new Set<string>();
-        const se = String(stop.entityId ?? '').trim().toLowerCase();
-        if (se) stopEntityKeys.add(se);
-        const depSyn = dependentShipmentIdFromSyntheticStopId(stop.id);
-        if (depSyn) stopEntityKeys.add(depSyn);
-        if (depSyn) {
-          const am = await fetchDependentShipmentEntityAliasKeys(tripId, [depSyn]);
-          for (const a of am.get(depSyn) ?? []) stopEntityKeys.add(a);
-        }
-
-        const matchStop = (list: TripStop[]) =>
-          list.find((s) => {
-            const sKeys = new Set<string>();
-            const sEnt = String(s.entityId ?? '').trim().toLowerCase();
-            if (sEnt) sKeys.add(sEnt);
-            const sDep = dependentShipmentIdFromSyntheticStopId(s.id);
-            if (sDep) sKeys.add(sDep);
-            const entityOk = [...stopEntityKeys].some((k) => sKeys.has(k));
-            return entityOk && s.stopType === stop.stopType;
-          });
-
-        let afterGen = await reloadTripStops();
-        let resolved = matchStop(afterGen);
-        if (!resolved || isSyntheticTripStopId(resolved.id)) {
-          await runEnsure();
-          afterGen = await reloadTripStops();
-          resolved = matchStop(afterGen);
-        }
-
-        if (resolved && !isSyntheticTripStopId(resolved.id)) {
-          stopId = resolved.id;
-        } else {
-          const wantT = stop.stopType;
-          const wantEntityKeys = new Set<string>();
-          const we = String(stop.entityId ?? '').trim().toLowerCase();
-          if (we) wantEntityKeys.add(we);
-          const fromSynthetic = dependentShipmentIdFromSyntheticStopId(stop.id);
-          if (fromSynthetic) wantEntityKeys.add(fromSynthetic);
-          if (fromSynthetic && (wantT === 'dependent_pickup' || wantT === 'dependent_dropoff')) {
-            const am = await fetchDependentShipmentEntityAliasKeys(tripId, [fromSynthetic]);
-            for (const a of am.get(fromSynthetic) ?? []) wantEntityKeys.add(a);
-          }
-          const { data: rawRows, error: rawErr } = await supabase
-            .from('trip_stops')
-            .select('id, entity_id, stop_type')
-            .eq('scheduled_trip_id', tripId);
-          if (!rawErr && rawRows?.length) {
-            for (const row of rawRows) {
-              const r = row as { id: string; entity_id?: string | null; stop_type?: string | null };
-              const eid = String(r.entity_id ?? '').trim().toLowerCase();
-              const mapped = normalizeTripStopTypeFromDb(String(r.stop_type ?? ''));
-              if (wantEntityKeys.has(eid) && mapped === wantT) {
-                stopId = String(r.id);
-                break;
-              }
-            }
-            // Linha com `entity_id` certo mas `stop_type` não normaliza para o enum (ex.: label do generate).
-            if (isSyntheticTripStopId(stopId) && (wantT === 'dependent_pickup' || wantT === 'dependent_dropoff')) {
-              for (const row of rawRows) {
-                const r = row as { id: string; entity_id?: string | null; stop_type?: string | null };
-                const eid = String(r.entity_id ?? '').trim().toLowerCase();
-                if (!wantEntityKeys.has(eid)) continue;
-                const rawT = String(r.stop_type ?? '');
-                const c = rawT.replace(/\s+/g, '_').toLowerCase();
-                if (!c.includes('dependent')) continue;
-                const legOk =
-                  wantT === 'dependent_pickup'
-                    ? c.includes('pickup') || c.includes('embark') || c.includes('board') || c.includes('collect')
-                    : c.includes('dropoff') ||
-                      c.includes('drop_off') ||
-                      c.includes('delivery') ||
-                      c.includes('debark');
-                if (!legOk) continue;
-                stopId = String(r.id);
-                break;
-              }
-            }
-          }
-        }
-
-        if (isSyntheticTripStopId(stopId)) {
           showAlert('Paradas', 'Não foi possível sincronizar as paradas com o servidor. Tente novamente.');
           return;
-        }
         }
       }
 
@@ -2551,12 +2531,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                     <Text style={styles.fieldLabel}>
                       {confirmSheetStop.stopType === 'passenger_pickup'
                         ? 'Código de embarque'
-                        : confirmSheetStop.stopType === 'passenger_dropoff'
-                          ? 'Código de desembarque'
-                          : confirmSheetStop.stopType === 'dependent_pickup'
-                            ? 'Código de embarque do dependente'
-                            : confirmSheetStop.stopType === 'dependent_dropoff'
-                              ? 'Código de desembarque do dependente'
+                        : confirmSheetStop.stopType === 'dependent_pickup'
+                          ? 'Código de embarque do dependente'
                           : confirmSheetStop.stopType === 'package_pickup'
                             ? isPackagePickupAtBase(confirmSheetStop)
                               ? 'Código na base'

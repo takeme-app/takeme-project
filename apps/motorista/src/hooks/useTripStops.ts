@@ -96,6 +96,23 @@ export async function fetchDependentShipmentEntityAliasKeys(
   return out;
 }
 
+/**
+ * Materializa passageiros/encomendas/dependentes em `trip_stops` (idempotente), preenchendo
+ * `trip_stops.code` a partir das entidades origem. Usa `ensure_all_trip_stops` quando disponível;
+ * fallback para as RPCs específicas em deploys antigos onde a agregadora ainda não existe.
+ */
+export async function ensureAllTripStopsRemote(tripId: string): Promise<void> {
+  if (!tripId) return;
+  const agg = await supabase.rpc('ensure_all_trip_stops' as never, { p_trip_id: tripId } as never);
+  if (!agg.error) return;
+  // Fallback: deploys que ainda não receberam 20260520130000_*.
+  await Promise.all([
+    supabase.rpc('ensure_passenger_trip_stops' as never, { p_trip_id: tripId } as never),
+    supabase.rpc('ensure_shipment_trip_stops' as never, { p_trip_id: tripId } as never),
+    supabase.rpc('ensure_dependent_trip_stops' as never, { p_trip_id: tripId } as never),
+  ]);
+}
+
 /** Índice da primeira parada ainda não concluída; se todas concluídas, retorna `stops.length`. */
 export function computeFirstIncompleteStopIndex(stops: TripStop[]): number {
   if (stops.length === 0) return 0;
@@ -125,7 +142,11 @@ export function useTripStops(tripId: string | null) {
     let out: TripStop[] = [];
 
     try {
-      await supabase.rpc('ensure_dependent_trip_stops' as never, { p_trip_id: tripId } as never);
+      // Materializa TODAS as paradas (passageiro/encomenda/dependente) de forma idempotente,
+      // preenchendo `trip_stops.code` a partir de bookings/shipments/dependent_shipments.
+      // Evitamos `generate_trip_stops` (remoto) porque ele é destrutivo (DELETE inicial) e
+      // incompleto (não cria dropoffs nem paradas de dependente, não copia codes).
+      await ensureAllTripStopsRemote(tripId);
 
       // 1. Try trip_stops table
       const { data, error: fetchErr } = await supabase
@@ -140,32 +161,11 @@ export function useTripStops(tripId: string | null) {
       } else if (data && data.length > 0) {
         out = await finalizeStopsForTrip(tripId, mapRows(data));
       } else {
-        // 2. No rows yet — try to generate via RPC (admin usa p_trip_id; alguns deploys usam trip_id)
-        let rpcErr =
-          (await supabase.rpc('generate_trip_stops' as never, { p_trip_id: tripId } as never)).error ??
-          null;
-        if (rpcErr) {
-          const second = await supabase.rpc('generate_trip_stops' as never, { trip_id: tripId } as never);
-          rpcErr = second.error ?? null;
-        }
-
-        if (!rpcErr) {
-          await supabase.rpc('ensure_dependent_trip_stops' as never, { p_trip_id: tripId } as never);
-          const { data: generated } = await supabase
-            .from('trip_stops')
-            .select('*')
-            .eq('scheduled_trip_id', tripId)
-            .order('sequence_order', { ascending: true });
-
-          if (generated && generated.length > 0) {
-            out = await finalizeStopsForTrip(tripId, mapRows(generated));
-          }
-        }
-
-        if (out.length === 0) {
-          const fallback = await buildStopsManually(tripId);
-          out = await finalizeStopsForTrip(tripId, fallback);
-        }
+        // 2. Sem linhas: o `ensure_all_trip_stops` só materializa passageiros/encomendas/dependentes,
+        //    mas não cria `driver_origin` nem `trip_destination`. Sem a âncora `driver_origin`,
+        //    algumas views antigas podem falhar em montar a ordem — usamos o fallback local.
+        const fallback = await buildStopsManually(tripId);
+        out = await finalizeStopsForTrip(tripId, fallback);
       }
 
       setStops(out);
@@ -462,7 +462,7 @@ async function buildShipmentStopsOnly(tripId: string): Promise<TripStop[]> {
         sequenceOrder: 0,
         status: 'pending',
         notes: s.instructions ?? null,
-        code: s.delivery_code ?? null,
+        code: s.pickup_code ?? null,
         packageDriverLeg: 'base_pickup',
       });
       out.push({
@@ -1085,6 +1085,39 @@ async function enrichPassengerBookingCodes(stops: TripStop[]): Promise<TripStop[
   });
 }
 
+/**
+ * Preenche `code` nas paradas de encomenda (coleta/retirada/entrega) quando `trip_stops.code`
+ * veio vazio. `generate_trip_stops` remoto não copia `shipments.pickup_code/delivery_code` para
+ * `trip_stops.code`, e a validação client-side usa `stop.code` antes de chamar `complete_trip_stop`.
+ */
+async function enrichShipmentPackageCodes(stops: TripStop[]): Promise<TripStop[]> {
+  const missing = new Set<string>();
+  for (const s of stops) {
+    if ((s.stopType === 'package_pickup' || s.stopType === 'package_dropoff') && s.entityId) {
+      if (onlyDigits(s.code ?? '').length !== 4) missing.add(String(s.entityId));
+    }
+  }
+  if (missing.size === 0) return stops;
+  const { data } = await supabase
+    .from('shipments')
+    .select('id, pickup_code, delivery_code')
+    .in('id', [...missing]);
+  const byId = new Map<string, { pickup_code?: string | null; delivery_code?: string | null }>();
+  for (const row of (data ?? []) as { id: string; pickup_code?: string | null; delivery_code?: string | null }[]) {
+    byId.set(row.id, row);
+  }
+  return stops.map((s) => {
+    if (s.stopType !== 'package_pickup' && s.stopType !== 'package_dropoff') return s;
+    if (!s.entityId || onlyDigits(s.code ?? '').length === 4) return s;
+    const r = byId.get(String(s.entityId));
+    if (!r) return s;
+    // Retirada/coleta usa pickup_code; entrega usa delivery_code.
+    const raw = s.stopType === 'package_pickup' ? r.pickup_code : r.delivery_code;
+    const next = String(raw ?? '').trim();
+    return next ? { ...s, code: next } : s;
+  });
+}
+
 /** Preenche `code` nas paradas de dependente quando `trip_stops.code` veio vazio. */
 async function enrichDependentShipmentCodes(stops: TripStop[]): Promise<TripStop[]> {
   const missing = new Set<string>();
@@ -1218,7 +1251,8 @@ async function finalizeStopsForTrip(tripId: string, stops: TripStop[]): Promise<
   const enrichedDep = await enrichDependentStopsFromRows(tripId, enrichedPkg);
   const withPassengerCodes = await enrichPassengerBookingCodes(enrichedDep);
   const withDependentCodes = await enrichDependentShipmentCodes(withPassengerCodes);
-  const dedupedPkg = dedupePackageStopsByShipment(withDependentCodes);
+  const withPackageCodes = await enrichShipmentPackageCodes(withDependentCodes);
+  const dedupedPkg = dedupePackageStopsByShipment(withPackageCodes);
   const deduped = dedupeDependentStopsByShipment(dedupedPkg);
   const reordered = reorderStopsPickupPhaseBeforeDeliveryPhase(deduped);
   const ordered = renumberStopSequence(reordered);

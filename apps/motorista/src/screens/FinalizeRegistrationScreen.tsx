@@ -74,6 +74,10 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
             origin_address: r.origin.trim(),
             destination_address: r.destination.trim(),
             price_per_person_cents: Math.max(0, Math.round(reais * 100)),
+            origin_lat: r.origin_lat ?? undefined,
+            origin_lng: r.origin_lng ?? undefined,
+            destination_lat: r.destination_lat ?? undefined,
+            destination_lng: r.destination_lng ?? undefined,
           };
         });
 

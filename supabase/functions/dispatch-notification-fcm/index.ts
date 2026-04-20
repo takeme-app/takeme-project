@@ -11,9 +11,13 @@ const GOOGLE_PRIVATE_KEY = (Deno.env.get("GOOGLE_PRIVATE_KEY") || "").replace(/\
 /** Opcional: mesmo valor no header `x-webhook-secret` do Database Webhook. */
 const NOTIFICATION_FCM_WEBHOOK_SECRET = Deno.env.get("NOTIFICATION_FCM_WEBHOOK_SECRET") || "";
 
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
 function json(status: number, data: Record<string, unknown>) {
+  // HTTP/Fetch spec: alguns status não permitem body. Normaliza para 200.
+  const safeStatus = NULL_BODY_STATUSES.has(status) ? 200 : status;
   return new Response(JSON.stringify(data), {
-    status,
+    status: safeStatus,
     headers: { "Content-Type": "application/json" },
   });
 }
@@ -75,16 +79,16 @@ Deno.serve(async (req) => {
     try {
       payload = await req.json();
     } catch {
-      return json(204, { ok: true, info: "No JSON body", error_id });
+      return json(200, { ok: true, info: "No JSON body", error_id });
     }
 
     if (payload?.table && payload.table !== "notifications") {
-      return json(204, { ok: true, info: "Ignored: other table", error_id });
+      return json(200, { ok: true, info: "Ignored: other table", error_id });
     }
 
     const record = getRecordFromBody(payload);
     if (!record) {
-      return json(204, { ok: true, info: "No record", error_id });
+      return json(200, { ok: true, info: "No record", error_id });
     }
 
     const userId = record.user_id as string | undefined;
@@ -111,7 +115,7 @@ Deno.serve(async (req) => {
       .map((r: { fcm_token: string }) => r.fcm_token)
       .filter(Boolean);
     if (tokens.length === 0) {
-      return json(204, {
+      return json(200, {
         ok: true,
         info: "No FCM tokens for profile",
         target_app_slug: targetAppSlug,

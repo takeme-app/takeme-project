@@ -53,6 +53,7 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
   const { showAlert } = useAppAlert();
   const [rows, setRows] = useState<RouteRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   type SheetMode = 'add' | 'import' | null;
   const [sheetMode, setSheetMode] = useState<SheetMode>(null);
   const [saving, setSaving] = useState(false);
@@ -71,6 +72,7 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
       .from('worker_routes')
       .select('id, origin_address, destination_address, price_per_person_cents, is_active')
       .eq('worker_id', user.id)
+      .eq('is_active', true)
       .order('created_at', { ascending: true });
     setRows((data ?? []) as RouteRow[]);
     setLoading(false);
@@ -102,6 +104,51 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
   };
 
   const { dragY, panHandlers, resetDrag } = useBottomSheetDrag(closeSheet);
+
+  const runDeleteRoute = async (routeId: string) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user?.id) {
+      showAlert('Erro', 'Não autenticado.');
+      return;
+    }
+    setDeletingId(routeId);
+    try {
+      const { error: u1 } = await supabase
+        .from('scheduled_trips')
+        .update({
+          is_active: false,
+          status: 'cancelled',
+          updated_at: new Date().toISOString(),
+          driver_journey_started_at: null,
+        } as never)
+        .eq('route_id', routeId)
+        .eq('driver_id', user.id)
+        .in('status', ['active', 'scheduled']);
+      if (u1) throw u1;
+
+      const { error: delErr } = await supabase.from('worker_routes').delete().eq('id', routeId).eq('worker_id', user.id);
+      if (delErr) throw delErr;
+      await load();
+    } catch (e: unknown) {
+      const msg =
+        (e as { message?: string })?.message ??
+        'Não foi possível excluir. Se existirem reservas ou vínculos ativos nesta rota, cancele-os antes.';
+      showAlert('Erro', msg);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const confirmDeleteRoute = (r: RouteRow) => {
+    Alert.alert(
+      'Excluir rota',
+      `Remover "${shortAddress(r.origin_address)} → ${shortAddress(r.destination_address)}"? As viagens planejadas desta rota serão canceladas e a rota some da lista.`,
+      [
+        { text: 'Voltar', style: 'cancel' },
+        { text: 'Excluir', style: 'destructive', onPress: () => { void runDeleteRoute(r.id); } },
+      ],
+    );
+  };
 
   const handleExportPdf = async () => {
     const now = new Date().toLocaleDateString('pt-BR');
@@ -298,27 +345,41 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
       ) : (
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           {rows.map((r) => (
-            <TouchableOpacity
-              key={r.id}
-              style={styles.card}
-              onPress={() => navigation.navigate('RouteSchedule', {
-                routeId: r.id,
-                routeName: `${shortAddress(r.origin_address)} → ${shortAddress(r.destination_address)}`,
-              })}
-              activeOpacity={0.75}
-            >
-              <View style={styles.cardInner}>
-                <View style={styles.cardText}>
-                  <Text style={styles.cardRoute}>
-                    {shortAddress(r.origin_address)}
-                    <Text style={styles.arrow}> → </Text>
-                    {shortAddress(r.destination_address)}
-                  </Text>
-                  <Text style={styles.cardPrice}>{formatCents(r.price_per_person_cents)} por pessoa</Text>
+            <View key={r.id} style={styles.cardRow}>
+              <TouchableOpacity
+                style={styles.card}
+                onPress={() => navigation.navigate('RouteSchedule', {
+                  routeId: r.id,
+                  routeName: `${shortAddress(r.origin_address)} → ${shortAddress(r.destination_address)}`,
+                })}
+                activeOpacity={0.75}
+              >
+                <View style={styles.cardInner}>
+                  <View style={styles.cardText}>
+                    <Text style={styles.cardRoute}>
+                      {shortAddress(r.origin_address)}
+                      <Text style={styles.arrow}> → </Text>
+                      {shortAddress(r.destination_address)}
+                    </Text>
+                    <Text style={styles.cardPrice}>{formatCents(r.price_per_person_cents)} por pessoa</Text>
+                  </View>
+                  <MaterialIcons name="chevron-right" size={22} color="#9CA3AF" />
                 </View>
-                <MaterialIcons name="chevron-right" size={22} color="#9CA3AF" />
-              </View>
-            </TouchableOpacity>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.deleteRouteBtn, deletingId === r.id && styles.deleteRouteBtnDisabled]}
+                onPress={() => confirmDeleteRoute(r)}
+                disabled={deletingId !== null}
+                accessibilityLabel="Excluir rota"
+                activeOpacity={0.7}
+              >
+                {deletingId === r.id ? (
+                  <ActivityIndicator size="small" color="#EF4444" />
+                ) : (
+                  <MaterialIcons name="delete-outline" size={24} color="#EF4444" />
+                )}
+              </TouchableOpacity>
+            </View>
           ))}
 
           <TouchableOpacity style={styles.addLink} onPress={openAddSheet} activeOpacity={0.7}>
@@ -481,10 +542,22 @@ const styles = StyleSheet.create({
   },
   headerTitle: { flex: 1, fontSize: 17, fontWeight: '700', color: '#111827', textAlign: 'center', marginHorizontal: 4 },
   scroll: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 8 },
+  cardRow: { flexDirection: 'row', alignItems: 'stretch', gap: 8, marginBottom: 12 },
   card: {
+    flex: 1,
     borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12,
-    paddingHorizontal: 16, paddingVertical: 18, marginBottom: 12,
+    paddingHorizontal: 16, paddingVertical: 18,
   },
+  deleteRouteBtn: {
+    width: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 12,
+    backgroundColor: '#FEF2F2',
+  },
+  deleteRouteBtnDisabled: { opacity: 0.5 },
   cardInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   cardText: { flex: 1 },
   cardRoute: { fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 4 },

@@ -34,6 +34,12 @@ type MapboxMapProps = {
   controlsTopInset?: number;
   /** Desloca os botões para dentro da margem direita (safe area). */
   controlsRightInset?: number;
+  /**
+   * Sobrescreve o comportamento do último botão (ícone "my-location").
+   * Quando fornecido, o toque dispara esta callback em vez de resetar a câmera
+   * para a região inicial — útil para centralizar na posição atual do usuário.
+   */
+  onUserLocationPress?: () => void;
   children?: React.ReactNode;
 };
 
@@ -51,6 +57,7 @@ export const MapboxMap = forwardRef<MapboxMapRef, MapboxMapProps>(function Mapbo
     showControls = false,
     controlsTopInset,
     controlsRightInset,
+    onUserLocationPress,
     children,
   },
   ref,
@@ -173,7 +180,11 @@ export const MapboxMap = forwardRef<MapboxMapRef, MapboxMapProps>(function Mapbo
             <MaterialIcons name="remove" size={22} color="#111827" />
           </TouchableOpacity>
           <View style={styles.controlSpacer} />
-          <TouchableOpacity style={styles.controlBtn} onPress={resetCamera} activeOpacity={0.7}>
+          <TouchableOpacity
+            style={styles.controlBtn}
+            onPress={onUserLocationPress ?? resetCamera}
+            activeOpacity={0.7}
+          >
             <MaterialIcons name="my-location" size={20} color="#111827" />
           </TouchableOpacity>
         </View>

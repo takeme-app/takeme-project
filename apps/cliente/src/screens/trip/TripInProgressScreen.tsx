@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { View, TouchableOpacity, StyleSheet, ScrollView, Platform } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -6,12 +6,14 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   MapboxMap,
+  type MapboxMapRef,
   MapboxMarker,
   MapboxPolyline,
   sanitizeMapRegion,
   regionFromOriginDestination,
   isValidTripCoordinate,
 } from '../../components/mapbox';
+import { requestLocationPermission, getCurrentOrLastKnownCoords } from '../../lib/location';
 import { LiveDriverMapMarker } from '../../components/LiveDriverMapMarker';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -184,6 +186,40 @@ export function TripInProgressScreen({ navigation, route }: Props) {
 
   const { coords: liveDriver } = useScheduledTripLiveLocation(live?.scheduledTripId ?? null);
 
+  const mapRef = useRef<MapboxMapRef>(null);
+
+  const handleRecenterOnMe = useCallback(async () => {
+    try {
+      const granted = await requestLocationPermission();
+      if (!granted) {
+        showAlert({
+          title: 'Permissão necessária',
+          message: 'Permita o acesso à localização para centralizar o mapa em você.',
+        });
+        return;
+      }
+      const coords = await getCurrentOrLastKnownCoords();
+      if (!coords) {
+        showAlert({
+          title: 'Localização indisponível',
+          message: 'Não foi possível obter sua localização agora. Tente novamente em instantes.',
+        });
+        return;
+      }
+      mapRef.current?.animateToRegion(
+        {
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        },
+        500,
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [showAlert]);
+
   const currentStep = steps[currentStepIndex];
   const totalSteps = steps.length;
   const isLastStep = currentStepIndex === totalSteps - 1;
@@ -282,9 +318,36 @@ export function TripInProgressScreen({ navigation, route }: Props) {
     };
   }, [live]);
 
+  /**
+   * Ponto-alvo para traçar o percurso e o ETA do motorista em tempo real.
+   * - Acompanhamento externo (mapFocused, ex.: envio de dependente): sempre o destino final.
+   *   O cliente não tem UI para marcar etapas, então mostrar motorista → destino dá a visão
+   *   única e correta de "quando a entrega termina".
+   * - Viagem do próprio passageiro: segue o step atual (coleta → entrega).
+   */
+  const liveDriverTargetPoint = useMemo<
+    { latitude: number; longitude: number } | null
+  >(() => {
+    if (mapFocused) {
+      const d = live?.destination;
+      if (d && isValidTripCoordinate(d.latitude, d.longitude)) {
+        return { latitude: d.latitude, longitude: d.longitude };
+      }
+    }
+    if (currentStep && isValidTripCoordinate(currentStep.latitude, currentStep.longitude)) {
+      return { latitude: currentStep.latitude, longitude: currentStep.longitude };
+    }
+    return null;
+  }, [
+    mapFocused,
+    live?.destination?.latitude,
+    live?.destination?.longitude,
+    currentStep?.latitude,
+    currentStep?.longitude,
+  ]);
+
   useEffect(() => {
-    const target = currentStep;
-    if (!liveDriver || !target || !isValidTripCoordinate(target.latitude, target.longitude)) {
+    if (!liveDriver || !liveDriverTargetPoint) {
       setLiveDriverRouteCoords([]);
       setLiveDriverEta(undefined);
       return;
@@ -293,7 +356,7 @@ export function TripInProgressScreen({ navigation, route }: Props) {
     (async () => {
       const rt = await getRouteWithDuration(
         { latitude: liveDriver.latitude, longitude: liveDriver.longitude },
-        { latitude: target.latitude, longitude: target.longitude },
+        liveDriverTargetPoint,
       );
       if (cancelled) return;
       setLiveDriverRouteCoords(rt?.coordinates?.length ? rt.coordinates : []);
@@ -306,7 +369,12 @@ export function TripInProgressScreen({ navigation, route }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [liveDriver?.latitude, liveDriver?.longitude, currentStep?.latitude, currentStep?.longitude, currentStep?.id]);
+  }, [
+    liveDriver?.latitude,
+    liveDriver?.longitude,
+    liveDriverTargetPoint?.latitude,
+    liveDriverTargetPoint?.longitude,
+  ]);
 
   const openCurrentSheet = () => {
     if (!currentStep) return;
@@ -382,18 +450,22 @@ export function TripInProgressScreen({ navigation, route }: Props) {
   const mapBlock = (
     <View style={[styles.mapWrap, mapFocused && styles.mapWrapFocused]}>
       <MapboxMap
+        ref={mapRef}
         style={styles.map}
         initialRegion={mapRegion}
         scrollEnabled
         showControls={mapFocused}
         controlsTopInset={mapFocused ? insets.top + 56 : undefined}
         controlsRightInset={mapFocused ? Math.max(insets.right, 12) + 4 : undefined}
+        onUserLocationPress={mapFocused ? handleRecenterOnMe : undefined}
       >
-        {polylineCoords.length >= 2 ? (
+        {/* Em modo de acompanhamento (dependente), priorizamos o percurso do motorista.
+            A rota estática origem→destino só aparece se ainda não houver trajetória dinâmica. */}
+        {polylineCoords.length >= 2 && (!mapFocused || liveDriverRouteCoords.length < 2) ? (
           <MapboxPolyline coordinates={polylineCoords} strokeWidth={4} />
         ) : null}
         {liveDriverRouteCoords.length >= 2 ? (
-          <MapboxPolyline coordinates={liveDriverRouteCoords} strokeColor="#C9A227" strokeWidth={3} />
+          <MapboxPolyline coordinates={liveDriverRouteCoords} strokeColor="#C9A227" strokeWidth={4} />
         ) : null}
         {liveDriver && isValidTripCoordinate(liveDriver.latitude, liveDriver.longitude) ? (
           <MapboxMarker
@@ -419,7 +491,7 @@ export function TripInProgressScreen({ navigation, route }: Props) {
                 <View style={[styles.tripStopMarker, styles.tripStopMarkerDone]}>
                   <MaterialIcons name="check" size={20} color="#fff" />
                 </View>
-              ) : i === currentStepIndex ? (
+              ) : mapFocused || i === currentStepIndex ? (
                 <View
                   style={[
                     styles.tripStopMarker,
@@ -451,7 +523,9 @@ export function TripInProgressScreen({ navigation, route }: Props) {
           mapFocused ? { top: insets.top + 56, left: 16 } : styles.timeBadgeDefaultPos,
         ]}
       >
-        <Text style={styles.timeBadgeText}>{etaText}</Text>
+        <Text style={styles.timeBadgeText}>
+          {mapFocused ? (liveDriverEta ?? etaText) : etaText}
+        </Text>
       </View>
       <TouchableOpacity
         style={[styles.backButton, mapFocused && { top: insets.top + 8 }]}
@@ -568,6 +642,10 @@ export function TripInProgressScreen({ navigation, route }: Props) {
         </>
       )}
 
+      {/* Sheets/modais de confirmação só existem no fluxo da viagem do passageiro.
+          No modo de acompanhamento (mapFocused, ex.: envio de dependente) nada é montado. */}
+      {mapFocused ? null : (
+        <>
       {/* Sheet: Detalhes da coleta */}
       <AnimatedBottomSheet visible={showColetaSheet} onClose={() => setShowColetaSheet(false)}>
         <View style={styles.detailSheetHeader}>
@@ -678,6 +756,8 @@ export function TripInProgressScreen({ navigation, route }: Props) {
         onSubmit={handleConfirmEntregaCode}
         backLabel="Voltar"
       />
+        </>
+      )}
     </SafeAreaView>
   );
 }

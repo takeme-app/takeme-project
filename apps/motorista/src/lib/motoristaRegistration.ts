@@ -14,6 +14,10 @@ export type MotoristaRouteInput = {
   origin_address: string;
   destination_address: string;
   price_per_person_cents: number;
+  origin_lat?: number | null;
+  origin_lng?: number | null;
+  destination_lat?: number | null;
+  destination_lng?: number | null;
 };
 
 export type MotoristaVehicleInput = {
@@ -217,13 +221,26 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
   }
 
   for (const r of routes) {
-    const { error: routeErr } = await supabase.from('worker_routes').insert({
+    const payload: Record<string, unknown> = {
       worker_id: userId,
       origin_address: r.origin_address.trim(),
       destination_address: r.destination_address.trim(),
       price_per_person_cents: Math.round(r.price_per_person_cents),
       is_active: true,
-    });
+    };
+    const ol = r.origin_lat;
+    const oln = r.origin_lng;
+    const dl = r.destination_lat;
+    const dln = r.destination_lng;
+    if (ol != null && oln != null && Number.isFinite(ol) && Number.isFinite(oln)) {
+      payload.origin_lat = ol;
+      payload.origin_lng = oln;
+    }
+    if (dl != null && dln != null && Number.isFinite(dl) && Number.isFinite(dln)) {
+      payload.destination_lat = dl;
+      payload.destination_lng = dln;
+    }
+    const { error: routeErr } = await supabase.from('worker_routes').insert(payload as never);
     if (routeErr) {
       throw new Error(
         [routeErr.message, routeErr.details, routeErr.hint].filter(Boolean).join(' — ') || 'Falha ao salvar rotas.'

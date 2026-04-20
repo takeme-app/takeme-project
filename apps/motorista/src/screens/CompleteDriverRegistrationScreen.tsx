@@ -24,6 +24,7 @@ import { formatCurrencyBRLInput } from '../utils/formatCurrency';
 import { GooglePlacesAutocomplete } from '../components/GooglePlacesAutocomplete';
 import { GoogleCityAutocomplete } from '../components/GoogleCityAutocomplete';
 import type { GoogleGeocodeResult } from '@take-me/shared';
+import { getGoogleMapsApiKey } from '../lib/googleMapsConfig';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CompleteDriverRegistration'>;
 
@@ -229,10 +230,18 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       return;
     }
 
+    const mapsKey = getGoogleMapsApiKey()?.trim();
     for (let i = 0; i < routes.length; i++) {
       const r = routes[i];
       if (!r.origin.trim() || !r.destination.trim()) {
         showAlert('Atenção', `Preencha origem e destino da rota ${i + 1}.`);
+        return;
+      }
+      if (mapsKey && (!r.originResolved || !r.destinationResolved)) {
+        showAlert(
+          'Atenção',
+          `Na rota ${i + 1}, toque em uma sugestão da lista para origem e destino (confirma o ponto no mapa para passageiros encontrarem sua viagem).`,
+        );
         return;
       }
       const cents = onlyDigits(r.suggestedPrice);
@@ -591,16 +600,44 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
               label="Origem"
               placeholder="Ex: São Paulo"
               value={r.origin}
-              onChangeText={(t) => updateRoute(r.id, { origin: t, originResolved: false })}
-              onSelectPlace={(place) => updateRoute(r.id, { origin: place.placeName, originResolved: true })}
+              onChangeText={(t) =>
+                updateRoute(r.id, {
+                  origin: t,
+                  originResolved: false,
+                  origin_lat: null,
+                  origin_lng: null,
+                })
+              }
+              onSelectPlace={(place: GoogleGeocodeResult) =>
+                updateRoute(r.id, {
+                  origin: place.placeName,
+                  originResolved: true,
+                  origin_lat: place.latitude,
+                  origin_lng: place.longitude,
+                })
+              }
               hasResolvedCoords={r.originResolved ?? false}
             />
             <GooglePlacesAutocomplete
               label="Destino"
               placeholder="Ex: Interior"
               value={r.destination}
-              onChangeText={(t) => updateRoute(r.id, { destination: t, destinationResolved: false })}
-              onSelectPlace={(place) => updateRoute(r.id, { destination: place.placeName, destinationResolved: true })}
+              onChangeText={(t) =>
+                updateRoute(r.id, {
+                  destination: t,
+                  destinationResolved: false,
+                  destination_lat: null,
+                  destination_lng: null,
+                })
+              }
+              onSelectPlace={(place: GoogleGeocodeResult) =>
+                updateRoute(r.id, {
+                  destination: place.placeName,
+                  destinationResolved: true,
+                  destination_lat: place.latitude,
+                  destination_lng: place.longitude,
+                })
+              }
               hasResolvedCoords={r.destinationResolved ?? false}
             />
             <FieldBlock label="Valor sugerido por passageiro">
