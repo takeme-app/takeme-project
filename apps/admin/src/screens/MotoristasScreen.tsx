@@ -627,7 +627,17 @@ export default function MotoristasScreen() {
                     },
                       React.createElement('div', { style: { ...cellBase, gap: 8, overflow: 'hidden' } },
                         renderAvatar(p.nome, p.avatarUrl ? resolvedAvatars[p.avatarUrl] : null),
-                        React.createElement('span', { style: { fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } }, p.nome)),
+                        React.createElement('span', { style: { fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } }, p.nome),
+                        (() => {
+                          const c = p.connect;
+                          if (!c?.accountId) {
+                            return React.createElement('span', { title: 'Sem Stripe Connect', style: { fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 999, background: '#fee2e2', color: '#991b1b', whiteSpace: 'nowrap' as const, ...font } }, 'sem Connect');
+                          }
+                          if (c.chargesEnabled && c.payoutsEnabled) {
+                            return React.createElement('span', { title: 'Stripe Connect ativo', style: { fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 999, background: '#dcfce7', color: '#166534', whiteSpace: 'nowrap' as const, ...font } }, 'Connect OK');
+                          }
+                          return React.createElement('span', { title: `charges=${c.chargesEnabled} payouts=${c.payoutsEnabled} details=${c.detailsSubmitted}`, style: { fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 999, background: '#fef3c7', color: '#92400e', whiteSpace: 'nowrap' as const, ...font } }, 'Connect pendente');
+                        })()),
                       React.createElement('div', { style: { ...cellBase, overflow: 'hidden' } },
                         React.createElement('span', { style: { fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 999, background: p.subtype === 'take_me' ? '#dbeafe' : '#f3e8ff', color: p.subtype === 'take_me' ? '#1e40af' : '#6b21a8', whiteSpace: 'nowrap' as const, ...font } },
                           p.subtype === 'take_me' ? 'Take Me' : 'Parceiro')),

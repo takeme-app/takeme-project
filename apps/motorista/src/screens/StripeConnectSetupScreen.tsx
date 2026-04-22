@@ -16,43 +16,63 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
-import { subtypeToMainRoute } from '../lib/motoristaAccess';
+import {
+  canUseAppWithStripeState,
+  getStripeConnectState,
+  subtypeToMainRoute,
+  type StripeConnectState,
+} from '../lib/motoristaAccess';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
+import { describeInvokeFailure } from '../utils/edgeFunctionResponse';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'StripeConnectSetup'>;
 
 const GOLD = '#C9A227';
 
+function isOpenableHttpUrl(url: unknown): url is string {
+  if (typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  return /^https?:\/\//i.test(trimmed);
+}
+
 export function StripeConnectSetupScreen({ navigation, route }: Props) {
   const subtype = route.params?.subtype ?? 'takeme';
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [hasConnect, setHasConnect] = useState(false);
+  const [stripeState, setStripeState] = useState<StripeConnectState>('none');
 
-  // Ao voltar para essa tela (ex: após onboarding no browser), verificar se já configurou
+  // Ao voltar do browser sincroniza o estado REAL com a Stripe (plano B caso
+  // o webhook `account.updated` atrase ou esteja mal configurado) e depois lê
+  // do banco. Se a conta já passou do onboarding, navega direto para o app.
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
       const check = async () => {
         setChecking(true);
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user || cancelled) { setChecking(false); return; }
-        const { data: wp } = await supabase
-          .from('worker_profiles')
-          .select('stripe_connect_account_id')
-          .eq('id', user.id)
-          .maybeSingle();
-        if (cancelled) return;
-        if (wp?.stripe_connect_account_id) {
-          setHasConnect(true);
-          // Auto-navegar para o app principal
-          setTimeout(() => {
-            if (!cancelled) {
-              navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(subtype) }] });
-            }
-          }, 1500);
+        try {
+          // Chamada best-effort: se sync falhar, caímos para leitura direta do banco.
+          await supabase.functions.invoke('stripe-connect-sync', { body: {} }).catch(() => undefined);
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user || cancelled) return;
+          const { data: wp } = await supabase
+            .from('worker_profiles')
+            .select('stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_details_submitted')
+            .eq('id', user.id)
+            .maybeSingle();
+          if (cancelled) return;
+          const state = getStripeConnectState(wp);
+          setStripeState(state);
+          if (canUseAppWithStripeState(state)) {
+            setTimeout(() => {
+              if (!cancelled) {
+                navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(subtype) }] });
+              }
+            }, 1500);
+          }
+        } finally {
+          if (!cancelled) setChecking(false);
         }
-        setChecking(false);
       };
       check();
       return () => { cancelled = true; };
@@ -62,42 +82,33 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
   const handleSetup = async () => {
     setLoading(true);
     try {
-      const res = await supabase.functions.invoke('stripe-connect-link', {
-        body: {
-          return_url: 'takeme://stripe-connect-return',
-          refresh_url: 'takeme://stripe-connect-return',
-        },
-      });
-      if (res.error || !res.data?.url) {
-        Alert.alert('Erro', res.error?.message || 'Falha ao gerar link de configuracao.');
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        Alert.alert('Erro', 'Sessão expirada. Faça login novamente.');
         setLoading(false);
         return;
       }
-      await Linking.openURL(res.data.url);
-    } catch (e: any) {
-      Alert.alert('Erro', e?.message || 'Falha ao abrir configuracao.');
+      const res = await supabase.functions.invoke('stripe-connect-link', {
+        body: {
+          return_url: 'take-me-motorista://stripe-connect-return',
+          refresh_url: 'take-me-motorista://stripe-connect-return',
+        },
+      });
+      const url = (res.data as { url?: unknown } | null)?.url;
+      if (res.error || !isOpenableHttpUrl(url)) {
+        const msg = await describeInvokeFailure(res.data, res.error);
+        Alert.alert('Erro', msg || 'Não foi possível gerar o link de configuração. Tente novamente.');
+        setLoading(false);
+        return;
+      }
+      await Linking.openURL(url);
+    } catch (e: unknown) {
+      Alert.alert('Erro', e instanceof Error ? e.message : 'Falha ao abrir configuracao.');
     }
     setLoading(false);
   };
 
-  const handleSkip = () => {
-    Alert.alert(
-      'Pular configuracao?',
-      'Sem o recebimento automatico, seus pagamentos precisarao ser liberados manualmente pelo administrador via PIX. Deseja continuar sem configurar?',
-      [
-        { text: 'Voltar', style: 'cancel' },
-        {
-          text: 'Continuar sem configurar',
-          style: 'destructive',
-          onPress: () => {
-            navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(subtype) }] });
-          },
-        },
-      ]
-    );
-  };
-
-  if (hasConnect) {
+  if (stripeState === 'active') {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar style="dark" />
@@ -112,6 +123,24 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
       </SafeAreaView>
     );
   }
+
+  if (stripeState === 'in_review') {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <StatusBar style="dark" />
+        <View style={styles.center}>
+          <MaterialIcons name="hourglass-top" size={64} color="#B45309" />
+          <Text style={styles.successTitle}>Cadastro enviado!</Text>
+          <Text style={styles.successSubtitle}>
+            Recebemos seus dados e a Stripe está analisando. Você já pode usar o app — o recebimento automático é liberado assim que a análise terminar (costuma levar até 2 dias úteis).
+          </Text>
+          <ActivityIndicator size="small" color={GOLD} style={{ marginTop: 16 }} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const isIncomplete = stripeState === 'incomplete';
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -146,6 +175,15 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
           </Text>
         </View>
 
+        {isIncomplete && (
+          <View style={[styles.infoCard, styles.pendingCard]}>
+            <MaterialIcons name="hourglass-empty" size={20} color="#B45309" />
+            <Text style={[styles.infoText, styles.pendingText]}>
+              Seu cadastro no Stripe ainda não foi concluído. Toque em "Continuar configuração" para retomar o onboarding.
+            </Text>
+          </View>
+        )}
+
         {/* Main CTA */}
         <TouchableOpacity
           style={[styles.btnPrimary, loading && { opacity: 0.6 }]}
@@ -158,19 +196,16 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
           ) : (
             <>
               <MaterialIcons name="arrow-forward" size={20} color="#fff" />
-              <Text style={styles.btnPrimaryText}>Configurar recebimento automatico</Text>
+              <Text style={styles.btnPrimaryText}>
+                {isIncomplete ? 'Continuar configuração' : 'Configurar recebimento automático'}
+              </Text>
             </>
           )}
         </TouchableOpacity>
 
-        {/* Skip */}
-        <TouchableOpacity
-          style={styles.skipBtn}
-          onPress={handleSkip}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.skipText}>Configurar depois (pagamento manual)</Text>
-        </TouchableOpacity>
+        <Text style={styles.mandatoryNote}>
+          O cadastro Stripe é obrigatório para acessar a plataforma.
+        </Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -272,14 +307,18 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontFamily: 'Inter_600SemiBold',
   },
-  skipBtn: {
+  mandatoryNote: {
+    fontSize: 13,
+    color: '#6B7280',
+    textAlign: 'center',
     paddingVertical: 12,
-  },
-  skipText: {
-    fontSize: 14,
-    color: '#9CA3AF',
-    textDecorationLine: 'underline',
     fontFamily: 'Inter_400Regular',
+  },
+  pendingCard: {
+    backgroundColor: '#FEF3C7',
+  },
+  pendingText: {
+    color: '#92400E',
   },
   successTitle: {
     fontSize: 22,

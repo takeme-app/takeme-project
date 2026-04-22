@@ -417,6 +417,9 @@ pending → contacted → quoted → in_analysis → approved → scheduled → 
 | `verify-email-code` | `VerifyEmailScreen` | Validar OTP com nome, telefone, senha |
 | `login-with-phone` | `LoginScreen` | Login por telefone |
 | `stripe-connect-link` | `PaymentsScreen`, `StripeConnectSetupScreen` | Link de cadastro Stripe Connect |
+| `stripe-connect-sync` | `PaymentsScreen`, `StripeConnectSetupScreen` | Sincroniza `charges_enabled`/`payouts_enabled` sob demanda (fallback do webhook) |
+| `stripe-connect-bridge` | Navegador externo (Stripe return_url/refresh_url) | Ponte HTTPS que redireciona para deep link `take-me-motorista://` |
+| `charge-excursion-request` | Fluxo de pagamento de excursao no app cliente | Cria `PaymentIntent` do orcamento de excursao (sem `transfer_data`) |
 | `expire-assignments` | Cron (nao chamada diretamente) | Expira assignments vencidos |
 
 > **Divergencia PRD vs codigo:** O PRD v1.1 citava `respond-assignment`, `confirm-code` e `create-motorista-account` como Edge Functions centrais. Na implementacao atual:
@@ -440,14 +443,25 @@ pending → contacted → quoted → in_analysis → approved → scheduled → 
 
 ## 9. Pagamentos e Ganhos
 
-### 9.1 Stripe Connect (obrigatorio)
+### 9.1 Stripe Connect (obrigatorio para os 4 subtypes)
 
-Apos aprovacao do cadastro (`worker_profiles.status = 'approved'`), o motorista e redirecionado para `StripeConnectSetupScreen` se nao tiver `stripe_connect_account_id`. O fluxo:
+Apos aprovacao do cadastro (`worker_profiles.status = 'approved'`), TODOS os 4 subtypes (`takeme`, `partner`, `shipments`, `excursions`) sao obrigados a concluir o onboarding Stripe antes de acessar o app. A arquitetura e a mesma para os 4 — a diferenca esta apenas no modelo de recebimento (ver 9.6). O fluxo:
 
-1. `StripeConnectSetupScreen`: chama Edge Function `stripe-connect-link` — cria conta **Express** BR (`card_payments` + `transfers`) e devolve um `account_links.url`
-2. Abre o link no navegador do sistema. Deep links de retorno: `takeme://stripe-connect-return` (tela de setup) e `takeme://payments` (tela de pagamentos, quando o motorista ja esta no app)
-3. Ao completar o Account Link, `stripe_connect_account_id` e gravado em `worker_profiles`. O webhook `account.updated` mantem `stripe_connect_charges_enabled`, `stripe_connect_payouts_enabled` e `stripe_connect_details_submitted` sincronizados
-4. Gate em `App.tsx`/`motoristaAccess.ts`: sem `stripe_connect_account_id`, redireciona para `StripeConnectSetup` e bloqueia o ambiente principal
+1. `StripeConnectSetupScreen`: chama Edge Function `stripe-connect-link` — cria conta **Express** BR (`card_payments` + `transfers`) e devolve um `account_links.url`. O `stripe_connect_account_id` e gravado em `worker_profiles` ja na criacao da conta (antes de abrir o Account Link).
+2. Abre o link no navegador do sistema. Deep links de retorno: `take-me-motorista://stripe-connect-return` (tela de setup) e `take-me-motorista://payments` (tela de pagamentos quando o motorista ja esta no app). A Stripe nao aceita deep links em `return_url`/`refresh_url`; a Edge Function `stripe-connect-bridge` serve paginas HTTPS que redirecionam para o scheme.
+3. Quando o motorista conclui o onboarding, o webhook `account.updated` espelha `stripe_connect_charges_enabled`, `stripe_connect_payouts_enabled` e `stripe_connect_details_submitted` em `worker_profiles`. Se o webhook nao chega, `stripe-connect-sync` age como fallback — consulta `accounts.retrieve` sob demanda (chamada pelas telas de setup/pagamentos).
+4. **Estado `in_review`**: `PaymentsScreen`/`StripeConnectSetupScreen` calculam `getStripeConnectState()` com quatro valores possiveis:
+   - `none`: sem `stripe_connect_account_id` → bloqueia app, botao "Configurar".
+   - `incomplete`: conta criada mas falta enviar dados (`details_submitted = false`) → abre Account Link para completar.
+   - `in_review`: `details_submitted = true` mas `charges_enabled = false` → **libera acesso ao app** com aviso "Em analise". Stripe esta validando documentos.
+   - `active`: `charges_enabled = true` → recebimento automatico ativo.
+5. Gate `canUseAppWithStripeState` em `motoristaAccess.ts`: libera o app em `in_review` **e** `active`. Bloqueia apenas `none`/`incomplete`. O helper antigo `isStripeConnectReadyForApp` esta deprecado — novo codigo deve usar o state model.
+6. **Notificacao de aprovacao**: quando `charges_enabled` transiciona `false → true` (via webhook OU sync), `stripe-webhook`/`stripe-connect-sync` inserem uma linha em `public.notifications` com `category='account_approved'` e `data.route` = deep link especifico do subtype:
+   - `takeme`/`partner` → `Payments`
+   - `shipments` → `PagamentosEncomendas`
+   - `excursions` → `PagamentosExcursoes`
+
+   Tambem dispara e-mail via Resend. Idempotencia via `worker_profiles.stripe_connect_notified_approved_at`.
 
 > **Nota:** o app motorista **nao** embute `@stripe/stripe-react-native`; toda a interacao com o Stripe acontece via Edge Functions e navegador externo.
 
@@ -472,6 +486,24 @@ Apos aprovacao do cadastro (`worker_profiles.status = 'approved'`), o motorista 
 - `PagamentosEncomendasScreen`: agrega `shipments` entregues (`status = 'delivered'`)
 - Filtrado por `driver_id` + `base_id` da base do preparador
 - Modelo de negocio: diaria fixa definida pelo admin (nao percentual por encomenda)
+
+### 9.6 Modelo de Recebimento (split Stripe Connect)
+
+Duas abordagens convivem no sistema, por tipo de entidade:
+
+| Entity type (`payouts.entity_type`) | Cobranca | Split Stripe |
+|-------------------------------------|----------|--------------|
+| `booking` (viagens takeme/partner) | `charge-booking` com `transfer_data[destination]` quando worker tem Connect | **Split no ato do charge** — dinheiro vai direto para a conta do motorista. `process-payouts` apenas marca `paid`. |
+| `shipment` / `dependent_shipment` (encomendas) | `charge-shipments` sem `transfer_data` | **Cobranca centralizada + transfer explicito**. Dinheiro fica na plataforma; `process-payouts` cria `stripe.transfers.create` por payout quando liberado. |
+| `excursion` (orcamentos `excursion_requests`) | `charge-excursion-request` sem `transfer_data` | Mesmo modelo de shipments. `stripe-webhook` (em `payment_intent.succeeded`) cria 2 rows de payouts: uma para `driver_id` (valor = `worker_payout_cents - preparer_payout_cents`) e outra para `preparer_id` (valor = `preparer_payout_cents`). |
+
+**Por que dois modelos?** Viagens ja estavam em producao com `transfer_data` e funcionam — nao vale a pena regredir. Encomendas e excursoes sao novas e usam o modelo mais conservador (dinheiro retido ate payout) porque permite refund simples enquanto nao liberado. `process-refund` cria `/transfers/{id}/reversals` antes do refund quando o payout ja tem `stripe_transfer_id`.
+
+**Campos novos (v1.4):**
+
+- `payouts.stripe_transfer_id` / `stripe_transfer_at` / `stripe_transfer_error`: rastreio de transfers explicitos (shipment/excursion).
+- `excursion_requests.preparer_payout_cents`: fatia do `worker_payout_cents` destinada ao preparador. Driver recebe o restante. Populado por `manage-excursion-budget`.
+- View `admin_shipment_payouts_stuck`: alerta para payouts shipment/excursion pendentes ha mais de 3 dias.
 
 ---
 

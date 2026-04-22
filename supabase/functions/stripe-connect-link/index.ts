@@ -7,6 +7,57 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-auth-token, x-client-info, apikey, content-type",
 };
 
+/**
+ * URLs aceitas pelo Stripe em Account Links (não aceita deep links tipo takeme://).
+ * Em modo teste, http:// é permitido pela Stripe; em live, só https://.
+ * @see https://docs.stripe.com/connect/express-accounts
+ */
+function isStripeRedirectUrlOk(u: string, live: boolean): boolean {
+  try {
+    const p = new URL(u);
+    if (p.protocol === "https:") return true;
+    if (!live && p.protocol === "http:") return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function firstStripeValidUrl(candidates: (string | undefined)[], live: boolean): string | null {
+  for (const c of candidates) {
+    const s = c?.trim();
+    if (s && isStripeRedirectUrlOk(s, live)) return s;
+  }
+  return null;
+}
+
+/** Fallback só para a API aceitar (mesmo padrão dos exemplos Stripe); produção deve usar secrets HTTPS reais. */
+const DEFAULT_RETURN_URL = "https://example.com/stripe-connect-return";
+const DEFAULT_REFRESH_URL = "https://example.com/stripe-connect-refresh";
+
+type ResolvedConnectUrls = { returnUrl: string; refreshUrl: string };
+
+function resolveStripeConnectUrls(
+  body: { return_url?: string; refresh_url?: string },
+  stripeSecret: string,
+): ResolvedConnectUrls {
+  const live = stripeSecret.startsWith("sk_live_");
+  const envReturn = Deno.env.get("STRIPE_CONNECT_RETURN_URL")?.trim();
+  const envRefresh = Deno.env.get("STRIPE_CONNECT_REFRESH_URL")?.trim();
+
+  const returnUrl = firstStripeValidUrl(
+    [body.return_url, envReturn, DEFAULT_RETURN_URL],
+    live,
+  ) ?? DEFAULT_RETURN_URL;
+
+  const refreshUrl = firstStripeValidUrl(
+    [body.refresh_url, envRefresh, envReturn, returnUrl, DEFAULT_REFRESH_URL],
+    live,
+  ) ?? returnUrl;
+
+  return { returnUrl, refreshUrl };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -51,14 +102,18 @@ Deno.serve(async (req) => {
       return_url?: string;
       refresh_url?: string;
     };
-    const returnUrl =
-      body.return_url?.trim() ||
-      Deno.env.get("STRIPE_CONNECT_RETURN_URL") ||
-      "https://example.com/stripe-connect-return";
-    const refreshUrl =
-      body.refresh_url?.trim() ||
-      Deno.env.get("STRIPE_CONNECT_REFRESH_URL") ||
-      returnUrl;
+
+    const { returnUrl, refreshUrl } = resolveStripeConnectUrls(body, stripeSecret);
+    const live = stripeSecret.startsWith("sk_live_");
+    const br = body.return_url?.trim();
+    const bf = body.refresh_url?.trim();
+    if ((br && !isStripeRedirectUrlOk(br, live)) || (bf && !isStripeRedirectUrlOk(bf, live))) {
+      console.info(
+        "stripe-connect-link: return/refresh do app não são aceitos pela Stripe (ex.: takeme://); usando",
+        returnUrl,
+        refreshUrl,
+      );
+    }
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
     const { data: wp, error: wpErr } = await admin

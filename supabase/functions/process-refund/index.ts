@@ -200,6 +200,103 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Reverter transfers explicitos ANTES do refund.
+    //
+    // Contexto: payouts de shipment/excursion_request usam stripe.transfers.create
+    // explicito no process-payouts. Quando ja estao 'paid', o dinheiro saiu da
+    // plataforma e foi para o Connect account. Se apenas chamarmos /refunds no
+    // PI, a plataforma reembolsa o cliente mas fica sem saldo (Stripe debita da
+    // conta platform). Precisamos reverter esses transfers primeiro para trazer
+    // o dinheiro de volta a plataforma.
+    //
+    // Payouts 'pending'/'processing' ja sao cancelados na query mais abaixo —
+    // como o dinheiro ainda esta na plataforma, nao precisa reversal.
+    //
+    // Nao aplica a booking (transfer_data no ato + comportamento default do
+    // Stripe reembolsa proporcionalmente do destination quando o PI tem
+    // transfer_data).
+    const reversalRatio = refundAmount / entityAmount;
+    const reversalResults: Array<{
+      payout_id: string;
+      transfer_id: string;
+      reversal_id: string | null;
+      reverse_amount_cents: number;
+      error?: string;
+    }> = [];
+
+    if (
+      entity_type === "shipment" ||
+      entity_type === "dependent_shipment" ||
+      entity_type === "excursion"
+    ) {
+      const { data: paidPayouts } = await admin
+        .from("payouts")
+        .select("id, stripe_transfer_id, worker_amount_cents")
+        .eq("entity_type", entity_type)
+        .eq("entity_id", entity_id)
+        .eq("status", "paid")
+        .not("stripe_transfer_id", "is", null);
+
+      for (const pp of paidPayouts ?? []) {
+        const transferId = pp.stripe_transfer_id as string | null;
+        const workerAmount = Number(pp.worker_amount_cents) || 0;
+        if (!transferId || workerAmount <= 0) continue;
+
+        // Reversal proporcional para refund parcial; integral para full refund.
+        const reverseAmount = Math.min(
+          workerAmount,
+          Math.max(1, Math.floor(workerAmount * reversalRatio)),
+        );
+
+        const reversalParams = new URLSearchParams({
+          amount: String(reverseAmount),
+          "metadata[entity_type]": entity_type,
+          "metadata[entity_id]": entity_id,
+          "metadata[payout_id]": String(pp.id),
+          "metadata[reason]": "refund_chain",
+        });
+
+        try {
+          const reversal = (await stripeFetch(
+            stripeSecret,
+            "POST",
+            `/transfers/${transferId}/reversals`,
+            reversalParams,
+          )) as { id: string };
+          reversalResults.push({
+            payout_id: String(pp.id),
+            transfer_id: transferId,
+            reversal_id: reversal.id,
+            reverse_amount_cents: reverseAmount,
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error(
+            `[process-refund] reversal falhou payout=${pp.id} transfer=${transferId}:`,
+            msg,
+          );
+          reversalResults.push({
+            payout_id: String(pp.id),
+            transfer_id: transferId,
+            reversal_id: null,
+            reverse_amount_cents: reverseAmount,
+            error: msg,
+          });
+          // Abort refund — sem reversal o saldo nao volta pra plataforma.
+          return new Response(
+            JSON.stringify({
+              error: `Falha ao reverter transfer ${transferId} antes do refund: ${msg}`,
+              reversal_results: reversalResults,
+            }),
+            {
+              status: 500,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            },
+          );
+        }
+      }
+    }
+
     const refundParams = new URLSearchParams({
       payment_intent: paymentIntentId,
       amount: String(refundAmount),
@@ -255,6 +352,7 @@ Deno.serve(async (req) => {
         refund_id: refundResult.id,
         refund_status: refundResult.status,
         refund_amount_cents: refundResult.amount,
+        reversal_results: reversalResults.length ? reversalResults : undefined,
       }),
       {
         status: 200,

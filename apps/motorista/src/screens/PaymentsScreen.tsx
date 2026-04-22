@@ -24,6 +24,8 @@ import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { fetchDriverPaymentTransfers, type DriverPaymentTransfer } from '../lib/driverPaymentTransfers';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
+import { describeInvokeFailure } from '../utils/edgeFunctionResponse';
+import { getStripeConnectState, type StripeConnectState } from '../lib/motoristaAccess';
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Payments'>,
@@ -69,7 +71,7 @@ export function PaymentsScreen({ navigation }: Props) {
   const [editPixVisible, setEditPixVisible] = useState(false);
   const [newPixKey, setNewPixKey] = useState('');
   const [savingPix, setSavingPix] = useState(false);
-  const [hasStripeConnect, setHasStripeConnect] = useState(false);
+  const [stripeState, setStripeState] = useState<StripeConnectState>('none');
   const [connectLoading, setConnectLoading] = useState(false);
 
   const load = useCallback(async () => {
@@ -77,13 +79,19 @@ export function PaymentsScreen({ navigation }: Props) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setLoading(false); return; }
 
+    // Sync best-effort com a Stripe antes de ler do banco, para não ficar dependendo
+    // só do webhook `account.updated`. Se a função falhar, seguimos com o que temos.
+    await supabase.functions.invoke('stripe-connect-sync', { body: {} }).catch(() => undefined);
+
     const { data: wp } = await supabase
       .from('worker_profiles')
-      .select('pix_key, stripe_connect_account_id')
+      .select(
+        'pix_key, stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_details_submitted'
+      )
       .eq('id', user.id)
       .single();
     setPixKey(wp?.pix_key ?? null);
-    setHasStripeConnect(Boolean(wp?.stripe_connect_account_id));
+    setStripeState(getStripeConnectState(wp));
 
     const today = new Date();
     const start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
@@ -127,16 +135,19 @@ export function PaymentsScreen({ navigation }: Props) {
       }
       const res = await supabase.functions.invoke('stripe-connect-link', {
         body: {
-          return_url: 'takeme://payments',
-          refresh_url: 'takeme://payments',
+          return_url: 'take-me-motorista://payments',
+          refresh_url: 'take-me-motorista://payments',
         },
       });
-      if (res.error || !res.data?.url) {
-        Alert.alert('Erro', res.error?.message || 'Não foi possível gerar o link de configuração.');
+      const url = (res.data as { url?: unknown } | null)?.url;
+      const isHttp = typeof url === 'string' && /^https?:\/\//i.test(url.trim());
+      if (res.error || !isHttp) {
+        const msg = await describeInvokeFailure(res.data, res.error);
+        Alert.alert('Erro', msg || 'Não foi possível gerar o link de configuração.');
         setConnectLoading(false);
         return;
       }
-      await Linking.openURL(res.data.url);
+      await Linking.openURL((url as string).trim());
     } catch (e: any) {
       Alert.alert('Erro', e?.message || 'Falha ao abrir configuração de pagamento.');
     }
@@ -185,28 +196,13 @@ export function PaymentsScreen({ navigation }: Props) {
             <MaterialIcons name="edit" size={20} color={GOLD} />
           </TouchableOpacity>
 
-          {/* Recebimento automático via Stripe Connect */}
-          <TouchableOpacity
-            style={[styles.pixCard, { borderColor: hasStripeConnect ? '#22C55E' : GOLD_BORDER }]}
-            onPress={hasStripeConnect ? undefined : handleStripeConnectSetup}
-            activeOpacity={hasStripeConnect ? 1 : 0.8}
-            disabled={connectLoading}
-          >
-            <View style={styles.pixCardContent}>
-              <Text style={[styles.pixCardLabel, hasStripeConnect && { color: '#22C55E' }]}>
-                {hasStripeConnect ? '✓ Recebimento automático ativo' : 'Ativar recebimento automático'}
-              </Text>
-              <Text style={[styles.pixCardValue, { fontSize: 12, color: '#6B7280' }]}>
-                {hasStripeConnect
-                  ? 'Seus pagamentos são depositados automaticamente via PIX'
-                  : 'Configure para receber automaticamente via PIX após cada viagem'}
-              </Text>
-            </View>
-            {connectLoading
-              ? <ActivityIndicator size="small" color={GOLD} />
-              : !hasStripeConnect && <MaterialIcons name="arrow-forward" size={20} color={GOLD} />
-            }
-          </TouchableOpacity>
+          {/* Recebimento automático via Stripe Connect (4 estados: none/incomplete/in_review/active) */}
+          <StripeConnectCard
+            state={stripeState}
+            loading={connectLoading}
+            onPressSetup={handleStripeConnectSetup}
+          />
+
 
           {/* Transferências de hoje */}
           <Text style={styles.sectionTitle}>Transferências de hoje</Text>
@@ -303,6 +299,91 @@ export function PaymentsScreen({ navigation }: Props) {
         </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
+  );
+}
+
+type StripeCardCopy = {
+  title: string;
+  subtitle: string;
+  borderColor: string;
+  titleColor?: string;
+  clickable: boolean;
+  showArrow: boolean;
+};
+
+function stripeCardCopy(state: StripeConnectState): StripeCardCopy {
+  switch (state) {
+    case 'active':
+      return {
+        title: '✓ Recebimento automático ativo',
+        subtitle: 'Seus pagamentos são depositados automaticamente via PIX.',
+        borderColor: '#22C55E',
+        titleColor: '#22C55E',
+        clickable: false,
+        showArrow: false,
+      };
+    case 'in_review':
+      return {
+        title: 'Cadastro Stripe em análise',
+        subtitle:
+          'Recebemos seus dados. A Stripe está validando (até 2 dias úteis). Enquanto isso você já pode operar — avisaremos assim que o recebimento automático for liberado.',
+        borderColor: '#F59E0B',
+        titleColor: '#92400E',
+        clickable: false,
+        showArrow: false,
+      };
+    case 'incomplete':
+      return {
+        title: 'Concluir configuração Stripe',
+        subtitle: 'Seu cadastro ainda não foi finalizado — toque para retomar o onboarding.',
+        borderColor: '#F59E0B',
+        titleColor: '#92400E',
+        clickable: true,
+        showArrow: true,
+      };
+    case 'none':
+    default:
+      return {
+        title: 'Ativar recebimento automático',
+        subtitle: 'Configure para receber automaticamente via PIX após cada viagem.',
+        borderColor: GOLD_BORDER,
+        clickable: true,
+        showArrow: true,
+      };
+  }
+}
+
+function StripeConnectCard({
+  state,
+  loading,
+  onPressSetup,
+}: {
+  state: StripeConnectState;
+  loading: boolean;
+  onPressSetup: () => void;
+}) {
+  const copy = stripeCardCopy(state);
+  return (
+    <TouchableOpacity
+      style={[styles.pixCard, { borderColor: copy.borderColor }]}
+      onPress={copy.clickable && !loading ? onPressSetup : undefined}
+      activeOpacity={copy.clickable ? 0.8 : 1}
+      disabled={loading || !copy.clickable}
+    >
+      <View style={styles.pixCardContent}>
+        <Text style={[styles.pixCardLabel, copy.titleColor ? { color: copy.titleColor } : null]}>
+          {copy.title}
+        </Text>
+        <Text style={[styles.pixCardValue, { fontSize: 12, color: '#6B7280' }]}>
+          {copy.subtitle}
+        </Text>
+      </View>
+      {loading ? (
+        <ActivityIndicator size="small" color={GOLD} />
+      ) : copy.showArrow ? (
+        <MaterialIcons name="arrow-forward" size={20} color={GOLD} />
+      ) : null}
+    </TouchableOpacity>
   );
 }
 

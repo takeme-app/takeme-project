@@ -116,6 +116,19 @@ export default function AtendimentoDetalheScreen() {
   const [refundEntityType, setRefundEntityType] = useState('booking');
   const [refundEntityId, setRefundEntityId] = useState('');
   const [refundProcessing, setRefundProcessing] = useState(false);
+  const [refundResult, setRefundResult] = useState<{
+    ok: boolean;
+    message: string;
+    refundAmountCents?: number;
+    refundId?: string | null;
+    reversalResults?: Array<{
+      payout_id: string;
+      transfer_id?: string | null;
+      reversal_id?: string | null;
+      reverse_amount_cents?: number;
+      error?: string | null;
+    }>;
+  } | null>(null);
 
   const [vehicleAuthOpen, setVehicleAuthOpen] = useState(false);
   const [vehicleData, setVehicleData] = useState<any>(null);
@@ -1019,6 +1032,7 @@ export default function AtendimentoDetalheScreen() {
         },
           React.createElement('option', { value: 'booking' }, 'Viagem (booking)'),
           React.createElement('option', { value: 'shipment' }, 'Encomenda (shipment)'),
+          React.createElement('option', { value: 'dependent_shipment' }, 'Encomenda dependente'),
           React.createElement('option', { value: 'excursion' }, 'Excursão')),
         React.createElement('label', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'ID da entidade'),
         React.createElement('input', {
@@ -1026,25 +1040,69 @@ export default function AtendimentoDetalheScreen() {
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => setRefundEntityId(e.target.value),
           style: { height: 44, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 12px', fontSize: 14, ...font },
         })),
+      refundResult
+        ? React.createElement('div', {
+            style: {
+              padding: 12, borderRadius: 8,
+              background: refundResult.ok ? '#dcfce7' : '#fee2e2',
+              color: refundResult.ok ? '#166534' : '#991b1b',
+              fontSize: 13, fontWeight: 600, ...font,
+            },
+          }, refundResult.message)
+        : null,
+      refundResult?.ok && refundResult.reversalResults && refundResult.reversalResults.length > 0
+        ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
+            React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Reversões de transfer (Stripe Connect)'),
+            React.createElement('div', { style: { border: '1px solid #e2e2e2', borderRadius: 8, overflow: 'hidden' } },
+              React.createElement('div', { style: { display: 'flex', background: '#e2e2e2', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: '#0d0d0d', ...font } },
+                React.createElement('div', { style: { flex: 2 } }, 'Payout'),
+                React.createElement('div', { style: { flex: 2 } }, 'Transfer'),
+                React.createElement('div', { style: { flex: 2 } }, 'Reversal'),
+                React.createElement('div', { style: { flex: 1 } }, 'Valor'),
+                React.createElement('div', { style: { flex: 1 } }, 'Erro')),
+              ...refundResult.reversalResults.map((r) =>
+                React.createElement('div', {
+                  key: r.payout_id,
+                  style: { display: 'flex', padding: '8px 10px', fontSize: 12, fontFamily: 'monospace', background: r.error ? '#fef2f2' : '#f6f6f6', borderTop: '1px solid #e2e2e2' },
+                },
+                  React.createElement('div', { style: { flex: 2 }, title: r.payout_id }, `${r.payout_id.slice(0, 10)}…`),
+                  React.createElement('div', { style: { flex: 2 }, title: r.transfer_id || '' }, r.transfer_id ? `${r.transfer_id.slice(0, 12)}…` : '—'),
+                  React.createElement('div', { style: { flex: 2 }, title: r.reversal_id || '' }, r.reversal_id ? `${r.reversal_id.slice(0, 12)}…` : '—'),
+                  React.createElement('div', { style: { flex: 1, fontFamily: 'Inter, sans-serif' } }, `R$ ${((r.reverse_amount_cents || 0) / 100).toFixed(2).replace('.', ',')}`),
+                  React.createElement('div', { style: { flex: 1, color: '#991b1b' }, title: r.error || '' }, r.error ? 'Erro' : '—')))))
+        : null,
       React.createElement('div', { style: { display: 'flex', gap: 12 } },
         React.createElement('button', {
           type: 'button',
           disabled: refundProcessing || !refundEntityId.trim(),
           onClick: async () => {
             setRefundProcessing(true);
-            try {
-              await invokeEdgeFunction('process-refund', 'POST', undefined, {
-                entity_type: refundEntityType, entity_id: refundEntityId.trim(), reason: 'admin_refund',
-              });
-              showToast('Reembolso processado com sucesso');
-              setRefundOpen(false);
-            } catch (err: any) { showToast(`Erro: ${err.message || 'falha no reembolso'}`); }
+            setRefundResult(null);
+            const { data, error } = await invokeEdgeFunction<any>('process-refund', 'POST', undefined, {
+              entity_type: refundEntityType, entity_id: refundEntityId.trim(), reason: 'admin_refund',
+            });
             setRefundProcessing(false);
+            if (error || (data && data.error)) {
+              const msg = error || data?.error || 'Falha ao processar reembolso';
+              setRefundResult({ ok: false, message: msg });
+              showToast(`Erro: ${msg}`);
+              return;
+            }
+            const reversalResults = Array.isArray(data?.reversal_results) ? data.reversal_results : [];
+            const amt = typeof data?.refund_amount_cents === 'number' ? data.refund_amount_cents : undefined;
+            setRefundResult({
+              ok: true,
+              message: `Reembolso processado${amt ? ` — R$ ${(amt / 100).toFixed(2).replace('.', ',')}` : ''}.`,
+              refundAmountCents: amt,
+              refundId: data?.refund_id ?? null,
+              reversalResults,
+            });
+            showToast('Reembolso processado com sucesso');
           },
           style: { flex: 1, height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', opacity: refundProcessing ? 0.6 : 1, ...font },
         }, refundProcessing ? 'Processando...' : 'Processar Reembolso'),
         React.createElement('button', {
-          type: 'button', onClick: () => setRefundOpen(false),
+          type: 'button', onClick: () => { setRefundOpen(false); setRefundResult(null); },
           style: { flex: 1, height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
         }, 'Cancelar')))) : null;
 

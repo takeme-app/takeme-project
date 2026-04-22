@@ -11,9 +11,14 @@ import {
   filterIconSvg,
 } from '../styles/webStyles';
 import { PAGAMENTOS_GESTAO_PREPARADORES_HREF } from '../constants/pagamentosGestaoNav';
-import { fetchPagamentos, fetchPagamentoCounts, invokeEdgeFunction } from '../data/queries';
+import {
+  fetchPagamentos,
+  fetchPagamentoCounts,
+  runProcessPayoutsDryRun,
+  runProcessPayouts,
+} from '../data/queries';
+import type { ProcessPayoutsResult } from '../data/queries';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { useAuth } from '../contexts/AuthContext';
 import type { PagamentoListItem, PagamentoCounts } from '../data/types';
 import { exportPayoutsReport } from '../utils/exportCsv';
 
@@ -85,6 +90,7 @@ const tableCols = [
   { label: '', flex: '0 0 40px', minWidth: 40 },
   { label: 'Profissional', flex: '1 1 20%', minWidth: 150 },
   { label: 'Tipo', flex: '0 0 120px', minWidth: 120 },
+  { label: 'Transfer', flex: '0 0 140px', minWidth: 140 },
   { label: 'Valor bruto', flex: '0 0 130px', minWidth: 130 },
   { label: 'Data', flex: '0 0 110px', minWidth: 110 },
   { label: 'Status', flex: '0 0 130px', minWidth: 130 },
@@ -96,6 +102,25 @@ const statusStyles: Record<string, { bg: string; color: string }> = {
   'Cancelado': { bg: '#eeafaa', color: '#551611' },
   'Concluído': { bg: '#b0e8d1', color: '#174f38' },
 };
+
+// Cor por entity_type para dar distincao visual em lote (booking vs shipment vs excursion).
+const entityTypeStyles: Record<string, { bg: string; color: string; label: string }> = {
+  booking: { bg: '#dbeafe', color: '#1e3a8a', label: 'Viagem' },
+  shipment: { bg: '#dcfce7', color: '#14532d', label: 'Encomenda' },
+  dependent_shipment: { bg: '#ccfbf1', color: '#134e4a', label: 'Dependente' },
+  excursion: { bg: '#ede9fe', color: '#4c1d95', label: 'Excursão' },
+};
+
+function entityBadge(entityTypeRaw: string, fallbackLabel: string) {
+  const meta = entityTypeStyles[entityTypeRaw] ?? { bg: '#f1f1f1', color: '#444', label: fallbackLabel };
+  return React.createElement('span', {
+    style: {
+      display: 'inline-block', padding: '3px 10px', borderRadius: 999,
+      fontSize: 12, fontWeight: 600, lineHeight: 1.4, whiteSpace: 'nowrap' as const,
+      background: meta.bg, color: meta.color, ...font,
+    },
+  }, meta.label);
+}
 
 const s = {
   metricCard: {
@@ -114,7 +139,6 @@ type PagAppliedFiltro = {
 
 export default function PagamentosScreen() {
   const navigate = useNavigate();
-  const { session } = useAuth();
   const [search, setSearch] = useState('');
   const [pagamentos, setPagamentos] = useState<PagamentoListItem[]>([]);
   const [counts, setCounts] = useState<PagamentoCounts>({ pagamentosPrevistos: 0, pagamentosFeitos: 0, lucro: 0 });
@@ -125,8 +149,20 @@ export default function PagamentosScreen() {
   const [batchLoading, setBatchLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
+  const [confirmMode, setConfirmMode] = useState<'connect_release' | 'manual_pix_confirm'>('connect_release');
+  const [dryRunPreview, setDryRunPreview] = useState<ProcessPayoutsResult | null>(null);
+  const [dryRunLoading, setDryRunLoading] = useState(false);
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [receiptPreview, setReceiptPreview] = useState<string | null>(null);
+  const [stuckPayouts, setStuckPayouts] = useState<Array<{
+    payout_id: string;
+    worker_id: string;
+    subtype: string | null;
+    entity_type: string;
+    worker_amount_cents: number;
+    status: string;
+    created_at: string;
+  }>>([]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -162,6 +198,31 @@ export default function PagamentosScreen() {
     Promise.all([fetchPagamentos(), fetchPagamentoCounts()]).then(([items, c]) => {
       if (!cancelled) { setPagamentos(items); setCounts(c); setLoading(false); }
     });
+    return () => { cancelled = true; };
+  }, []);
+
+  // View admin_shipment_payouts_stuck: payouts de shipment/excursion com
+  // mais de 3 dias pendentes/processing. Sinal para alertar sobre dinheiro
+  // retido na plataforma (opcao B de arquitetura — charge-shipments e
+  // charge-excursion-request cobram centralizado; process-payouts precisa
+  // rodar para liberar via stripe.transfers.create).
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    let cancelled = false;
+    (supabase as any)
+      .from('admin_shipment_payouts_stuck')
+      .select('payout_id, worker_id, subtype, entity_type, worker_amount_cents, status, created_at')
+      .order('created_at', { ascending: true })
+      .limit(50)
+      .then(({ data, error }: any) => {
+        if (cancelled) return;
+        if (error) {
+          // View pode nao existir em ambientes nao migrados ainda — ignorar silenciosamente.
+          console.warn('[PagamentosScreen] admin_shipment_payouts_stuck indisponivel:', error.message);
+          return;
+        }
+        setStuckPayouts(data ?? []);
+      });
     return () => { cancelled = true; };
   }, []);
 
@@ -372,16 +433,57 @@ export default function PagamentosScreen() {
     });
   }, [pendingFilteredRows, allPendingSelected]);
 
-  const handleBatchRelease = useCallback(() => {
+  /**
+   * Abre modal de confirmacao em modo "Connect release":
+   * - Dispara dry_run para contar o que vai virar transfer/paid/manual.
+   * - NAO passa mark_paid=true (deixa a edge criar stripe.transfers.create
+   *   para quem tem Connect e marcar processing para quem nao tem).
+   */
+  const handleBatchRelease = useCallback(async () => {
     if (selectedIds.size === 0) return;
+    setConfirmMode('connect_release');
+    setDryRunPreview(null);
+    setDryRunLoading(true);
     setConfirmModalOpen(true);
-  }, [selectedIds]);
+    try {
+      const { data, error } = await runProcessPayoutsDryRun([...selectedIds]);
+      if (error) {
+        showToast('❌ Dry-run falhou: ' + error);
+      } else if (data?.processed) {
+        setDryRunPreview(data.processed);
+      }
+    } finally {
+      setDryRunLoading(false);
+    }
+  }, [selectedIds, showToast]);
+
+  /**
+   * Modo "Marcar pago manualmente" (PIX/banco). Valido SO para selecao
+   * homogenea de linhas sem Stripe Connect. O botao que chama este handler
+   * so aparece quando selectedNoConnect > 0 e selectedWithConnect === 0.
+   */
+  const handleBatchMarkPaid = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    setConfirmMode('manual_pix_confirm');
+    setDryRunPreview(null);
+    setDryRunLoading(true);
+    setConfirmModalOpen(true);
+    try {
+      const { data, error } = await runProcessPayoutsDryRun([...selectedIds]);
+      if (error) {
+        showToast('❌ Dry-run falhou: ' + error);
+      } else if (data?.processed) {
+        setDryRunPreview(data.processed);
+      }
+    } finally {
+      setDryRunLoading(false);
+    }
+  }, [selectedIds, showToast]);
 
   const executeRelease = useCallback(async () => {
     setConfirmModalOpen(false);
     setBatchLoading(true);
     try {
-      // Upload comprovante se fornecido
       let receiptUrl: string | undefined;
       if (receiptFile) {
         const ext = receiptFile.name.split('.').pop() || 'jpg';
@@ -395,18 +497,29 @@ export default function PagamentosScreen() {
         }
       }
 
-      const res = await invokeEdgeFunction('process-payouts', 'POST', undefined, {
-        payout_ids: [...selectedIds],
-        mark_paid: true,
+      const markPaid = confirmMode === 'manual_pix_confirm';
+      const { data, error } = await runProcessPayouts([...selectedIds], {
+        mark_paid: markPaid,
         receipt_url: receiptUrl,
       });
-      if (res.error) { showToast('❌ ' + res.error); }
-      else if ((res.data as any)?.ok) {
-        const p = (res.data as any).processed || {};
-        const total = (p.manual_pix_paid || 0) + (p.stripe_connect_auto_paid || 0);
-        showToast(`✅ ${total} pagamento(s) liberado(s) com sucesso`);
+      if (error) {
+        showToast('❌ ' + error);
+      } else if (data?.ok) {
+        const p = data.processed || ({} as Partial<ProcessPayoutsResult>);
+        if (markPaid) {
+          showToast(`✅ ${p.manual_pix_paid || 0} pagamento(s) confirmado(s) manualmente`);
+        } else {
+          const tNew = p.stripe_connect_transfers_created || 0;
+          const tOld = p.stripe_connect_auto_paid || 0;
+          const mp = p.manual_pix_processing || 0;
+          showToast(`✅ ${tNew} transfer(s), ${tOld} booking(s), ${mp} p/ PIX manual`);
+          if (p.stripe_connect_transfers_failed && p.stripe_connect_transfers_failed > 0) {
+            showToast(`⚠️ ${p.stripe_connect_transfers_failed} transfer(s) falhou — verifique coluna Transfer`);
+          }
+        }
+      } else {
+        showToast('❌ Erro ao liberar pagamentos');
       }
-      else { showToast('❌ Erro ao liberar pagamentos'); }
     } catch (e: any) {
       showToast('❌ ' + (e?.message || 'Erro ao liberar'));
     }
@@ -414,18 +527,31 @@ export default function PagamentosScreen() {
     setReceiptPreview(null);
     await refetchAll();
     setBatchLoading(false);
-  }, [selectedIds, refetchAll, showToast, receiptFile]);
+  }, [selectedIds, confirmMode, refetchAll, showToast, receiptFile]);
 
   const handleReleaseAll = useCallback(async () => {
-    if (!confirm('Liberar TODOS os pagamentos pendentes? Workers com Stripe Connect serão marcados como pagos. Outros como "em processamento" para pagamento manual.')) return;
+    if (!confirm(
+      'Liberar TODOS os pagamentos pendentes?\n\n' +
+      '• Workers com Stripe Connect: será criado stripe.transfers.create automaticamente (entity_type ∈ shipment/excursion/dependent_shipment) ou apenas marcado paid (booking).\n' +
+      '• Workers sem Connect: ficam em "processing" aguardando PIX manual.',
+    )) return;
     setBatchLoading(true);
     try {
-      const res = await invokeEdgeFunction('process-payouts', 'POST', undefined, { force: true });
-      if (res.error) { showToast('❌ ' + res.error); }
-      else if ((res.data as any)?.ok) {
-        const p = (res.data as any).processed || {};
-        showToast(`✅ ${p.stripe_connect_auto_paid || 0} automáticos, ${p.manual_pix_processing || 0} manuais`);
-      } else { showToast('❌ Erro ao processar pagamentos'); }
+      const { data, error } = await runProcessPayouts([], { force: true });
+      if (error) {
+        showToast('❌ ' + error);
+      } else if (data?.ok) {
+        const p = data.processed || ({} as Partial<ProcessPayoutsResult>);
+        const tNew = p.stripe_connect_transfers_created || 0;
+        const tOld = p.stripe_connect_auto_paid || 0;
+        const mp = p.manual_pix_processing || 0;
+        showToast(`✅ ${tNew} transfer(s), ${tOld} booking(s), ${mp} p/ PIX manual`);
+        if (p.stripe_connect_transfers_failed && p.stripe_connect_transfers_failed > 0) {
+          showToast(`⚠️ ${p.stripe_connect_transfers_failed} transfer(s) falhou`);
+        }
+      } else {
+        showToast('❌ Erro ao processar pagamentos');
+      }
     } catch (e: any) {
       showToast('❌ ' + (e?.message || 'Erro ao processar'));
     }
@@ -495,11 +621,16 @@ export default function PagamentosScreen() {
       }, 'Gestão de pagamentos')));
 
   // ── Selection bar (between KPIs and table) ─────────────────────────────
+  // Particionamento da selecao por Stripe Connect — define quais botoes exibir.
+  const selectedRows = pagamentos.filter((p) => selectedIds.has(p.id));
+  const selectedWithConnectCount = selectedRows.filter((r) => r.workerHasConnect).length;
+  const selectedNoConnectCount = selectedRows.length - selectedWithConnectCount;
+  const mixedSelection = selectedWithConnectCount > 0 && selectedNoConnectCount > 0;
+
   const selectionBar = pendingFilteredRows.length > 0
     ? React.createElement('div', {
-        style: { display: 'flex', alignItems: 'center', gap: 10, width: '100%' },
+        style: { display: 'flex', alignItems: 'center', gap: 10, width: '100%', flexWrap: 'wrap' as const },
       },
-        // Selecionar / deselecionar pendentes
         React.createElement('button', {
           type: 'button', onClick: handleSelectAllPending,
           style: {
@@ -520,8 +651,18 @@ export default function PagamentosScreen() {
             : null),
           allPendingSelected ? 'Desmarcar todos' : `Selecionar pendentes (${pendingFilteredRows.length})`),
 
-        // Liberar selecionados (só aparece quando há seleção)
-        selectedIds.size > 0
+        // Aviso para selecao mista (Connect + sem Connect).
+        mixedSelection
+          ? React.createElement('span', {
+              style: {
+                fontSize: 12, color: '#b91c1c', fontWeight: 600, padding: '0 8px', ...font,
+              },
+            }, `Selecao mista: ${selectedWithConnectCount} com Connect + ${selectedNoConnectCount} sem Connect. Separe para liberar.`)
+          : null,
+
+        // Botao PRIMARIO: liberar via Stripe Connect (sem mark_paid) — apenas
+        // quando todas as selecionadas tem Connect.
+        selectedIds.size > 0 && !mixedSelection && selectedWithConnectCount === selectedIds.size
           ? React.createElement('button', {
               type: 'button', onClick: handleBatchRelease, disabled: batchLoading,
               style: actionBtnStyle('#22c55e', '#fff'),
@@ -529,13 +670,32 @@ export default function PagamentosScreen() {
               React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
                 React.createElement('path', { d: 'M22 2L11 13', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round' }),
                 React.createElement('path', { d: 'M22 2l-7 20-4-9-9-4z', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })),
-              batchLoading ? 'Processando...' : `Liberar selecionados (${selectedIds.size})`)
+              batchLoading ? 'Processando...' : `Liberar via Connect (${selectedIds.size})`)
           : null,
 
-        // Espaço flexível
+        // Botao SECUNDARIO: marcar pago manualmente — apenas quando todas as
+        // selecionadas NAO tem Connect (fluxo PIX manual).
+        selectedIds.size > 0 && !mixedSelection && selectedNoConnectCount === selectedIds.size
+          ? React.createElement('button', {
+              type: 'button', onClick: handleBatchMarkPaid, disabled: batchLoading,
+              style: actionBtnStyle('#0d0d0d', '#fff'),
+            },
+              React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+                React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#fff', strokeWidth: 2.5, strokeLinecap: 'round' })),
+              batchLoading ? 'Processando...' : `Confirmar pago (PIX/banco) (${selectedIds.size})`)
+          : null,
+
         React.createElement('div', { style: { flex: 1 } }),
 
-        // Exportar relatório
+        // Liberar todos com force (atinge todos pendentes do banco, nao so filtrados).
+        React.createElement('button', {
+          type: 'button', onClick: handleReleaseAll, disabled: batchLoading,
+          style: actionBtnStyle('#fff', '#b91c1c', '1.5px solid #fecaca'),
+        },
+          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' },
+            React.createElement('path', { d: 'M13 2L4 14h7l-1 8 9-12h-7l1-8z', stroke: '#b91c1c', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })),
+          'Liberar todos pendentes (force)'),
+
         React.createElement('button', {
           type: 'button', onClick: handleExportCsv, disabled: batchLoading,
           style: actionBtnStyle('#fff', '#0d0d0d', '1.5px solid #e2e2e2'),
@@ -545,6 +705,52 @@ export default function PagamentosScreen() {
             React.createElement('polyline', { points: '7 10 12 15 17 10', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
             React.createElement('line', { x1: 12, y1: 15, x2: 12, y2: 3, stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })),
           'Exportar relatório'))
+    : null;
+
+  // ── Alerta: payouts de shipment/excursion pendentes ha >3 dias ────────
+  // Banner vermelho (severidade alta, conforme plano) com link "Ver lista"
+  // que filtra a tabela por status Agendado/Em andamento.
+  const stuckTotalCents = stuckPayouts.reduce((acc, p) => acc + (Number(p.worker_amount_cents) || 0), 0);
+  const stuckBanner = stuckPayouts.length > 0
+    ? React.createElement('div', {
+        style: {
+          display: 'flex', gap: 16, alignItems: 'flex-start',
+          background: '#fee2e2', border: '1.5px solid #b91c1c', borderRadius: 12,
+          padding: '16px 20px', width: '100%', boxSizing: 'border-box' as const,
+        },
+      },
+        React.createElement('div', {
+          style: {
+            width: 40, height: 40, borderRadius: '50%', background: '#b91c1c',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          },
+        },
+          React.createElement('svg', { width: 22, height: 22, viewBox: '0 0 24 24', fill: 'none' },
+            React.createElement('path', { d: 'M12 9v4M12 17h.01', stroke: '#fff', strokeWidth: 2.5, strokeLinecap: 'round' }),
+            React.createElement('path', {
+              d: 'M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z',
+              stroke: '#fff', strokeWidth: 2, strokeLinejoin: 'round',
+            }))),
+        React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+          React.createElement('span', {
+            style: { fontSize: 15, fontWeight: 700, color: '#7f1d1d', ...font },
+          }, `Dinheiro retido: ${stuckPayouts.length} payout(s) de encomenda/excursão há mais de 3 dias`),
+          React.createElement('span', {
+            style: { fontSize: 13, color: '#991b1b', lineHeight: 1.5, ...font },
+          }, `Total bruto: ${fmtBRL(stuckTotalCents)}. Liberação via process-payouts cria stripe.transfers.create para cada worker com Connect; sem Connect, marca processing para pagamento manual via PIX.`),
+          React.createElement('button', {
+            type: 'button',
+            onClick: () => {
+              setAppliedFiltro({ status: 'Agendado', periodo: 'mes' });
+              setFiltroTabelaAtivo(true);
+            },
+            style: {
+              alignSelf: 'flex-start', marginTop: 8,
+              background: '#b91c1c', color: '#fff', border: 'none',
+              borderRadius: 8, padding: '6px 14px', fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', ...font,
+            },
+          }, 'Ver lista (filtrar por Agendado)')))
     : null;
 
   // ── Toast notification ─────────────────────────────────────────────────
@@ -592,15 +798,48 @@ export default function PagamentosScreen() {
     const st = statusStyles[row.status];
     const isPending = row.status === 'Agendado';
     const isSelected = selectedIds.has(row.id);
+    // Destaque visual quando transfer explicito (shipment/excursion) falhou.
+    const hasTransferError = Boolean(row.stripeTransferError);
+    const rowBg = hasTransferError ? '#fef2f2' : (isSelected ? '#f0fdf4' : '#fff');
+
+    // Celula Transfer: verde (sucesso) | vermelho (erro) | cinza (booking sem transfer).
+    let transferCell: React.ReactNode = '—';
+    if (row.stripeTransferError) {
+      transferCell = React.createElement('span', {
+        title: row.stripeTransferError,
+        style: {
+          display: 'inline-block', padding: '3px 10px', borderRadius: 999,
+          fontSize: 11, fontWeight: 700, color: '#7f1d1d', background: '#fee2e2',
+          border: '1px solid #fecaca', cursor: 'help', ...font,
+        },
+      }, 'Erro');
+    } else if (row.stripeTransferId) {
+      const shortId = row.stripeTransferId.length > 14 ? `${row.stripeTransferId.slice(0, 10)}…` : row.stripeTransferId;
+      transferCell = React.createElement('span', {
+        title: row.stripeTransferAt ? `Criado em ${new Date(row.stripeTransferAt).toLocaleString('pt-BR')}` : row.stripeTransferId,
+        style: {
+          display: 'inline-block', padding: '3px 10px', borderRadius: 999,
+          fontSize: 11, fontWeight: 600, color: '#14532d', background: '#dcfce7',
+          fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+          cursor: 'help',
+        },
+      }, shortId);
+    } else if (row.entityTypeRaw === 'booking' && row.statusRaw === 'paid') {
+      // booking usa transfer_data no charge → nao precisa de transfer explicito.
+      transferCell = React.createElement('span', {
+        title: 'Booking: split feito via transfer_data no charge (sem transfer explícito).',
+        style: { fontSize: 12, color: '#767676', fontStyle: 'italic' as const, cursor: 'help', ...font },
+      }, 'no charge');
+    }
+
     return React.createElement('div', {
       key: row.id,
       'data-testid': 'pagamento-table-row',
       style: {
         display: 'flex', minHeight: 64, alignItems: 'center', padding: '8px 16px',
-        borderBottom: '1px solid #d9d9d9', background: isSelected ? '#f0fdf4' : '#fff',
+        borderBottom: '1px solid #d9d9d9', background: rowBg,
       },
     },
-      // Checkbox
       React.createElement('div', { style: { ...cellBase, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth, justifyContent: 'center' } },
         isPending
           ? React.createElement('button', {
@@ -609,11 +848,19 @@ export default function PagamentosScreen() {
             }, isSelected ? React.createElement('svg', { width: 10, height: 10, viewBox: '0 0 24 24', fill: 'none' },
               React.createElement('path', { d: 'M20 6L9 17l-5-5', stroke: '#fff', strokeWidth: 3, strokeLinecap: 'round' })) : null)
           : null),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500 } }, row.workerName),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth } }, row.entityType),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth } }, fmtBRL(row.grossAmountCents)),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth, whiteSpace: 'pre-line' as const, fontSize: 13, lineHeight: 1.4 } }, row.dataFinalizacao),
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth } },
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500, flexDirection: 'column' as const, alignItems: 'flex-start', gap: 2 } },
+        React.createElement('span', null, row.workerName),
+        !row.workerHasConnect
+          ? React.createElement('span', {
+              style: { fontSize: 10, color: '#b91c1c', fontWeight: 600, ...font },
+            }, 'sem Stripe Connect')
+          : null),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth } },
+        entityBadge(row.entityTypeRaw, row.entityType)),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth } }, transferCell),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth } }, fmtBRL(row.grossAmountCents)),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth, whiteSpace: 'pre-line' as const, fontSize: 13, lineHeight: 1.4 } }, row.dataFinalizacao),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[6].flex, minWidth: tableCols[6].minWidth } },
         React.createElement('span', {
           style: {
             display: 'inline-block', padding: '4px 12px', borderRadius: 999,
@@ -652,6 +899,44 @@ export default function PagamentosScreen() {
     confirmByWorker[p.workerId].count += 1;
   }
 
+  // Linha de detalhamento do dry-run (aparece no modal antes de confirmar).
+  const dryRunRow = (label: string, value: number | string, emphasis?: boolean) =>
+    React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0' } },
+      React.createElement('span', { style: { fontSize: 13, color: '#444', ...font } }, label),
+      React.createElement('span', { style: { fontSize: 14, fontWeight: emphasis ? 700 : 600, color: emphasis ? '#0d0d0d' : '#444', ...font } }, String(value)));
+
+  const dryRunSection = dryRunLoading
+    ? React.createElement('div', {
+        style: { background: '#f8f9fa', borderRadius: 12, padding: '16px 20px', textAlign: 'center' as const, color: '#767676', fontSize: 13, ...font },
+      }, 'Simulando liberação…')
+    : dryRunPreview
+      ? React.createElement('div', {
+          style: { background: '#f8f9fa', borderRadius: 12, padding: '16px 20px', display: 'flex', flexDirection: 'column' as const, gap: 4 },
+        },
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 700, color: '#0d0d0d', marginBottom: 4, ...font } }, 'Prévia (dry-run)'),
+          dryRunRow('Connect — transfers a criar', dryRunPreview.stripe_connect_transfers_created, true),
+          dryRunRow('Connect — bookings pagos no charge', dryRunPreview.stripe_connect_auto_paid),
+          dryRunRow('Sem Connect — para PIX manual (processing)', dryRunPreview.manual_pix_processing),
+          confirmMode === 'manual_pix_confirm'
+            ? dryRunRow('Sem Connect — serão marcados paid', dryRunPreview.manual_pix_paid, true)
+            : null,
+          dryRunPreview.below_threshold_skipped
+            ? dryRunRow('Abaixo do limite — ignorados', dryRunPreview.below_threshold_skipped)
+            : null)
+      : null;
+
+  const confirmTitle = confirmMode === 'manual_pix_confirm'
+    ? 'Confirmar pagamento manual (PIX/banco)'
+    : 'Liberar via Stripe Connect';
+
+  const confirmCtaLabel = confirmMode === 'manual_pix_confirm'
+    ? (batchLoading ? 'Processando...' : 'Confirmar pago manualmente')
+    : (batchLoading ? 'Processando...' : 'Liberar via Connect');
+
+  const confirmHint = confirmMode === 'manual_pix_confirm'
+    ? 'Use somente após efetuar o PIX/transferência manual fora do sistema. O registro será marcado como paid imediatamente.'
+    : 'A função process-payouts cria stripe.transfers.create para shipments/excursions dos workers com Connect; bookings são marcados paid direto (split no charge).';
+
   const confirmModal = confirmModalOpen
     ? React.createElement('div', {
         style: {
@@ -668,9 +953,8 @@ export default function PagamentosScreen() {
           },
           onClick: (e: React.MouseEvent) => e.stopPropagation(),
         },
-          // Header
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-            React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Confirmar liberação'),
+            React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, confirmTitle),
             React.createElement('button', {
               type: 'button', onClick: () => setConfirmModalOpen(false),
               style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
@@ -691,6 +975,8 @@ export default function PagamentosScreen() {
             React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
               React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'Valor a liberar (profissionais)'),
               React.createElement('span', { style: { fontSize: 20, fontWeight: 700, color: '#22c55e', ...font } }, fmtBRL(confirmTotalWorkerCents)))),
+
+          dryRunSection,
 
           // Lista por profissional
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0 } },
@@ -748,12 +1034,10 @@ export default function PagamentosScreen() {
                       React.createElement('line', { x1: 12, y1: 3, x2: 12, y2: 15, stroke: '#999', strokeWidth: 2, strokeLinecap: 'round' })),
                     React.createElement('span', { style: { fontSize: 13, color: '#999', ...font } }, 'Anexar comprovante (imagem ou PDF)')))),
 
-          // Nota
           React.createElement('p', {
             style: { fontSize: 12, color: '#999', margin: 0, lineHeight: 1.5, ...font },
-          }, 'Os pagamentos serão marcados como liberados. Para profissionais sem Stripe Connect, exporte o relatório e processe os pagamentos manualmente via PIX/banco.'),
+          }, confirmHint),
 
-          // Botões
           React.createElement('div', { style: { display: 'flex', gap: 12, marginTop: 4 } },
             React.createElement('button', {
               type: 'button', onClick: () => setConfirmModalOpen(false),
@@ -763,15 +1047,16 @@ export default function PagamentosScreen() {
               },
             }, 'Cancelar'),
             React.createElement('button', {
-              type: 'button', onClick: executeRelease, disabled: batchLoading,
+              type: 'button', onClick: executeRelease, disabled: batchLoading || dryRunLoading,
               style: {
-                flex: 1, height: 48, borderRadius: 12, border: 'none', background: '#22c55e',
+                flex: 1, height: 48, borderRadius: 12, border: 'none',
+                background: confirmMode === 'manual_pix_confirm' ? '#0d0d0d' : '#22c55e',
                 fontSize: 15, fontWeight: 600, color: '#fff', cursor: 'pointer', ...font,
-                opacity: batchLoading ? 0.6 : 1,
+                opacity: (batchLoading || dryRunLoading) ? 0.6 : 1,
               },
-            }, batchLoading ? 'Processando...' : 'Confirmar liberação'))))
+            }, confirmCtaLabel))))
     : null;
 
   return React.createElement(React.Fragment, null,
-    title, searchRow, metricCards, selectionBar, emptyMsg || tableSection, filtroTabelaModal, toastEl, confirmModal);
+    title, searchRow, stuckBanner, metricCards, selectionBar, emptyMsg || tableSection, filtroTabelaModal, toastEl, confirmModal);
 }
