@@ -147,13 +147,26 @@ Deno.serve(async (req) => {
     const fcmUrl = `https://fcm.googleapis.com/v1/projects/${GOOGLE_PROJECT_ID}/messages:send`;
     const results: unknown[] = [];
 
+    // Channel id precisa bater com o criado em runtime por cada app via
+    // Notifee (react-native-notify-kit): garante que o FCM em background e
+    // o display local em foreground usem o mesmo canal HIGH, evitando canais
+    // duplicados e "heads-up" faltando no Android.
+    const androidChannelId =
+      targetAppSlug === "motorista" ? "motorista-default" : "cliente-default";
+
     for (const token of tokens) {
       const messagePayload = {
         message: {
           token,
           notification: { title, body: bodyText },
           data: customData,
-          android: { notification: { sound: "default" } },
+          android: {
+            priority: "HIGH",
+            notification: {
+              sound: "default",
+              channel_id: androidChannelId,
+            },
+          },
         },
       };
 

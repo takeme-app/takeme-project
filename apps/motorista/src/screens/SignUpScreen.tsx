@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   TextInput,
@@ -20,8 +20,19 @@ import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
 import { parseInvokeError } from '../utils/edgeFunctionResponse';
 import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext';
+import { isValidEmailFormat } from '../utils/validateEmail';
+import {
+  checkEmailAvailability,
+  type EmailAvailability,
+} from '../lib/checkEmailAvailability';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SignUp'>;
+
+/** Debounce da checagem de e-mail após `onBlur`/digitação: evita rajadas de `functions.invoke`. */
+const EMAIL_AVAILABILITY_DEBOUNCE_MS = 500;
+const PASSWORD_MIN_LEN = 8;
+
+type EmailCheckStatus = 'idle' | 'checking' | EmailAvailability | 'format';
 
 function formatPhone(value: string): string {
   const digits = value.replace(/\D/g, '').slice(0, 11);
@@ -51,21 +62,89 @@ export function SignUpScreen({ navigation, route }: Props) {
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // Feedback inline do e-mail (formato + checagem de existência no servidor).
+  const [emailStatus, setEmailStatus] = useState<EmailCheckStatus>('idle');
+  const [emailStatusMsg, setEmailStatusMsg] = useState<string | null>(null);
+  const [emailTouched, setEmailTouched] = useState(false);
+  const [passwordTouched, setPasswordTouched] = useState(false);
+  const [confirmTouched, setConfirmTouched] = useState(false);
+
   const openTerms = () => navigation.navigate('TermsOfUse');
   const openPrivacy = () => navigation.navigate('PrivacyPolicy');
 
   const handlePhoneChange = (text: string) => setPhone(formatPhone(text));
 
+  const emailNormalized = email.trim();
+  const emailFormatValid = useMemo(() => isValidEmailFormat(emailNormalized), [emailNormalized]);
+
+  // Checagem de existência do e-mail no servidor, com debounce + race guard.
+  const lastQueryRef = useRef<string>('');
+  useEffect(() => {
+    if (!emailNormalized) {
+      setEmailStatus('idle');
+      setEmailStatusMsg(null);
+      return;
+    }
+    if (!emailFormatValid) {
+      setEmailStatus('format');
+      setEmailStatusMsg('E-mail em formato inválido.');
+      return;
+    }
+
+    let cancelled = false;
+    setEmailStatus('checking');
+    setEmailStatusMsg(null);
+    const query = emailNormalized.toLowerCase();
+    lastQueryRef.current = query;
+    const timer = setTimeout(async () => {
+      const result = await checkEmailAvailability(query);
+      if (cancelled || lastQueryRef.current !== query) return;
+      setEmailStatus(result.status);
+      setEmailStatusMsg(result.message ?? null);
+    }, EMAIL_AVAILABILITY_DEBOUNCE_MS);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [emailNormalized, emailFormatValid]);
+
+  const handleEmailBlur = useCallback(() => setEmailTouched(true), []);
+  const handlePasswordBlur = useCallback(() => setPasswordTouched(true), []);
+  const handleConfirmBlur = useCallback(() => setConfirmTouched(true), []);
+
+  const passwordValid = password.length >= PASSWORD_MIN_LEN;
+  const passwordsMatch = password.length > 0 && password === confirmPassword;
+
+  const formReadyToSubmit =
+    emailFormatValid &&
+    (emailStatus === 'available' || emailStatus === 'error') &&
+    passwordValid &&
+    passwordsMatch &&
+    !loading;
+
   const handleContinue = async () => {
-    if (!email.trim()) {
-      showAlert('Atenção', 'Preencha o e-mail.');
+    setEmailTouched(true);
+    setPasswordTouched(true);
+    setConfirmTouched(true);
+
+    if (!emailFormatValid) {
+      showAlert('Atenção', 'Informe um e-mail válido.');
       return;
     }
-    if (password.length < 8) {
-      showAlert('Atenção', 'A senha deve ter no mínimo 8 caracteres.');
+    if (emailStatus === 'taken') {
+      showAlert('Atenção', emailStatusMsg ?? 'Este e-mail já está cadastrado.');
       return;
     }
-    if (password !== confirmPassword) {
+    if (emailStatus === 'checking') {
+      showAlert('Aguarde', 'Ainda estamos verificando o e-mail.');
+      return;
+    }
+    if (!passwordValid) {
+      showAlert('Atenção', `A senha deve ter no mínimo ${PASSWORD_MIN_LEN} caracteres.`);
+      return;
+    }
+    if (!passwordsMatch) {
       showAlert('Atenção', 'As senhas não coincidem.');
       return;
     }
@@ -79,25 +158,29 @@ export function SignUpScreen({ navigation, route }: Props) {
       setLoading(true);
       try {
         const { data: fnData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
-          body: { email: email.trim(), purpose: 'signup', checkEmailOnly: true },
+          body: { email: emailNormalized, purpose: 'signup', checkEmailOnly: true },
         });
         const apiErrorMsg =
           fnData && typeof fnData === 'object' && fnData !== null && 'error' in fnData
             ? String((fnData as { error: unknown }).error)
             : null;
         if (apiErrorMsg) {
+          setEmailStatus('taken');
+          setEmailStatusMsg(apiErrorMsg);
           showAlert('Atenção', apiErrorMsg);
           return;
         }
         if (fnError) {
           const bodyError = await parseInvokeError(fnError);
           if (bodyError) {
+            setEmailStatus('taken');
+            setEmailStatusMsg(bodyError);
             showAlert('Atenção', bodyError);
             return;
           }
           throw fnError;
         }
-        setDeferred({ email: email.trim(), password, driverType: registrationType });
+        setDeferred({ email: emailNormalized, password, driverType: registrationType });
         if (registrationType === 'preparador_excursões') {
           navigation.navigate('CompletePreparadorExcursoes');
         } else if (registrationType === 'preparador_encomendas') {
@@ -130,7 +213,7 @@ export function SignUpScreen({ navigation, route }: Props) {
     setLoading(true);
     try {
       const { data: fnData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
-        body: { email: email.trim(), phone: phoneDigits },
+        body: { email: emailNormalized, phone: phoneDigits },
       });
       const apiErrorMsg =
         fnData && typeof fnData === 'object' && fnData !== null && 'error' in fnData
@@ -152,7 +235,7 @@ export function SignUpScreen({ navigation, route }: Props) {
       }
 
       navigation.navigate('VerifyEmail', {
-        email: email.trim(),
+        email: emailNormalized,
         password,
         fullName: fullName.trim(),
         phone: phoneDigits,
@@ -165,8 +248,41 @@ export function SignUpScreen({ navigation, route }: Props) {
     }
   };
 
+  const emailHintState = useMemo(() => {
+    if (!emailTouched && emailStatus !== 'checking') return null;
+    if (!emailNormalized) return null;
+    if (emailStatus === 'format') return { kind: 'error', text: 'E-mail em formato inválido.' };
+    if (emailStatus === 'checking') return { kind: 'muted', text: 'Verificando e-mail…' };
+    if (emailStatus === 'taken')
+      return {
+        kind: 'error',
+        text: emailStatusMsg ?? 'Este e-mail já está cadastrado.',
+      };
+    if (emailStatus === 'available') return { kind: 'ok', text: 'E-mail disponível.' };
+    if (emailStatus === 'error')
+      return {
+        kind: 'muted',
+        text: 'Não foi possível validar agora. Continuaremos ao clicar em Continuar.',
+      };
+    return null;
+  }, [emailNormalized, emailStatus, emailStatusMsg, emailTouched]);
+
+  const passwordHint = useMemo(() => {
+    if (!passwordTouched || password.length === 0) return null;
+    if (!passwordValid) {
+      return { kind: 'error' as const, text: `Use no mínimo ${PASSWORD_MIN_LEN} caracteres.` };
+    }
+    return { kind: 'ok' as const, text: 'Senha ok.' };
+  }, [password, passwordTouched, passwordValid]);
+
+  const confirmHint = useMemo(() => {
+    if (!confirmTouched || confirmPassword.length === 0) return null;
+    if (!passwordsMatch) return { kind: 'error' as const, text: 'As senhas não coincidem.' };
+    return { kind: 'ok' as const, text: 'Senhas coincidem.' };
+  }, [confirmPassword, confirmTouched, passwordsMatch]);
+
   return (
-    <KeyboardAvoidingView style={styles.container} behavior="padding">
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <StatusBar style="dark" />
       <View style={[styles.header, { paddingTop: Math.max(12, insets.top) }]}>
         <TouchableOpacity style={styles.backButtonCircle} onPress={() => navigation.goBack()} activeOpacity={0.7}>
@@ -208,44 +324,118 @@ export function SignUpScreen({ navigation, route }: Props) {
           </>
         ) : null}
 
-        <TextInput
-          style={styles.input}
-          placeholder="Email"
-          placeholderTextColor="#9CA3AF"
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-        />
-        <View style={styles.passwordRow}>
+        <View style={styles.fieldGroup}>
           <TextInput
-            style={[styles.input, styles.inputPassword]}
-            placeholder="Senha (mín. 8 caracteres)"
+            style={[
+              styles.input,
+              styles.inputWithHint,
+              emailHintState?.kind === 'error' ? styles.inputError : null,
+              emailHintState?.kind === 'ok' ? styles.inputOk : null,
+            ]}
+            placeholder="Email"
             placeholderTextColor="#9CA3AF"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry={hidePassword}
+            value={email}
+            onChangeText={setEmail}
+            onBlur={handleEmailBlur}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            textContentType="emailAddress"
           />
-          <TouchableOpacity style={styles.eyeButton} onPress={() => setHidePassword((v) => !v)}>
-            <MaterialIcons name={hidePassword ? 'visibility' : 'visibility-off'} size={22} color="#6B7280" style={styles.eyeIconCenter} />
-          </TouchableOpacity>
+          {emailHintState && (
+            <View style={styles.hintRow}>
+              {emailStatus === 'checking' ? (
+                <ActivityIndicator size="small" color="#6B7280" style={styles.hintSpinner} />
+              ) : null}
+              <Text
+                style={[
+                  styles.hintText,
+                  emailHintState.kind === 'error' && styles.hintError,
+                  emailHintState.kind === 'ok' && styles.hintOk,
+                ]}
+              >
+                {emailHintState.text}
+              </Text>
+            </View>
+          )}
         </View>
-        <View style={styles.passwordRow}>
-          <TextInput
-            style={[styles.input, styles.inputPassword]}
-            placeholder="Confirme a senha"
-            placeholderTextColor="#9CA3AF"
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            secureTextEntry={hideConfirm}
-          />
-          <TouchableOpacity style={styles.eyeButton} onPress={() => setHideConfirm((v) => !v)}>
-            <MaterialIcons name={hideConfirm ? 'visibility' : 'visibility-off'} size={22} color="#6B7280" style={styles.eyeIconCenter} />
-          </TouchableOpacity>
+
+        <View style={styles.fieldGroup}>
+          <View style={styles.passwordRow}>
+            <TextInput
+              style={[
+                styles.input,
+                styles.inputPassword,
+                styles.inputWithHint,
+                passwordHint?.kind === 'error' ? styles.inputError : null,
+                passwordHint?.kind === 'ok' ? styles.inputOk : null,
+              ]}
+              placeholder={`Senha (mín. ${PASSWORD_MIN_LEN} caracteres)`}
+              placeholderTextColor="#9CA3AF"
+              value={password}
+              onChangeText={setPassword}
+              onBlur={handlePasswordBlur}
+              secureTextEntry={hidePassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="newPassword"
+            />
+            <TouchableOpacity style={styles.eyeButton} onPress={() => setHidePassword((v) => !v)}>
+              <MaterialIcons name={hidePassword ? 'visibility' : 'visibility-off'} size={22} color="#6B7280" style={styles.eyeIconCenter} />
+            </TouchableOpacity>
+          </View>
+          {passwordHint && (
+            <Text
+              style={[
+                styles.hintText,
+                passwordHint.kind === 'error' && styles.hintError,
+                passwordHint.kind === 'ok' && styles.hintOk,
+              ]}
+            >
+              {passwordHint.text}
+            </Text>
+          )}
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <View style={styles.passwordRow}>
+            <TextInput
+              style={[
+                styles.input,
+                styles.inputPassword,
+                styles.inputWithHint,
+                confirmHint?.kind === 'error' ? styles.inputError : null,
+                confirmHint?.kind === 'ok' ? styles.inputOk : null,
+              ]}
+              placeholder="Confirme a senha"
+              placeholderTextColor="#9CA3AF"
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              onBlur={handleConfirmBlur}
+              secureTextEntry={hideConfirm}
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="newPassword"
+            />
+            <TouchableOpacity style={styles.eyeButton} onPress={() => setHideConfirm((v) => !v)}>
+              <MaterialIcons name={hideConfirm ? 'visibility' : 'visibility-off'} size={22} color="#6B7280" style={styles.eyeIconCenter} />
+            </TouchableOpacity>
+          </View>
+          {confirmHint && (
+            <Text
+              style={[
+                styles.hintText,
+                confirmHint.kind === 'error' && styles.hintError,
+                confirmHint.kind === 'ok' && styles.hintOk,
+              ]}
+            >
+              {confirmHint.text}
+            </Text>
+          )}
         </View>
 
         <TouchableOpacity
-          style={[styles.continueButton, loading && styles.continueButtonDisabled]}
+          style={[styles.continueButton, (!formReadyToSubmit || loading) && styles.continueButtonDisabled]}
           activeOpacity={0.8}
           onPress={handleContinue}
           disabled={loading}
@@ -295,13 +485,22 @@ const styles = StyleSheet.create({
     color: '#000000',
     marginBottom: 16,
   },
+  inputWithHint: { marginBottom: 6 },
+  inputError: { borderColor: '#DC2626' },
+  inputOk: { borderColor: '#059669' },
+  fieldGroup: { marginBottom: 10 },
   passwordRow: { position: 'relative', marginBottom: 0 },
   inputPassword: { paddingRight: 48 },
   eyeButton: { position: 'absolute', right: 12, top: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' },
   eyeIconCenter: { marginTop: -3 },
+  hintRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6, paddingHorizontal: 4 },
+  hintSpinner: { marginRight: 6 },
+  hintText: { fontSize: 12, color: '#6B7280', marginBottom: 6, paddingHorizontal: 4 },
+  hintError: { color: '#DC2626' },
+  hintOk: { color: '#059669' },
   continueButton: { backgroundColor: '#000000', paddingVertical: 16, borderRadius: 12, alignItems: 'center', marginTop: 8, marginBottom: 24 },
   continueButtonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
-  continueButtonDisabled: { opacity: 0.8 },
+  continueButtonDisabled: { opacity: 0.5 },
   checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 16 },
   checkboxTouch: { marginRight: 12, marginTop: 2 },
   checkboxLabelWrap: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },

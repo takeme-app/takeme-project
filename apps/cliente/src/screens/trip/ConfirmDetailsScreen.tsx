@@ -72,6 +72,7 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
           destLat: destination.latitude,
           destLng: destination.longitude,
           dayKey: calendarDayKeySaoPaulo(depIso),
+          currentScheduledTripId: tripId ?? null,
         });
         if (dupMsg) {
           showAlert('Limite', dupMsg);

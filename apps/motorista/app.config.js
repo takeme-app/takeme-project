@@ -53,19 +53,7 @@ if (!googleMapsKey) {
 module.exports = {
   expo: {
     ...appJson.expo,
-    plugins: [
-      ...(appJson.expo.plugins || []),
-      [
-        'expo-build-properties',
-        {
-          android: {
-            // Windows + OneDrive + caminhos longos: o CMake/Ninja da New Arch gera .o com path > 260 chars e falha.
-            // Para voltar à New Arch: clone curto (ex.: C:\dev\take_me) ou habilite "caminhos longos" no Windows.
-            newArchEnabled: false,
-          },
-        },
-      ],
-    ],
+    plugins: [...(appJson.expo.plugins || [])],
     ios: {
       ...appJson.expo.ios,
       config: {

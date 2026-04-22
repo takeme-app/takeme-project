@@ -1,6 +1,7 @@
 {
   "expo": {
     "name": "Take Me - Motorista",
+    "newArchEnabled": true,
     "slug": "take-me-motorista",
     "owner": "viniciusbsilva",
     "scheme": "take-me-motorista",

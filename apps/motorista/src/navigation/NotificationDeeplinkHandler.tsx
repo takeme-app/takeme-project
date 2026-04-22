@@ -5,6 +5,7 @@ import {
   applyNotificationDeeplink,
   parseNotificationDeeplink,
 } from '../lib/notificationDeeplink';
+import { registerMotoristaForegroundNotifications } from '../lib/foregroundNotificationHandler';
 
 type NavRef = React.RefObject<NavigationContainerRef<RootStackParamList> | null>;
 
@@ -14,16 +15,21 @@ type NavRef = React.RefObject<NavigationContainerRef<RootStackParamList> | null>
  *
  * - `onNotificationOpenedApp`: app em background/foreground → usuário tocou na push.
  * - `getInitialNotification`: app estava fechado e foi aberto pela push.
- * - `onMessage`: foreground — neste ponto não navegamos automaticamente (o
- *   usuário ainda está vendo outra tela); apenas deixamos a entrada cair no
- *   inbox via Realtime. Reservado para futuras UX (toast/banner).
+ * - `onMessage` (via Notifee): foreground — cria notificação local para o
+ *   sistema exibir o banner/heads-up e propaga o toque pelo `onForegroundEvent`.
  *
  * Sem-op em Web/bundles sem o módulo nativo.
  */
 export function NotificationDeeplinkHandler({ navigationRef }: { navigationRef: NavRef }) {
   useEffect(() => {
     let unsubOpened: (() => void) | undefined;
+    let unsubForeground: (() => void) | undefined;
     let cancelled = false;
+
+    const applyFromRawData = (data: unknown) => {
+      const link = parseNotificationDeeplink(data);
+      if (link) applyNotificationDeeplink(navigationRef, link);
+    };
 
     (async () => {
       try {
@@ -31,17 +37,17 @@ export function NotificationDeeplinkHandler({ navigationRef }: { navigationRef: 
 
         const initial = await messaging().getInitialNotification();
         if (!cancelled && initial?.data) {
-          const link = parseNotificationDeeplink(initial.data);
-          if (link) {
-            // Pequeno delay para aguardar NavigationContainer pronto.
-            setTimeout(() => applyNotificationDeeplink(navigationRef, link), 250);
-          }
+          // Pequeno delay para aguardar NavigationContainer pronto.
+          setTimeout(() => applyFromRawData(initial.data), 250);
         }
 
         unsubOpened = messaging().onNotificationOpenedApp((msg) => {
-          const link = parseNotificationDeeplink(msg?.data);
-          if (link) applyNotificationDeeplink(navigationRef, link);
+          applyFromRawData(msg?.data);
         });
+
+        unsubForeground = await registerMotoristaForegroundNotifications(
+          applyFromRawData,
+        );
       } catch {
         /* Web ou bundle sem módulo nativo: sem-op. */
       }
@@ -50,6 +56,7 @@ export function NotificationDeeplinkHandler({ navigationRef }: { navigationRef: 
     return () => {
       cancelled = true;
       unsubOpened?.();
+      unsubForeground?.();
     };
   }, [navigationRef]);
 

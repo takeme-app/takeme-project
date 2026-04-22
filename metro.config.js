@@ -37,16 +37,31 @@ config.resolver.nodeModulesPaths = [
   path.resolve(monorepoRoot, 'node_modules'),
 ];
 
-// Força react (e subpaths) a resolver SEMPRE da cópia do app sendo buildado.
-// Sem isso, arquivos em node_modules raiz resolvem de um app vizinho → dois
-// instances de React → "Invalid hook call" / useState of null.
-const reactRoot = path.resolve(projectRoot, 'node_modules', 'react');
-config.resolver.resolveRequest = (context, moduleName, platform) => {
-  if (moduleName === 'react' || moduleName.startsWith('react/')) {
-    const filePath = require.resolve(moduleName, { paths: [path.resolve(projectRoot, 'node_modules')] });
-    return { filePath, type: 'sourceFile' };
+/**
+ * React 19 expõe "exports" no package.json. Com `unstable_enablePackageExports` ativo, o Metro
+ * pode resolver `react` e `react/jsx-dev-runtime` de formas inconsistentes no monorepo + Hermes,
+ * e o runtime JSX lê `React.__CLIENT_INTERNALS_*` em um módulo `react` ainda incompleto →
+ * ReferenceError: Property 'React' doesn't exist no dispositivo.
+ */
+config.resolver.unstable_enablePackageExports = false;
+
+const reactRoot = path.join(monorepoRoot, 'node_modules', 'react');
+const reactShimFiles = {
+  react: path.join(reactRoot, 'index.js'),
+  'react/jsx-runtime': path.join(reactRoot, 'jsx-runtime.js'),
+  'react/jsx-dev-runtime': path.join(reactRoot, 'jsx-dev-runtime.js'),
+};
+
+const upstreamResolveRequest = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform, ...rest) => {
+  const filePath = reactShimFiles[moduleName];
+  if (filePath) {
+    return { type: 'sourceFile', filePath };
   }
-  return context.resolveRequest(context, moduleName, platform);
+  if (typeof upstreamResolveRequest === 'function') {
+    return upstreamResolveRequest(context, moduleName, platform, ...rest);
+  }
+  return context.resolveRequest(context, moduleName, platform, ...rest);
 };
 
 module.exports = config;
