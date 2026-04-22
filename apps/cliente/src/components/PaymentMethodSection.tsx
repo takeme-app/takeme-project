@@ -8,6 +8,7 @@ import {
   ScrollView,
   Platform,
 } from 'react-native';
+import { useIsFocused } from '@react-navigation/native';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { CardField, useStripe } from '../lib/stripeNativeBridge';
@@ -83,6 +84,7 @@ export function PaymentMethodSection({
   cancellationPolicyVariant,
   loading = false,
 }: PaymentMethodSectionProps) {
+  const isFocused = useIsFocused();
   const { createPaymentMethod } = useStripe();
   const { showAlert } = useAppAlert();
   const [cardName, setCardName] = useState('');
@@ -109,7 +111,8 @@ export function PaymentMethodSection({
     let cancelled = false;
     setSavedCardsLoading(true);
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
       if (!user || cancelled) {
         if (!cancelled) setSavedCardsLoading(false);
         return;
@@ -141,7 +144,9 @@ export function PaymentMethodSection({
     return () => {
       cancelled = true;
     };
-  }, [selectedMethod]);
+    // `loading` (ex.: fareLoading no checkout) e foco da tela: primeira rodada pode ocorrer antes da sessão/preço;
+    // sem reexecutar, a lista de cartões salva ficava vazia para sempre.
+  }, [selectedMethod, loading, isFocused]);
 
   const handleConfirmSavedCard = useCallback(async () => {
     if (selectedMethod !== 'credito' && selectedMethod !== 'debito') return;
