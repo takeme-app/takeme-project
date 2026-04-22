@@ -28,7 +28,7 @@ export function PlanTripScreen({ navigation, route }: Props) {
           origin: places.origin,
           destination: places.destination,
           scheduledDateId: when.scheduledDateId,
-          scheduledTimeSlot: when.scheduledTimeSlot,
+          ...(when.scheduledTimeSlot ? { scheduledTimeSlot: when.scheduledTimeSlot } : {}),
         });
       }
     },
@@ -57,6 +57,7 @@ export function PlanTripScreen({ navigation, route }: Props) {
         origin: places.origin,
         destination: places.destination,
         scheduled_trip_id: trip.id,
+        scheduledTripDepartureAt: trip.departure_at,
       });
     },
     [navigation],
@@ -119,7 +120,7 @@ export function PlanTripScreen({ navigation, route }: Props) {
       onContinuePressOverride={onContinuePressOverride}
       whenTitle="Para quando você precisa da viagem?"
       nowSubtitle="Chame um carro imediatamente"
-      laterSubtitle="Agende para o horário que preferir"
+      laterSubtitle="Agende escolhendo o dia"
     />
   );
 }

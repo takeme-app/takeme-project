@@ -655,19 +655,10 @@ export function PendingRequestsScreen({ navigation }: Props) {
             await load();
             return;
           }
-          const tripId = acc?.scheduled_trip_id;
           setItems((prev) => prev.filter((i) => i.id !== item.id));
           const conv = await createOrGetShipmentConversation(item.rawId, userId);
           if (conv.error) showAlert('Chat', conv.error);
-          if (tripId) {
-            navigation.navigate('TripDetail', { tripId });
-          } else if (conv.conversationId) {
-            navigation.navigate('DriverClientChat', {
-              conversationId: conv.conversationId,
-              participantName: item.userName,
-              participantAvatar: item.userAvatar ?? undefined,
-            });
-          }
+          await load();
           return;
         }
         if (item.shipmentOfferPendingSystem) {
@@ -686,8 +677,10 @@ export function PendingRequestsScreen({ navigation }: Props) {
           await load();
           return;
         }
+        await load();
+        return;
       } else if (item.kind === 'shipment') {
-        await supabase
+        const { data: shipRows, error: shipErr } = await supabase
           .from('shipments')
           .update(
             accept
@@ -698,12 +691,34 @@ export function PendingRequestsScreen({ navigation }: Props) {
                 } as never)
               : ({ status: 'cancelled' } as never),
           )
-          .eq('id', item.rawId);
+          .eq('id', item.rawId)
+          .select('id');
+        if (shipErr || !shipRows?.length) {
+          showAlert(
+            'Encomenda',
+            shipErr
+              ? getUserErrorMessage(shipErr, 'Não foi possível atualizar o envio.')
+              : 'Nenhuma linha foi atualizada. Verifique permissões ou se o pedido ainda está pendente.',
+          );
+          await load();
+          return;
+        }
       } else if (item.kind === 'dependent_shipment') {
-        await supabase
+        const { data: depRows, error: depErr } = await supabase
           .from('dependent_shipments')
           .update((accept ? { status: 'confirmed' } : { status: 'cancelled' }) as never)
-          .eq('id', item.rawId);
+          .eq('id', item.rawId)
+          .select('id');
+        if (depErr || !depRows?.length) {
+          showAlert(
+            'Dependente',
+            depErr
+              ? getUserErrorMessage(depErr, 'Não foi possível atualizar o pedido.')
+              : 'Nenhuma linha foi atualizada. Verifique se o pedido ainda está pendente.',
+          );
+          await load();
+          return;
+        }
         const { data: waDep } = await supabase
           .from('worker_assignments')
           .select('id')
@@ -712,7 +727,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
           .eq('entity_id', item.rawId)
           .maybeSingle();
         if (waDep) {
-          await supabase
+          const { error: waDepErr } = await supabase
             .from('worker_assignments')
             .update(
               accept
@@ -724,49 +739,45 @@ export function PendingRequestsScreen({ navigation }: Props) {
                   } as never),
             )
             .eq('id', (waDep as { id: string }).id);
+          if (waDepErr) {
+            showAlert(
+              'Dependente',
+              getUserErrorMessage(waDepErr, 'Pedido atualizado, mas falhou ao registrar na fila de motorista.'),
+            );
+            await load();
+            return;
+          }
         }
       } else {
-        if (accept) {
-          const { data: cur } = await supabase
-            .from('bookings')
-            .select('paid_at')
-            .eq('id', item.rawId)
-            .maybeSingle();
-          const paidAt = (cur as { paid_at?: string | null } | null)?.paid_at;
-          const upd: Record<string, string> = {
-            status: 'confirmed',
-            updated_at: now,
-          };
-          if (!paidAt) {
-            upd.paid_at = now;
-          }
-          await supabase.from('bookings').update(upd as never).eq('id', item.rawId);
-        } else {
-          await supabase
-            .from('bookings')
-            .update({ status: 'cancelled', updated_at: now } as never)
-            .eq('id', item.rawId);
+        const { data: rpcData, error: rpcErr } = await supabase.rpc('motorista_respond_booking_request', {
+          p_booking_id: item.rawId,
+          p_accept: accept,
+        });
+        const rpc = rpcData as { ok?: boolean; error?: string; detail?: string; message?: string } | null;
+        if (rpcErr) {
+          showAlert('Reserva', getUserErrorMessage(rpcErr, 'Não foi possível atualizar a reserva.'));
+          await load();
+          return;
         }
-
-        const { data: wa } = await supabase
-          .from('worker_assignments')
-          .select('id')
-          .eq('worker_id', userId)
-          .eq('entity_type', 'booking')
-          .eq('entity_id', item.rawId)
-          .maybeSingle();
-        if (wa) {
-          await supabase
-            .from('worker_assignments')
-            .update(accept
-              ? { status: 'accepted' } as never
-              : { status: 'rejected', rejected_at: now, rejection_reason: 'Recusado pelo motorista' } as never
-            )
-            .eq('id', (wa as { id: string }).id);
+        if (!rpc || rpc.ok !== true) {
+          const code = rpc?.error ?? '';
+          const msg =
+            code === 'not_your_trip'
+              ? 'Esta reserva não pertence à sua viagem.'
+              : code === 'invalid_status'
+                ? 'Esta reserva já foi processada ou não está mais pendente.'
+                : code === 'not_found'
+                  ? 'Reserva não encontrada.'
+                  : code === 'unauthorized'
+                    ? 'Faça login novamente.'
+                    : code === 'server_error' && rpc?.message
+                      ? String(rpc.message)
+                      : 'Não foi possível atualizar a reserva.';
+          showAlert('Reserva', msg);
+          await load();
+          return;
         }
       }
-
-      setItems((prev) => prev.filter((i) => i.id !== item.id));
 
       if (accept) {
         const conv =
@@ -780,16 +791,8 @@ export function PendingRequestsScreen({ navigation }: Props) {
         if (conv.error) {
           showAlert('Chat', conv.error);
         }
-        if (item.scheduledTripId) {
-          navigation.navigate('TripDetail', { tripId: item.scheduledTripId });
-        } else if (conv.conversationId) {
-          navigation.navigate('DriverClientChat', {
-            conversationId: conv.conversationId,
-            participantName: item.userName,
-            participantAvatar: item.userAvatar ?? undefined,
-          });
-        }
       }
+      await load();
     } finally {
       setActioning(null);
     }

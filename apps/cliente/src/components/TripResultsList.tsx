@@ -6,9 +6,9 @@ import {
   loadClientScheduledTrips,
   compareTripsByDepartureAndBadge,
   tripFitsPassengersAndBags,
+  filterScheduledTripsByWhenSelection,
   type ClientScheduledTripItem,
 } from '../lib/clientScheduledTrips';
-import { parseTimeSlotRange, toISODateFromUtcIso } from '../lib/dateTimeSlots';
 import { formatDriverRatingLabel, formatTripFareBrl } from '../lib/tripDriverDisplay';
 import type { SelectedPlaces } from './AddressSelectionScreen';
 import type { WhenTimeResult } from '../hooks/useWhenTimeSelection';
@@ -67,8 +67,8 @@ export function TripResultsList({ places, when, onScheduleLater, onListFooterMet
   // de `places` no useMemo abaixo gerava novo `filteredTrips` sempre e reativava o layout effect
   // que chama `onListFooterMetaChange` → setState no pai → loop "Maximum update depth exceeded".
   const scheduleKey =
-    when.whenOption === 'later' && when.scheduledDateId && when.scheduledTimeSlot
-      ? `${when.scheduledDateId}|${when.scheduledTimeSlot}`
+    when.whenOption === 'later' && when.scheduledDateId
+      ? `${when.scheduledDateId}|${when.scheduledTimeSlot ?? 'dia'}`
       : 'now';
   const placesKey = `${places.origin.latitude},${places.origin.longitude},${places.destination.latitude},${places.destination.longitude}|${scheduleKey}`;
 
@@ -82,23 +82,10 @@ export function TripResultsList({ places, when, onScheduleLater, onListFooterMet
         Math.abs(t.longitude - destination.longitude) <= ROUTE_MATCH_DEGREES &&
         tripFitsPassengersAndBags(t, LIST_PASSENGERS, LIST_BAGS),
     );
-    if (when.whenOption === 'later' && when.scheduledDateId && when.scheduledTimeSlot && list.length > 0) {
-      const dateId = when.scheduledDateId;
-      const slotStr = when.scheduledTimeSlot;
-      list = list.filter((t) => {
-        if (!t.departure_at) return false;
-        const tripDate = toISODateFromUtcIso(t.departure_at);
-        if (tripDate !== dateId) return false;
-        const slot = parseTimeSlotRange(slotStr);
-        if (!slot) return true;
-        const dep = new Date(t.departure_at);
-        const depMinutes = dep.getHours() * 60 + dep.getMinutes();
-        return depMinutes >= slot.startMinutes && depMinutes < slot.endMinutes;
-      });
-    }
+    list = filterScheduledTripsByWhenSelection(list, when);
     return [...list].sort(compareTripsByDepartureAndBadge);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `placesKey` resume coords + janela temporal; `places` muda de referência.
-  }, [allTrips, placesKey]);
+  }, [allTrips, placesKey, when.whenOption, when.scheduledDateId, when.scheduledTimeSlot]);
 
   useEffect(() => {
     setSelectedTripId(null);

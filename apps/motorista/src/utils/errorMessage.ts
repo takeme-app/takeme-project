@@ -15,10 +15,10 @@ const ERROR_PT: Array<[RegExp, string]> = [
   [/jwt expired/i, 'Sessão expirada. Faça login novamente.'],
   [/invalid jwt|jwt could not be verified|jwt.*not.*valid/i, 'Sessão inválida ou expirada. Faça login novamente.'],
   [/edge function|non-2xx/i, 'Serviço temporariamente indisponível. Tente novamente.'],
-  // Storage / anexos (Supabase)
+  // RLS / permissão (PostgREST em tabelas diversas — não assumir só chat/anexo)
   [
     /row-level security|violates row-level|new row violates|rls|unauthorized|403/i,
-    'Sem permissão para enviar o arquivo (conversa encerrada ou política do servidor). Verifique se o chat está ativo ou fale com o suporte.',
+    'Sem permissão para concluir esta ação (regras do servidor). Verifique se o pedido ainda está pendente ou fale com o suporte.',
   ],
   [/bucket not found|bucket does not exist|not found.*bucket/i, 'O armazenamento de anexos ainda não foi configurado no servidor (bucket chat-attachments).'],
   [/payload too large|entity too large|413|file too large|maximum.*size/i, 'Arquivo muito grande. Tente uma imagem menor ou outro formato.'],

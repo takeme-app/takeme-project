@@ -6,7 +6,8 @@ import {
 } from '../lib/recentDestinations';
 import { distanceKm } from '../lib/location';
 
-const MAX_ITEMS = 10;
+/** Máximo exibido nas telas de viagem/envio/dependente (ordenado por distância). */
+const DISPLAY_RECENT_LIMIT = 3;
 
 export function useRecentDestinationsSorted(originLat: number, originLng: number) {
   const [recentDestinations, setRecentDestinations] = useState<RecentDestination[]>([]);
@@ -28,7 +29,7 @@ export function useRecentDestinationsSorted(originLat: number, originLng: number
         }))
         .sort((a, b) => (a.dist ?? Infinity) - (b.dist ?? Infinity))
         .map(({ item }) => item)
-        .slice(0, MAX_ITEMS),
+        .slice(0, DISPLAY_RECENT_LIMIT),
     [recentDestinations, originLat, originLng],
   );
 

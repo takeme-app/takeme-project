@@ -61,6 +61,12 @@ export function GoogleCityAutocomplete({
 
   useEffect(() => {
     if (!apiKey) return;
+    if (cityConfirmed) {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      setSuggestions([]);
+      setOpen(false);
+      return;
+    }
     if (timerRef.current) clearTimeout(timerRef.current);
     if (value.trim().length < 2) {
       setSuggestions([]);
@@ -74,7 +80,7 @@ export function GoogleCityAutocomplete({
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [value, runSuggest, apiKey]);
+  }, [value, runSuggest, apiKey, cityConfirmed]);
 
   if (!apiKey) {
     return (
@@ -105,11 +111,11 @@ export function GoogleCityAutocomplete({
   }
 
   const handlePick = (item: GoogleGeocodeResult) => {
-    onChangeText(item.placeName);
-    onSelectPlace(item);
-    onResolutionChange(true);
     setSuggestions([]);
     setOpen(false);
+    onSelectPlace(item);
+    onResolutionChange(true);
+    onChangeText(item.placeName);
   };
 
   return (
@@ -123,9 +129,11 @@ export function GoogleCityAutocomplete({
           onChangeText={(t) => {
             onChangeText(t);
             onResolutionChange(false);
-            setOpen(t.trim().length >= 2);
+            if (!cityConfirmed && t.trim().length >= 2) setOpen(true);
           }}
-          onFocus={() => value.trim().length >= 2 && setOpen(true)}
+          onFocus={() => {
+            if (!cityConfirmed && value.trim().length >= 2) setOpen(true);
+          }}
         />
         {cityConfirmed ? (
           <View style={styles.checkWrap} accessibilityLabel="Cidade confirmada">

@@ -6,16 +6,10 @@ import {
   Pressable,
   Animated,
   ScrollView,
-  Platform,
 } from 'react-native';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
-import DateTimePicker from '@react-native-community/datetimepicker';
-import {
-  ALL_TIME_SLOTS,
-  getAvailableTimeSlots,
-  formatDateDisplayLabel,
-} from '../lib/dateTimeSlots';
+import { getDateCarouselOptions } from '../lib/dateTimeSlots';
 import type { useWhenTimeSelection } from '../hooks/useWhenTimeSelection';
 
 type WhenTimeState = ReturnType<typeof useWhenTimeSelection>;
@@ -35,15 +29,16 @@ const COLORS = {
   neutral700: '#767676',
 };
 
+const DAY_OPTIONS = getDateCarouselOptions();
+
 export function WhenTimeSheets({
   state,
   whenTitle = 'Para quando?',
   nowSubtitle = 'Solicitar imediatamente',
-  laterSubtitle = 'Agende para o horário que preferir',
+  laterSubtitle = 'Agende escolhendo o dia',
 }: Props) {
   return (
     <>
-      {/* When Sheet */}
       <Modal
         visible={state.whenSheetVisible}
         transparent
@@ -110,7 +105,6 @@ export function WhenTimeSheets({
         </View>
       </Modal>
 
-      {/* Time Sheet */}
       <Modal
         visible={state.timeSheetVisible}
         transparent
@@ -129,73 +123,37 @@ export function WhenTimeSheets({
             pointerEvents="box-none"
           >
             <View style={styles.handle} />
-            <Text style={styles.sheetTitle}>Escolha a hora</Text>
-            <TouchableOpacity
-              style={styles.dateInput}
-              onPress={() => state.setShowDatePicker(true)}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.dateInputText}>
-                {formatDateDisplayLabel(state.selectedDay)}
-              </Text>
-              <MaterialIcons name="event" size={22} color={COLORS.neutral700} />
-            </TouchableOpacity>
-            {state.showDatePicker && (
-              <>
-                <DateTimePicker
-                  value={new Date(state.selectedDay + 'T12:00:00')}
-                  mode="date"
-                  display={Platform.OS === 'android' ? 'default' : 'spinner'}
-                  minimumDate={new Date()}
-                  onChange={(_, date) => {
-                    if (date) {
-                      const { toISODate } = require('../lib/dateTimeSlots');
-                      state.setSelectedDay(toISODate(date));
-                      state.setSelectedSlot(null);
-                    }
-                    if (Platform.OS === 'android') state.setShowDatePicker(false);
-                  }}
-                  locale="pt-BR"
-                />
-                {Platform.OS === 'ios' && (
-                  <TouchableOpacity
-                    style={styles.datePickerDone}
-                    onPress={() => state.setShowDatePicker(false)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.datePickerDoneText}>Concluído</Text>
-                  </TouchableOpacity>
-                )}
-              </>
-            )}
+            <Text style={styles.sheetTitle}>Escolha o dia</Text>
             <ScrollView
               style={styles.timeSlotsScroll}
               contentContainerStyle={styles.timeSlotsContent}
             >
-              {getAvailableTimeSlots(state.selectedDay, ALL_TIME_SLOTS).map((slot) => (
+              {DAY_OPTIONS.map((opt) => (
                 <TouchableOpacity
-                  key={slot.label}
+                  key={opt.id}
                   style={styles.timeSlotRow}
-                  onPress={() => state.setSelectedSlot(slot.label)}
+                  onPress={() => state.setSelectedDay(opt.id)}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.timeSlotText}>{slot.label}</Text>
+                  <View>
+                    <Text style={styles.timeSlotText}>{opt.dayLabel}</Text>
+                    <Text style={styles.daySubLabel}>{opt.dateLabel}</Text>
+                  </View>
                   <View
-                    style={[styles.radio, state.selectedSlot === slot.label && styles.radioSelected]}
+                    style={[styles.radio, state.selectedDay === opt.id && styles.radioSelected]}
                   >
-                    {state.selectedSlot === slot.label && <View style={styles.radioInner} />}
+                    {state.selectedDay === opt.id && <View style={styles.radioInner} />}
                   </View>
                 </TouchableOpacity>
               ))}
             </ScrollView>
             <View style={styles.timeFooter}>
               <TouchableOpacity
-                style={[styles.continueButton, !state.selectedSlot && styles.continueButtonDisabled]}
+                style={styles.continueButton}
                 onPress={state.handleSelectTime}
-                disabled={!state.selectedSlot}
                 activeOpacity={0.8}
               >
-                <Text style={styles.continueButtonText}>Selecionar horário</Text>
+                <Text style={styles.continueButtonText}>Selecionar dia</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.cancelButton} onPress={state.closeTimeSheet}>
                 <Text style={styles.cancelButtonText}>Cancelar</Text>
@@ -272,20 +230,7 @@ const styles = StyleSheet.create({
   },
   continueButtonDisabled: { opacity: 0.4 },
   continueButtonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
-  dateInput: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: COLORS.neutral300,
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    marginBottom: 16,
-  },
-  dateInputText: { fontSize: 16, fontWeight: '500', color: COLORS.black },
-  datePickerDone: { alignItems: 'center', paddingVertical: 8, marginBottom: 8 },
-  datePickerDoneText: { fontSize: 16, fontWeight: '600', color: COLORS.black },
-  timeSlotsScroll: { maxHeight: 200 },
+  timeSlotsScroll: { maxHeight: 320 },
   timeSlotsContent: { paddingBottom: 8 },
   timeSlotRow: {
     flexDirection: 'row',
@@ -296,7 +241,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.neutral300,
   },
-  timeSlotText: { fontSize: 16, color: COLORS.black },
+  timeSlotText: { fontSize: 16, fontWeight: '600', color: COLORS.black },
+  daySubLabel: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
   timeFooter: { marginTop: 12 },
   cancelButton: { alignItems: 'center', paddingVertical: 12, marginTop: 4 },
   cancelButtonText: { fontSize: 15, color: COLORS.neutral700, fontWeight: '500' },

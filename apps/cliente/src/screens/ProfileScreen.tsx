@@ -52,12 +52,14 @@ export function ProfileScreen({ navigation }: Props) {
   } | null>(null);
   const [nameFallback, setNameFallback] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
 
   const loadProfile = useCallback(async () => {
     setLoading(true);
     const { data: { session } } = await supabase.auth.getSession();
     const user = session?.user;
     if (!user) {
+      setUnreadNotifications(0);
       setLoading(false);
       return;
     }
@@ -74,6 +76,13 @@ export function ProfileScreen({ navigation }: Props) {
       .eq('id', user.id)
       .maybeSingle();
     setProfile(row ?? null);
+    const { count: unreadCount, error: unreadErr } = await supabase
+      .from('notifications')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('target_app_slug', 'cliente')
+      .is('read_at', null);
+    setUnreadNotifications(!unreadErr && typeof unreadCount === 'number' ? unreadCount : 0);
     setLoading(false);
   }, []);
 
@@ -197,30 +206,34 @@ export function ProfileScreen({ navigation }: Props) {
           </View>
           <View style={styles.gridRow}>
             {GRID_ITEMS.slice(3, 6).map((item) => (
-              <TouchableOpacity
-                key={item.id}
-                style={[styles.gridItem, { paddingHorizontal: gridItemPaddingH }]}
-                onPress={() => navigation.navigate(item.screen)}
-                activeOpacity={0.7}
-              >
-                {item.id === 'notificacoes' ? (
-                  <IconNotifications color={COLORS.black} width={24} height={24} />
-                ) : item.id === 'dependentes' ? (
-                  <IconDependents color={COLORS.black} width={24} height={24} />
-                ) : item.id === 'conversas' ? (
-                  <IconConversations color={COLORS.black} width={24} height={24} />
-                ) : (
-                  <MaterialIcons name={item.icon} size={24} color={COLORS.black} />
-                )}
-                <Text
-                  style={[styles.gridLabel, { fontSize: gridLabelFontSize }]}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.85}
+              <View key={item.id} style={styles.gridItemWrap}>
+                <TouchableOpacity
+                  style={[styles.gridItem, { paddingHorizontal: gridItemPaddingH }]}
+                  onPress={() => navigation.navigate(item.screen)}
+                  activeOpacity={0.7}
                 >
-                  {item.label}
-                </Text>
-              </TouchableOpacity>
+                  {item.id === 'notificacoes' ? (
+                    <IconNotifications color={COLORS.black} width={24} height={24} />
+                  ) : item.id === 'dependentes' ? (
+                    <IconDependents color={COLORS.black} width={24} height={24} />
+                  ) : item.id === 'conversas' ? (
+                    <IconConversations color={COLORS.black} width={24} height={24} />
+                  ) : (
+                    <MaterialIcons name={item.icon} size={24} color={COLORS.black} />
+                  )}
+                  <Text
+                    style={[styles.gridLabel, { fontSize: gridLabelFontSize }]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.85}
+                  >
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+                {item.id === 'notificacoes' && unreadNotifications > 0 ? (
+                  <View style={styles.notificationBadge} accessibilityLabel="Notificações não lidas" />
+                ) : null}
+              </View>
             ))}
           </View>
         </View>
@@ -330,6 +343,22 @@ const styles = StyleSheet.create({
   gridRow: {
     flexDirection: 'row',
     gap: 16,
+  },
+  gridItemWrap: {
+    flex: 1,
+    minWidth: 0,
+    position: 'relative',
+  },
+  notificationBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: COLORS.danger,
+    borderWidth: 2,
+    borderColor: COLORS.background,
   },
   gridItem: {
     flex: 1,

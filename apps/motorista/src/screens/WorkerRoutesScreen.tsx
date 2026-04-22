@@ -29,6 +29,7 @@ import { GooglePlacesAutocomplete } from '../components/GooglePlacesAutocomplete
 import { googleForwardGeocode, type GoogleGeocodeResult } from '@take-me/shared';
 import { getGoogleMapsApiKey } from '../lib/googleMapsConfig';
 import { formatCurrencyBRLInput, parseCurrencyBRLToNumber } from '../utils/formatCurrency';
+import { SwipeableRouteRow } from '../components/SwipeableRouteRow';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'WorkerRoutes'>;
 
@@ -49,11 +50,44 @@ function shortAddress(full: string): string {
   return parts[0]?.trim() ?? full;
 }
 
+/** Viagens desta rota com passageiro, dependente ou encomenda já aceitos — não pode excluir a rota. */
+async function routeHasAcceptedServices(workerRouteId: string, workerId: string): Promise<boolean> {
+  const { data: trips } = await supabase
+    .from('scheduled_trips')
+    .select('id')
+    .eq('route_id', workerRouteId)
+    .eq('driver_id', workerId);
+  const tripIds = (trips ?? []).map((t: { id: string }) => t.id);
+  if (tripIds.length === 0) return false;
+
+  const [b, d, s] = await Promise.all([
+    supabase
+      .from('bookings')
+      .select('id', { count: 'exact', head: true })
+      .in('scheduled_trip_id', tripIds)
+      .in('status', ['confirmed', 'in_progress']),
+    supabase
+      .from('dependent_shipments')
+      .select('id', { count: 'exact', head: true })
+      .in('scheduled_trip_id', tripIds)
+      .in('status', ['confirmed', 'in_progress']),
+    supabase
+      .from('shipments')
+      .select('id', { count: 'exact', head: true })
+      .in('scheduled_trip_id', tripIds)
+      .in('status', ['confirmed', 'in_progress'])
+      .not('driver_id', 'is', null),
+  ]);
+  return ((b.count ?? 0) > 0 || (d.count ?? 0) > 0 || (s.count ?? 0) > 0);
+}
+
 export function WorkerRoutesScreen({ navigation, route }: Props) {
   const { showAlert } = useAppAlert();
   const [rows, setRows] = useState<RouteRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   type SheetMode = 'add' | 'import' | null;
   const [sheetMode, setSheetMode] = useState<SheetMode>(null);
   const [saving, setSaving] = useState(false);
@@ -66,19 +100,35 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user?.id) { setRows([]); setLoading(false); return; }
-    const { data } = await supabase
+    if (!user?.id) {
+      setRows([]);
+      setLoading(false);
+      return;
+    }
+    const { data, error } = await supabase
       .from('worker_routes')
       .select('id, origin_address, destination_address, price_per_person_cents, is_active')
       .eq('worker_id', user.id)
       .eq('is_active', true)
       .order('created_at', { ascending: true });
-    setRows((data ?? []) as RouteRow[]);
+    if (error) {
+      console.warn('[WorkerRoutesScreen] worker_routes', error.message);
+      setLoadError(error.message ?? 'Não foi possível carregar as rotas.');
+      setRows([]);
+    } else {
+      setRows((data ?? []) as RouteRow[]);
+    }
     setLoading(false);
   }, []);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(
+    useCallback(() => {
+      setOpenSwipeId(null);
+      load();
+    }, [load]),
+  );
 
   const openAddSheet = () => {
     setOrigin('');
@@ -111,6 +161,13 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
       showAlert('Erro', 'Não autenticado.');
       return;
     }
+    if (await routeHasAcceptedServices(routeId, user.id)) {
+      showAlert(
+        'Não é possível excluir',
+        'Esta rota possui viagens com passageiro, dependente ou encomenda já aceitos. Conclua ou cancele esses vínculos antes de excluir a rota.',
+      );
+      return;
+    }
     setDeletingId(routeId);
     try {
       const { error: u1 } = await supabase
@@ -140,14 +197,28 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
   };
 
   const confirmDeleteRoute = (r: RouteRow) => {
-    Alert.alert(
-      'Excluir rota',
-      `Remover "${shortAddress(r.origin_address)} → ${shortAddress(r.destination_address)}"? As viagens planejadas desta rota serão canceladas e a rota some da lista.`,
-      [
-        { text: 'Voltar', style: 'cancel' },
-        { text: 'Excluir', style: 'destructive', onPress: () => { void runDeleteRoute(r.id); } },
-      ],
-    );
+    void (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) {
+        showAlert('Erro', 'Não autenticado.');
+        return;
+      }
+      if (await routeHasAcceptedServices(r.id, user.id)) {
+        showAlert(
+          'Não é possível excluir',
+          'Esta rota possui viagens com passageiro, dependente ou encomenda já aceitos. Conclua ou cancele esses vínculos antes de excluir a rota.',
+        );
+        return;
+      }
+      Alert.alert(
+        'Excluir rota',
+        `Remover "${shortAddress(r.origin_address)} → ${shortAddress(r.destination_address)}"? As viagens planejadas desta rota serão canceladas e a rota some da lista.`,
+        [
+          { text: 'Voltar', style: 'cancel' },
+          { text: 'Excluir', style: 'destructive', onPress: () => { void runDeleteRoute(r.id); } },
+        ],
+      );
+    })();
   };
 
   const handleExportPdf = async () => {
@@ -342,43 +413,66 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
 
       {loading ? (
         <View style={styles.center}><ActivityIndicator size="large" color="#111827" /></View>
+      ) : loadError ? (
+        <View style={styles.center}>
+          <Text style={styles.loadErrorText}>{loadError}</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => void load()} activeOpacity={0.75}>
+            <Text style={styles.retryBtnText}>Tentar de novo</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+          {rows.length === 0 ? (
+            <Text style={styles.emptyRoutesText}>
+              Nenhuma rota ativa. Toque em «Adicionar nova rota» ou importe trechos pelo ícone de download.
+            </Text>
+          ) : null}
           {rows.map((r) => (
-            <View key={r.id} style={styles.cardRow}>
-              <TouchableOpacity
-                style={styles.card}
-                onPress={() => navigation.navigate('RouteSchedule', {
-                  routeId: r.id,
-                  routeName: `${shortAddress(r.origin_address)} → ${shortAddress(r.destination_address)}`,
-                })}
-                activeOpacity={0.75}
+            <View key={r.id} style={styles.swipeRowWrap}>
+              <SwipeableRouteRow
+                isOpen={openSwipeId === r.id}
+                onOpen={() => setOpenSwipeId(r.id)}
+                onClose={() => setOpenSwipeId((cur) => (cur === r.id ? null : cur))}
+                deleteAction={
+                  <TouchableOpacity
+                    style={[styles.deleteRouteBtn, deletingId === r.id && styles.deleteRouteBtnDisabled]}
+                    onPress={() => confirmDeleteRoute(r)}
+                    disabled={deletingId !== null}
+                    accessibilityLabel="Excluir rota"
+                    activeOpacity={0.7}
+                  >
+                    {deletingId === r.id ? (
+                      <ActivityIndicator size="small" color="#EF4444" />
+                    ) : (
+                      <MaterialIcons name="delete-outline" size={24} color="#EF4444" />
+                    )}
+                  </TouchableOpacity>
+                }
               >
-                <View style={styles.cardInner}>
-                  <View style={styles.cardText}>
-                    <Text style={styles.cardRoute}>
-                      {shortAddress(r.origin_address)}
-                      <Text style={styles.arrow}> → </Text>
-                      {shortAddress(r.destination_address)}
-                    </Text>
-                    <Text style={styles.cardPrice}>{formatCents(r.price_per_person_cents)} por pessoa</Text>
+                <TouchableOpacity
+                  style={styles.card}
+                  onPress={() => {
+                    setOpenSwipeId(null);
+                    navigation.navigate('RouteSchedule', {
+                      routeId: r.id,
+                      routeName: `${shortAddress(r.origin_address)} → ${shortAddress(r.destination_address)}`,
+                    });
+                  }}
+                  activeOpacity={0.75}
+                >
+                  <View style={styles.cardInner}>
+                    <View style={styles.cardText}>
+                      <Text style={styles.cardRoute}>
+                        {shortAddress(r.origin_address)}
+                        <Text style={styles.arrow}> → </Text>
+                        {shortAddress(r.destination_address)}
+                      </Text>
+                      <Text style={styles.cardPrice}>{formatCents(r.price_per_person_cents)} por pessoa</Text>
+                    </View>
+                    <MaterialIcons name="chevron-right" size={22} color="#9CA3AF" />
                   </View>
-                  <MaterialIcons name="chevron-right" size={22} color="#9CA3AF" />
-                </View>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.deleteRouteBtn, deletingId === r.id && styles.deleteRouteBtnDisabled]}
-                onPress={() => confirmDeleteRoute(r)}
-                disabled={deletingId !== null}
-                accessibilityLabel="Excluir rota"
-                activeOpacity={0.7}
-              >
-                {deletingId === r.id ? (
-                  <ActivityIndicator size="small" color="#EF4444" />
-                ) : (
-                  <MaterialIcons name="delete-outline" size={24} color="#EF4444" />
-                )}
-              </TouchableOpacity>
+                </TouchableOpacity>
+              </SwipeableRouteRow>
             </View>
           ))}
 
@@ -467,7 +561,10 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
                     setOrigin(t);
                     setOriginPlace(null);
                   }}
-                  onSelectPlace={setOriginPlace}
+                  onSelectPlace={(place) => {
+                    setOrigin(place.placeName);
+                    setOriginPlace(place);
+                  }}
                   hasResolvedCoords={originPlace != null}
                 />
 
@@ -479,7 +576,10 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
                     setDestination(t);
                     setDestinationPlace(null);
                   }}
-                  onSelectPlace={setDestinationPlace}
+                  onSelectPlace={(place) => {
+                    setDestination(place.placeName);
+                    setDestinationPlace(place);
+                  }}
                   hasResolvedCoords={destinationPlace != null}
                 />
 
@@ -525,7 +625,16 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 },
+  loadErrorText: { fontSize: 14, color: '#6B7280', textAlign: 'center', marginBottom: 16 },
+  retryBtn: {
+    backgroundColor: '#111827',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+  },
+  retryBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  emptyRoutesText: { fontSize: 14, color: '#6B7280', marginBottom: 16, lineHeight: 20 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -542,20 +651,26 @@ const styles = StyleSheet.create({
   },
   headerTitle: { flex: 1, fontSize: 17, fontWeight: '700', color: '#111827', textAlign: 'center', marginHorizontal: 4 },
   scroll: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 8 },
-  cardRow: { flexDirection: 'row', alignItems: 'stretch', gap: 8, marginBottom: 12 },
+  swipeRowWrap: { marginBottom: 12 },
   card: {
     flex: 1,
-    borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12,
-    paddingHorizontal: 16, paddingVertical: 18,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    borderTopRightRadius: 0,
+    borderBottomRightRadius: 0,
+    paddingHorizontal: 16,
+    paddingVertical: 18,
   },
   deleteRouteBtn: {
-    width: 48,
+    flex: 1,
+    width: '100%' as const,
+    minHeight: 52,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#FECACA',
-    borderRadius: 12,
-    backgroundColor: '#FEF2F2',
+    borderWidth: 0,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
   },
   deleteRouteBtnDisabled: { opacity: 0.5 },
   cardInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

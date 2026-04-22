@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ShipmentStackParamList } from '../../navigation/types';
-import { PaymentMethodSection, type PaymentMethodType } from '../../components/PaymentMethodSection';
+import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmParams } from '../../components/PaymentMethodSection';
 import { supabase } from '../../lib/supabase';
 import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { resolveShipmentBaseId } from '../../lib/resolveShipmentBase';
@@ -26,6 +26,9 @@ import {
 import { guessCityFromPtAddress } from '../../lib/shipmentOriginCity';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
+import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
+
+const MAX_ENCOMENDA_PHOTOS = 8;
 
 type Props = NativeStackScreenProps<ShipmentStackParamList, 'ConfirmShipment'>;
 
@@ -66,6 +69,8 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
     adminPctApplied,
     clientPreferredDriverId,
     resolvedBaseId: resolvedBaseIdParam,
+    scheduledTripDepartureAt,
+    scheduledTripId,
   } = route.params;
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -128,7 +133,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
   );
 
   const handleConfirmPayment = useCallback(
-    async (params: { method: PaymentMethodType; paymentMethodId?: string }) => {
+    async (params: CardPaymentConfirmParams) => {
       setSubmitting(true);
       try {
         const {
@@ -139,10 +144,41 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           showAlert('Erro', 'Faça login para continuar.');
           return;
         }
-        let photoUrl: string | null = null;
-        if (recipient.photoUri) {
-          photoUrl = await uploadPhotoAndGetPath(user.id, recipient.photoUri);
+        let depIsoForGuard = scheduledTripDepartureAt ?? null;
+        if (!depIsoForGuard && scheduledTripId) {
+          const { data: stRow } = await supabase
+            .from('scheduled_trips')
+            .select('departure_at')
+            .eq('id', scheduledTripId)
+            .maybeSingle();
+          depIsoForGuard = (stRow?.departure_at as string | undefined) ?? null;
         }
+        if (!depIsoForGuard && whenOption === 'now') {
+          depIsoForGuard = new Date().toISOString();
+        }
+        if (depIsoForGuard) {
+          const dupMsg = await getDuplicateDestinationSameDayMessage({
+            userId: user.id,
+            destLat: destination.latitude,
+            destLng: destination.longitude,
+            dayKey: calendarDayKeySaoPaulo(depIsoForGuard),
+          });
+          if (dupMsg) {
+            showAlert('Limite', dupMsg);
+            return;
+          }
+        }
+        const rawPhotoUris = [
+          ...(recipient.photoUris ?? []),
+          ...(recipient.photoUri ? [recipient.photoUri] : []),
+        ].slice(0, MAX_ENCOMENDA_PHOTOS);
+        const uploadedPaths: string[] = [];
+        for (const uri of rawPhotoUris) {
+          const p = await uploadPhotoAndGetPath(user.id, uri);
+          if (p) uploadedPaths.push(p);
+        }
+        const photoUrl = uploadedPaths[0] ?? null;
+        const photoPathsJson = uploadedPaths;
         const paymentMethodDb =
           params.method === 'credito'
             ? 'credito'
@@ -171,6 +207,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
             origin_lng: origin.longitude,
             origin_city: originCityResolved,
             ...(clientPreferredDriverId ? { client_preferred_driver_id: clientPreferredDriverId } : {}),
+            ...(scheduledTripId ? { scheduled_trip_id: scheduledTripId } : {}),
             destination_address: destination.address,
             destination_lat: destination.latitude,
             destination_lng: destination.longitude,
@@ -182,6 +219,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
             recipient_phone: recipient.phone,
             instructions: recipient.instructions ?? null,
             photo_url: photoUrl,
+            photo_paths: photoPathsJson,
             payment_method: paymentMethodDb,
             ...pricingInsertRow,
             status,
@@ -212,8 +250,12 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           params.method === 'credito' || params.method === 'debito' || params.method === 'pix';
 
         let stripeCardCharged = false;
-        if (shipmentId && (params.method === 'credito' || params.method === 'debito') && params.paymentMethodId) {
-          const stripeCtx = await ensureAccessTokenForStripeFunctions();
+        const hasStripePm = Boolean(params.paymentMethodId?.trim());
+        const hasSavedPm = Boolean(params.savedPaymentMethodId?.trim());
+        if (shipmentId && (params.method === 'credito' || params.method === 'debito') && (hasStripePm || hasSavedPm)) {
+          const stripeCtx = await ensureAccessTokenForStripeFunctions({
+            holderCpfDigits: params.holderCpfDigits,
+          });
           if (!stripeCtx.ok) {
             await supabase
               .from('shipments')
@@ -226,7 +268,9 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
             headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
             body: {
               shipment_id: shipmentId,
-              stripe_payment_method_id: params.paymentMethodId,
+              ...(hasSavedPm
+                ? { payment_method_id: params.savedPaymentMethodId!.trim() }
+                : { stripe_payment_method_id: params.paymentMethodId!.trim() }),
             },
           });
           if (chargeFnError) {
@@ -312,6 +356,8 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
       packageSize,
       clientPreferredDriverId,
       resolvedBaseIdParam,
+      scheduledTripDepartureAt,
+      scheduledTripId,
       recipient,
       amountCents,
       pricingInsertRow,

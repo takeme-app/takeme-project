@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { View, TextInput, TouchableOpacity, StyleSheet, ScrollView, Image, Modal, Pressable, Animated, Platform } from 'react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import { View, TextInput, TouchableOpacity, StyleSheet, ScrollView, Image, Modal, Pressable, Animated } from 'react-native';
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
@@ -10,7 +9,7 @@ import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { MainTabParamList } from '../navigation/MainTabs';
 import { useRootNavigation } from '../navigation/RootNavigationContext';
 import { getRecentDestinations, formatRecentDestinationDisplay, type RecentDestination } from '../lib/recentDestinations';
-import { ALL_TIME_SLOTS, getAvailableTimeSlots, toISODate, formatDateDisplayLabel } from '../lib/dateTimeSlots';
+import { toISODate, getDateCarouselOptions } from '../lib/dateTimeSlots';
 import { syncClienteProfileFcmToken } from '../lib/clienteFcm';
 
 // Tokens do Figma: neutral-100 white, black-500 #0d0d0d, neutral-300 #f1f1f1, neutral-400 #e2e2e2, neutral-700 #767676
@@ -34,6 +33,7 @@ type HomeScreenProps = BottomTabScreenProps<MainTabParamList, 'Home'>;
 
 const SHEET_SLIDE_DISTANCE = 400;
 const TIME_SHEET_SLIDE = 450;
+const HOME_DAY_OPTIONS = getDateCarouselOptions();
 
 export function HomeScreen({ navigation }: HomeScreenProps) {
   const { navigateToTripStack, navigateToShipmentStack, navigateToDependentShipmentStack, navigateToExcursionStack } = useRootNavigation();
@@ -44,8 +44,6 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
   const sheetTranslateY = useRef(new Animated.Value(SHEET_SLIDE_DISTANCE)).current;
   const [timeSheetVisible, setTimeSheetVisible] = useState(false);
   const [selectedDay, setSelectedDay] = useState<string>(() => toISODate(new Date()));
-  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const timeSheetOverlayOpacity = useRef(new Animated.Value(0)).current;
   const timeSheetTranslateY = useRef(new Animated.Value(TIME_SHEET_SLIDE)).current;
 
@@ -116,7 +114,6 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
 
   const openTimeSheet = () => {
     setSelectedDay(toISODate(new Date()));
-    setSelectedSlot(null);
     timeSheetOverlayOpacity.setValue(0);
     timeSheetTranslateY.setValue(TIME_SHEET_SLIDE);
     setTimeSheetVisible(true);
@@ -126,7 +123,6 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
     timeSheetOverlayOpacity.setValue(0);
     timeSheetTranslateY.setValue(TIME_SHEET_SLIDE);
     setTimeSheetVisible(false);
-    setSelectedSlot(null);
   };
 
   const handleWhenContinue = () => {
@@ -140,10 +136,8 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
   };
 
   const handleSelectTime = () => {
-    if (selectedSlot) {
-      closeTimeSheet();
-      navigateToTripStack('PlanRide', { scheduledDateId: selectedDay, scheduledTimeSlot: selectedSlot });
-    }
+    closeTimeSheet();
+    navigateToTripStack('PlanRide', { scheduledDateId: selectedDay });
   };
 
   return (
@@ -197,7 +191,7 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
         {/* Destinos recentes (máx. 2) — só exibe quando houver histórico */}
         {recentDestinations.length > 0 && (
           <View style={styles.recentCard}>
-            {recentDestinations.slice(0, 2).map((item, index) => {
+            {recentDestinations.slice(0, 3).map((item, index) => {
               const { line1, line2 } = formatRecentDestinationDisplay(item);
               return (
               <TouchableOpacity
@@ -316,7 +310,7 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
               </View>
               <View style={styles.sheetOptionTextWrap}>
                 <Text style={styles.sheetOptionLabel}>Mais tarde</Text>
-                <Text style={styles.sheetOptionSubtitle}>Agende para o horário que preferir</Text>
+                <Text style={styles.sheetOptionSubtitle}>Agende escolhendo o dia</Text>
               </View>
               <View style={[styles.sheetRadio, whenOption === 'later' && styles.sheetRadioSelected]}>
                 {whenOption === 'later' && <View style={styles.sheetRadioInner} />}
@@ -341,63 +335,32 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
           <Pressable style={styles.timeSheetOverlayTouchable} onPress={closeTimeSheet} />
           <Animated.View style={[styles.timeSheetContent, { transform: [{ translateY: timeSheetTranslateY }] }]} pointerEvents="box-none">
             <View style={styles.timeSheetHandle} />
-            <Text style={styles.timeSheetTitle}>Escolha a hora</Text>
-            <TouchableOpacity
-              style={styles.dateInput}
-              onPress={() => setShowDatePicker(true)}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.dateInputText}>{formatDateDisplayLabel(selectedDay)}</Text>
-              <MaterialIcons name="event" size={22} color={COLORS.neutral700} />
-            </TouchableOpacity>
-            {showDatePicker && (
-              <>
-                <DateTimePicker
-                  value={new Date(selectedDay + 'T12:00:00')}
-                  mode="date"
-                  display={Platform.OS === 'android' ? 'default' : 'spinner'}
-                  minimumDate={new Date()}
-                  onChange={(_, date) => {
-                    if (date) {
-                      setSelectedDay(toISODate(date));
-                      setSelectedSlot(null);
-                    }
-                    if (Platform.OS === 'android') {
-                      setShowDatePicker(false);
-                    }
-                  }}
-                  locale="pt-BR"
-                />
-                {Platform.OS === 'ios' && (
-                  <TouchableOpacity style={styles.datePickerDoneButton} onPress={() => setShowDatePicker(false)} activeOpacity={0.8}>
-                    <Text style={styles.datePickerDoneText}>Concluído</Text>
-                  </TouchableOpacity>
-                )}
-              </>
-            )}
+            <Text style={styles.timeSheetTitle}>Escolha o dia</Text>
             <ScrollView style={styles.timeSlotsScroll} contentContainerStyle={styles.timeSlotsContent}>
-              {getAvailableTimeSlots(selectedDay, ALL_TIME_SLOTS).map((slot) => (
+              {HOME_DAY_OPTIONS.map((opt) => (
                 <TouchableOpacity
-                  key={slot.label}
+                  key={opt.id}
                   style={styles.timeSlotRow}
-                  onPress={() => setSelectedSlot(slot.label)}
+                  onPress={() => setSelectedDay(opt.id)}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.timeSlotText}>{slot.label}</Text>
-                  <View style={[styles.timeRadio, selectedSlot === slot.label && styles.timeRadioSelected]}>
-                    {selectedSlot === slot.label && <View style={styles.timeRadioInner} />}
+                  <View>
+                    <Text style={styles.timeSlotText}>{opt.dayLabel}</Text>
+                    <Text style={styles.daySubLabel}>{opt.dateLabel}</Text>
+                  </View>
+                  <View style={[styles.timeRadio, selectedDay === opt.id && styles.timeRadioSelected]}>
+                    {selectedDay === opt.id && <View style={styles.timeRadioInner} />}
                   </View>
                 </TouchableOpacity>
               ))}
             </ScrollView>
             <View style={styles.timeSheetFooter}>
               <TouchableOpacity
-                style={[styles.timePrimaryButton, !selectedSlot && styles.timePrimaryButtonDisabled]}
+                style={styles.timePrimaryButton}
                 onPress={handleSelectTime}
-                disabled={!selectedSlot}
                 activeOpacity={0.8}
               >
-                <Text style={styles.timePrimaryButtonText}>Selecionar horário</Text>
+                <Text style={styles.timePrimaryButtonText}>Selecionar dia</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.timeCancelButton} onPress={closeTimeSheet}>
                 <Text style={styles.timeCancelButtonText}>Cancelar</Text>
@@ -766,7 +729,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.neutral300,
   },
-  timeSlotText: { fontSize: 16, fontWeight: '500', color: COLORS.black },
+  timeSlotText: { fontSize: 16, fontWeight: '600', color: COLORS.black },
+  daySubLabel: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
   timeRadio: {
     width: 22,
     height: 22,

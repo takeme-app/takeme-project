@@ -6,6 +6,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../navigation/types';
 import { MaterialIcons } from '@expo/vector-icons';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
+import { useUnreadNotifications } from '../hooks/useUnreadNotifications';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'Settings'>;
 
@@ -18,6 +19,8 @@ type GridItem = {
 };
 
 export function SettingsScreen({ navigation }: Props) {
+  const hasUnreadNotifications = useUnreadNotifications();
+
   const topRow: GridItem[] = [
     {
       key: 'perfil',
@@ -89,10 +92,17 @@ export function SettingsScreen({ navigation }: Props) {
           {grid.map((item) => (
             <TouchableOpacity
               key={item.key}
-              style={[styles.card, styles.cardHalf]}
+              style={[
+                styles.card,
+                styles.cardHalf,
+                item.key === 'notif' && styles.cardHalfWithBadge,
+              ]}
               onPress={item.onPress}
               activeOpacity={0.75}
             >
+              {item.key === 'notif' && hasUnreadNotifications ? (
+                <View pointerEvents="none" style={styles.unreadDotOnCard} />
+              ) : null}
               <MaterialIcons name={item.icon} size={26} color="#111827" />
               <Text style={styles.cardLabelSmall}>{item.label}</Text>
             </TouchableOpacity>
@@ -141,6 +151,19 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     maxWidth: '48%',
   },
+  cardHalfWithBadge: { position: 'relative' },
   cardLabel: { fontSize: 17, fontWeight: '600', color: '#111827' },
   cardLabelSmall: { fontSize: 14, fontWeight: '600', color: '#111827', textAlign: 'center', marginTop: 10 },
+  /** Mesmo verde do tab Perfil (notificações não lidas no app motorista). */
+  unreadDotOnCard: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#22C55E',
+    borderWidth: 1.5,
+    borderColor: '#F3F4F6',
+  },
 });

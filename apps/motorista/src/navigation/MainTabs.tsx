@@ -8,6 +8,7 @@ import { PaymentsScreen } from '../screens/PaymentsScreen';
 import { ActivitiesScreen } from '../screens/ActivitiesScreen';
 import { ProfileStack } from './ProfileStack';
 import { useDriverOngoingTripForTabs } from '../hooks/useDriverOngoingTripForTabs';
+import { useUnreadNotifications } from '../hooks/useUnreadNotifications';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
@@ -18,6 +19,7 @@ const MIN_BOTTOM_INSET = 8;
 
 export function MainTabs() {
   const { hasOngoingTrip } = useDriverOngoingTripForTabs();
+  const hasUnreadNotifications = useUnreadNotifications();
   const insets = useSafeAreaInsets();
   const bottomPadding = Math.max(insets.bottom, MIN_BOTTOM_INSET);
   const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + bottomPadding;
@@ -93,6 +95,22 @@ export function MainTabs() {
           const hideTabOnChat = focused === 'Chat';
           return {
             title: 'Perfil',
+            tabBarBadge: hasUnreadNotifications ? ' ' : undefined,
+            tabBarBadgeStyle: hasUnreadNotifications
+              ? {
+                  backgroundColor: '#22C55E',
+                  minWidth: 8,
+                  maxWidth: 8,
+                  height: 8,
+                  borderRadius: 4,
+                  fontSize: 1,
+                  lineHeight: 8,
+                  color: 'transparent',
+                  paddingHorizontal: 0,
+                  paddingTop: 0,
+                  paddingBottom: 0,
+                }
+              : undefined,
             tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
               <MaterialIcons name={focused ? 'person' : 'person-outline'} size={24} color={color} />
             ),

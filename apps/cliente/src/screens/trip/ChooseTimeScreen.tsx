@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { View, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { Text } from '../../components/Text';
-import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList } from '../../navigation/types';
+import { getDateCarouselOptions } from '../../lib/dateTimeSlots';
 
 type Props = NativeStackScreenProps<TripStackParamList, 'ChooseTime'>;
 
@@ -17,60 +17,36 @@ const COLORS = {
   neutral700: '#767676',
 };
 
-const DAY_TABS = [
-  { id: 'hoje', label: 'Hoje Out 03' },
-  { id: 'amanha', label: 'Amanhã Out 04' },
-  { id: 'domingo', label: 'Domingo Out 05' },
-];
-
-const TIME_SLOTS = [
-  '09:00 - 10:00',
-  '10:00 - 10:30',
-  '11:00 - 11:30',
-  '12:00 - 12:30',
-  '14:00 - 14:30',
-  '15:00 - 15:30',
-];
+const DAY_OPTIONS = getDateCarouselOptions();
 
 export function ChooseTimeScreen({ navigation }: Props) {
-  const [selectedDay, setSelectedDay] = useState('hoje');
-  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
+  const [selectedDayId, setSelectedDayId] = useState<string | null>(null);
 
   const handleSelect = () => {
-    if (selectedSlot) navigation.navigate('SearchTrip', { immediateTrip: false });
+    if (selectedDayId) {
+      navigation.navigate('PlanRide', { scheduledDateId: selectedDayId });
+    }
   };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
-      <Text style={styles.title}>Escolha a hora</Text>
-
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.dayScroll}>
-        {DAY_TABS.map((day) => (
-          <TouchableOpacity
-            key={day.id}
-            style={[styles.dayTab, selectedDay === day.id && styles.dayTabSelected]}
-            onPress={() => setSelectedDay(day.id)}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.dayTabText, selectedDay === day.id && styles.dayTabTextSelected]}>
-              {day.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      <Text style={styles.title}>Escolha o dia</Text>
 
       <ScrollView style={styles.slotsScroll} contentContainerStyle={styles.slotsContent}>
-        {TIME_SLOTS.map((slot) => (
+        {DAY_OPTIONS.map((opt) => (
           <TouchableOpacity
-            key={slot}
+            key={opt.id}
             style={styles.slotRow}
-            onPress={() => setSelectedSlot(slot)}
+            onPress={() => setSelectedDayId(opt.id)}
             activeOpacity={0.7}
           >
-            <Text style={styles.slotText}>{slot}</Text>
-            <View style={[styles.radio, selectedSlot === slot && styles.radioSelected]}>
-              {selectedSlot === slot && <View style={styles.radioInner} />}
+            <View>
+              <Text style={styles.slotText}>{opt.dayLabel}</Text>
+              <Text style={styles.daySubLabel}>{opt.dateLabel}</Text>
+            </View>
+            <View style={[styles.radio, selectedDayId === opt.id && styles.radioSelected]}>
+              {selectedDayId === opt.id && <View style={styles.radioInner} />}
             </View>
           </TouchableOpacity>
         ))}
@@ -78,12 +54,12 @@ export function ChooseTimeScreen({ navigation }: Props) {
 
       <View style={styles.footer}>
         <TouchableOpacity
-          style={[styles.primaryButton, !selectedSlot && styles.primaryButtonDisabled]}
+          style={[styles.primaryButton, !selectedDayId && styles.primaryButtonDisabled]}
           onPress={handleSelect}
-          disabled={!selectedSlot}
+          disabled={!selectedDayId}
           activeOpacity={0.8}
         >
-          <Text style={styles.primaryButtonText}>Selecionar horário</Text>
+          <Text style={styles.primaryButtonText}>Selecionar dia</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.cancelButton} onPress={() => navigation.goBack()}>
           <Text style={styles.cancelButtonText}>Cancelar</Text>
@@ -103,18 +79,6 @@ const styles = StyleSheet.create({
     marginTop: 24,
     marginBottom: 20,
   },
-  dayScroll: { marginBottom: 24, maxHeight: 48 },
-  dayTab: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 12,
-    marginHorizontal: 6,
-    borderWidth: 1,
-    borderColor: COLORS.neutral400,
-  },
-  dayTabSelected: { borderColor: COLORS.black, backgroundColor: COLORS.neutral300 },
-  dayTabText: { fontSize: 14, fontWeight: '500', color: COLORS.neutral700 },
-  dayTabTextSelected: { color: COLORS.black },
   slotsScroll: { flex: 1 },
   slotsContent: { paddingHorizontal: 24, paddingBottom: 24 },
   slotRow: {
@@ -125,7 +89,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.neutral300,
   },
-  slotText: { fontSize: 16, fontWeight: '500', color: COLORS.black },
+  slotText: { fontSize: 16, fontWeight: '600', color: COLORS.black },
+  daySubLabel: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
   radio: {
     width: 22,
     height: 22,

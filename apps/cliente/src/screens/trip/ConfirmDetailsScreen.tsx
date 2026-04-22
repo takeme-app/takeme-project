@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -16,6 +16,8 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList, TripPassengerParam } from '../../navigation/types';
 import { formatCpf, onlyDigits, validateCpf } from '../../utils/formatCpf';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import { supabase } from '../../lib/supabase';
+import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
 
 type Props = NativeStackScreenProps<TripStackParamList, 'ConfirmDetails'>;
 
@@ -36,6 +38,7 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
   /** Passageiros *adicionais* (o solicitante já conta como 1 lugar). */
   const [extraPassengers, setExtraPassengers] = useState(0);
   const [passengerData, setPassengerData] = useState<Record<number, { name: string; cpf: string }>>({});
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   const updatePassenger = (index: number, field: 'name' | 'cpf', value: string) => {
     setPassengerData((prev) => ({
@@ -43,6 +46,69 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
       [index]: { ...(prev[index] ?? { name: '', cpf: '' }), [field]: value },
     }));
   };
+
+  const goToCheckout = useCallback(async () => {
+    if (!driver || !destination) return;
+    setConfirmBusy(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        showAlert('Sessão', 'Faça login para continuar.');
+        return;
+      }
+      let depIso = route.params?.scheduledTripDepartureAt ?? null;
+      const tripId = route.params?.scheduled_trip_id;
+      if (!depIso && tripId) {
+        const { data: stRow } = await supabase
+          .from('scheduled_trips')
+          .select('departure_at')
+          .eq('id', tripId)
+          .maybeSingle();
+        depIso = (stRow?.departure_at as string | undefined) ?? null;
+      }
+      if (depIso) {
+        const dupMsg = await getDuplicateDestinationSameDayMessage({
+          userId: user.id,
+          destLat: destination.latitude,
+          destLng: destination.longitude,
+          dayKey: calendarDayKeySaoPaulo(depIso),
+        });
+        if (dupMsg) {
+          showAlert('Limite', dupMsg);
+          return;
+        }
+      }
+      const passengerList: TripPassengerParam[] = Array.from({ length: extraPassengers }, (_, i) => ({
+        name: passengerData[i]?.name ?? '',
+        cpf: passengerData[i]?.cpf ?? '',
+        bags: '',
+      }));
+      navigation.navigate('Checkout', {
+        driver,
+        origin,
+        destination,
+        scheduled_trip_id: route.params?.scheduled_trip_id,
+        passengers: passengerList,
+        bags_count: bags,
+        immediateTrip: route.params?.immediateTrip,
+        scheduledTripDepartureAt: route.params?.scheduledTripDepartureAt,
+      });
+    } finally {
+      setConfirmBusy(false);
+    }
+  }, [
+    bags,
+    destination,
+    driver,
+    extraPassengers,
+    navigation,
+    origin,
+    passengerData,
+    route.params?.immediateTrip,
+    route.params?.scheduledTripDepartureAt,
+    route.params?.scheduled_trip_id,
+    showAlert,
+  ]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -95,7 +161,7 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
           </TouchableOpacity>
           <Text style={styles.stepperValue}>
             {extraPassengers === 0
-              ? 'Nenhum extra'
+              ? 'Nenhum'
               : extraPassengers === 1
                 ? '1 passageiro extra'
                 : `${extraPassengers} passageiros extras`}
@@ -135,7 +201,8 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
         ))}
 
         <TouchableOpacity
-          style={styles.confirmButton}
+          style={[styles.confirmButton, confirmBusy && styles.confirmButtonDisabled]}
+          disabled={confirmBusy}
           onPress={() => {
             for (let i = 0; i < extraPassengers; i++) {
               const cpfRaw = passengerData[i]?.cpf ?? '';
@@ -145,24 +212,11 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
                 return;
               }
             }
-            const passengerList: TripPassengerParam[] = Array.from({ length: extraPassengers }, (_, i) => ({
-              name: passengerData[i]?.name ?? '',
-              cpf: passengerData[i]?.cpf ?? '',
-              bags: '',
-            }));
-            navigation.navigate('Checkout', {
-              driver,
-              origin,
-              destination,
-              scheduled_trip_id: route.params?.scheduled_trip_id,
-              passengers: passengerList,
-              bags_count: bags,
-              immediateTrip: route.params?.immediateTrip,
-            });
+            void goToCheckout();
           }}
           activeOpacity={0.8}
         >
-          <Text style={styles.confirmButtonText}>Confirmar viagem</Text>
+          <Text style={styles.confirmButtonText}>{confirmBusy ? 'Verificando…' : 'Confirmar viagem'}</Text>
         </TouchableOpacity>
       </ScrollView>
       </KeyboardAvoidingView>
@@ -213,6 +267,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: COLORS.black,
   },
+  confirmButtonDisabled: { opacity: 0.65 },
   confirmButton: {
     backgroundColor: COLORS.black,
     paddingVertical: 16,

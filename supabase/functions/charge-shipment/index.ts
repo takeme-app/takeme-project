@@ -191,8 +191,7 @@ Deno.serve(async (req) => {
       customer: customerId,
       "payment_method": stripePaymentMethodId,
       confirm: "true",
-      "automatic_payment_methods[enabled]": "true",
-      "automatic_payment_methods[allow_redirects]": "never",
+      "payment_method_types[0]": "card",
       [`metadata[${metaKey}]`]: id,
     });
 
@@ -201,6 +200,15 @@ Deno.serve(async (req) => {
       status?: string;
       last_payment_error?: { message?: string };
     };
+    if (pi.status === "requires_action") {
+      return new Response(
+        JSON.stringify({
+          error:
+            "Seu banco pediu uma confirmação extra neste cartão que não pode ser concluída neste fluxo. Tente outro cartão ou use Pix.",
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
     if (pi.status !== "succeeded" && pi.status !== "requires_capture") {
       const errMsg = pi.last_payment_error?.message ?? "Pagamento não foi aprovado";
       return new Response(JSON.stringify({ error: errMsg }), {
@@ -219,9 +227,13 @@ Deno.serve(async (req) => {
       .eq("user_id", userId);
 
     if (updateErr) {
-      console.error("charge-shipment: update after PI succeeded", updateErr);
+      console.error(
+        "[charge-shipment] update after PI succeeded:",
+        JSON.stringify({ message: updateErr.message, details: updateErr.details, hint: updateErr.hint, code: updateErr.code }),
+      );
+      const detail = updateErr.message?.trim() || "sem detalhe";
       return new Response(
-        JSON.stringify({ error: "Pagamento aprovado mas falha ao gravar envio; contate o suporte" }),
+        JSON.stringify({ error: `Pagamento aprovado mas falha ao gravar envio; contate o suporte. (detalhe: ${detail})` }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }

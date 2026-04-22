@@ -456,7 +456,8 @@ export default function PromocaoCreateScreen() {
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
       React.createElement('h1', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, isEditMode ? 'Editar promoção' : 'Criar nova promoção'),
       React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, lineHeight: 1.5, ...font } },
-        'Preencha os dados da nova promoção. Após salvar, ela ficará disponível imediatamente se estiver marcada como ativa.')),
+        'Preencha os dados da nova promoção. Após salvar, ela ficará disponível imediatamente se estiver marcada como ativa. ' +
+        'Quando «Passageiros» ou «Motoristas» estiver marcado, o desconto incide sobre corridas (`bookings`): o app do passageiro passa a mostrar na lista o mesmo valor líquido cobrado no cartão (tarifa da rota menos o desconto, enquanto a promoção estiver vigente).')),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
       React.createElement('span', { style: { ...labelMd, minHeight: 40, display: 'flex', alignItems: 'center' } }, 'Título da promoção'),
       React.createElement('input', {

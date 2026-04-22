@@ -19,6 +19,9 @@ type DraftBookingBody = {
   passenger_count?: number;
   bags_count?: number;
   passenger_data?: unknown;
+  promotion_id?: string;
+  promo_discount_cents?: number;
+  admin_pct_applied?: number;
 };
 
 async function stripeFetch(
@@ -336,9 +339,8 @@ Deno.serve(async (req) => {
         customer: customerId,
         "payment_method": stripePaymentMethodId,
         confirm: "true",
-        // Dashboard pode habilitar Link/PIX etc.; sem return_url a Stripe exige desativar redirects.
-        "automatic_payment_methods[enabled]": "true",
-        "automatic_payment_methods[allow_redirects]": "never",
+        /** Só cartão: evita Link/outros métodos que exigem redirect sem `return_url` no servidor. */
+        "payment_method_types[0]": "card",
         "metadata[scheduled_trip_id]": sid,
         "metadata[user_id]": userId,
       });
@@ -358,6 +360,15 @@ Deno.serve(async (req) => {
         );
       }
 
+      if (pi.status === "requires_action") {
+        return new Response(
+          JSON.stringify({
+            error:
+              "Seu banco pediu uma confirmação extra neste cartão que não pode ser concluída neste fluxo. Tente outro cartão ou use Pix.",
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
       if (pi.status !== "succeeded" && pi.status !== "requires_capture") {
         const errMsg = pi.last_payment_error?.message ?? "Pagamento não foi aprovado";
         return new Response(JSON.stringify({ error: errMsg }), {
@@ -410,7 +421,10 @@ Deno.serve(async (req) => {
         .single();
 
       if (insErr || !inserted?.id) {
-        console.error("[charge-booking] insert após cobrança:", insErr);
+        console.error(
+          "[charge-booking] insert após cobrança:",
+          JSON.stringify({ message: insErr?.message, details: insErr?.details, hint: insErr?.hint, code: insErr?.code }),
+        );
         if (pi.id) {
           try {
             await stripeRefundPaymentIntent(stripeSecret, pi.id);
@@ -418,10 +432,11 @@ Deno.serve(async (req) => {
             console.error("[charge-booking] estorno após falha no insert:", re);
           }
         }
+        const detail = insErr?.message?.trim() || "sem detalhe";
         return new Response(
           JSON.stringify({
             error:
-              "Pagamento autorizado, mas não foi possível registrar a reserva (capacidade ou dados). O valor será estornado automaticamente; se não refletir em até 5 dias úteis, contate o suporte.",
+              `Pagamento autorizado, mas não foi possível registrar a reserva. O valor será estornado automaticamente; se não refletir em até 5 dias úteis, contate o suporte. (detalhe: ${detail})`,
           }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
@@ -509,8 +524,7 @@ Deno.serve(async (req) => {
       customer: customerId,
       "payment_method": stripePaymentMethodId,
       confirm: "true",
-      "automatic_payment_methods[enabled]": "true",
-      "automatic_payment_methods[allow_redirects]": "never",
+      "payment_method_types[0]": "card",
       "metadata[booking_id]": bookingId,
     });
     if (connectAccountId && applicationFeeCents != null) {
@@ -523,6 +537,15 @@ Deno.serve(async (req) => {
       status?: string;
       last_payment_error?: { message?: string };
     };
+    if (pi.status === "requires_action") {
+      return new Response(
+        JSON.stringify({
+          error:
+            "Seu banco pediu uma confirmação extra neste cartão que não pode ser concluída neste fluxo. Tente outro cartão ou use Pix.",
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
     if (pi.status !== "succeeded" && pi.status !== "requires_capture") {
       const errMsg = pi.last_payment_error?.message ?? "Pagamento não foi aprovado";
       return new Response(
@@ -542,8 +565,13 @@ Deno.serve(async (req) => {
       .eq("id", bookingId)
       .eq("user_id", userId);
     if (updateErr) {
+      console.error(
+        "[charge-booking] update após cobrança (legacy):",
+        JSON.stringify({ message: updateErr.message, details: updateErr.details, hint: updateErr.hint, code: updateErr.code }),
+      );
+      const detail = updateErr.message?.trim() || "sem detalhe";
       return new Response(
-        JSON.stringify({ error: "Reserva cobrada mas falha ao atualizar status; contate o suporte" }),
+        JSON.stringify({ error: `Reserva cobrada mas falha ao atualizar status; contate o suporte. (detalhe: ${detail})` }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }

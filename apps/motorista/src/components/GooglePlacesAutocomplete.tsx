@@ -55,6 +55,12 @@ export function GooglePlacesAutocomplete({
   );
 
   useEffect(() => {
+    if (hasResolvedCoords) {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      setSuggestions([]);
+      setOpen(false);
+      return;
+    }
     if (timerRef.current) clearTimeout(timerRef.current);
     if (value.trim().length < 2) {
       setSuggestions([]);
@@ -62,19 +68,19 @@ export function GooglePlacesAutocomplete({
       return;
     }
     timerRef.current = setTimeout(() => {
-      runSuggest(value);
+      void runSuggest(value);
       setOpen(true);
     }, DEBOUNCE_MS);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [value, runSuggest]);
+  }, [value, runSuggest, hasResolvedCoords]);
 
   const handlePick = (item: GoogleGeocodeResult) => {
-    onChangeText(item.placeName);
-    onSelectPlace(item);
     setSuggestions([]);
     setOpen(false);
+    /** Só o pai define texto + resolved; evita onChangeText resetar originResolved antes do select. */
+    onSelectPlace(item);
   };
 
   return (
@@ -88,9 +94,11 @@ export function GooglePlacesAutocomplete({
           value={value}
           onChangeText={(t) => {
             onChangeText(t);
-            setOpen(t.trim().length >= 2);
+            if (!hasResolvedCoords && t.trim().length >= 2) setOpen(true);
           }}
-          onFocus={() => value.trim().length >= 2 && setOpen(true)}
+          onFocus={() => {
+            if (!hasResolvedCoords && value.trim().length >= 2) setOpen(true);
+          }}
         />
         {hasResolvedCoords ? (
           <View style={styles.checkWrap} accessibilityLabel="Endereço confirmado no mapa">

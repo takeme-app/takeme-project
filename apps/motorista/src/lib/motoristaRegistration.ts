@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { resolveWorkerBaseId } from './resolveWorkerBaseId';
+import { ensureWorkerRouteHasCoordinates } from './ensureWorkerRouteCoordinates';
 import type { RegistrationType } from '../navigation/types';
 
 /** Mapeia tipo de cadastro para subtype no banco. */
@@ -240,11 +241,20 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
       payload.destination_lat = dl;
       payload.destination_lng = dln;
     }
-    const { error: routeErr } = await supabase.from('worker_routes').insert(payload as never);
-    if (routeErr) {
+    const { data: insertedRoute, error: routeErr } = await supabase
+      .from('worker_routes')
+      .insert(payload as never)
+      .select('id')
+      .single();
+    if (routeErr || !insertedRoute?.id) {
       throw new Error(
-        [routeErr.message, routeErr.details, routeErr.hint].filter(Boolean).join(' — ') || 'Falha ao salvar rotas.'
+        [routeErr?.message, routeErr?.details, routeErr?.hint].filter(Boolean).join(' — ') || 'Falha ao salvar rotas.'
       );
+    }
+    const ensured = await ensureWorkerRouteHasCoordinates(supabase, insertedRoute.id as string);
+    if (!ensured.ok) {
+      // Cadastro segue; sem chave Google o motorista pode geocodificar depois em Minhas rotas / cronograma.
+      console.warn('[registerMotoristaWithAuth] Coordenadas da rota:', ensured.message);
     }
   }
 

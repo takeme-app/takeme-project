@@ -16,6 +16,8 @@ import type { ShipmentStackParamList } from '../../navigation/types';
 import { loadShipmentDriversForRoute } from '../../lib/loadShipmentDriversForRoute';
 import type { ClientScheduledTripItem } from '../../lib/clientScheduledTrips';
 import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
+import { quoteShipmentForClient, type ShipmentQuoteOk } from '../../lib/shipmentQuote';
+import { resolveShipmentBaseId } from '../../lib/resolveShipmentBase';
 
 type Props = NativeStackScreenProps<ShipmentStackParamList, 'SelectShipmentDriver'>;
 
@@ -37,64 +39,111 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
     whenLabel,
     packageSize,
     packageSizeLabel,
-    recipient,
-    amountCents,
-    pricingSubtotalCents,
-    platformFeeCents,
-    priceRouteBaseCents,
-    pricingRouteId,
-    adminPctApplied,
-    resolvedBaseId,
   } = route.params;
 
   const [items, setItems] = useState<ClientScheduledTripItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [driversLoading, setDriversLoading] = useState(true);
+  const [driversError, setDriversError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const [quote, setQuote] = useState<ShipmentQuoteOk | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(true);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+  const [resolvedBaseId, setResolvedBaseId] = useState<string | null>(null);
+  const [quoteRetryKey, setQuoteRetryKey] = useState(0);
+
+  const loadDrivers = useCallback(async () => {
+    setDriversLoading(true);
+    setDriversError(null);
     const { items: list, error: err } = await loadShipmentDriversForRoute({
       originLat: origin.latitude,
       originLng: origin.longitude,
       destinationLat: destination.latitude,
       destinationLng: destination.longitude,
     });
-    if (err) setError(err);
+    if (err) setDriversError(err);
     setItems(list);
-    setLoading(false);
+    setDriversLoading(false);
   }, [origin.latitude, origin.longitude, destination.latitude, destination.longitude]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadDrivers();
+  }, [loadDrivers]);
 
-  const confirmParams = {
-    origin,
-    destination,
-    whenOption,
-    whenLabel,
+  useEffect(() => {
+    let cancelled = false;
+    setQuoteLoading(true);
+    setQuoteError(null);
+    setQuote(null);
+    (async () => {
+      const res = await quoteShipmentForClient({
+        originAddress: origin.address,
+        destinationAddress: destination.address,
+        originLat: origin.latitude,
+        originLng: origin.longitude,
+        destinationLat: destination.latitude,
+        destinationLng: destination.longitude,
+        packageSize,
+      });
+      if (cancelled) return;
+      if (!res.ok) {
+        setQuoteError(res.error);
+        setQuote(null);
+      } else {
+        setQuote(res.quote);
+      }
+      let base: string | null = null;
+      try {
+        const resolved = await resolveShipmentBaseId({
+          origin: { latitude: origin.latitude, longitude: origin.longitude },
+          originAddress: origin.address,
+        });
+        base = resolved ?? null;
+      } catch {
+        base = null;
+      }
+      if (!cancelled) setResolvedBaseId(base);
+      setQuoteLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    origin.address,
+    origin.latitude,
+    origin.longitude,
+    destination.address,
+    destination.latitude,
+    destination.longitude,
     packageSize,
-    packageSizeLabel,
-    recipient,
-    amountCents,
-    pricingSubtotalCents,
-    platformFeeCents,
-    priceRouteBaseCents,
-    pricingRouteId,
-    adminPctApplied,
-    resolvedBaseId,
-  };
+    quoteRetryKey,
+  ]);
 
   const handleContinue = () => {
     const sel = items.find((i) => i.id === selectedId);
-    if (!sel) return;
-    navigation.navigate('ConfirmShipment', {
-      ...confirmParams,
+    if (!sel || !quote) return;
+    navigation.navigate('Recipient', {
+      origin,
+      destination,
+      whenOption,
+      whenLabel,
+      packageSize,
+      packageSizeLabel,
+      amountCents: quote.amountCents,
+      pricingSubtotalCents: quote.pricingSubtotalCents,
+      platformFeeCents: quote.platformFeeCents,
+      priceRouteBaseCents: quote.priceRouteBaseCents,
+      pricingRouteId: quote.pricingRouteId,
+      adminPctApplied: quote.adminPctApplied,
+      resolvedBaseId,
       clientPreferredDriverId: sel.driver_id,
+      scheduledTripDepartureAt: sel.departure_at,
+      scheduledTripId: sel.id,
     });
   };
+
+  const loading = driversLoading || quoteLoading;
+  const blockingError = quoteError;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}>
@@ -112,11 +161,25 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
       {loading ? (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={COLORS.black} />
+          <Text style={styles.loadingHint}>Calculando valor e motoristas…</Text>
         </View>
-      ) : error ? (
+      ) : blockingError ? (
         <View style={styles.centered}>
-          <Text style={styles.errText}>{error}</Text>
-          <TouchableOpacity style={styles.retryBtn} onPress={() => void load()}>
+          <Text style={styles.errText}>{blockingError}</Text>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            onPress={() => {
+              setQuoteRetryKey((k) => k + 1);
+              void loadDrivers();
+            }}
+          >
+            <Text style={styles.retryBtnText}>Tentar de novo</Text>
+          </TouchableOpacity>
+        </View>
+      ) : driversError ? (
+        <View style={styles.centered}>
+          <Text style={styles.errText}>{driversError}</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => void loadDrivers()}>
             <Text style={styles.retryBtnText}>Tentar de novo</Text>
           </TouchableOpacity>
         </View>
@@ -163,8 +226,8 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
             })}
           </ScrollView>
           <TouchableOpacity
-            style={[styles.primary, !selectedId && styles.primaryDisabled]}
-            disabled={!selectedId}
+            style={[styles.primary, (!selectedId || !quote) && styles.primaryDisabled]}
+            disabled={!selectedId || !quote}
             onPress={handleContinue}
             activeOpacity={0.85}
           >
@@ -185,6 +248,7 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingBottom: 16 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+  loadingHint: { marginTop: 12, fontSize: 14, color: COLORS.neutral700, textAlign: 'center' },
   errText: { fontSize: 15, color: COLORS.neutral700, textAlign: 'center' },
   retryBtn: { marginTop: 16, paddingVertical: 12, paddingHorizontal: 20 },
   retryBtnText: { fontSize: 16, fontWeight: '600', color: COLORS.black },

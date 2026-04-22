@@ -12,6 +12,7 @@ import {
   Platform,
   Animated,
   Pressable,
+  InteractionManager,
 } from 'react-native';
 import { useBottomSheetDrag } from '../hooks/useBottomSheetDrag';
 import { Text } from '../components/Text';
@@ -94,13 +95,14 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
   const [transferSaving, setTransferSaving] = useState(false);
   const transferSlideAnim = useRef(new Animated.Value(400)).current;
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
+    if (!silent) setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user?.id) {
       setTrips([]);
       setDayToggles({});
-      setLoading(false);
+      if (!silent) setLoading(false);
       return;
     }
     const { data, error } = await supabase
@@ -117,7 +119,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
       console.warn('[RouteScheduleScreen] scheduled_trips', error.message);
       setTrips([]);
       setDayToggles({});
-      setLoading(false);
+      if (!silent) setLoading(false);
       return;
     }
 
@@ -129,10 +131,12 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
       toggles[idx] = (toggles[idx] ?? false) || Boolean(t.is_active);
     }
     setDayToggles(toggles);
-    setLoading(false);
+    if (!silent) setLoading(false);
   }, [routeId]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(useCallback(() => {
+    void load({ silent: false });
+  }, [load]));
 
   const dayTrips = (dayIdx: number) =>
     trips.filter((t) => {
@@ -161,13 +165,13 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
               'Horários de partida ou chegada inválidos. Use HH:MM (ex.: 09:00 e 10:30).',
             );
           }
-          await load();
+          await load({ silent: true });
           return;
         }
         const geoOk = await ensureWorkerRouteHasCoordinates(supabase, routeId);
         if (!geoOk.ok) {
           showAlert('Mapa', geoOk.message);
-          await load();
+          await load({ silent: true });
           return;
         }
         const { data: routeGeoRow } = await supabase
@@ -228,7 +232,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
     } catch {
       showAlert('Erro', 'Não foi possível atualizar o cronograma.');
     }
-    await load();
+    await load({ silent: true });
   };
 
   const openAddModal = (dayIdx: number) => {
@@ -237,22 +241,24 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
     resetDrag();
     slideAnim.setValue(400);
     setModalVisible(true);
-    Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+    // useNativeDriver:false: Animated.add(slideAnim, dragY) + Modal evita travamento no iOS ao cadastrar horário.
+    Animated.spring(slideAnim, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
   };
 
   const closeModal = () => {
-    Animated.timing(slideAnim, { toValue: 400, duration: 250, useNativeDriver: true })
+    Animated.timing(slideAnim, { toValue: 400, duration: 250, useNativeDriver: false })
       .start(() => setModalVisible(false));
   };
 
-  const { dragY, panHandlers, resetDrag } = useBottomSheetDrag(closeModal);
+  const { dragY, panHandlers, resetDrag } = useBottomSheetDrag(closeModal, { useNativeDriver: false });
 
   const closeTransferModal = () => {
-    Animated.timing(transferSlideAnim, { toValue: 400, duration: 250, useNativeDriver: true })
+    Animated.timing(transferSlideAnim, { toValue: 400, duration: 250, useNativeDriver: false })
       .start(() => setTransferModalVisible(false));
   };
 
-  const { dragY: transferDragY, panHandlers: transferPanHandlers, resetDrag: resetTransferDrag } = useBottomSheetDrag(closeTransferModal);
+  const { dragY: transferDragY, panHandlers: transferPanHandlers, resetDrag: resetTransferDrag } =
+    useBottomSheetDrag(closeTransferModal, { useNativeDriver: false });
 
   const handleTransfer = async () => {
     if (!transferTripId || transferTargetDay === null) return;
@@ -282,7 +288,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         .update(patch as never)
         .eq('id', transferTripId);
       closeTransferModal();
-      await load();
+      await load({ silent: true });
     } catch (e) {
       showAlert('Erro', 'Não foi possível transferir a viagem.');
     } finally {
@@ -360,9 +366,19 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
       });
       if (error) throw error;
       closeModal();
-      await load();
+      await new Promise<void>((r) => {
+        InteractionManager.runAfterInteractions(() => r());
+      });
+      await load({ silent: true });
     } catch (e: unknown) {
-      showAlert('Erro', (e as { message?: string })?.message ?? 'Erro ao adicionar viagem.');
+      const msg =
+        typeof e === 'object' && e !== null && 'message' in e
+          ? String((e as { message: unknown }).message)
+          : 'Erro ao adicionar viagem.';
+      closeModal();
+      slideAnim.setValue(400);
+      setModalVisible(false);
+      setTimeout(() => showAlert('Erro', msg), 0);
     } finally {
       setAddSaving(false);
     }
@@ -448,7 +464,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
                         resetTransferDrag();
                         transferSlideAnim.setValue(400);
                         setTransferModalVisible(true);
-                        Animated.spring(transferSlideAnim, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+                        Animated.spring(transferSlideAnim, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
                       }} activeOpacity={0.7}>
                         <MaterialIcons name="swap-horiz" size={18} color="#111827" />
                         <Text style={styles.actionLabel}>Transferir viagem</Text>

@@ -11,7 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { DependentShipmentStackParamList } from '../../navigation/types';
-import { PaymentMethodSection, type PaymentMethodType } from '../../components/PaymentMethodSection';
+import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmParams } from '../../components/PaymentMethodSection';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
@@ -21,6 +21,9 @@ import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCusto
 import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
 import { fetchResolvedPriceCentsForScheduledTrip } from '../../lib/clientScheduledTrips';
 import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
+import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
+
+const MAX_DEPENDENT_PHOTOS = 8;
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'ConfirmDependentShipment'>;
 
@@ -56,6 +59,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     dependentId,
     amountCents,
     photoUri,
+    photoUris,
     driver,
     scheduledTripDepartureAt,
   } = route.params;
@@ -113,7 +117,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   );
 
   const handleConfirmPayment = useCallback(
-    async (params: { method: PaymentMethodType; paymentMethodId?: string }) => {
+    async (params: CardPaymentConfirmParams) => {
       setSubmitting(true);
       try {
         const {
@@ -140,6 +144,17 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           setSubmitting(false);
           return;
         }
+        const dupMsg = await getDuplicateDestinationSameDayMessage({
+          userId: user.id,
+          destLat: destination.latitude,
+          destLng: destination.longitude,
+          dayKey: calendarDayKeySaoPaulo(scheduledTripDepartureAt),
+        });
+        if (dupMsg) {
+          showAlert('Limite', dupMsg);
+          setSubmitting(false);
+          return;
+        }
         const paymentMethodDb =
           params.method === 'credito'
             ? 'credito'
@@ -150,10 +165,13 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
                 : 'dinheiro';
         const status = 'pending_review';
         const pricing = flatPricingSnapshot(finalAmountCents);
-        let photoUrl: string | null = null;
-        if (photoUri) {
-          photoUrl = await uploadPhotoAndGetPath(user.id, photoUri);
+        const rawPhotoUris = [...(photoUris ?? []), ...(photoUri ? [photoUri] : [])].slice(0, MAX_DEPENDENT_PHOTOS);
+        const uploadedPaths: string[] = [];
+        for (const uri of rawPhotoUris) {
+          const p = await uploadPhotoAndGetPath(user.id, uri);
+          if (p) uploadedPaths.push(p);
         }
+        const photoUrl = uploadedPaths[0] ?? null;
         const { data: row, error } = await supabase
           .from('dependent_shipments')
           .insert({
@@ -176,6 +194,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
             ...pricing,
             status,
             photo_url: photoUrl,
+            photo_paths: uploadedPaths,
           })
           .select('id')
           .single();
@@ -187,8 +206,12 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         const shipmentId = row?.id;
         const orderId = shipmentId ? orderIdFromUuid(shipmentId) : '----';
 
-        if (shipmentId && (params.method === 'credito' || params.method === 'debito') && params.paymentMethodId) {
-          const stripeCtx = await ensureAccessTokenForStripeFunctions();
+        const hasStripePm = Boolean(params.paymentMethodId?.trim());
+        const hasSavedPm = Boolean(params.savedPaymentMethodId?.trim());
+        if (shipmentId && (params.method === 'credito' || params.method === 'debito') && (hasStripePm || hasSavedPm)) {
+          const stripeCtx = await ensureAccessTokenForStripeFunctions({
+            holderCpfDigits: params.holderCpfDigits,
+          });
           if (!stripeCtx.ok) {
             await supabase
               .from('dependent_shipments')
@@ -202,7 +225,9 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
             headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
             body: {
               dependent_shipment_id: shipmentId,
-              stripe_payment_method_id: params.paymentMethodId,
+              ...(hasSavedPm
+                ? { payment_method_id: params.savedPaymentMethodId!.trim() }
+                : { stripe_payment_method_id: params.paymentMethodId!.trim() }),
             },
           });
           if (chargeFnError) {
@@ -241,9 +266,9 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
       destination,
       whenOption,
       scheduledTripDepartureAt,
-      scheduledTripId,
-      driver.amount_cents,
+      driver,
       photoUri,
+      photoUris,
       navigation,
       showAlert,
       uploadPhotoAndGetPath,

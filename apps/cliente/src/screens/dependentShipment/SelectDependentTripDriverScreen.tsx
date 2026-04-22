@@ -62,6 +62,7 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
     instructions,
     dependentId,
     photoUri,
+    photoUris,
   } = route.params;
 
   const legParams = {
@@ -74,7 +75,8 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
     bagsCount,
     instructions,
     dependentId,
-    photoUri,
+    ...(photoUris?.length ? { photoUris } : {}),
+    ...(photoUri ? { photoUri } : {}),
   };
 
   const [items, setItems] = useState<ClientScheduledTripItem[]>([]);

@@ -83,6 +83,7 @@ type Shipment = {
   origin_address: string | null;
   destination_address: string | null;
   recipient_name: string | null;
+  status: string | null;
 };
 
 type DocumentAsset = {
@@ -379,6 +380,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const [trip, setTrip] = useState<Trip | null>(null);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [shipments, setShipments] = useState<Shipment[]>([]);
+  const [hasAcceptedDependent, setHasAcceptedDependent] = useState(false);
 
   const [cancelVisible, setCancelVisible] = useState(false);
   const [rescheduleVisible, setRescheduleVisible] = useState(false);
@@ -400,7 +402,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
     } = await supabase.auth.getUser();
     const uid = user?.id ?? null;
 
-    const [{ data: tripData }, { data: bookingsData }, { data: shipmentsData }] =
+    const [{ data: tripData }, { data: bookingsData }, { data: shipmentsData }, { data: dependentsData }] =
       await Promise.all([
         supabase
           .from('scheduled_trips')
@@ -415,21 +417,27 @@ export function TripDetailScreen({ route, navigation }: Props) {
             'id, passenger_count, bags_count, status, amount_cents, profiles(full_name, avatar_url, rating)'
           )
           .eq('scheduled_trip_id', tripId)
-          .in('status', ['confirmed', 'in_progress']),
+          .in('status', ['pending', 'paid', 'confirmed', 'in_progress']),
         uid
           ? supabase
               .from('shipments')
               .select(
-                'id, instructions, package_size, origin_address, destination_address, recipient_name',
+                'id, instructions, package_size, origin_address, destination_address, recipient_name, status',
               )
               .eq('scheduled_trip_id', tripId)
               .eq('driver_id', uid)
           : Promise.resolve({ data: [] as Shipment[], error: null }),
+        supabase
+          .from('dependent_shipments')
+          .select('id')
+          .eq('scheduled_trip_id', tripId)
+          .in('status', ['confirmed', 'in_progress']),
       ]);
 
     if (tripData) setTrip(tripData as Trip);
     if (bookingsData) setBookings(bookingsData as Booking[]);
     if (shipmentsData) setShipments(shipmentsData as Shipment[]);
+    setHasAcceptedDependent(Boolean(dependentsData && dependentsData.length > 0));
 
     setLoadingTrip(false);
   }, [tripId]);
@@ -444,6 +452,21 @@ export function TripDetailScreen({ route, navigation }: Props) {
 
   const handleStartTrip = async () => {
     if (!trip) return;
+    const acceptedBooking = bookings.some(
+      (b) => b.status === 'confirmed' || b.status === 'in_progress',
+    );
+    const acceptedShipment = shipments.some(
+      (s) => s.status === 'confirmed' || s.status === 'in_progress',
+    );
+    const canStart =
+      acceptedBooking || acceptedShipment || hasAcceptedDependent;
+    if (!canStart) {
+      Alert.alert(
+        'Aceite antes de iniciar',
+        'É necessário ter pelo menos um passageiro, dependente ou encomenda aceito nesta viagem.',
+      );
+      return;
+    }
     setStartLoading(true);
     try {
       const {
@@ -546,7 +569,9 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const awaitingBookings = bookings.filter(
     (b) => b.status === 'pending' || b.status === 'paid',
   );
-  const confirmedTripBookings = bookings.filter((b) => b.status === 'confirmed');
+  const confirmedTripBookings = bookings.filter(
+    (b) => b.status === 'confirmed' || b.status === 'in_progress',
+  );
   const bookingsInTrip = [...awaitingBookings, ...confirmedTripBookings];
   const totalPax = bookingsInTrip.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
   const totalBags = bookingsInTrip.reduce((s, b) => s + (b.bags_count ?? 0), 0);
@@ -649,6 +674,10 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const journeyStarted = Boolean(trip.driver_journey_started_at);
   const showStartButton =
     !isCompleted && trip.status !== 'cancelled' && !journeyStarted;
+  const canStartTrip =
+    bookings.some((b) => b.status === 'confirmed' || b.status === 'in_progress') ||
+    shipments.some((s) => s.status === 'confirmed' || s.status === 'in_progress') ||
+    hasAcceptedDependent;
   const showPassengerSection =
     (isScheduled || isActive) && bookingsInTrip.length > 0;
   const showShipmentSection = (isScheduled || isActive) && shipments.length > 0;
@@ -985,8 +1014,17 @@ export function TripDetailScreen({ route, navigation }: Props) {
         <View style={styles.bottomActions}>
           {showStartButton && (
             <TouchableOpacity
-              style={styles.btnStart}
-              onPress={handleStartTrip}
+              style={[styles.btnStart, !canStartTrip && styles.btnStartMuted]}
+              onPress={() => {
+                if (!canStartTrip) {
+                  Alert.alert(
+                    'Aceite antes de iniciar',
+                    'É necessário ter pelo menos um passageiro, dependente ou encomenda aceito nesta viagem.',
+                  );
+                  return;
+                }
+                void handleStartTrip();
+              }}
               activeOpacity={0.85}
               disabled={startLoading}
             >
@@ -1300,6 +1338,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  btnStartMuted: { opacity: 0.42 },
   btnStartText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
   btnSecondary: {
     backgroundColor: '#F3F4F6',

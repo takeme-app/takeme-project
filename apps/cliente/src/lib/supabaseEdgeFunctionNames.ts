@@ -1,6 +1,5 @@
 /**
- * Slugs em `/functions/v1/<slug>` devem coincidir com o deploy no Supabase.
- * O projeto remoto (via MCP) publicou `charge-shipments`; o código-fonte no repo fica em `supabase/functions/charge-shipment/`.
- * Se você republicar com `supabase functions deploy charge-shipment`, altere aqui para `charge-shipment`.
+ * Slug em `/functions/v1/<slug>` — alinhado a `supabase/config.toml` e pasta `supabase/functions/charge-shipment/`.
+ * Se o projeto remoto usar outro nome, ajuste e faça deploy com o mesmo slug.
  */
-export const EDGE_CHARGE_SHIPMENT_SLUG = 'charge-shipments' as const;
+export const EDGE_CHARGE_SHIPMENT_SLUG = 'charge-shipment' as const;

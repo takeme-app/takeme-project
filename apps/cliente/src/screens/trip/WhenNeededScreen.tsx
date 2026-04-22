@@ -68,7 +68,7 @@ export function WhenNeededScreen({ navigation }: Props) {
         </View>
         <View style={styles.optionTextWrap}>
           <Text style={styles.optionLabel}>Mais tarde</Text>
-          <Text style={styles.optionSubtitle}>Agende para o horário que preferir</Text>
+          <Text style={styles.optionSubtitle}>Agende escolhendo o dia</Text>
         </View>
         <View style={[styles.radio, selected === 'later' && styles.radioSelected]}>
           {selected === 'later' && <View style={styles.radioInner} />}

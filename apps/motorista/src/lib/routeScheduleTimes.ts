@@ -72,6 +72,9 @@ export function computeNextDepartureArrivalFromWeekday(
   departureTimeHHMM: string,
   arrivalTimeHHMM: string,
 ): { departureAt: Date; arrivalAt: Date } {
+  if (!Number.isInteger(dayNum) || dayNum < 0 || dayNum > 6) {
+    throw new Error('Dia da semana inválido.');
+  }
   const depNorm = normalizeRouteTimeForSchedule(departureTimeHHMM);
   const arrNorm = normalizeRouteTimeForSchedule(arrivalTimeHHMM);
   if (!depNorm || !arrNorm) {
@@ -88,21 +91,29 @@ export function computeNextDepartureArrivalFromWeekday(
   const arrMin = parseInt(arrMatch[2], 10);
 
   const now = new Date();
-  const maxScan = 400;
-  for (let add = 0; add < maxScan; add++) {
-    const cal = new Date(now.getFullYear(), now.getMonth(), now.getDate() + add, 0, 0, 0, 0);
-    if (cal.getDay() !== dayNum) continue;
-
-    const departureAt = new Date(cal);
-    departureAt.setHours(depH, depMin, 0, 0);
-    if (departureAt.getTime() <= now.getTime()) continue;
-
-    const arrivalAt = new Date(cal);
-    arrivalAt.setHours(arrH, arrMin, 0, 0);
-    if (arrivalAt.getTime() <= departureAt.getTime()) {
-      arrivalAt.setDate(arrivalAt.getDate() + 1);
-    }
-    return { departureAt, arrivalAt };
+  const todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const dow = now.getDay();
+  let addDays = (dayNum - dow + 7) % 7;
+  let departureAt = new Date(todayMid);
+  departureAt.setDate(departureAt.getDate() + addDays);
+  departureAt.setHours(depH, depMin, 0, 0);
+  if (departureAt.getTime() <= now.getTime()) {
+    departureAt.setDate(departureAt.getDate() + 7);
   }
-  throw new Error('Não foi possível calcular a próxima data da viagem.');
+
+  const baseCal = new Date(
+    departureAt.getFullYear(),
+    departureAt.getMonth(),
+    departureAt.getDate(),
+    0,
+    0,
+    0,
+    0,
+  );
+  const arrivalAt = new Date(baseCal);
+  arrivalAt.setHours(arrH, arrMin, 0, 0);
+  if (arrivalAt.getTime() <= departureAt.getTime()) {
+    arrivalAt.setDate(arrivalAt.getDate() + 1);
+  }
+  return { departureAt, arrivalAt };
 }
