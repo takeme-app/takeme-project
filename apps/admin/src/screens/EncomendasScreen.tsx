@@ -48,6 +48,7 @@ type EncomendaRow = {
   chegada: string;
   status: 'Cancelado' | 'Concluído' | 'Agendado' | 'Em andamento';
   rawStatus: string;
+  paymentStatus: 'paid' | 'pending' | 'held' | null;
 };
 
 type TableCol = {
@@ -118,7 +119,22 @@ function toEncomendaRow(e: EncomendaListItem): EncomendaRow {
     chegada: e.chegada,
     status: e.status,
     rawStatus: e.rawStatus,
+    paymentStatus: e.paymentStatus,
   };
+}
+
+function paymentBadgeEl(status: EncomendaRow['paymentStatus']): React.ReactNode {
+  const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
+  if (status === 'held') {
+    return React.createElement('span', { title: 'Payout com erro (retido)', style: { fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 999, background: '#fee2e2', color: '#991b1b', whiteSpace: 'nowrap' as const, ...font } }, 'retido');
+  }
+  if (status === 'paid') {
+    return React.createElement('span', { title: 'Payouts liquidados', style: { fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 999, background: '#dcfce7', color: '#166534', whiteSpace: 'nowrap' as const, ...font } }, 'pago');
+  }
+  if (status === 'pending') {
+    return React.createElement('span', { title: 'Cobrado — aguardando liquidacao do payout', style: { fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 999, background: '#fef3c7', color: '#92400e', whiteSpace: 'nowrap' as const, ...font } }, 'pendente');
+  }
+  return null;
 }
 
 function isoDatePartLocal(iso: string): string {
@@ -567,14 +583,15 @@ export default function EncomendasScreen() {
       React.createElement('div', { key: 'dt', style: tableCellBase(tableCols[3], { fontWeight: 400 }) }, row.data),
       React.createElement('div', { key: 'emb', style: tableCellBase(tableCols[4], { fontWeight: 400 }) }, row.embarque),
       React.createElement('div', { key: 'chg', style: tableCellBase(tableCols[5], { fontWeight: 400 }) }, row.chegada),
-      React.createElement('div', { key: 'st', style: tableCellBase(tableCols[6]) },
+      React.createElement('div', { key: 'st', style: { ...tableCellBase(tableCols[6]), flexDirection: 'column' as const, gap: 4 } },
         React.createElement('span', {
           style: {
             display: 'inline-block', padding: '4px 12px', borderRadius: 999,
             fontSize: 13, fontWeight: 700, lineHeight: 1.5, whiteSpace: 'nowrap' as const,
             background: st.bg, color: st.color, ...font,
           },
-        }, badgeLabel)),
+        }, badgeLabel),
+        paymentBadgeEl(row.paymentStatus)),
       React.createElement('div', {
         key: 'act',
         style: {

@@ -24,10 +24,12 @@ import {
   encomendaCountsFromItems,
   fetchApprovedTripExpensesCents,
   fetchPendingCounts,
+  fetchStuckPayoutsSummary,
   type ViagemListFilter,
   type PagamentoCountsByCategory,
   type PendingCounts,
 } from '../data/queries';
+import { useNavigate } from 'react-router-dom';
 import type { PagamentoCounts } from '../data/types';
 
 export default function HomeScreen() {
@@ -36,6 +38,8 @@ export default function HomeScreen() {
   const [pagByCategory, setPagByCategory] = useState<PagamentoCountsByCategory | null>(null);
   const [approvedExpenseCents, setApprovedExpenseCents] = useState(0);
   const [pending, setPending] = useState<PendingCounts>({ pendingWorkers: 0, pendingPayouts: 0 });
+  const [stuckPayouts, setStuckPayouts] = useState<{ count: number; totalCents: number }>({ count: 0, totalCents: 0 });
+  const navigate = useNavigate();
 
   // Dados carregados UMA vez — filtros aplicados localmente (instantâneo)
   const [allViagens, setAllViagens] = useState<import('../data/types').ViagemListItem[]>([]);
@@ -50,7 +54,8 @@ export default function HomeScreen() {
       fetchPagamentoCountsByCategory(),
       fetchApprovedTripExpensesCents(),
       fetchPendingCounts(),
-    ]).then(([v, e, pbc, exp, pc]) => {
+      fetchStuckPayoutsSummary(),
+    ]).then(([v, e, pbc, exp, pc, stuck]) => {
       if (!cancelled) {
         setAllViagens(v);
         setAllEncomendas(e);
@@ -58,6 +63,7 @@ export default function HomeScreen() {
         setPagByCategory(pbc);
         setApprovedExpenseCents(exp.totalCents);
         setPending(pc);
+        setStuckPayouts({ count: stuck.count, totalCents: stuck.totalCents });
         setDataLoaded(true);
       }
     });
@@ -378,8 +384,21 @@ export default function HomeScreen() {
         React.createElement('span', { style: { width: 28, height: 28, borderRadius: '50%', background: '#fee59a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: '#92400e', ...font } }, String(pending.pendingPayouts)),
         React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, 'Pagamentos aguardando liberação')) : null)) : null;
 
+  const stuckSection = stuckPayouts.count > 0
+    ? React.createElement('div', {
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, width: '100%', padding: '16px 20px', background: '#fee2e2', border: '1px solid #b91c1c', borderRadius: 16, boxSizing: 'border-box' as const, cursor: 'pointer' },
+        onClick: () => navigate('/pagamentos'),
+        role: 'button', 'aria-label': 'Abrir Pagamentos para ver payouts retidos',
+      },
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+          React.createElement('span', { style: { fontSize: 16, fontWeight: 700, color: '#7f1d1d', ...font } }, 'Payouts retidos > 3 dias'),
+          React.createElement('span', { style: { fontSize: 13, color: '#7f1d1d', ...font } }, `${stuckPayouts.count} payout${stuckPayouts.count === 1 ? '' : 's'} aguardando — R$ ${(stuckPayouts.totalCents / 100).toFixed(2).replace('.', ',')}`)),
+        React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#7f1d1d', textDecoration: 'underline', ...font } }, 'Ver pagamentos'))
+    : null;
+
   return React.createElement(React.Fragment, null,
     React.createElement('h1', { style: webStyles.homeTitle }, 'Início'),
+    stuckSection,
     pendingSection,
     subTabsSection,
     searchSection,

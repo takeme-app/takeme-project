@@ -27,6 +27,9 @@ verify_jwt = false
 [functions.charge-shipments]
 verify_jwt = false
 
+[functions.charge-excursion-request]
+verify_jwt = false
+
 [functions.refund-shipment-no-driver]
 verify_jwt = false
 
@@ -38,6 +41,12 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.stripe-connect-link]
+verify_jwt = false
+
+[functions.stripe-connect-bridge]
+verify_jwt = false
+
+[functions.stripe-connect-sync]
 verify_jwt = false
 
 [functions.process-refund]

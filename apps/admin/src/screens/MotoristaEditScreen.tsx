@@ -16,6 +16,8 @@ import {
   saveWorkerProfileFields,
 } from '../data/queries';
 import PlacesAddressInput from '../components/PlacesAddressInput';
+import StripeConnectCard from '../components/StripeConnectCard';
+import type { WorkerConnectStatus } from '../data/types';
 import { getGoogleMapsApiKey } from '../lib/expoExtra';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -824,11 +826,35 @@ export default function MotoristaEditScreen() {
       return React.createElement('a', { href, target: '_blank', rel: 'noopener noreferrer', style: { textDecoration: 'none', color: 'inherit' } }, docRow('documento_de_veiculo.pdf'));
     })());
 
+  // Stripe Connect status (leitura direta de worker_profiles ja carregado em .select('*')).
+  const connectStatus: WorkerConnectStatus = {
+    accountId: (worker as any)?.stripe_connect_account_id ?? null,
+    chargesEnabled: Boolean((worker as any)?.stripe_connect_charges_enabled),
+    payoutsEnabled: Boolean((worker as any)?.stripe_connect_payouts_enabled),
+    detailsSubmitted: Boolean((worker as any)?.stripe_connect_details_submitted),
+    notifiedApprovedAt: (worker as any)?.stripe_connect_notified_approved_at ?? null,
+  };
+
+  const stripeConnectSection = id
+    ? React.createElement(StripeConnectCard, {
+        workerId: id,
+        connect: connectStatus,
+        onSynced: (next) => setWorker((prev: any) => prev ? {
+          ...prev,
+          stripe_connect_charges_enabled: next.chargesEnabled,
+          stripe_connect_payouts_enabled: next.payoutsEnabled,
+          stripe_connect_details_submitted: next.detailsSubmitted,
+          stripe_connect_account_id: next.accountId ?? prev.stripe_connect_account_id,
+        } : prev),
+      })
+    : null;
+
   const dadosSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 16, paddingBottom: 32, borderBottom: '1px solid #e2e2e2', width: '100%', boxSizing: 'border-box' as const },
   },
     React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, width: '100%', ...font } }, 'Dados do Motorista'),
-    dadosInnerCard);
+    dadosInnerCard,
+    stripeConnectSection);
 
   // ── Fotos do veículo: DB pode ter paths (FinalizeRegistration) ou URLs públicas (VehicleForm) ──
   const rawPhotoCount =

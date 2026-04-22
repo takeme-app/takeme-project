@@ -7,6 +7,49 @@ const corsHeaders = {
     "authorization, x-auth-token, x-client-info, apikey, content-type",
 };
 
+const STRIPE_API = "https://api.stripe.com/v1";
+
+type StripeTransfer = { id: string; amount: number; destination: string };
+
+// Helper para chamar Stripe via form-encoded, com suporte a Idempotency-Key.
+async function stripeFetch<T = unknown>(
+  secretKey: string,
+  method: string,
+  path: string,
+  body?: URLSearchParams,
+  idempotencyKey?: string,
+): Promise<T> {
+  const res = await fetch(`${STRIPE_API}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+    },
+    body: body ? body.toString() : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err =
+      (data as { error?: { message?: string } })?.error?.message ?? res.statusText;
+    throw new Error(err);
+  }
+  return data as T;
+}
+
+// Decide se o payout precisa de stripe.transfers.create explicito.
+// booking: NAO — transfer ja aconteceu no charge via transfer_data (charge-booking).
+// shipment, dependent_shipment e excursion: SIM — charge fica na plataforma,
+// transfer ocorre aqui. Nota: entity_type 'excursion' corresponde a excursion_requests
+// (orcamentos) no banco; o nome curto segue o check constraint em public.payouts.
+function needsExplicitTransfer(entityType: string | null | undefined): boolean {
+  return (
+    entityType === "shipment" ||
+    entityType === "dependent_shipment" ||
+    entityType === "excursion"
+  );
+}
+
 /**
  * process-payouts — Processa payouts pendentes em lote.
  *
@@ -165,9 +208,13 @@ Deno.serve(async (req) => {
     grouped[p.worker_id].push(p);
   }
 
+  const stripeSecret = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
+
   // ── Processar ──
   const result = {
     stripe_connect_auto_paid: 0,
+    stripe_connect_transfers_created: 0,
+    stripe_connect_transfers_failed: 0,
     manual_pix_processing: 0,
     manual_pix_paid: 0,
     below_threshold_skipped: 0,
@@ -210,29 +257,155 @@ Deno.serve(async (req) => {
       continue;
     }
 
-    // Worker COM Stripe Connect → dinheiro já transferido no charge
+    // Worker COM Stripe Connect → duas regras distintas por entity_type.
+    //
+    // - booking: transfer_data[destination] ja rodou no charge (charge-booking),
+    //   entao so marcamos paid. Comportamento preservado.
+    //
+    // - shipment / excursion_request: charge ficou na plataforma (opcao B da
+    //   auditoria). Precisamos criar stripe.transfers.create explicito agora,
+    //   salvando stripe_transfer_id antes de marcar paid.
     if (hasConnect) {
       if (dry_run) {
-        result.stripe_connect_auto_paid += workerPayouts.length;
+        // Contabiliza corretamente no preview
+        for (const p of workerPayouts as any[]) {
+          if (needsExplicitTransfer(p.entity_type)) {
+            result.stripe_connect_transfers_created += 1;
+          } else {
+            result.stripe_connect_auto_paid += 1;
+          }
+        }
         continue;
       }
-      const { error: updErr } = await admin
-        .from("payouts")
-        .update({ status: "paid", paid_at: new Date().toISOString() })
-        .in("id", payoutIds);
-      if (updErr) {
-        errors.push(`Worker ${workerId}: erro ao marcar Connect paid - ${updErr.message}`);
-        continue;
+
+      const nowIso = new Date().toISOString();
+
+      for (const p of workerPayouts as any[]) {
+        if (!needsExplicitTransfer(p.entity_type)) {
+          // booking: mantem comportamento antigo
+          const { error: updErr } = await admin
+            .from("payouts")
+            .update({ status: "paid", paid_at: nowIso })
+            .eq("id", p.id);
+          if (updErr) {
+            errors.push(`Payout ${p.id}: erro ao marcar Connect paid - ${updErr.message}`);
+            continue;
+          }
+          await admin.from("payout_logs").insert({
+            payout_id: p.id,
+            action: "auto_released",
+            performed_by: performedBy,
+            details: { method: "stripe_connect_transfer_at_charge", stripe_connect: true },
+          });
+          result.stripe_connect_auto_paid += 1;
+          continue;
+        }
+
+        // shipment ou excursion_request: transfer explicito.
+        if (!stripeSecret) {
+          const msg = "STRIPE_SECRET_KEY ausente — impossivel criar transfer explicito";
+          await admin
+            .from("payouts")
+            .update({ status: "processing", stripe_transfer_error: msg })
+            .eq("id", p.id);
+          errors.push(`Payout ${p.id}: ${msg}`);
+          result.stripe_connect_transfers_failed += 1;
+          continue;
+        }
+
+        const amount = Number(p.worker_amount_cents) || 0;
+        if (amount <= 0) {
+          // Nada a transferir (ex.: 0 cents). Marca paid sem chamar Stripe.
+          await admin
+            .from("payouts")
+            .update({ status: "paid", paid_at: nowIso })
+            .eq("id", p.id);
+          await admin.from("payout_logs").insert({
+            payout_id: p.id,
+            action: "auto_released",
+            performed_by: performedBy,
+            details: { method: "zero_amount_no_transfer", stripe_connect: true },
+          });
+          result.stripe_connect_auto_paid += 1;
+          continue;
+        }
+
+        // Idempotency-Key deterministico por payout — safe em re-run.
+        const idempotencyKey = `payout_${p.id}`;
+        const params = new URLSearchParams();
+        params.set("amount", String(amount));
+        params.set("currency", "brl");
+        params.set("destination", worker.stripe_connect_account_id);
+        params.set("metadata[payout_id]", String(p.id));
+        params.set("metadata[entity_type]", String(p.entity_type));
+        if (p.entity_id) {
+          params.set("metadata[entity_id]", String(p.entity_id));
+        }
+        params.set("metadata[worker_id]", String(workerId));
+
+        try {
+          const transfer = await stripeFetch<StripeTransfer>(
+            stripeSecret,
+            "POST",
+            "/transfers",
+            params,
+            idempotencyKey,
+          );
+
+          const { error: updErr } = await admin
+            .from("payouts")
+            .update({
+              status: "paid",
+              paid_at: nowIso,
+              stripe_transfer_id: transfer.id,
+              stripe_transfer_at: nowIso,
+              stripe_transfer_error: null,
+            })
+            .eq("id", p.id);
+
+          if (updErr) {
+            // Transfer ja foi pra Stripe — registra erro mas nao rollback
+            // (idempotency key cobre eventual retry do mesmo payout).
+            errors.push(
+              `Payout ${p.id}: transfer ${transfer.id} criado mas update falhou - ${updErr.message}`,
+            );
+            result.stripe_connect_transfers_failed += 1;
+            continue;
+          }
+
+          await admin.from("payout_logs").insert({
+            payout_id: p.id,
+            action: "auto_released",
+            performed_by: performedBy,
+            details: {
+              method: "stripe_connect_explicit_transfer",
+              stripe_transfer_id: transfer.id,
+              amount_cents: amount,
+              destination: worker.stripe_connect_account_id,
+            },
+          });
+          result.stripe_connect_transfers_created += 1;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          // Fica visivel para retry manual; nao avanca para paid.
+          await admin
+            .from("payouts")
+            .update({ status: "processing", stripe_transfer_error: msg })
+            .eq("id", p.id);
+          await admin.from("payout_logs").insert({
+            payout_id: p.id,
+            action: "batch_released",
+            performed_by: performedBy,
+            details: {
+              method: "stripe_connect_explicit_transfer_failed",
+              error: msg,
+            },
+          });
+          errors.push(`Payout ${p.id}: transfer falhou - ${msg}`);
+          result.stripe_connect_transfers_failed += 1;
+        }
       }
-      for (const pid of payoutIds) {
-        await admin.from("payout_logs").insert({
-          payout_id: pid,
-          action: "auto_released",
-          performed_by: performedBy,
-          details: { method: "stripe_connect_transfer_at_charge", stripe_connect: true },
-        });
-      }
-      result.stripe_connect_auto_paid += workerPayouts.length;
+
       continue;
     }
 

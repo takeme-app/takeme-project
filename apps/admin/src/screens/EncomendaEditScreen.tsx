@@ -9,12 +9,14 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   fetchApprovedDriversForEncomendaUI,
   fetchEncomendaEditDetail,
+  fetchPayoutsByEntity,
   formatCurrencyBRL,
   updateDependentShipmentFields,
   updateScheduledTripFields,
   updateShipmentFields,
 } from '../data/queries';
 import type { EncomendaEditDetail } from '../data/types';
+import type { EntityPayoutRow } from '../data/queries';
 import MapView from '../components/MapView';
 import PlacesAddressInput from '../components/PlacesAddressInput';
 import { DETAIL_TRIP_MAP_HEIGHT, webStyles } from '../styles/webStyles';
@@ -297,6 +299,7 @@ export default function EncomendaEditScreen() {
 
   const [motoristas, setMotoristas] = useState<MotoristaDisponivel[]>([]);
   const [motoristaSelecionado, setMotoristaSelecionado] = useState('');
+  const [payouts, setPayouts] = useState<EntityPayoutRow[]>([]);
   const motoristaTripSyncKeyRef = useRef<string>('');
 
   const scheduledTripId = detail?.kind === 'shipment' ? detail.scheduledTripId : null;
@@ -386,6 +389,7 @@ export default function EncomendaEditScreen() {
         setReceiverName(d.receiverName ?? '');
         setBagsCount(String(d.bagsCount ?? 0));
       }
+      fetchPayoutsByEntity(d.kind, d.id).then((rows) => setPayouts(rows));
       setLoading(false);
     });
   }, [routeId]);
@@ -863,6 +867,44 @@ export default function EncomendaEditScreen() {
                 motoristasComRota.slice(0, 2).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id)))),
               React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
                 motoristasComRota.slice(2, 4).map((m) => cartaoMotorista(m, motoristaSelecionado === m.id, () => setMotoristaSelecionado(m.id)))))))),
+    // Pagamento (stripe_payment_intent_id + payouts)
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, paddingBottom: 24, borderBottom: '1px solid #e2e2e2' } },
+      React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Pagamento'),
+      React.createElement('div', { style: { fontSize: 13, color: '#0d0d0d', ...font } },
+        React.createElement('span', { style: { color: '#767676' } }, 'Stripe PaymentIntent: '),
+        detail?.stripePaymentIntentId
+          ? React.createElement('a', {
+              href: `https://dashboard.stripe.com/payments/${detail.stripePaymentIntentId}`,
+              target: '_blank', rel: 'noopener noreferrer',
+              style: { color: '#3b82f6', fontWeight: 600 },
+            }, detail.stripePaymentIntentId)
+          : React.createElement('span', { style: { color: '#767676' } }, '— ainda sem cobranca —')),
+      payouts.length === 0
+        ? React.createElement('p', { style: { fontSize: 13, color: '#767676', margin: 0, ...font } }, 'Nenhum payout registrado ainda para esta encomenda.')
+        : React.createElement('div', { style: { border: '1px solid #e2e2e2', borderRadius: 12, overflow: 'hidden' } },
+            React.createElement('div', { style: { display: 'flex', background: '#e2e2e2', padding: '10px 14px', fontSize: 11, fontWeight: 600, color: '#0d0d0d', ...font } },
+              React.createElement('div', { style: { flex: 2 } }, 'Worker'),
+              React.createElement('div', { style: { flex: 1 } }, 'Worker'),
+              React.createElement('div', { style: { flex: 1 } }, 'Transfer'),
+              React.createElement('div', { style: { flex: 1 } }, 'Status')),
+            ...payouts.map((p) =>
+              React.createElement('div', {
+                key: p.id,
+                style: {
+                  display: 'flex', padding: '10px 14px', fontSize: 13, color: '#0d0d0d',
+                  background: p.stripeTransferError ? '#fef2f2' : '#f6f6f6',
+                  borderTop: '1px solid #e2e2e2', ...font,
+                },
+              },
+                React.createElement('div', { style: { flex: 2, fontWeight: 500 } }, p.workerName),
+                React.createElement('div', { style: { flex: 1 } }, formatCurrencyBRL(p.workerAmountCents)),
+                React.createElement('div', { style: { flex: 1, fontSize: 12, fontFamily: 'monospace' } },
+                  p.stripeTransferError
+                    ? React.createElement('span', { title: p.stripeTransferError, style: { color: '#991b1b', fontWeight: 600 } }, 'Erro')
+                    : p.stripeTransferId
+                      ? React.createElement('span', { title: p.stripeTransferId, style: { color: '#166534', fontWeight: 600 } }, `${p.stripeTransferId.slice(0, 12)}…`)
+                      : React.createElement('span', { style: { color: '#767676' } }, '—')),
+                React.createElement('div', { style: { flex: 1, fontWeight: 600 } }, p.status))))),
     // Encomendas
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
       React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Encomendas'),

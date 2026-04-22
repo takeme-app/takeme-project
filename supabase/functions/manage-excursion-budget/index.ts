@@ -21,32 +21,55 @@ function isAdmin(user: { app_metadata?: Record<string, unknown> }): boolean {
  *   discount: { type: "percentage"|"fixed", value: number } | null,
  *   total_cents: number
  * }
+ *
+ * role esperada para o preparador: 'preparer' ou 'preparador' (case-insensitive).
  */
+type BudgetTeamLine = {
+  role: string;
+  name: string;
+  worker_id?: string;
+  value_cents: number;
+};
+
 type BudgetLines = {
-  team?: Array<{
-    role: string;
-    name: string;
-    worker_id?: string;
-    value_cents: number;
-  }>;
-  basic_items?: Array<{
-    name: string;
-    quantity: number;
-    value_cents: number;
-  }>;
-  additional_services?: Array<{
-    name: string;
-    quantity: number;
-    value_cents: number;
-  }>;
-  recreation_items?: Array<{
-    name: string;
-    quantity: number;
-    value_cents: number;
-  }>;
+  team?: BudgetTeamLine[];
+  basic_items?: Array<{ name: string; quantity: number; value_cents: number }>;
+  additional_services?: Array<{ name: string; quantity: number; value_cents: number }>;
+  recreation_items?: Array<{ name: string; quantity: number; value_cents: number }>;
   discount?: { type: "percentage" | "fixed"; value: number } | null;
   total_cents: number;
 };
+
+// Deriva preparer_payout_cents a partir de budget_lines.team quando o body
+// nao envia o valor explicitamente.
+//
+// Regras (em ordem de prioridade):
+//   1) body.preparer_payout_cents numerico e >= 0
+//   2) soma de team[].value_cents onde worker_id == preparer_id informado
+//   3) soma de team[].value_cents onde role normalizada inclui "prepar"
+//   4) 0 (fallback — admin precisa editar via coluna depois)
+function derivePreparerPayoutCents(
+  explicit: number | undefined,
+  preparerId: string | null | undefined,
+  team: BudgetTeamLine[] | undefined,
+): number {
+  if (typeof explicit === "number" && Number.isFinite(explicit) && explicit >= 0) {
+    return Math.floor(explicit);
+  }
+  if (!team?.length) return 0;
+
+  if (preparerId) {
+    const byId = team
+      .filter((t) => t.worker_id === preparerId)
+      .reduce((acc, t) => acc + (Number(t.value_cents) || 0), 0);
+    if (byId > 0) return Math.floor(byId);
+  }
+
+  const byRole = team
+    .filter((t) => typeof t.role === "string" && t.role.toLowerCase().includes("prepar"))
+    .reduce((acc, t) => acc + (Number(t.value_cents) || 0), 0);
+  return Math.floor(byRole);
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -87,15 +110,23 @@ Deno.serve(async (req) => {
 
     const body = (await req.json().catch(() => ({}))) as {
       excursion_id?: string;
-      action?: string; // "save_draft" | "finalize"
+      action?: string;
       budget_lines?: BudgetLines;
       total_amount_cents?: number;
       driver_id?: string;
       preparer_id?: string;
+      preparer_payout_cents?: number;
     };
 
-    const { excursion_id, action, budget_lines, total_amount_cents, driver_id, preparer_id } =
-      body;
+    const {
+      excursion_id,
+      action,
+      budget_lines,
+      total_amount_cents,
+      driver_id,
+      preparer_id,
+      preparer_payout_cents,
+    } = body;
 
     if (!excursion_id || typeof excursion_id !== "string") {
       return new Response(
@@ -119,10 +150,9 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Buscar excursão
     const { data: excursion, error: excErr } = await admin
       .from("excursion_requests")
-      .select("id, user_id, status")
+      .select("id, user_id, status, preparer_id, worker_payout_cents")
       .eq("id", excursion_id)
       .single();
 
@@ -151,23 +181,32 @@ Deno.serve(async (req) => {
 
     const nowIso = new Date().toISOString();
 
+    const effectivePreparerId =
+      preparer_id ?? (excursion.preparer_id as string | null | undefined) ?? null;
+
+    // Calcula a fatia do preparador. Fallback 0 evita quebrar o finalize quando
+    // admin ainda nao discriminou o custo por funcao no budget_lines.
+    const preparerPayout = derivePreparerPayoutCents(
+      preparer_payout_cents,
+      effectivePreparerId,
+      budget_lines.team,
+    );
+
     const updates: Record<string, unknown> = {
       budget_lines,
       total_amount_cents: totalCents,
+      preparer_payout_cents: preparerPayout,
       budget_created_by: user.id,
       budget_created_at: nowIso,
       updated_at: nowIso,
     };
 
-    // Vincular motorista e preparador se informados
     if (driver_id) updates.driver_id = driver_id;
     if (preparer_id) updates.preparer_id = preparer_id;
 
     if (action === "finalize") {
-      // Finalizar = mudar status para "quoted" e notificar cliente
       updates.status = "quoted";
     }
-    // save_draft = só salva sem mudar status
 
     const { error: updateErr } = await admin
       .from("excursion_requests")
@@ -188,7 +227,6 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Notificar cliente quando finalizado
     if (action === "finalize" && excursion.user_id) {
       await admin.from("notifications").insert({
         user_id: excursion.user_id,
@@ -203,6 +241,7 @@ Deno.serve(async (req) => {
         ok: true,
         action,
         total_amount_cents: totalCents,
+        preparer_payout_cents: preparerPayout,
       }),
       {
         status: 200,

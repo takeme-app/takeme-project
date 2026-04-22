@@ -310,10 +310,13 @@ Deno.serve(async (req) => {
       if (driverId) {
         const { data: wp } = await admin
           .from("worker_profiles")
-          .select("stripe_connect_account_id")
+          .select("stripe_connect_account_id, stripe_connect_charges_enabled")
           .eq("id", driverId)
           .maybeSingle();
-        connectAccountId = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? null;
+        const rawAcct = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? null;
+        // Só aplica split quando a Stripe habilitou o destino (charges_enabled). Caso contrário
+        // cobra sem transfer_data — o repasse fica para depois via payouts manuais.
+        connectAccountId = rawAcct && wp?.stripe_connect_charges_enabled === true ? rawAcct : null;
         const workerPayoutPreview = chargeAmountCents - platformFeeCents;
         const payout = Number.isFinite(workerPayoutPreview) ? Math.max(0, Math.floor(workerPayoutPreview)) : null;
         if (connectAccountId && payout != null) {
@@ -490,10 +493,12 @@ Deno.serve(async (req) => {
     if (driverId) {
       const { data: wp } = await admin
         .from("worker_profiles")
-        .select("stripe_connect_account_id")
+        .select("stripe_connect_account_id, stripe_connect_charges_enabled")
         .eq("id", driverId)
         .maybeSingle();
-      connectAccountId = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? null;
+      const rawAcct = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? null;
+      // Split Connect só com charges_enabled; caso contrário pagamento manual.
+      connectAccountId = rawAcct && wp?.stripe_connect_charges_enabled === true ? rawAcct : null;
 
       const workerPayout = booking.worker_payout_cents;
       const payout =

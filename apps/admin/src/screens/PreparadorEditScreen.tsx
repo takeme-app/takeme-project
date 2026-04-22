@@ -16,10 +16,12 @@ import {
   saveVehicleFields,
   formatCurrencyBRL,
   updateExcursionStatus,
+  runChargeExcursionRequest,
 } from '../data/queries';
-import type { PreparadorEditDetail, PreparadorCandidate, ExcursionStatusHistoryRow, PreparadorEncomendaDetail } from '../data/types';
+import type { PreparadorEditDetail, PreparadorCandidate, ExcursionStatusHistoryRow, PreparadorEncomendaDetail, WorkerConnectStatus } from '../data/types';
 import { supabase } from '../lib/supabase';
 import { resolveStorageDisplayUrl as resolveAvatar } from '../lib/storageDisplayUrl';
+import StripeConnectCard from '../components/StripeConnectCard';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -278,7 +280,7 @@ export default function PreparadorEditScreen() {
       const isShipments = tabContext === 'encomendas';
       const [{ data: pp }, { data: wp }, { data: vehicles }, { data: shipments }, { data: ratings }, { data: excursions }] = await Promise.all([
         (supabase as any).from('profiles').select('full_name, phone, avatar_url, cpf, city').eq('id', id).maybeSingle(),
-        (supabase as any).from('worker_profiles').select('status, subtype, cpf, age, experience_years, bank_code, bank_agency, bank_account, pix_key, cnh_document_url, cnh_document_back_url, background_check_url, city').eq('id', id).maybeSingle(),
+        (supabase as any).from('worker_profiles').select('status, subtype, cpf, age, experience_years, bank_code, bank_agency, bank_account, pix_key, cnh_document_url, cnh_document_back_url, background_check_url, city, stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_payouts_enabled, stripe_connect_details_submitted, stripe_connect_notified_approved_at').eq('id', id).maybeSingle(),
         isShipments
           ? (supabase as any).from('vehicles').select('id, year, model, plate, passenger_capacity, vehicle_document_url, status').eq('worker_id', id).order('created_at', { ascending: false }).limit(5)
           : Promise.resolve({ data: [] }),
@@ -636,6 +638,24 @@ export default function PreparadorEditScreen() {
                   doc.url
                     ? React.createElement('a', { href: doc.url, target: '_blank', rel: 'noopener noreferrer', style: { fontSize: 13, color: '#3b82f6', ...font } }, 'Ver documento')
                     : React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, 'Não enviado'))))),
+
+          // Stripe Connect — split automatico por stripe.transfers.create.
+          (() => {
+            const connect: WorkerConnectStatus = {
+              accountId: (wd as any).stripe_connect_account_id ?? null,
+              chargesEnabled: Boolean((wd as any).stripe_connect_charges_enabled),
+              payoutsEnabled: Boolean((wd as any).stripe_connect_payouts_enabled),
+              detailsSubmitted: Boolean((wd as any).stripe_connect_details_submitted),
+              notifiedApprovedAt: (wd as any).stripe_connect_notified_approved_at ?? null,
+            };
+            return id
+              ? React.createElement(StripeConnectCard, {
+                  workerId: id,
+                  connect,
+                  onSynced: () => { void reload(); },
+                })
+              : null;
+          })(),
 
           // Veículos (apenas para preparador de encomendas)
           isShipmentsTab ? React.createElement('div', { style: { background: '#fff', borderRadius: 16, border: '1px solid #e2e2e2', padding: 24, display: 'flex', flexDirection: 'column' as const, gap: 16 } },
@@ -1089,6 +1109,64 @@ export default function PreparadorEditScreen() {
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => setKmLabel(e.target.value),
           style: { ...inputBase, fontSize: 48, fontWeight: 700, minHeight: 56 },
         }))),
+    (() => {
+      if (!detail) return null;
+      const amountRow = (label: string, cents: number | null | undefined, opts: { bold?: boolean; muted?: boolean } = {}) =>
+        React.createElement('div', { key: label, style: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f1f1f1', fontSize: 14, color: opts.muted ? '#767676' : '#0d0d0d', fontWeight: opts.bold ? 700 : 500, ...font } },
+          React.createElement('span', null, label),
+          React.createElement('span', null, formatCurrencyBRL(cents ?? 0)));
+      const piUrl = detail.stripePaymentIntentId
+        ? `https://dashboard.stripe.com/payments/${detail.stripePaymentIntentId}`
+        : null;
+      const canCharge = !detail.stripePaymentIntentId && (detail.statusRaw === 'quoted' || detail.statusRaw === 'approved');
+      const handleCharge = async (method: 'pix' | 'card') => {
+        if (!detail?.id) return;
+        setBanner(null);
+        const res = await runChargeExcursionRequest(detail.id, method);
+        if (res.error || (res.data && (res.data as any).error)) {
+          setBanner({ type: 'err', text: res.error || (res.data as any)?.error || 'Falha ao iniciar cobranca' });
+          return;
+        }
+        const data = res.data as any;
+        const payIntent = data?.payment_intent_id || data?.paymentIntentId;
+        const qr = data?.next_action?.pix_display_qr_code || data?.pix_qr_code;
+        setBanner({ type: 'ok', text: `Cobranca iniciada${payIntent ? ` (PI: ${payIntent})` : ''}${qr ? ' — QR PIX gerado' : ''}` });
+        await reload();
+      };
+      return React.createElement('div', { style: { border: '1px solid #e2e2e2', borderRadius: 16, padding: '24px', background: '#fff', display: 'flex', flexDirection: 'column' as const, gap: 12 } },
+        React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Orçamento e pagamento'),
+        amountRow('Total cobrado do cliente', detail.totalAmountCents, { bold: true }),
+        amountRow('Pagamento ao preparador', detail.preparerPayoutCents),
+        amountRow('Pagamento ao motorista', detail.driverPayoutCents),
+        amountRow('Worker payout (preparador + motorista)', detail.workerPayoutCents, { muted: true }),
+        amountRow('Taxa da plataforma', detail.platformFeeCents),
+        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 12, marginTop: 8, fontSize: 13, color: '#0d0d0d', ...font } },
+          React.createElement('div', null,
+            React.createElement('span', { style: { color: '#767676' } }, 'Preparador: '),
+            React.createElement('span', { style: { fontWeight: 600 } }, detail.preparerId ? `#${detail.preparerId.slice(0, 8)}` : '—')),
+          React.createElement('div', null,
+            React.createElement('span', { style: { color: '#767676' } }, 'Motorista: '),
+            React.createElement('span', { style: { fontWeight: 600 } }, detail.driverId ? `#${detail.driverId.slice(0, 8)}` : '—')),
+          React.createElement('div', null,
+            React.createElement('span', { style: { color: '#767676' } }, 'Status: '),
+            React.createElement('span', { style: { fontWeight: 600 } }, detail.statusLabel))),
+        piUrl
+          ? React.createElement('div', { style: { fontSize: 13, color: '#0d0d0d', ...font } },
+              React.createElement('span', { style: { color: '#767676' } }, 'Stripe PaymentIntent: '),
+              React.createElement('a', { href: piUrl, target: '_blank', rel: 'noopener noreferrer', style: { color: '#3b82f6', fontWeight: 600 } }, detail.stripePaymentIntentId))
+          : React.createElement('div', { style: { fontSize: 13, color: '#767676', ...font } }, 'Ainda sem cobranca registrada.'),
+        canCharge
+          ? React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 8 } },
+              React.createElement('button', {
+                type: 'button', onClick: () => handleCharge('pix'),
+                style: { height: 40, padding: '0 16px', borderRadius: 8, border: 'none', background: '#0d8344', color: '#fff', fontWeight: 600, cursor: 'pointer', ...font },
+              }, 'Cobrar cliente via PIX'),
+              React.createElement('button', {
+                type: 'button', onClick: () => handleCharge('card'),
+                style: { height: 40, padding: '0 16px', borderRadius: 8, border: '1px solid #d9d9d9', background: '#fff', color: '#0d0d0d', fontWeight: 600, cursor: 'pointer', ...font },
+              }, 'Cobrar cliente via cartão'))
+          : null);
+    })(),
     React.createElement('div', { style: { border: '1px solid #e2e2e2', borderRadius: 16, overflow: 'hidden', background: '#fff' } },
       React.createElement('div', { style: { padding: '28px 28px 16px' } },
         React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Orçamento / receitas')),

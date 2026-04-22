@@ -144,9 +144,9 @@ export async function describeInvokeFailure(
   if (msg && msg !== 'Edge function returned a non-2xx status code') return msg;
 
   return [
-    'A função create-motorista-account respondeu com erro (HTTP não-2xx).',
-    'Abra o painel Supabase → Edge Functions → create-motorista-account → Logs.',
-    'Confira também deploy, secrets (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) e JWT da função.',
+    'A Edge Function respondeu com erro (HTTP não-2xx).',
+    'Abra o painel Supabase → Edge Functions → escolha a função → Logs.',
+    'Confira deploy, secrets da função e o corpo JSON da resposta (campo error).',
   ].join(' ');
 }
 
