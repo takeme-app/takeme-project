@@ -444,10 +444,12 @@ pending → contacted → quoted → in_analysis → approved → scheduled → 
 
 Apos aprovacao do cadastro (`worker_profiles.status = 'approved'`), o motorista e redirecionado para `StripeConnectSetupScreen` se nao tiver `stripe_connect_account_id`. O fluxo:
 
-1. `StripeConnectSetupScreen`: chama Edge Function `stripe-connect-link`
-2. Abre link externo no navegador para cadastro Stripe Connect
-3. Ao completar, `stripe_connect_account_id` e salvo em `worker_profiles`
-4. Gate em `App.tsx`: sem Stripe Connect, nao acessa o ambiente principal
+1. `StripeConnectSetupScreen`: chama Edge Function `stripe-connect-link` — cria conta **Express** BR (`card_payments` + `transfers`) e devolve um `account_links.url`
+2. Abre o link no navegador do sistema. Deep links de retorno: `takeme://stripe-connect-return` (tela de setup) e `takeme://payments` (tela de pagamentos, quando o motorista ja esta no app)
+3. Ao completar o Account Link, `stripe_connect_account_id` e gravado em `worker_profiles`. O webhook `account.updated` mantem `stripe_connect_charges_enabled`, `stripe_connect_payouts_enabled` e `stripe_connect_details_submitted` sincronizados
+4. Gate em `App.tsx`/`motoristaAccess.ts`: sem `stripe_connect_account_id`, redireciona para `StripeConnectSetup` e bloqueia o ambiente principal
+
+> **Nota:** o app motorista **nao** embute `@stripe/stripe-react-native`; toda a interacao com o Stripe acontece via Edge Functions e navegador externo.
 
 ### 9.2 Historico Financeiro (`driverPaymentTransfers.ts`)
 

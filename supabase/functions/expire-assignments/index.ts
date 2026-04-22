@@ -7,6 +7,23 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payload + "=".repeat((4 - (payload.length % 4)) % 4);
+    return JSON.parse(atob(padded));
+  } catch {
+    return null;
+  }
+}
+
+function isServiceRoleToken(token: string): boolean {
+  const p = decodeJwtPayload(token);
+  return p?.role === "service_role" && p?.iss === "supabase";
+}
+
 /**
  * expire-assignments
  *
@@ -18,7 +35,7 @@ const corsHeaders = {
  * Recomendação: rodar a cada 5 minutos.
  *
  * Supabase cron config:
- *   Schedule: "*/5 * * * *"
+ *   Schedule: every 5 minutes
  *   URL: POST /functions/v1/expire-assignments
  *   Header: Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>
  */
@@ -31,12 +48,10 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    // Autenticação: aceita service_role key ou admin JWT
     const authHeader = req.headers.get("Authorization");
     const token = authHeader?.replace("Bearer ", "").trim() ?? "";
 
-    // Validar que é service role ou admin
-    if (token !== serviceRoleKey) {
+    if (!isServiceRoleToken(token) && token !== serviceRoleKey) {
       const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
       const userClient = createClient(supabaseUrl, anonKey, {
         global: { headers: { Authorization: `Bearer ${token}` } },

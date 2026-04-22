@@ -6,9 +6,7 @@ import {
   TextInput,
   ActivityIndicator,
   ScrollView,
-  Clipboard,
   Platform,
-  Alert,
 } from 'react-native';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -225,27 +223,6 @@ export function PaymentMethodSection({
     onConfirmPayment({ method: 'dinheiro' });
   }, [onConfirmPayment]);
 
-  const handleCopyPixCode = useCallback(() => {
-    const code = '00190500954014481606'; // placeholder
-    Clipboard.setString(code);
-    if (Platform.OS === 'ios') Alert.alert('Copiado', 'Código Pix copiado.');
-    else showAlert('Copiado', 'Código Pix copiado para a área de transferência.');
-  }, [showAlert]);
-
-  const handleResendPixEmail = useCallback(() => {
-    if (pixResendCooldown > 0) return;
-    setPixResendCooldown(60);
-    const interval = setInterval(() => {
-      setPixResendCooldown((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-  }, [pixResendCooldown]);
-
   const policyLines = getCancellationPolicyLines(
     selectedMethod === 'credito' ? 'shipment_credit' : selectedMethod === 'debito' ? 'shipment_debit' : cancellationPolicyVariant
   );
@@ -276,6 +253,17 @@ export function PaymentMethodSection({
                   {opt.type === 'credito' ? 'Cartão de crédito' : 'Cartão de débito'}
                 </Text>
               </View>
+
+              {opt.type === 'credito' ? (
+                <>
+                  <Text style={styles.formLabel}>Número de parcelas</Text>
+                  <View style={styles.readOnlyField}>
+                    <Text style={styles.readOnlyText}>
+                      1x de R$ {(amountCents / 100).toFixed(2).replace('.', ',')} (parcela única)
+                    </Text>
+                  </View>
+                </>
+              ) : null}
 
               {savedCardsLoading ? (
                 <ActivityIndicator style={styles.savedCardsLoader} color={COLORS.black} />
@@ -422,27 +410,10 @@ export function PaymentMethodSection({
 
           {selectedMethod === opt.type && opt.type === 'pix' && (
             <View style={styles.expanded}>
-              <Text style={styles.pixStep}>1. Acesse o app do seu banco</Text>
-              <Text style={styles.pixStep}>2. Escolha pagar com Pix</Text>
-              <Text style={styles.pixStep}>3. Cole o seguinte código:</Text>
-              <View style={styles.pixCodeRow}>
-                <Text style={styles.pixCode} numberOfLines={1}>0019050 0954014 48160 6...</Text>
-                <TouchableOpacity onPress={handleCopyPixCode} style={styles.copyButton} hitSlop={12}>
-                  <MaterialIcons name="content-copy" size={22} color={COLORS.black} />
-                </TouchableOpacity>
-              </View>
-              <View style={styles.pixQrPlaceholder}>
-                <MaterialIcons name="qr-code-2" size={80} color={COLORS.neutral700} />
-              </View>
-              <TouchableOpacity
-                style={[styles.resendButton, pixResendCooldown > 0 && styles.resendButtonDisabled]}
-                onPress={handleResendPixEmail}
-                disabled={pixResendCooldown > 0}
-              >
-                <Text style={styles.resendButtonText}>
-                  {pixResendCooldown > 0 ? `Reenviar email (${pixResendCooldown}s)` : 'Reenviar email (60s)'}
-                </Text>
-              </TouchableOpacity>
+              <Text style={styles.pixIntro}>
+                Ao confirmar o envio, abriremos o Pix oficial (Stripe): você poderá copiar o código, abrir o
+                comprovante no navegador e pagar no app do banco. Só depois disso o pedido segue para os motoristas.
+              </Text>
               <TouchableOpacity
                 style={[styles.confirmButton, loading && styles.confirmButtonDisabled]}
                 onPress={handleConfirmPix}
@@ -624,47 +595,11 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginBottom: 4,
   },
-  pixStep: {
+  pixIntro: {
     fontSize: 14,
-    color: COLORS.black,
-    marginBottom: 6,
-  },
-  pixCodeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 16,
-  },
-  pixCode: {
-    flex: 1,
-    fontSize: 14,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    color: COLORS.black,
-  },
-  copyButton: {
-    padding: 8,
-  },
-  pixQrPlaceholder: {
-    width: 120,
-    height: 120,
-    backgroundColor: COLORS.neutral300,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'center',
-    marginBottom: 16,
-  },
-  resendButton: {
-    alignSelf: 'flex-start',
-    marginBottom: 16,
-  },
-  resendButtonDisabled: {
-    opacity: 0.5,
-  },
-  resendButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.black,
+    color: COLORS.neutral700,
+    lineHeight: 22,
+    marginBottom: 12,
   },
   dinheiroText: {
     fontSize: 14,

@@ -14,7 +14,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
  *
  * Autenticação: aceita apenas service-role key no header Authorization.
  * Agendamento sugerido (Supabase cron ou pg_cron):
- *   */10 * * * *
+ *   every 10 minutes
  *   POST <project>/functions/v1/notify-driver-upcoming-trips
  *   Header: Authorization: Bearer <SERVICE_ROLE_KEY>
  */
@@ -24,6 +24,23 @@ const corsHeaders = {
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payload + "=".repeat((4 - (payload.length % 4)) % 4);
+    return JSON.parse(atob(padded));
+  } catch {
+    return null;
+  }
+}
+
+function isServiceRoleToken(token: string): boolean {
+  const p = decodeJwtPayload(token);
+  return p?.role === "service_role" && p?.iss === "supabase";
+}
 
 type TripRow = {
   id: string;
@@ -49,7 +66,7 @@ Deno.serve(async (req) => {
   const token = (req.headers.get("Authorization") ?? "")
     .replace("Bearer ", "")
     .trim();
-  if (token !== serviceRoleKey) {
+  if (!isServiceRoleToken(token) && token !== serviceRoleKey) {
     return new Response(JSON.stringify({ error: "Não autorizado" }), {
       status: 401,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

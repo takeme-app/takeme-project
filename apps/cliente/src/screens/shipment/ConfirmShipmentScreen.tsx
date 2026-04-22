@@ -5,6 +5,9 @@ import {
   StyleSheet,
   ScrollView,
   ActivityIndicator,
+  Alert,
+  Clipboard,
+  Linking,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -27,6 +30,7 @@ import { guessCityFromPtAddress } from '../../lib/shipmentOriginCity';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
 import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
+import { waitForShipmentStripePaymentIntentId } from '../../lib/waitForShipmentStripePaymentIntentId';
 
 const MAX_ENCOMENDA_PHOTOS = 8;
 
@@ -249,7 +253,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         const paymentProcessed =
           params.method === 'credito' || params.method === 'debito' || params.method === 'pix';
 
-        let stripeCardCharged = false;
+        let stripePaidOnline = false;
         const hasStripePm = Boolean(params.paymentMethodId?.trim());
         const hasSavedPm = Boolean(params.savedPaymentMethodId?.trim());
         if (shipmentId && (params.method === 'credito' || params.method === 'debito') && (hasStripePm || hasSavedPm)) {
@@ -287,7 +291,90 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
             return;
           }
           const charged = chargeData as { ok?: boolean } | null;
-          stripeCardCharged = charged?.ok === true;
+          stripePaidOnline = charged?.ok === true;
+        } else if (shipmentId && params.method === 'pix') {
+          const stripeCtx = await ensureAccessTokenForStripeFunctions();
+          if (!stripeCtx.ok) {
+            await supabase
+              .from('shipments')
+              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+              .eq('id', shipmentId);
+            showAlert('Pagamento', stripeCtx.message);
+            return;
+          }
+          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke(EDGE_CHARGE_SHIPMENT_SLUG, {
+            headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
+            body: { shipment_id: shipmentId },
+          });
+          if (chargeFnError) {
+            const raw = await describeInvokeFailure(chargeData, chargeFnError);
+            const chargeErrMsg = getUserErrorMessage({ message: raw }, raw);
+            await supabase
+              .from('shipments')
+              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+              .eq('id', shipmentId);
+            showAlert(
+              'Pagamento',
+              chargeErrMsg || 'Não foi possível iniciar o Pix; o pedido foi cancelado.',
+            );
+            return;
+          }
+          const pixBody = chargeData as {
+            ok?: boolean;
+            pix_requires_payment?: boolean;
+            image_url_png?: string | null;
+            hosted_voucher_url?: string | null;
+            pix_copy_paste?: string | null;
+          } | null;
+          if (pixBody?.pix_requires_payment) {
+            const paste = typeof pixBody.pix_copy_paste === 'string' ? pixBody.pix_copy_paste.trim() : '';
+            if (paste) {
+              try {
+                await Clipboard.setString(paste);
+              } catch {
+                /* ignore */
+              }
+            }
+            const hosted = typeof pixBody.hosted_voucher_url === 'string' ? pixBody.hosted_voucher_url.trim() : '';
+            await new Promise<void>((resolve) => {
+              const msg = paste
+                ? 'Copiamos o código Pix para a área de transferência. Abra o comprovante no navegador se preferir; depois pague no app do banco. Quando concluir, toque em Continuar.'
+                : 'Abra o comprovante Pix no navegador, pague no app do banco e toque em Continuar.';
+              const buttons: { text: string; onPress?: () => void }[] = [];
+              if (hosted) {
+                buttons.push({
+                  text: 'Abrir comprovante',
+                  onPress: () => {
+                    void Linking.openURL(hosted);
+                  },
+                });
+              }
+              buttons.push({ text: 'Continuar', onPress: () => resolve() });
+              Alert.alert('Pix', msg, buttons, { cancelable: false });
+            });
+            const paid = await waitForShipmentStripePaymentIntentId('shipments', shipmentId);
+            if (!paid) {
+              await supabase
+                .from('shipments')
+                .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+                .eq('id', shipmentId);
+              showAlert(
+                'Pix',
+                'Não detectamos o pagamento a tempo. O pedido foi cancelado; você pode criar um novo envio.',
+              );
+              return;
+            }
+            stripePaidOnline = true;
+          } else if (pixBody?.ok === true) {
+            stripePaidOnline = true;
+          } else {
+            await supabase
+              .from('shipments')
+              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+              .eq('id', shipmentId);
+            showAlert('Pagamento', 'Resposta inesperada do servidor ao iniciar Pix.');
+            return;
+          }
         }
 
         const canStartDriverOfferQueue =
@@ -319,10 +406,12 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
                   ? 'Não foi possível abrir a fila: falta motorista preferido. Volte e escolha um motorista.'
                   : begin.error === 'forbidden'
                     ? 'Sessão inválida ao iniciar a fila. Faça login de novo.'
-                    : `Não foi possível iniciar a fila (${begin.error}). Contacte o suporte.`,
+                    : begin.error === 'payment_required'
+                      ? 'Pagamento ainda não confirmado no sistema. Aguarde alguns segundos após o Pix ou cartão e tente de novo na lista de envios.'
+                      : `Não foi possível iniciar a fila (${begin.error}). Contacte o suporte.`,
               );
             } else if (begin?.cancelled) {
-              if (stripeCardCharged) {
+              if (stripePaidOnline) {
                 await supabase.functions.invoke('refund-shipment-no-driver', {
                   body: { shipment_id: shipmentId },
                 });

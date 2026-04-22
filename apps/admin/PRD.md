@@ -509,10 +509,14 @@ Reutilizam telas existentes para manter contexto de origem (`location.state.from
 | `manage-excursion-budget` | Criar/finalizar orcamento de excursao | POST |
 | `manage-admin-users` | CRUD de usuarios admin com permissoes | POST, PATCH, DELETE |
 | `send-admin-credentials` | Envia email com credenciais de acesso ao novo admin (Resend) | POST |
-| `process-refund` | Estorno integral ou parcial via Stripe Refunds | POST |
-| `expire-assignments` | Expira assignments pendentes (cron 5 min), chama process-refund | POST |
-| `respond-assignment` | Worker aceita/rejeita assignment, processa estorno Stripe real | POST |
-| `charge-booking` | Cobra booking via Stripe PaymentIntent, salva stripe_payment_intent_id | POST |
+| `process-refund` | Estorno integral ou parcial via Stripe Refunds (acionado pelo admin em Atendimentos) | POST |
+| `refund-shipment-no-driver` | Estorno automatico quando nenhum motorista aceita a encomenda | POST |
+| `expire-assignments` | Expira assignments pendentes (cron 5 min); encadeia `process-refund` | POST |
+| `charge-booking` | Cobra booking via Stripe PaymentIntent (modo draft: cobra antes de inserir); aplica split Connect via `transfer_data` quando o motorista possui `stripe_connect_account_id` | POST |
+| `charge-shipments` | Cobra `shipments` ou `dependent_shipments` via PaymentIntent e grava `stripe_payment_intent_id`. Folder local em `supabase/functions/charge-shipments/`, alinhado ao slug publicado | POST |
+| `stripe-webhook` | Recebe eventos Stripe (`payment_intent.succeeded`, `payment_intent.payment_failed`, `charge.refunded`, `account.updated`) e reconcilia reservas/envios/Connect | POST |
+| `stripe-connect-link` | Gera `account_links` para onboarding Stripe Connect Express BR (motorista/preparador) | POST |
+| `process-payouts` | Processa lote de `payouts` pendentes: workers com Connect sao marcados `paid` (ja transferido no charge); demais viram `processing` para pagamento manual via PIX | POST |
 | `confirm-code` | Verifica codigos de pickup/delivery | POST |
 | `ensure-stripe-customer` | Cria/busca customer Stripe | POST |
 | `save-payment-method` | Salva cartao no Stripe | POST |

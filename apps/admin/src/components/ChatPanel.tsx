@@ -252,6 +252,7 @@ export default function ChatPanel(props: ChatPanelProps) {
       ? React.createElement('div', { style: { padding: '8px 16px', borderTop: '1px solid #e2e2e2' } },
           React.createElement(FileUpload, {
             bucket: 'chat-attachments',
+            pathPrefix: conversationId,
             onUploaded: handleFileUploaded,
             onCancel: () => setShowUpload(false),
           }),

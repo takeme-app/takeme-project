@@ -8,6 +8,23 @@ const corsHeaders = {
 
 const STRIPE_API = "https://api.stripe.com/v1";
 
+/** Erros da Stripe em que o cliente pode corrigir configuração (não é falha interna do servidor). */
+function stripeUserConfigMessage(stripeMessage: string): string | null {
+  const m = stripeMessage.toLowerCase();
+  if (
+    m.includes("no such paymentmethod") ||
+    m.includes("no such payment_method") ||
+    (m.includes("resource_missing") && m.includes("payment_method"))
+  ) {
+    return (
+      "Chaves Stripe incompatíveis: use o mesmo par de chaves (teste ou produção) da mesma conta. " +
+      "No Stripe Dashboard da conta em que está o STRIPE_SECRET_KEY do Supabase, copie o pk_test (ou pk_live) " +
+      "de Developers → API keys para EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY no app, reinicie o Metro e cadastre o cartão de novo."
+    );
+  }
+  return null;
+}
+
 async function stripeFetch(
   secretKey: string,
   method: string,
@@ -172,7 +189,7 @@ Deno.serve(async (req) => {
     const expiryYear = card?.exp_year ?? null;
     const holderName = (pm?.billing_details?.name?.trim()) || null;
 
-    const { error: insertErr } = await admin.from("payment_methods").insert({
+    const rowPayload = {
       user_id: userId,
       type,
       last_four: last4,
@@ -182,24 +199,45 @@ Deno.serve(async (req) => {
       holder_name: holderName,
       provider: "stripe",
       provider_id: paymentMethodId,
-    });
+    };
 
-    if (insertErr) {
+    const { data: existingPm, error: existingErr } = await admin
+      .from("payment_methods")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("provider_id", paymentMethodId)
+      .maybeSingle();
+
+    if (existingErr) {
       return new Response(
-        JSON.stringify({ error: insertErr.message ?? "Erro ao salvar cartão" }),
+        JSON.stringify({ error: existingErr.message ?? "Erro ao verificar cartão existente" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const { error: notifErr } = await admin.from("notifications").insert({
-      user_id: userId,
-      title: "Cartão cadastrado",
-      message: "Seu cartão foi adicionado com sucesso.",
-      category: "payment",
-      target_app_slug: "cliente",
-    });
-    if (notifErr) {
-      console.warn("save-payment-method: notification insert (best-effort):", notifErr.message);
+    const isUpdate = Boolean(existingPm?.id);
+    const { error: upsertErr } = isUpdate
+      ? await admin.from("payment_methods").update(rowPayload).eq("id", existingPm!.id)
+      : await admin.from("payment_methods").insert(rowPayload);
+
+    if (upsertErr) {
+      return new Response(
+        JSON.stringify({ error: upsertErr.message ?? "Erro ao salvar cartão" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!isUpdate) {
+      const { error: notifErr } = await admin.from("notifications").insert({
+        user_id: userId,
+        title: "Cartão cadastrado",
+        message: "Seu cartão foi adicionado com sucesso.",
+        category: "payment",
+        target_app_slug: "cliente",
+      });
+      if (notifErr) {
+        console.warn("save-payment-method: notification insert (best-effort):", notifErr.message);
+      }
     }
 
     return new Response(
@@ -208,9 +246,13 @@ Deno.serve(async (req) => {
     );
   } catch (err) {
     console.error("save-payment-method:", err);
-    return new Response(
-      JSON.stringify({ error: err instanceof Error ? err.message : "Erro ao processar pagamento" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    const raw = err instanceof Error ? err.message : "Erro ao processar pagamento";
+    const friendly = stripeUserConfigMessage(raw);
+    const status = friendly ? 400 : 500;
+    const body = friendly ?? raw;
+    return new Response(JSON.stringify({ error: body }), {
+      status,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });
