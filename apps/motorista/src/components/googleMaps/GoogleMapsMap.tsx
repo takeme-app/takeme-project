@@ -86,6 +86,11 @@ type GoogleMapsMapProps = {
   compassEnabled?: boolean;
   showsUserLocation?: boolean;
   centerOnUserAtStart?: boolean;
+  /**
+   * Recua o canvas do MapView pelo rodapé (px). Útil no Android com barra de navegação
+   * virtual / edge-to-edge: o logo e a atribuição Mapbox sobem e deixam de ficar sob os botões do sistema.
+   */
+  layoutBottomInset?: number;
 };
 
 export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(function GoogleMapsMap(
@@ -102,6 +107,7 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
     pitchEnabled = true,
     rotateEnabled = true,
     showsUserLocation = false,
+    layoutBottomInset = 0,
   },
   ref,
 ) {
@@ -277,10 +283,21 @@ export const GoogleMapsMap = forwardRef<GoogleMapsMapRef, GoogleMapsMapProps>(fu
     );
   }
 
+  const mapCanvasStyle = useMemo(
+    () => ({
+      position: 'absolute' as const,
+      left: 0,
+      right: 0,
+      top: 0,
+      bottom: Math.max(0, layoutBottomInset),
+    }),
+    [layoutBottomInset],
+  );
+
   return (
     <View style={[{ flex: 1 }, style]}>
       <MapView
-        style={StyleSheet.absoluteFill}
+        style={mapCanvasStyle}
         styleURL={styleURL}
         scrollEnabled={scrollEnabled}
         pitchEnabled={pitchEnabled}

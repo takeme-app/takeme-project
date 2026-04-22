@@ -243,6 +243,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
           destLat: destination.latitude,
           destLng: destination.longitude,
           dayKey: calendarDayKeySaoPaulo(depIsoForGuard),
+          currentScheduledTripId: scheduledTripId ?? null,
         });
         if (dupMsg) {
           showAlert('Limite', dupMsg);

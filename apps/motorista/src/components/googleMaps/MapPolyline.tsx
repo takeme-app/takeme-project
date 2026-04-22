@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo, useMemo } from 'react';
 import { ShapeSource, LineLayer } from '@rnmapbox/maps';
 import type { LatLng } from './geometry';
 
@@ -17,7 +17,16 @@ type Props = {
   lineDasharray?: number[];
 };
 
-export function MapPolyline({
+/**
+ * LineLayer em ShapeSource — renderizado em GPU pelo Mapbox.
+ *
+ * Performance:
+ *  - O GeoJSON (`shape`) e o objeto de estilo são memoizados para evitar recriar
+ *    a cada render do pai (mesmos valores ⇒ mesma referência ⇒ Mapbox não refaz trabalho).
+ *  - O componente é memoizado (React.memo): se `coordinates` chegar como referência
+ *    estável (useMemo no pai), re-renders do pai não afetam este nó.
+ */
+function MapPolylineComponent({
   id = 'route',
   coordinates,
   strokeColor = '#C9A227',
@@ -27,33 +36,43 @@ export function MapPolyline({
   layerIndex,
   lineDasharray,
 }: Props) {
-  const valid: LatLng[] = [];
-  for (const c of coordinates) {
-    const lng = parseFloat(String(c.longitude));
-    const lat = parseFloat(String(c.latitude));
-    if (Number.isFinite(lng) && Number.isFinite(lat)) valid.push({ latitude: lat, longitude: lng });
-  }
-  if (valid.length < 2) return null;
+  const validCoords = useMemo<LatLng[]>(() => {
+    const out: LatLng[] = [];
+    for (const c of coordinates) {
+      const lng = parseFloat(String(c.longitude));
+      const lat = parseFloat(String(c.latitude));
+      if (Number.isFinite(lng) && Number.isFinite(lat)) out.push({ latitude: lat, longitude: lng });
+    }
+    return out;
+  }, [coordinates]);
 
   const hasDash = Boolean(lineDasharray && lineDasharray.length >= 2);
   // Traço: `round` + dash costuma sumir ou ficar irregular no Mapbox nativo; `butt` é o recomendado.
-  const lineStyle = {
-    lineColor: strokeColor,
-    lineWidth: strokeWidth,
-    lineOpacity,
-    lineCap: (hasDash ? 'butt' : 'round') as 'butt' | 'round',
-    lineJoin: (hasDash ? 'miter' : 'round') as 'miter' | 'round',
-    ...(hasDash ? { lineDasharray } : {}),
-  };
+  const lineStyle = useMemo(
+    () => ({
+      lineColor: strokeColor,
+      lineWidth: strokeWidth,
+      lineOpacity,
+      lineCap: (hasDash ? 'butt' : 'round') as 'butt' | 'round',
+      lineJoin: (hasDash ? 'miter' : 'round') as 'miter' | 'round',
+      ...(hasDash ? { lineDasharray } : {}),
+    }),
+    [strokeColor, strokeWidth, lineOpacity, hasDash, lineDasharray],
+  );
 
-  const geojson = {
-    type: 'Feature' as const,
-    properties: {},
-    geometry: {
-      type: 'LineString' as const,
-      coordinates: valid.map((c) => [c.longitude, c.latitude]),
-    },
-  };
+  const geojson = useMemo(
+    () => ({
+      type: 'Feature' as const,
+      properties: {},
+      geometry: {
+        type: 'LineString' as const,
+        coordinates: validCoords.map((c) => [c.longitude, c.latitude]),
+      },
+    }),
+    [validCoords],
+  );
+
+  if (validCoords.length < 2) return null;
 
   return (
     <ShapeSource id={`${id}-source`} shape={geojson} lineMetrics={false}>
@@ -66,3 +85,5 @@ export function MapPolyline({
     </ShapeSource>
   );
 }
+
+export const MapPolyline = memo(MapPolylineComponent);

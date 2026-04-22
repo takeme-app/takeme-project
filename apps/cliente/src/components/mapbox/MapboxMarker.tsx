@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo, useMemo } from 'react';
 import { View, TouchableOpacity, Image, type ImageSourcePropType } from 'react-native';
 import { PointAnnotation, MarkerView } from '@rnmapbox/maps';
 import { MAPBOX_ORIGIN_MARKER_COLOR } from '@take-me/shared';
@@ -39,11 +39,18 @@ const defaultPin = (pinColor: string) => (
 );
 
 /**
- * Marcador no Mapbox.
+ * Marcador no Mapbox (cliente).
  * - Com `icon` ou `children` usa MarkerView (tamanho fixo em pixels).
  * - Sem nenhum usa PointAnnotation com pin padrão.
+ *
+ * Performance:
+ *  - `coord` tuple memoizada (evita nova referência a cada render).
+ *  - Não usamos `key={id}` no MarkerView (forçava remount quando `id` é estável
+ *    mas o pai re-renderiza — o Mapbox ≥ 10 reposiciona o nativo sozinho).
+ *  - `React.memo` com comparação custom: re-renders do pai não propagam quando
+ *    as props efetivas (lat/lng/cor/onPress/children) são iguais.
  */
-export function MapboxMarker({
+function MapboxMarkerComponent({
   id,
   coordinate,
   anchor = { x: 0.5, y: 1 },
@@ -55,11 +62,13 @@ export function MapboxMarker({
   children,
   onPress,
 }: MapboxMarkerProps) {
-  if (!isValidTripCoordinate(coordinate.latitude, coordinate.longitude)) {
-    return null;
-  }
+  const valid = isValidTripCoordinate(coordinate.latitude, coordinate.longitude);
+  const coord = useMemo<[number, number]>(
+    () => [coordinate.longitude, coordinate.latitude],
+    [coordinate.longitude, coordinate.latitude],
+  );
 
-  const coord: [number, number] = [coordinate.longitude, coordinate.latitude];
+  if (!valid) return null;
 
   if (children || icon) {
     let content: React.ReactNode;
@@ -84,7 +93,7 @@ export function MapboxMarker({
     }
 
     return (
-      <MarkerView key={id} coordinate={coord} anchor={anchor} allowOverlap>
+      <MarkerView id={id} coordinate={coord} anchor={anchor} allowOverlap>
         <View collapsable={false}>{content}</View>
       </MarkerView>
     );
@@ -102,3 +111,23 @@ export function MapboxMarker({
     </PointAnnotation>
   );
 }
+
+function areMapboxMarkerPropsEqual(prev: MapboxMarkerProps, next: MapboxMarkerProps): boolean {
+  if (prev.id !== next.id) return false;
+  if (prev.title !== next.title) return false;
+  if (prev.description !== next.description) return false;
+  if (prev.pinColor !== next.pinColor) return false;
+  if (prev.icon !== next.icon) return false;
+  if ((prev.iconSize ?? 20) !== (next.iconSize ?? 20)) return false;
+  if (prev.onPress !== next.onPress) return false;
+  if (prev.children !== next.children) return false;
+  const pa = prev.anchor;
+  const na = next.anchor;
+  if ((pa?.x ?? 0.5) !== (na?.x ?? 0.5)) return false;
+  if ((pa?.y ?? 1) !== (na?.y ?? 1)) return false;
+  if (prev.coordinate.latitude !== next.coordinate.latitude) return false;
+  if (prev.coordinate.longitude !== next.coordinate.longitude) return false;
+  return true;
+}
+
+export const MapboxMarker = memo(MapboxMarkerComponent, areMapboxMarkerPropsEqual);

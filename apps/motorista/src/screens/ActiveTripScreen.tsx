@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
+import { memo, useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -16,9 +16,9 @@ import {
   BackHandler,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
+import { StatusBar, setStatusBarHidden } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
-import { CommonActions } from '@react-navigation/native';
+import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import {
@@ -105,6 +105,9 @@ const DARK = '#111827';
 const GOLD = '#C9A227';
 /** Trecho imediato no mapa (GPS → próxima etapa): preto, distinto do ouro contínuo. */
 const ROUTE_IMMEDIATE_LEG_COLOR = DARK;
+/** Âncora compartilhada dos marcadores do mapa (centralizados no ponto). Referência estável
+ *  → ajuda o `React.memo` do MapMarker a não recalcular por causa de objeto novo a cada render. */
+const MAP_MARKER_CENTER_ANCHOR = { x: 0.5, y: 0.5 } as const;
 /** `mapbox://styles/mapbox/streets-v12` — camada viária alta o suficiente para a rota não ficar por baixo das ruas. */
 const MAPBOX_STREETS_ROUTE_ABOVE_LAYER_ID = 'road-motorway-trunk';
 /**
@@ -114,6 +117,14 @@ const MAPBOX_STREETS_ROUTE_ABOVE_LAYER_ID = 'road-motorway-trunk';
 const NEAREST_ROUTE_LINE_DASH: [number, number] = [4, 3];
 /** Reduz rajadas de `getRoute` quando o GPS muda antes da resposta (cancelava o `.then` e a linha sumia). */
 const NEAREST_DASHED_ROUTE_FETCH_DEBOUNCE_MS = 450;
+/**
+ * GPS chama o callback com frequência alta; `setDriverPosition` re-renderiza toda a `ActiveTripScreen`
+ * (mapa + overlays). Ref sempre atualizado; React só neste intervalo ou após deslocamento mínimo.
+ */
+const DRIVER_POSITION_UI_MIN_INTERVAL_MS = 160;
+const DRIVER_POSITION_UI_MIN_MOVE_M = 10;
+/** Soma trechos no ref e consolida `setTraveledMeters` em um único update periódico. */
+const ODOMETER_UI_FLUSH_MS = 650;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -292,6 +303,85 @@ function StopKindMarkerIcon({
   }
   return <MaterialIcons name="place" size={size} color={color} />;
 }
+
+// ---------------------------------------------------------------------------
+// Markers do mapa (memoizados)
+// ---------------------------------------------------------------------------
+
+/**
+ * Marcador de parada no mapa. Recebe apenas primitivas → o `React.memo` em
+ * `MapMarker` só re-renderiza quando algo de fato mudou desta parada, mesmo
+ * que o pai (`ActiveTripScreen`) re-renderize por GPS/ETA/UI.
+ */
+type ActiveStopMarkerProps = {
+  id: string;
+  stop: Stop;
+  latitude: number;
+  longitude: number;
+  completed: boolean;
+  isActiveSequentialStop: boolean;
+  markerBg: string;
+};
+
+const ActiveStopMarker = memo(function ActiveStopMarker({
+  id,
+  stop,
+  latitude,
+  longitude,
+  completed,
+  isActiveSequentialStop,
+  markerBg,
+}: ActiveStopMarkerProps) {
+  return (
+    <MapMarker id={id} coordinate={{ latitude, longitude }} anchor={MAP_MARKER_CENTER_ANCHOR}>
+      <View
+        style={[
+          styles.mapMarkerOuter,
+          isActiveSequentialStop && styles.mapMarkerOuterGpsNext,
+        ]}
+      >
+        <View style={[styles.mapMarker, { backgroundColor: markerBg }]}>
+          <StopKindMarkerIcon stop={stop} completed={completed} color="#fff" />
+        </View>
+      </View>
+    </MapMarker>
+  );
+});
+
+/**
+ * Marcador do motorista (pin do carro). Isolado em memo para que o tick do
+ * GPS + re-render da tela inteira não force o Mapbox a refazer a view nativa
+ * deste marker quando só mudou uma coord insignificante.
+ */
+type ActiveDriverMarkerProps = {
+  latitude: number;
+  longitude: number;
+  following: boolean;
+};
+
+const ActiveDriverMarker = memo(function ActiveDriverMarker({
+  latitude,
+  longitude,
+  following,
+}: ActiveDriverMarkerProps) {
+  return (
+    <MapMarker
+      id="driver"
+      coordinate={{ latitude, longitude }}
+      anchor={MAP_MARKER_CENTER_ANCHOR}
+    >
+      <View style={styles.driverPulse}>
+        <View style={styles.driverMarker}>
+          <MaterialIcons
+            name={following ? 'navigation' : 'play-arrow'}
+            size={18}
+            color="#fff"
+          />
+        </View>
+      </View>
+    </MapMarker>
+  );
+});
 
 /** Rótulo curto no card inferior — nunca tratar desembarque de passageiro como “Entrega”. */
 function stopPhaseShortLabel(s: Stop): string {
@@ -655,8 +745,30 @@ function pickGeographicNearestNavTarget(
 export function ActiveTripScreen({ navigation, route }: Props) {
   const { tripId } = route.params;
   const { showAlert } = useAppAlert();
+
+  /** Mapa em tela cheia: esconde a barra de status enquanto esta tela está em foco. */
+  useFocusEffect(
+    useCallback(() => {
+      setStatusBarHidden(true, 'fade');
+      return () => {
+        setStatusBarHidden(false, 'fade');
+      };
+    }, []),
+  );
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
+
+  /**
+   * Folga inferior confiável: em Android edge-to-edge com botões virtuais, `insets.bottom`
+   * às vezes vem 0 e o conteúdo absoluto fica sob a barra do sistema (card / logo Mapbox).
+   */
+  const effectiveBottomInset = useMemo(() => {
+    const raw = insets.bottom;
+    if (Platform.OS === 'android' && raw < 24) {
+      return Math.max(raw, 48);
+    }
+    return raw;
+  }, [insets.bottom]);
 
   // Data
   const [trip, setTrip] = useState<TripRow | null>(null);
@@ -685,10 +797,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const [stopsRouteCoords, setStopsRouteCoords] = useState<LatLng[]>([]);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
 
-  // Driver position
+  // Driver position (ref atualizado a cada fix; estado React com throttle para fluidez)
   const [driverPosition, setDriverPosition] = useState<LatLng | null>(null);
   const driverPositionRef = useRef<LatLng | null>(null);
-  driverPositionRef.current = driverPosition;
+  const driverUiLastFlushRef = useRef<{ t: number; lat: number; lng: number } | null>(null);
   const locationSub = useRef<any>(null);
   const mapRef = useRef<GoogleMapsMapRef>(null);
   const hasFramedDriverOnMap = useRef(false);
@@ -707,7 +819,28 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
   /** Distância percorrida nesta tela (soma dos trechos GPS; não é o tamanho da polyline planejada). */
   const odometerLastFixRef = useRef<{ lat: number; lng: number } | null>(null);
+  const odometerPendingMRef = useRef(0);
+  const odometerFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [traveledMeters, setTraveledMeters] = useState(0);
+
+  const flushDriverPositionToUi = useCallback((lat: number, lng: number) => {
+    if (!isValidGlobeCoordinate(lat, lng)) return;
+    const next: LatLng = { latitude: lat, longitude: lng };
+    driverPositionRef.current = next;
+    const last = driverUiLastFlushRef.current;
+    const now = Date.now();
+    if (!last) {
+      driverUiLastFlushRef.current = { t: now, lat, lng };
+      setDriverPosition(next);
+      return;
+    }
+    const dt = now - last.t;
+    const moved = haversineMeters(last.lat, last.lng, lat, lng);
+    if (moved >= DRIVER_POSITION_UI_MIN_MOVE_M || dt >= DRIVER_POSITION_UI_MIN_INTERVAL_MS) {
+      driverUiLastFlushRef.current = { t: now, lat, lng };
+      setDriverPosition(next);
+    }
+  }, []);
 
   const accumulateTripOdometer = useCallback((lat: number, lng: number) => {
     if (!isValidGlobeCoordinate(lat, lng)) return;
@@ -716,12 +849,27 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     if (!prev) return;
     const d = haversineMeters(prev.lat, prev.lng, lat, lng);
     if (d < 2 || d > ODOM_MAX_SEGMENT_M) return;
-    setTraveledMeters((m) => m + d);
+    odometerPendingMRef.current += d;
+    if (odometerFlushTimerRef.current != null) return;
+    odometerFlushTimerRef.current = setTimeout(() => {
+      odometerFlushTimerRef.current = null;
+      const add = odometerPendingMRef.current;
+      odometerPendingMRef.current = 0;
+      if (add > 0) setTraveledMeters((m) => m + add);
+    }, ODOMETER_UI_FLUSH_MS);
   }, []);
 
   useEffect(() => {
     odometerLastFixRef.current = null;
+    odometerPendingMRef.current = 0;
+    if (odometerFlushTimerRef.current != null) {
+      clearTimeout(odometerFlushTimerRef.current);
+      odometerFlushTimerRef.current = null;
+    }
     setTraveledMeters(0);
+    driverUiLastFlushRef.current = null;
+    driverPositionRef.current = null;
+    setDriverPosition(null);
   }, [tripId]);
 
   // UI state
@@ -794,13 +942,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     }
     /** Sem rota desenhada: centra no veículo (0 m à frente) para o PIN não descer em direção ao card. */
     const lookAheadM = guide.length >= 2 ? NAV_LOOK_AHEAD_M : 0;
-    const miniCardLiftFromScreenBottom = Platform.OS === 'ios' ? 28 : 20;
     const padding = buildNavigationPadding({
       windowHeight,
       safeTop: insets.top,
-      safeBottom: insets.bottom,
+      safeBottom: effectiveBottomInset,
       extraBottomOverlayPx:
-        miniCardLiftFromScreenBottom +
+        12 +
         NAV_MAP_EXTRA_BOTTOM_FOR_MINI_CARD_PX +
         (lookAheadM > 0 ? NAV_LOOKAHEAD_ICON_BOTTOM_CLEARANCE_PX : 0),
     });
@@ -820,7 +967,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       padding,
       animationDuration: NAV_CAMERA_ANIMATION_MS,
     });
-  }, [windowHeight, insets.top, insets.bottom]);
+  }, [windowHeight, insets.top, effectiveBottomInset]);
 
   const scheduleNavFrame = useCallback(() => {
     if (!followNavRef.current) return;
@@ -888,7 +1035,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           const la = current.coords.latitude;
           const lo = current.coords.longitude;
           accumulateTripOdometer(la, lo);
-          setDriverPosition({ latitude: la, longitude: lo });
+          flushDriverPositionToUi(la, lo);
           latestDriverFixRef.current = {
             latitude: la,
             longitude: lo,
@@ -914,7 +1061,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             const la = loc.coords.latitude;
             const lo = loc.coords.longitude;
             accumulateTripOdometer(la, lo);
-            setDriverPosition({ latitude: la, longitude: lo });
+            flushDriverPositionToUi(la, lo);
             latestDriverFixRef.current = {
               latitude: la,
               longitude: lo,
@@ -941,8 +1088,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     return () => {
       active = false;
       locationSub.current?.remove?.();
+      if (odometerFlushTimerRef.current != null) {
+        clearTimeout(odometerFlushTimerRef.current);
+        odometerFlushTimerRef.current = null;
+        const add = odometerPendingMRef.current;
+        odometerPendingMRef.current = 0;
+        if (add > 0) setTraveledMeters((m) => m + add);
+      }
     };
-  }, [showAlert, scheduleNavFrame, accumulateTripOdometer]);
+  }, [showAlert, scheduleNavFrame, accumulateTripOdometer, flushDriverPositionToUi]);
 
   /** Publica posição para o app do passageiro (`scheduled_trip_live_locations`) enquanto a viagem está ativa. */
   useEffect(() => {
@@ -1240,10 +1394,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // Trecho imediato: GPS → alvo geograficamente mais próximo (paradas restantes + destino da viagem).
   useEffect(() => {
     if (loading) return;
-    if (
-      !driverPosition ||
-      !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
-    ) {
+    const dpLive = driverPositionRef.current;
+    const dp =
+      dpLive && isValidGlobeCoordinate(dpLive.latitude, dpLive.longitude)
+        ? dpLive
+        : driverPosition;
+    if (!dp || !isValidGlobeCoordinate(dp.latitude, dp.longitude)) {
       setNearestDashedCoords([]);
       setNearestTargetCoord(null);
       setEtaSeconds(null);
@@ -1256,7 +1412,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       tripDestLL ?? null,
       trip?.destination_address,
     );
-    const nearest = pickGeographicNearestNavTarget(driverPosition, targets);
+    const nearest = pickGeographicNearestNavTarget(dp, targets);
     if (!nearest || !isValidGlobeCoordinate(nearest.coord.latitude, nearest.coord.longitude)) {
       setNearestDashedCoords([]);
       setNearestTargetCoord(null);
@@ -1266,11 +1422,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
     setNearestTargetCoord(nearest.coord);
 
-    const straightFrom = (dp: LatLng): LatLng[] => [
-      { latitude: dp.latitude, longitude: dp.longitude },
+    const straightFrom = (from: LatLng): LatLng[] => [
+      { latitude: from.latitude, longitude: from.longitude },
       nearest.coord,
     ];
-    const straightFallback = straightFrom(driverPosition);
+    const straightFallback = straightFrom(dp);
     setNearestDashedCoords(straightFallback);
     setEtaSeconds(null);
 
@@ -2083,13 +2239,14 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
   return (
     <View style={styles.root}>
-      <StatusBar style="dark" />
+      <StatusBar hidden animated hideTransitionAnimation="fade" style="light" />
 
       {/* ── Mapa (Google Maps) ───────────────────────────── */}
       <GoogleMapsMap
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
         initialRegion={mapInitialRegion}
+        layoutBottomInset={Platform.OS === 'android' ? effectiveBottomInset : 0}
         onUserAdjustedMap={() => {
           setFollowMyLocation(false);
           const fix = latestDriverFixRef.current;
@@ -2176,42 +2333,25 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           const markerBg = isCompleted ? '#374151' : STOP_TYPE_COLORS[stop.stopType];
           const isActiveSequentialStop = idx === mapHighlightStopIndex && !allDone;
           return (
-            <MapMarker
+            <ActiveStopMarker
               key={stop.id}
               id={stop.id}
-              coordinate={{ latitude: lat, longitude: lng }}
-              anchor={{ x: 0.5, y: 0.5 }}
-            >
-              <View
-                style={[
-                  styles.mapMarkerOuter,
-                  isActiveSequentialStop && styles.mapMarkerOuterGpsNext,
-                ]}
-              >
-                <View style={[styles.mapMarker, { backgroundColor: markerBg }]}>
-                  <StopKindMarkerIcon stop={stop} completed={isCompleted} color="#fff" />
-                </View>
-              </View>
-            </MapMarker>
+              stop={stop}
+              latitude={lat}
+              longitude={lng}
+              completed={isCompleted}
+              isActiveSequentialStop={isActiveSequentialStop}
+              markerBg={markerBg}
+            />
           );
         })}
 
         {driverMapPinCoordinate && (
-          <MapMarker
-            id="driver"
-            coordinate={driverMapPinCoordinate}
-            anchor={{ x: 0.5, y: 0.5 }}
-          >
-            <View style={styles.driverPulse}>
-              <View style={styles.driverMarker}>
-                <MaterialIcons
-                  name={followMyLocation ? 'navigation' : 'play-arrow'}
-                  size={18}
-                  color="#fff"
-                />
-              </View>
-            </View>
-          </MapMarker>
+          <ActiveDriverMarker
+            latitude={driverMapPinCoordinate.latitude}
+            longitude={driverMapPinCoordinate.longitude}
+            following={followMyLocation}
+          />
         )}
       </GoogleMapsMap>
 
@@ -2312,7 +2452,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         {/* Mini bottom card — sempre visível quando há viagem ativa */}
         {cardInfo && !detailVisible && !allDone && (
           <TouchableOpacity
-            style={styles.miniSheet}
+            style={[styles.miniSheet, { bottom: effectiveBottomInset + 12 }]}
             onPress={openDetailFromMiniSheet}
             activeOpacity={0.95}
           >
@@ -2364,7 +2504,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
         {/* All done float button */}
         {allDone && !finalizeVisible && !completedVisible && (
-          <TouchableOpacity style={styles.finalizeFloatBtn} onPress={openFinalize} activeOpacity={0.85}>
+          <TouchableOpacity
+            style={[styles.finalizeFloatBtn, { bottom: effectiveBottomInset + 16 }]}
+            onPress={openFinalize}
+            activeOpacity={0.85}
+          >
             <Text style={styles.finalizeFloatBtnText}>Finalizar viagem</Text>
           </TouchableOpacity>
         )}
@@ -2377,7 +2521,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           <Pressable style={styles.overlayBackdrop} onPress={closeDetail} />
           <Animated.View
             collapsable={false}
-            style={[styles.detailSheet, styles.sheetAboveBackdrop, { transform: [{ translateY: detailSlide }] }]}
+            style={[
+              styles.detailSheet,
+              styles.sheetAboveBackdrop,
+              { transform: [{ translateY: detailSlide }], paddingBottom: effectiveBottomInset + 24 },
+            ]}
           >
           <View style={styles.handle} />
 
@@ -2566,7 +2714,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             style={[
               styles.detailSheet,
               styles.sheetAboveBackdrop,
-              { transform: [{ translateY: confirmSheetSlide }] },
+              { transform: [{ translateY: confirmSheetSlide }], paddingBottom: effectiveBottomInset + 24 },
             ]}
           >
             <View style={styles.handle} />
@@ -2689,7 +2837,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           <Pressable style={styles.overlayBackdrop} onPress={closeFinalize} />
           <Animated.View
             collapsable={false}
-            style={[styles.detailSheet, styles.sheetAboveBackdrop, { transform: [{ translateY: finalizeSlide }] }]}
+            style={[
+              styles.detailSheet,
+              styles.sheetAboveBackdrop,
+              { transform: [{ translateY: finalizeSlide }], paddingBottom: effectiveBottomInset + 24 },
+            ]}
           >
           <View style={styles.handle} />
           <View style={styles.finalizeTopRow}>
@@ -2786,7 +2938,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               styles.sheetAboveBackdrop,
               {
                 transform: [{ translateY: completedSlide }],
-                paddingBottom: Math.max(insets.bottom, 16) + 16,
+                paddingBottom: Math.max(effectiveBottomInset, 16) + 16,
               },
             ]}
           >
@@ -3031,7 +3183,6 @@ const styles = StyleSheet.create({
 
   miniSheet: {
     position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 28 : 20,
     left: 14,
     right: 14,
     backgroundColor: '#fff',
@@ -3138,7 +3289,6 @@ const styles = StyleSheet.create({
   // ── Finalize float button ────────────────────────────────
   finalizeFloatBtn: {
     position: 'absolute',
-    bottom: 36,
     left: 24,
     right: 24,
     backgroundColor: DARK,
@@ -3176,7 +3326,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 24,
-    paddingBottom: Platform.OS === 'ios' ? 44 : 32,
     maxHeight: '90%',
   },
   detailTopRow: {
