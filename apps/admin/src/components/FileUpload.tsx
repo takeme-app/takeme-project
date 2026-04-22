@@ -5,14 +5,22 @@ import { supabase } from '../lib/supabase';
 export interface FileUploadProps {
   /** Storage bucket (default: chat-attachments) */
   bucket?: string;
-  /** Callback ao completar upload */
-  onUploaded: (publicUrl: string, type: 'pdf' | 'image') => void;
+  /**
+   * Prefixo obrigatório do caminho no bucket (ex.: conversationId).
+   * Garante compatibilidade com as policies RLS do storage, que exigem
+   * `${conversationId}/...` como primeira pasta.
+   */
+  pathPrefix: string;
+  /** Callback ao completar upload (signed URL de 1 ano já pronta para exibir). */
+  onUploaded: (signedUrl: string, type: 'pdf' | 'image') => void;
   /** Cancela o upload / fecha o componente */
   onCancel?: () => void;
   /** Aceita apenas certos tipos (default: pdf + imagens) */
   accept?: string;
   style?: React.CSSProperties;
 }
+
+const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 365;
 
 // ── Styles ───────────────────────────────────────────────────────────
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -76,7 +84,7 @@ function formatSize(bytes: number): string {
 
 // ── Component ────────────────────────────────────────────────────────
 export default function FileUpload(props: FileUploadProps) {
-  const { bucket = 'chat-attachments', onUploaded, onCancel, accept = '.pdf,.png,.jpg,.jpeg,.webp', style } = props;
+  const { bucket = 'chat-attachments', pathPrefix, onUploaded, onCancel, accept = '.pdf,.png,.jpg,.jpeg,.webp', style } = props;
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -103,13 +111,21 @@ export default function FileUpload(props: FileUploadProps) {
     if (!file) return;
     const type = getFileType(file);
     if (!type) return;
+    const safePrefix = (pathPrefix || '').trim();
+    if (!safePrefix) {
+      setError('Contexto inválido para upload.');
+      return;
+    }
 
     setUploading(true);
     setError(null);
 
     try {
-      const ext = file.name.split('.').pop() || 'bin';
-      const path = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const rawExt = file.name.split('.').pop() || 'bin';
+      const ext = rawExt.replace(/[^a-z0-9]/gi, '').slice(0, 8) || 'bin';
+      const id = (globalThis.crypto?.randomUUID?.() as string | undefined)
+        || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const path = `${safePrefix}/${id}.${ext}`;
 
       const { error: uploadError } = await (supabase as any).storage
         .from(bucket)
@@ -117,19 +133,19 @@ export default function FileUpload(props: FileUploadProps) {
 
       if (uploadError) throw uploadError;
 
-      const { data: urlData } = (supabase as any).storage.from(bucket).getPublicUrl(path);
-      const publicUrl = urlData?.publicUrl;
+      const { data: signed, error: signErr } = await (supabase as any).storage
+        .from(bucket)
+        .createSignedUrl(path, SIGNED_URL_TTL_SEC);
+      if (signErr || !signed?.signedUrl) throw signErr ?? new Error('Não foi possível gerar URL assinada');
 
-      if (!publicUrl) throw new Error('Não foi possível obter URL pública');
-
-      onUploaded(publicUrl, type);
+      onUploaded(signed.signedUrl, type);
       setFile(null);
     } catch (err: any) {
       setError(err.message || 'Erro ao enviar arquivo');
     } finally {
       setUploading(false);
     }
-  }, [file, bucket, onUploaded]);
+  }, [file, bucket, pathPrefix, onUploaded]);
 
   const handleDrop = useCallback((e: any) => {
     e.preventDefault();

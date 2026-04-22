@@ -24,7 +24,7 @@ verify_jwt = false
 [functions.charge-booking]
 verify_jwt = false
 
-[functions.charge-shipment]
+[functions.charge-shipments]
 verify_jwt = false
 
 [functions.refund-shipment-no-driver]

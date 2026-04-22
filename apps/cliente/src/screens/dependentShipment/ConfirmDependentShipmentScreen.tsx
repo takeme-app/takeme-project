@@ -4,6 +4,9 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
+  Alert,
+  Clipboard,
+  Linking,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -19,6 +22,7 @@ import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
 import { flatPricingSnapshot } from '../../lib/orderPricingSnapshot';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
+import { waitForShipmentStripePaymentIntentId } from '../../lib/waitForShipmentStripePaymentIntentId';
 import { fetchResolvedPriceCentsForScheduledTrip } from '../../lib/clientScheduledTrips';
 import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
 import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
@@ -241,6 +245,89 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
               'Pagamento',
               chargeErrMsg || 'Não foi possível confirmar o pagamento; o pedido foi cancelado.',
             );
+            setSubmitting(false);
+            return;
+          }
+        } else if (shipmentId && params.method === 'pix') {
+          const stripeCtx = await ensureAccessTokenForStripeFunctions();
+          if (!stripeCtx.ok) {
+            await supabase
+              .from('dependent_shipments')
+              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+              .eq('id', shipmentId);
+            showAlert('Pagamento', stripeCtx.message);
+            setSubmitting(false);
+            return;
+          }
+          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke(EDGE_CHARGE_SHIPMENT_SLUG, {
+            headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
+            body: { dependent_shipment_id: shipmentId },
+          });
+          if (chargeFnError) {
+            const raw = await describeInvokeFailure(chargeData, chargeFnError);
+            const chargeErrMsg = getUserErrorMessage({ message: raw }, raw);
+            await supabase
+              .from('dependent_shipments')
+              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+              .eq('id', shipmentId);
+            showAlert(
+              'Pagamento',
+              chargeErrMsg || 'Não foi possível iniciar o Pix; o pedido foi cancelado.',
+            );
+            setSubmitting(false);
+            return;
+          }
+          const pixBody = chargeData as {
+            ok?: boolean;
+            pix_requires_payment?: boolean;
+            pix_copy_paste?: string | null;
+            hosted_voucher_url?: string | null;
+          } | null;
+          if (pixBody?.pix_requires_payment) {
+            const paste = typeof pixBody.pix_copy_paste === 'string' ? pixBody.pix_copy_paste.trim() : '';
+            if (paste) {
+              try {
+                await Clipboard.setString(paste);
+              } catch {
+                /* ignore */
+              }
+            }
+            const hosted = typeof pixBody.hosted_voucher_url === 'string' ? pixBody.hosted_voucher_url.trim() : '';
+            await new Promise<void>((resolve) => {
+              const msg = paste
+                ? 'Copiamos o código Pix. Abra o comprovante se preferir; pague no banco e toque em Continuar.'
+                : 'Abra o comprovante Pix, pague no app do banco e toque em Continuar.';
+              const buttons: { text: string; onPress?: () => void }[] = [];
+              if (hosted) {
+                buttons.push({
+                  text: 'Abrir comprovante',
+                  onPress: () => {
+                    void Linking.openURL(hosted);
+                  },
+                });
+              }
+              buttons.push({ text: 'Continuar', onPress: () => resolve() });
+              Alert.alert('Pix', msg, buttons, { cancelable: false });
+            });
+            const paid = await waitForShipmentStripePaymentIntentId('dependent_shipments', shipmentId);
+            if (!paid) {
+              await supabase
+                .from('dependent_shipments')
+                .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+                .eq('id', shipmentId);
+              showAlert(
+                'Pix',
+                'Não detectamos o pagamento a tempo. O pedido foi cancelado; você pode criar um novo envio.',
+              );
+              setSubmitting(false);
+              return;
+            }
+          } else if (pixBody?.ok !== true) {
+            await supabase
+              .from('dependent_shipments')
+              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+              .eq('id', shipmentId);
+            showAlert('Pagamento', 'Resposta inesperada do servidor ao iniciar Pix.');
             setSubmitting(false);
             return;
           }

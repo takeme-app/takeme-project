@@ -101,15 +101,6 @@ Deno.serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-    if (!paymentMethodIdSupabase && !stripePaymentMethodIdFromClient) {
-      return new Response(
-        JSON.stringify({
-          error: "Envie payment_method_id (cartão salvo) ou stripe_payment_method_id (pm_…).",
-        }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
     const admin = createClient(supabaseUrl, serviceRoleKey);
     const table = shipmentId ? "shipments" : "dependent_shipments";
     const id = shipmentId ?? dependentId!;
@@ -148,6 +139,108 @@ Deno.serve(async (req) => {
       });
     }
 
+    const { data: profile } = await admin.from("profiles").select("stripe_customer_id").eq("id", userId).single();
+    const customerId = profile?.stripe_customer_id as string | null | undefined;
+    if (!customerId) {
+      return new Response(
+        JSON.stringify({ error: "Cliente Stripe não encontrado; adicione um método de pagamento primeiro" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const amountCents = Number(s.amount_cents);
+    if (!Number.isInteger(amountCents) || amountCents < 1) {
+      return new Response(JSON.stringify({ error: "Valor do envio inválido" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const metaKey = shipmentId ? "shipment_id" : "dependent_shipment_id";
+
+    // ── Pix (BR): só payment_method_types=pix — sem pm_ de cartão.
+    if (s.payment_method === "pix") {
+      if (paymentMethodIdSupabase || stripePaymentMethodIdFromClient) {
+        return new Response(
+          JSON.stringify({
+            error:
+              "Para Pix não envie payment_method_id nem stripe_payment_method_id; a cobrança usa o cliente Stripe.",
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const pixParams = new URLSearchParams({
+        amount: String(amountCents),
+        currency: "brl",
+        customer: customerId,
+        "payment_method_types[]": "pix",
+        confirm: "true",
+        [`metadata[${metaKey}]`]: id,
+        "metadata[user_id]": userId,
+      });
+      const piPix = (await stripeFetch(stripeSecret, "POST", "/payment_intents", pixParams)) as {
+        id?: string;
+        status?: string;
+        last_payment_error?: { message?: string };
+        next_action?: {
+          type?: string;
+          pix_display_qr_code?: {
+            image_url_png?: string;
+            hosted_voucher_url?: string;
+            data?: string;
+          };
+        };
+      };
+      if (piPix.status === "succeeded" || piPix.status === "requires_capture") {
+        const { error: updateErrPix } = await admin
+          .from(table)
+          .update({ stripe_payment_intent_id: piPix.id ?? null } as never)
+          .eq("id", id)
+          .eq("user_id", userId);
+        if (updateErrPix) {
+          console.error("charge-shipments: update after Pix PI succeeded", updateErrPix);
+          return new Response(
+            JSON.stringify({ error: "Pagamento aprovado mas falha ao gravar envio; contate o suporte" }),
+            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify(
+            shipmentId ? { ok: true, shipment_id: id } : { ok: true, dependent_shipment_id: id },
+          ),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      if (piPix.status === "requires_action" && piPix.next_action?.type === "pix_display_qr_code") {
+        const qr = piPix.next_action.pix_display_qr_code;
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            pix_requires_payment: true,
+            payment_intent_id: piPix.id ?? null,
+            image_url_png: qr?.image_url_png ?? null,
+            hosted_voucher_url: qr?.hosted_voucher_url ?? null,
+            pix_copy_paste: qr?.data ?? null,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const errMsg = piPix.last_payment_error?.message ?? `Pix não disponível (status=${piPix.status ?? "?"})`;
+      return new Response(JSON.stringify({ error: errMsg }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (!paymentMethodIdSupabase && !stripePaymentMethodIdFromClient) {
+      return new Response(
+        JSON.stringify({
+          error: "Envie payment_method_id (cartão salvo) ou stripe_payment_method_id (pm_…).",
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     let stripePaymentMethodId: string;
     if (stripePaymentMethodIdFromClient) {
       stripePaymentMethodId = stripePaymentMethodIdFromClient;
@@ -167,24 +260,6 @@ Deno.serve(async (req) => {
       stripePaymentMethodId = pmRow.provider_id as string;
     }
 
-    const { data: profile } = await admin.from("profiles").select("stripe_customer_id").eq("id", userId).single();
-    const customerId = profile?.stripe_customer_id as string | null | undefined;
-    if (!customerId) {
-      return new Response(
-        JSON.stringify({ error: "Cliente Stripe não encontrado; adicione um método de pagamento primeiro" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const amountCents = Number(s.amount_cents);
-    if (!Number.isInteger(amountCents) || amountCents < 1) {
-      return new Response(JSON.stringify({ error: "Valor do envio inválido" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const metaKey = shipmentId ? "shipment_id" : "dependent_shipment_id";
     const piParams = new URLSearchParams({
       amount: String(amountCents),
       currency: "brl",
@@ -193,6 +268,7 @@ Deno.serve(async (req) => {
       confirm: "true",
       "payment_method_types[0]": "card",
       [`metadata[${metaKey}]`]: id,
+      "metadata[user_id]": userId,
     });
 
     const pi = (await stripeFetch(stripeSecret, "POST", "/payment_intents", piParams)) as {
@@ -217,7 +293,6 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Só `stripe_payment_intent_id`: ambientes sem migração `20260411150000_*` não têm `updated_at` em shipments.
     const { error: updateErr } = await admin
       .from(table)
       .update({
@@ -228,7 +303,7 @@ Deno.serve(async (req) => {
 
     if (updateErr) {
       console.error(
-        "[charge-shipment] update after PI succeeded:",
+        "[charge-shipments] update after PI succeeded:",
         JSON.stringify({ message: updateErr.message, details: updateErr.details, hint: updateErr.hint, code: updateErr.code }),
       );
       const detail = updateErr.message?.trim() || "sem detalhe";
@@ -247,7 +322,7 @@ Deno.serve(async (req) => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {
-    console.error("charge-shipment:", err);
+    console.error("charge-shipments:", err);
     return new Response(
       JSON.stringify({ error: err instanceof Error ? err.message : "Erro ao processar cobrança" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

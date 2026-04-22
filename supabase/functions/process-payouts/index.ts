@@ -50,14 +50,21 @@ Deno.serve(async (req) => {
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-    // Verificar role admin
     const admin = createClient(supabaseUrl, serviceRoleKey);
+    const appRole = user.app_metadata && typeof user.app_metadata === "object"
+      ? (user.app_metadata as { role?: string }).role
+      : undefined;
+    const metaRole = user.user_metadata && typeof user.user_metadata === "object"
+      ? (user.user_metadata as { role?: string }).role
+      : undefined;
+    const jwtAdmin = appRole === "admin" || metaRole === "admin";
     const { data: wp } = await admin
       .from("worker_profiles")
       .select("role")
       .eq("id", user.id)
       .maybeSingle();
-    if (!wp || wp.role !== "admin") {
+    const workerAdmin = wp?.role === "admin";
+    if (!jwtAdmin && !workerAdmin) {
       return new Response(
         JSON.stringify({ error: "Acesso negado. Apenas administradores." }),
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }

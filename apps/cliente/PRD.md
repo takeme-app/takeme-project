@@ -222,10 +222,14 @@ Splash → Welcome → Login/SignUp/VerifyEmail → AddPaymentPrompt → Main
 
 1. Recalcula preco pelo `scheduled_trip_id`
 2. Aplica promocao via RPC `apply_active_promotion` (tipo `bookings`)
-3. **Cartao:** `ensure-stripe-customer` → `charge-booking` (cria booking no servidor, retorna `booking_id`)
+3. **Cartao (modo draft):** `ensure-stripe-customer` → `charge-booking` com `draft_booking` (cobra no Stripe **antes** de gravar a reserva, so criando a linha em `bookings` apos `payment_intent` bem-sucedido). Retorna `booking_id` e `amount_cents`. Se o `INSERT` falhar depois da cobranca, a funcao dispara `refund` automatico no Stripe.
 4. **PIX / Dinheiro:** `INSERT` em `bookings` com `status: 'pending'` e snapshot de preco (`orderPricingSnapshot.ts`)
 
+**Split automatico (Stripe Connect):** quando a `scheduled_trip` ja tem motorista com `worker_profiles.stripe_connect_account_id`, a cobranca vai com `transfer_data[destination]` + `application_fee_amount = chargeAmountCents − worker_payout_cents`, ou seja, a parte do motorista ja sai na hora para a conta Connect; a taxa administrativa fica na plataforma. Sem conta Connect o valor inteiro vai para a plataforma e o repasse acontece via `payouts` (PIX manual pelo admin).
+
 **Snapshot de preco:** No momento da reserva, grava `subtotal_cents`, `platform_fee_cents`, `admin_pct_applied` no booking. Valores imutaveis apos criacao.
+
+**Ambiente de build para cartao:** o SDK `@stripe/stripe-react-native` e carregado de forma defensiva (`src/lib/stripeNativeBridge.tsx`); cartao real so funciona em **development build / EAS** com o plugin nativo. Expo Go e Web exibem fallback "cartao indisponivel neste ambiente". Chave publica vem de `EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY` (ver [`EAS_BUILD.md`](EAS_BUILD.md)).
 
 ### 4.3 Cancelamento de Viagem
 
@@ -244,15 +248,16 @@ Splash → Welcome → Login/SignUp/VerifyEmail → AddPaymentPrompt → Main
 - Com base → envio vai para preparador (sem escolha de motorista)
 - Sem base → cliente escolhe motorista preferido
 
-**Confirmacao (`ConfirmShipmentScreen`):**
-- `INSERT` em `shipments` com dados completos
+**Confirmacao (`ConfirmShipmentScreen` / `ConfirmDependentShipmentScreen`):**
+- `INSERT` em `shipments` (ou `dependent_shipments`) com dados completos
 - Upload opcional de foto para `shipment-photos`
 - Se tem motorista preferido e sem hub: RPC `shipment_begin_driver_offering`
-- Pagamento com cartao: Edge Function `charge-shipments`
+- Pagamento com cartao: Edge Function `charge-shipments` (codigo fonte local em `supabase/functions/charge-shipments/`; slug centralizado em `apps/cliente/src/lib/supabaseEdgeFunctionNames.ts`). Recebe `shipment_id` **ou** `dependent_shipment_id` + `stripe_payment_method_id`; grava `stripe_payment_intent_id` na linha
 - Se pagamento falhar: cancela o envio
 
 **Estorno automatico:**
 - Se nenhum motorista aceitar: Edge Function `refund-shipment-no-driver`
+- Cancelamentos/expiracoes de assignment: cron `expire-assignments` encadeia `process-refund`
 
 ### 4.5 Envio de Dependentes
 

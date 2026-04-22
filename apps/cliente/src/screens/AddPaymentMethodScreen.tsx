@@ -17,6 +17,7 @@ import { CardField, useStripe } from '../lib/stripeNativeBridge';
 import { supabase } from '../lib/supabase';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import { parseEdgeFunctionResponse } from '../utils/parseEdgeFunctionResponse';
 import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AddPaymentMethod'>;
@@ -107,13 +108,10 @@ export function AddPaymentMethodScreen({ navigation }: Props) {
         showAlert('Erro', getUserErrorMessage(e, 'Falha ao enviar. Tente de novo.'));
         return;
       }
-      const data = await res.json().catch(() => ({})) as { error?: string; ok?: boolean };
-      if (!res.ok) {
-        showAlert('Erro', getUserErrorMessage({ message: data?.error }, `Erro do servidor (${res.status}). Tente novamente.`));
-        return;
-      }
-      if (data?.error) {
-        showAlert('Erro', getUserErrorMessage({ message: data.error }, 'Não foi possível salvar o método de pagamento.'));
+      const parsed = await parseEdgeFunctionResponse(res);
+      if (!parsed.success) {
+        const fallback = parsed.errorMessage || `Erro do servidor (${res.status}). Tente novamente.`;
+        showAlert('Erro', getUserErrorMessage({ message: parsed.errorMessage }, fallback));
         return;
       }
       navigation.navigate('CardRegisteredSuccess');

@@ -175,7 +175,7 @@ npm run admin        # Admin web (localhost)
 | Funcao | Descricao | Usado por |
 |--------|-----------|-----------|
 | `charge-booking` | Cobra reserva via Stripe PaymentIntent | Cliente |
-| `charge-shipment(s)` | Cobra envio de encomenda via Stripe | Cliente |
+| `charge-shipments` | Cobra envio de encomenda via Stripe | Cliente |
 | `confirm-code` | Verifica codigos de pickup/delivery | Motorista |
 | `create-motorista-account` | Cadastro completo de motorista | Motorista |
 | `delete-account` | Exclusao de conta (LGPD) com cascade | Cliente |

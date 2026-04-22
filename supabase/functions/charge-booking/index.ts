@@ -317,13 +317,13 @@ Deno.serve(async (req) => {
         const workerPayoutPreview = chargeAmountCents - platformFeeCents;
         const payout = Number.isFinite(workerPayoutPreview) ? Math.max(0, Math.floor(workerPayoutPreview)) : null;
         if (connectAccountId && payout != null) {
-          if (payout > amountCents) {
+          if (payout > chargeAmountCents) {
             return new Response(
               JSON.stringify({ error: "Inconsistência de valores da reserva (repasse > total)" }),
               { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             );
           }
-          applicationFeeCents = amountCents - payout;
+          applicationFeeCents = chargeAmountCents - payout;
           if (applicationFeeCents < 0) {
             return new Response(
               JSON.stringify({ error: "Taxa de aplicação inválida para Stripe Connect" }),
@@ -526,6 +526,7 @@ Deno.serve(async (req) => {
       confirm: "true",
       "payment_method_types[0]": "card",
       "metadata[booking_id]": bookingId,
+      "metadata[user_id]": userId,
     });
     if (connectAccountId && applicationFeeCents != null) {
       piParams.set("application_fee_amount", String(applicationFeeCents));

@@ -43,7 +43,11 @@ const ERROR_PT: Array<[RegExp, string]> = [
   [/try again|try_again_later/i, 'Erro temporário. Tente novamente em alguns instantes.'],
   [/exceeds.*balance|withdrawal_count_limit/i, 'Limite do cartão excedido. Use outro cartão.'],
   [/test mode.*non.?test|live mode.*test/i, 'Cartão de teste inválido para este ambiente.'],
-  [/could not find payment|no such payment/i, 'Método de pagamento não encontrado.'],
+  [
+    // Stripe: "No such PaymentMethod" — sem [^a-z_] com /i no mesmo regex (em JS, /i afeta [^a-z_] e bloqueia letras maiúsculas).
+    /could not find payment|no such payment_method|no such paymentmethod|resource_missing.*payment_method/i,
+    'O servidor não encontrou este cartão no Stripe. Confira se EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY (app) e STRIPE_SECRET_KEY (secrets da edge function save-payment-method no Supabase) são do mesmo modo (teste ou live) e da mesma conta Stripe.',
+  ],
   [/authentication.*required|authentication_required/i, 'Autenticação adicional necessária. Tente novamente.'],
   [/setup_intent_unexpected_state/i, 'Erro na configuração do pagamento. Tente novamente.'],
   [/zip code failed|incorrect_zip|postal_code/i, 'CEP do cartão inválido.'],
