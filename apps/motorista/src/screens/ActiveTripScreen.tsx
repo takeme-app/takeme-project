@@ -460,6 +460,52 @@ function formatDuration(startIso: string, endDate: Date): string {
   return `${m}min`;
 }
 
+/** HEIC/PNG etc. — alinha content-type ao arquivo real (evita upload como image/jpeg incorreto). */
+function mimeAndExtFromExpenseAsset(asset: ImagePicker.ImagePickerAsset): { mime: string; ext: string } {
+  const mime = (asset.mimeType ?? '').toLowerCase() || 'image/jpeg';
+  if (mime.includes('png')) return { mime: 'image/png', ext: 'png' };
+  if (mime.includes('webp')) return { mime: 'image/webp', ext: 'webp' };
+  if (mime.includes('heic')) return { mime: 'image/heic', ext: 'heic' };
+  if (mime.includes('heif')) return { mime: 'image/heif', ext: 'heif' };
+  if (mime.includes('gif')) return { mime: 'image/gif', ext: 'gif' };
+  const name = (asset.fileName ?? '').toLowerCase();
+  const dot = name.lastIndexOf('.');
+  if (dot >= 0) {
+    const e = name.slice(dot + 1);
+    if (e === 'png') return { mime: 'image/png', ext: 'png' };
+    if (e === 'webp') return { mime: 'image/webp', ext: 'webp' };
+    if (e === 'heic' || e === 'heif') return { mime: e === 'heif' ? 'image/heif' : 'image/heic', ext: e };
+    if (e === 'gif') return { mime: 'image/gif', ext: 'gif' };
+  }
+  return { mime: 'image/jpeg', ext: 'jpg' };
+}
+
+/** Android pode destruir a Activity ao fechar o picker — recupera o resultado pendente. */
+async function mergePendingAndroidGalleryResult(
+  result: ImagePicker.ImagePickerResult,
+): Promise<ImagePicker.ImagePickerResult> {
+  if (Platform.OS !== 'android' || !result.canceled) return result;
+  try {
+    const pending = await ImagePicker.getPendingResultAsync();
+    if (pending == null) return result;
+    if ('code' in pending && typeof (pending as { code?: string }).code === 'string') return result;
+    if ('assets' in pending && pending.assets && pending.assets.length > 0) {
+      return { canceled: false, assets: pending.assets };
+    }
+  } catch {
+    /* ignore */
+  }
+  return result;
+}
+
+/** Upload no Storage: evita `fetch(uri)` + Blob (quebram com ph:// e com alguns tipos no RN). */
+function uint8ArrayFromBase64(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 /** Ignora null, NaN e (0,0) — evita rotas para o Atlântico vindas do banco. */
 function pickStopCoord(
   lat: number | null | undefined,
@@ -693,8 +739,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   /** Snapshot da parada ao abrir o sheet — o modal NÃO deve usar `currentStop` (realtime pode alterar a lista/índice). */
   const [confirmUiStop, setConfirmUiStop] = useState<Stop | null>(null);
 
-  // Finalize — comprovantes (fotos) enviados ao storage ao concluir a viagem
-  const [tripExpenseFiles, setTripExpenseFiles] = useState<{ uri: string; mimeType: string; name: string }[]>([]);
+  // Finalize — comprovantes (fotos): `base64` vem do picker para upload sem depender de fetch(uri).
+  const [tripExpenseFiles, setTripExpenseFiles] = useState<
+    { uri: string; mimeType: string; name: string; base64?: string | null }[]
+  >([]);
   const [finalizingTrip, setFinalizingTrip] = useState(false);
 
   // Rating
@@ -996,17 +1044,25 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     return cents > 0 ? `R$ ${(cents / 100).toFixed(2).replace('.', ',')}` : '—';
   }, [trip]);
 
-  /** Tempo desde o início real da viagem (`driver_journey_started_at`), senão horário agendado `departure_at`. */
+  /**
+   * Tempo desde o início real (`driver_journey_started_at`). Sem isso, usa `departure_at` só se já
+   * passou — evita “0min” quando a partida agendada está no futuro e a jornada ainda não foi gravada.
+   */
   const tripElapsedLabel = useMemo(() => {
     if (!trip) return '—';
-    const startIso = trip.driver_journey_started_at ?? trip.departure_at;
-    if (!startIso) return '—';
-    return formatDuration(startIso, new Date());
+    const now = new Date();
+    const journey = trip.driver_journey_started_at;
+    if (journey) return formatDuration(journey, now);
+    const dep = trip.departure_at;
+    if (!dep) return '—';
+    if (new Date(dep).getTime() > now.getTime()) return '—';
+    return formatDuration(dep, now);
   }, [trip]);
 
-  /** Odômetro aproximado (GPS nesta sessão); só exibe após deslocamento mínimo. */
+  /** Odômetro aproximado (GPS nesta sessão); trechos curtos mostram metros em vez de “—”. */
   const tripTraveledDistanceLabel = useMemo(() => {
-    if (traveledMeters < 40) return '—';
+    if (traveledMeters < 5) return '—';
+    if (traveledMeters < 1000) return `~${Math.round(traveledMeters)} m`;
     const km = traveledMeters / 1000;
     return `~${km.toFixed(1).replace('.', ',')} km`;
   }, [traveledMeters]);
@@ -1571,19 +1627,24 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       showAlert('Permissão', 'Precisamos de acesso às fotos para anexar comprovantes de despesa.');
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
+    const raw = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsMultipleSelection: true,
       quality: 0.85,
+      base64: true,
       selectionLimit: 8,
+      ...(Platform.OS === 'ios'
+        ? { preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible }
+        : {}),
     });
+    const result = await mergePendingAndroidGalleryResult(raw);
     if (result.canceled || !result.assets?.length) return;
     setTripExpenseFiles((prev) => {
       const next = [...prev];
       for (const a of result.assets) {
-        const mime = a.mimeType ?? 'image/jpeg';
-        const name = a.fileName ?? `comprovante-${Date.now()}.jpg`;
-        next.push({ uri: a.uri, mimeType: mime, name });
+        const { mime, ext } = mimeAndExtFromExpenseAsset(a);
+        const name = a.fileName?.trim() || `comprovante-${Date.now()}.${ext}`;
+        next.push({ uri: a.uri, mimeType: mime, name, base64: a.base64 ?? null });
       }
       return next.slice(0, 8);
     });
@@ -1799,34 +1860,80 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
       const uploadedPaths: string[] = [];
       for (const file of tripExpenseFiles) {
-        const res = await fetch(file.uri);
-        const blob = await res.blob();
+        let bytes: Uint8Array;
+        if (file.base64) {
+          try {
+            bytes = uint8ArrayFromBase64(file.base64);
+          } catch {
+            throw new Error('Foto inválida. Remova o anexo e escolha de novo na galeria.');
+          }
+        } else {
+          let res: Response;
+          try {
+            res = await fetch(file.uri);
+          } catch {
+            throw new Error(
+              'Não foi possível ler a foto (URI inválida ou biblioteca de fotos). No iPhone, remova o anexo e escolha de novo na galeria.',
+            );
+          }
+          if (!res.ok) {
+            throw new Error(`Não foi possível ler a foto (código ${res.status}). Tente outra imagem.`);
+          }
+          const buf = await res.arrayBuffer();
+          bytes = new Uint8Array(buf);
+        }
         const rawExt = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() : 'jpg';
         const ext = rawExt && /^[a-z0-9]+$/.test(rawExt) ? rawExt : 'jpg';
         const path = `${user.id}/${tripId}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
-        const { error: upErr } = await supabase.storage.from('trip-expenses').upload(path, blob, {
+        const { error: upErr } = await supabase.storage.from('trip-expenses').upload(path, bytes, {
           contentType: file.mimeType || 'image/jpeg',
           upsert: false,
         });
-        if (upErr) throw upErr;
+        if (upErr) {
+          const um = String((upErr as { message?: string }).message || '');
+          if (/row-level security|rls|violates row-level|new row violates/i.test(um)) {
+            throw new Error(
+              'O servidor recusou o envio do comprovante (armazenamento). Tente finalizar sem fotos ou peça ao suporte para revisar o bucket trip-expenses no Supabase.',
+            );
+          }
+          throw upErr;
+        }
         uploadedPaths.push(path);
       }
 
-      const updatePayload: Record<string, unknown> = {
-        status: 'completed',
-        is_active: false,
-        driver_journey_started_at: null,
-        updated_at: new Date().toISOString(),
-      };
-      if (uploadedPaths.length > 0) {
-        updatePayload.driver_expense_paths = uploadedPaths;
+      const rpcPayload =
+        uploadedPaths.length > 0
+          ? { p_trip_id: tripId, p_expense_paths: uploadedPaths }
+          : { p_trip_id: tripId };
+      const { data: rpcJson, error: rpcErr } = await supabase.rpc(
+        'motorista_complete_scheduled_trip',
+        rpcPayload as never,
+      );
+      if (rpcErr) {
+        const rm = String(rpcErr.message || '');
+        if (/could not find the function|schema cache|404/i.test(rm)) {
+          throw new Error(
+            'O servidor ainda não tem a função para concluir a viagem. Aplique a migração motorista_complete_scheduled_trip no Supabase (supabase db push) e tente de novo.',
+          );
+        }
+        throw rpcErr;
       }
-      const { error } = await supabase
-        .from('scheduled_trips')
-        .update(updatePayload as never)
-        .eq('id', tripId)
-        .eq('driver_id', user.id);
-      if (error) throw error;
+      const rpcData = rpcJson as { ok?: boolean; error?: string; message?: string } | null;
+      if (rpcData && rpcData.ok === false) {
+        if (rpcData.error === 'not_your_trip') {
+          throw new Error('Esta viagem não está atribuída à sua conta.');
+        }
+        if (rpcData.error === 'not_found') {
+          throw new Error('Viagem não encontrada ou já removida.');
+        }
+        if (rpcData.error === 'unauthorized') {
+          throw new Error('Sessão inválida. Faça login novamente.');
+        }
+        throw new Error(
+          rpcData.message ||
+            'Não foi possível concluir a viagem no servidor. Tente de novo ou fale com o suporte.',
+        );
+      }
       void (supabase as any).from('scheduled_trip_live_locations').delete().eq('scheduled_trip_id', tripId);
       await closeConversationsForScheduledTrip(tripId);
 

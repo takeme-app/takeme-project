@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Animated } from 'react-native';
-import { toISODate } from '../lib/dateTimeSlots';
+import { toISODate, formatDateDisplayLabel } from '../lib/dateTimeSlots';
 
 const WHEN_SHEET_SLIDE = 400;
 const TIME_SHEET_SLIDE = 450;
@@ -18,31 +18,28 @@ export type WhenTimeResult = {
   whenOption: 'now' | 'later';
   whenLabel: string;
   scheduledDateId?: string;
+  /** Ausente = dia inteiro (qualquer viagem ofertada na data). */
   scheduledTimeSlot?: string;
 };
 
 export function useWhenTimeSelection() {
   const [whenOption, setWhenOption] = useState<'now' | 'later' | null>(null);
   const [whenLabel, setWhenLabel] = useState('Agora');
-  /** Mantém data/hora após fechar o sheet (closeTimeSheet zera selectedSlot). */
-  const [committedLater, setCommittedLater] = useState<{ day: string; slot: string } | null>(null);
+  /** Mantém o dia após fechar o sheet (closeTimeSheet não limpa o dia escolhido). */
+  const [committedLater, setCommittedLater] = useState<{ day: string } | null>(null);
   const [whenSheetVisible, setWhenSheetVisible] = useState(false);
   const [timeSheetVisible, setTimeSheetVisible] = useState(false);
   const [selectedDay, setSelectedDay] = useState(() => toISODate(new Date()));
-  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
-  const [showDatePicker, setShowDatePicker] = useState(false);
 
   const whenOverlayOpacity = useRef(new Animated.Value(0)).current;
   const whenSheetTranslateY = useRef(new Animated.Value(WHEN_SHEET_SLIDE)).current;
   const timeSheetOverlayOpacity = useRef(new Animated.Value(0)).current;
   const timeSheetTranslateY = useRef(new Animated.Value(TIME_SHEET_SLIDE)).current;
 
-  // Animar abertura do when-sheet
   useEffect(() => {
     if (whenSheetVisible) animateOpen(whenOverlayOpacity, whenSheetTranslateY, WHEN_SHEET_SLIDE);
   }, [whenSheetVisible]);
 
-  // Animar abertura do time-sheet
   useEffect(() => {
     if (timeSheetVisible) animateOpen(timeSheetOverlayOpacity, timeSheetTranslateY, TIME_SHEET_SLIDE);
   }, [timeSheetVisible]);
@@ -63,7 +60,6 @@ export function useWhenTimeSelection() {
 
   const openTimeSheet = useCallback(() => {
     setSelectedDay(toISODate(new Date()));
-    setSelectedSlot(null);
     timeSheetOverlayOpacity.setValue(0);
     timeSheetTranslateY.setValue(TIME_SHEET_SLIDE);
     setTimeSheetVisible(true);
@@ -73,7 +69,6 @@ export function useWhenTimeSelection() {
     timeSheetOverlayOpacity.setValue(0);
     timeSheetTranslateY.setValue(TIME_SHEET_SLIDE);
     setTimeSheetVisible(false);
-    setSelectedSlot(null);
   }, []);
 
   /** Chamado ao confirmar "Agora" ou "Mais tarde" no when-sheet. Retorna a opção ou null. */
@@ -92,37 +87,38 @@ export function useWhenTimeSelection() {
     return null;
   }, [whenOption, closeWhenSheet, openTimeSheet]);
 
-  /** Chamado ao selecionar horário no time-sheet. Retorna o resultado ou null. */
+  /** Chamado ao confirmar o dia no sheet de agendamento. */
   const handleSelectTime = useCallback((): WhenTimeResult | null => {
-    if (!selectedSlot) return null;
-    setCommittedLater({ day: selectedDay, slot: selectedSlot });
+    if (!selectedDay) return null;
+    const label = formatDateDisplayLabel(selectedDay);
+    setCommittedLater({ day: selectedDay });
     setWhenOption('later');
-    setWhenLabel(selectedSlot);
+    setWhenLabel(label);
     closeTimeSheet();
     return {
       whenOption: 'later',
-      whenLabel: selectedSlot,
+      whenLabel: label,
       scheduledDateId: selectedDay,
-      scheduledTimeSlot: selectedSlot,
+      scheduledTimeSlot: undefined,
     };
-  }, [selectedSlot, selectedDay, closeTimeSheet]);
+  }, [selectedDay, closeTimeSheet]);
 
   const getResult = useCallback((): WhenTimeResult => {
     if (committedLater) {
       return {
         whenOption: 'later',
-        whenLabel: committedLater.slot,
+        whenLabel: formatDateDisplayLabel(committedLater.day),
         scheduledDateId: committedLater.day,
-        scheduledTimeSlot: committedLater.slot,
+        scheduledTimeSlot: undefined,
       };
     }
     return {
       whenOption: whenOption === 'later' ? 'later' : 'now',
       whenLabel,
       scheduledDateId: whenOption === 'later' ? selectedDay : undefined,
-      scheduledTimeSlot: whenOption === 'later' && selectedSlot ? selectedSlot : undefined,
+      scheduledTimeSlot: undefined,
     };
-  }, [committedLater, whenOption, whenLabel, selectedDay, selectedSlot]);
+  }, [committedLater, whenOption, whenLabel, selectedDay]);
 
   return {
     whenOption,
@@ -132,10 +128,6 @@ export function useWhenTimeSelection() {
     timeSheetVisible,
     selectedDay,
     setSelectedDay,
-    selectedSlot,
-    setSelectedSlot,
-    showDatePicker,
-    setShowDatePicker,
     openWhenSheet,
     closeWhenSheet,
     openTimeSheet,
@@ -143,7 +135,6 @@ export function useWhenTimeSelection() {
     handleWhenContinue,
     handleSelectTime,
     getResult,
-    // Animated values
     whenOverlayOpacity,
     whenSheetTranslateY,
     timeSheetOverlayOpacity,

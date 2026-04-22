@@ -36,7 +36,8 @@ import { bookingCardChargeAmountCents } from '../../lib/bookingChargePreview';
 import { fetchResolvedPriceCentsForScheduledTrip } from '../../lib/clientScheduledTrips';
 import { MAPBOX_DESTINATION_MARKER_COLOR, MAPBOX_ORIGIN_MARKER_COLOR } from '@take-me/shared';
 import { flatPricingSnapshot, applyPromotionToSnapshot } from '../../lib/orderPricingSnapshot';
-import { PaymentMethodSection, type PaymentMethodType } from '../../components/PaymentMethodSection';
+import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmParams } from '../../components/PaymentMethodSection';
+import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
 
 const supabasePublicUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 
@@ -213,7 +214,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
   }, [origin?.latitude, origin?.longitude, destination?.latitude, destination?.longitude]);
 
   const handleConfirmPayment = useCallback(
-    async (params: { method: PaymentMethodType; paymentMethodId?: string }) => {
+    async (params: CardPaymentConfirmParams) => {
       if (!origin || !destination) return;
       if (!scheduledTripId) {
         showAlert(
@@ -226,6 +227,27 @@ export function CheckoutScreen({ navigation, route }: Props) {
       if (!user) {
         showAlert('Sessão', 'Faça login para concluir o pagamento.');
         return;
+      }
+      let depIsoForGuard = route.params?.scheduledTripDepartureAt ?? null;
+      if (!depIsoForGuard && scheduledTripId) {
+        const { data: stRow } = await supabase
+          .from('scheduled_trips')
+          .select('departure_at')
+          .eq('id', scheduledTripId)
+          .maybeSingle();
+        depIsoForGuard = (stRow?.departure_at as string | undefined) ?? null;
+      }
+      if (depIsoForGuard) {
+        const dupMsg = await getDuplicateDestinationSameDayMessage({
+          userId: user.id,
+          destLat: destination.latitude,
+          destLng: destination.longitude,
+          dayKey: calendarDayKeySaoPaulo(depIsoForGuard),
+        });
+        if (dupMsg) {
+          showAlert('Limite', dupMsg);
+          return;
+        }
       }
       setPaymentSubmitting(true);
       try {
@@ -273,8 +295,10 @@ export function CheckoutScreen({ navigation, route }: Props) {
         );
 
         if (params.method === 'credito' || params.method === 'debito') {
-          if (!params.paymentMethodId) {
-            showAlert('Pagamento', 'Informe e confirme os dados do cartão.');
+          const hasStripePm = Boolean(params.paymentMethodId?.trim());
+          const hasSavedPm = Boolean(params.savedPaymentMethodId?.trim());
+          if (!hasStripePm && !hasSavedPm) {
+            showAlert('Pagamento', 'Selecione um cartão salvo ou informe os dados de um cartão.');
             return;
           }
           const { data: { session: sessionBefore } } = await supabase.auth.getSession();
@@ -291,8 +315,10 @@ export function CheckoutScreen({ navigation, route }: Props) {
             );
             return;
           }
+          const cpf = params.holderCpfDigits?.replace(/\D/g, '') ?? '';
           const { data: ensureData, error: ensureErr } = await supabase.functions.invoke('ensure-stripe-customer', {
             headers: { Authorization: `Bearer ${accessToken}` },
+            body: cpf.length === 11 ? { cpf } : undefined,
           });
           if (ensureErr) {
             const raw = await describeInvokeFailure(ensureData, ensureErr);
@@ -302,7 +328,9 @@ export function CheckoutScreen({ navigation, route }: Props) {
           const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke('charge-booking', {
             headers: { Authorization: `Bearer ${accessToken}` },
             body: {
-              stripe_payment_method_id: params.paymentMethodId,
+              ...(hasSavedPm
+                ? { payment_method_id: params.savedPaymentMethodId!.trim() }
+                : { stripe_payment_method_id: params.paymentMethodId!.trim() }),
               draft_booking: {
                 scheduled_trip_id: scheduledTripId,
                 origin_address: origin.address,
@@ -404,6 +432,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
           booking: summary,
           immediateTrip: route.params?.immediateTrip,
           tripLive,
+          paymentMethod: params.method,
         });
       } finally {
         setPaymentSubmitting(false);
@@ -424,6 +453,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
       origin,
       passengersParam,
       route.params?.immediateTrip,
+      route.params?.scheduledTripDepartureAt,
       scheduledTripId,
       showAlert,
       origin,

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -16,19 +16,38 @@ import { CardField, useStripe } from '../lib/stripeNativeBridge';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
 import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
+import { supabase } from '../lib/supabase';
 
 export type PaymentMethodType = 'credito' | 'debito' | 'pix' | 'dinheiro';
 
 export type CancellationPolicyVariant = 'trip' | 'shipment_credit' | 'shipment_debit';
 
+export type CardPaymentConfirmParams = {
+  method: PaymentMethodType;
+  /** Id do PaymentMethod na Stripe (`pm_…`), quando o cartão foi tokenizado agora. */
+  paymentMethodId?: string;
+  /** Id da linha em `public.payment_methods` (cartão já salvo no cadastro / carteira). */
+  savedPaymentMethodId?: string;
+  /** CPF do portador (11 dígitos), para registro no Customer Stripe (BR). */
+  holderCpfDigits?: string;
+};
+
 export type PaymentMethodSectionProps = {
   amountCents: number;
   selectedMethod: PaymentMethodType | null;
   onSelectMethod: (method: PaymentMethodType) => void;
-  onConfirmPayment: (params: { method: PaymentMethodType; paymentMethodId?: string }) => void | Promise<void>;
+  onConfirmPayment: (params: CardPaymentConfirmParams) => void | Promise<void>;
   confirmLabel: string;
   cancellationPolicyVariant: CancellationPolicyVariant;
   loading?: boolean;
+};
+
+type SavedCardRow = {
+  id: string;
+  type: 'credit' | 'debit';
+  last_four: string | null;
+  holder_name: string | null;
+  brand: string | null;
 };
 
 const PAYMENT_OPTIONS: { type: PaymentMethodType; label: string; icon: keyof typeof MaterialIcons.glyphMap }[] = [
@@ -73,10 +92,85 @@ export function PaymentMethodSection({
   const [cpfCnpj, setCpfCnpj] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [pixResendCooldown, setPixResendCooldown] = useState(0);
-
-  const amountFormatted = `R$ ${(amountCents / 100).toFixed(2).replace('.', ',')}`;
+  const [savedCards, setSavedCards] = useState<SavedCardRow[]>([]);
+  const [savedCardsLoading, setSavedCardsLoading] = useState(false);
+  /** Cartão salvo vs tokenizar novo (quando existir salvo). */
+  const [cardEntryMode, setCardEntryMode] = useState<'saved' | 'new'>('new');
+  const [selectedSavedId, setSelectedSavedId] = useState<string | null>(null);
 
   const handleCpfChange = useCallback((text: string) => setCpfCnpj(formatCpf(text)), []);
+
+  useEffect(() => {
+    if (selectedMethod !== 'credito' && selectedMethod !== 'debito') {
+      setSavedCards([]);
+      setSelectedSavedId(null);
+      setCardEntryMode('new');
+      return;
+    }
+    const dbType = selectedMethod === 'credito' ? 'credit' : 'debit';
+    let cancelled = false;
+    setSavedCardsLoading(true);
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || cancelled) {
+        if (!cancelled) setSavedCardsLoading(false);
+        return;
+      }
+      const { data, error } = await supabase
+        .from('payment_methods')
+        .select('id, type, last_four, holder_name, brand')
+        .eq('user_id', user.id)
+        .eq('type', dbType)
+        .order('created_at', { ascending: false });
+      if (cancelled) return;
+      setSavedCardsLoading(false);
+      if (error) {
+        setSavedCards([]);
+        setSelectedSavedId(null);
+        setCardEntryMode('new');
+        return;
+      }
+      const rows = (data ?? []) as SavedCardRow[];
+      setSavedCards(rows);
+      if (rows.length > 0) {
+        setSelectedSavedId(rows[0].id);
+        setCardEntryMode('saved');
+      } else {
+        setSelectedSavedId(null);
+        setCardEntryMode('new');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMethod]);
+
+  const handleConfirmSavedCard = useCallback(async () => {
+    if (selectedMethod !== 'credito' && selectedMethod !== 'debito') return;
+    if (!selectedSavedId) {
+      showAlert('Atenção', 'Selecione um cartão salvo.');
+      return;
+    }
+    const cpfDigits = onlyDigits(cpfCnpj);
+    if (!cpfDigits) {
+      showAlert('Atenção', 'Preencha o CPF.');
+      return;
+    }
+    if (!validateCpf(cpfDigits)) {
+      showAlert('CPF inválido', 'O CPF informado não é válido. Verifique e tente novamente.');
+      return;
+    }
+    setConfirming(true);
+    try {
+      await onConfirmPayment({
+        method: selectedMethod,
+        savedPaymentMethodId: selectedSavedId,
+        holderCpfDigits: cpfDigits,
+      });
+    } finally {
+      setConfirming(false);
+    }
+  }, [selectedMethod, selectedSavedId, cpfCnpj, onConfirmPayment, showAlert]);
 
   const handleConfirmCard = useCallback(async () => {
     if (selectedMethod !== 'credito' && selectedMethod !== 'debito') return;
@@ -113,7 +207,11 @@ export function PaymentMethodSection({
         showAlert('Erro', 'Não foi possível obter o método de pagamento.');
         return;
       }
-      await onConfirmPayment({ method: selectedMethod, paymentMethodId: paymentMethod.id });
+      await onConfirmPayment({
+        method: selectedMethod,
+        paymentMethodId: paymentMethod.id,
+        holderCpfDigits: cpfDigits,
+      });
     } finally {
       setConfirming(false);
     }
@@ -170,97 +268,151 @@ export function PaymentMethodSection({
             </View>
           </TouchableOpacity>
 
-          {selectedMethod === opt.type && opt.type === 'credito' && (
+          {selectedMethod === opt.type && (opt.type === 'credito' || opt.type === 'debito') && (
             <View style={styles.expanded}>
               <Text style={styles.formLabel}>Método de pagamento</Text>
               <View style={styles.readOnlyField}>
-                <Text style={styles.readOnlyText}>Cartão de crédito</Text>
+                <Text style={styles.readOnlyText}>
+                  {opt.type === 'credito' ? 'Cartão de crédito' : 'Cartão de débito'}
+                </Text>
               </View>
-              <Text style={styles.formLabel}>Número de parcelas</Text>
-              <View style={styles.readOnlyField}>
-                <Text style={styles.readOnlyText}>1x de {amountFormatted} (parcela única)</Text>
-              </View>
-              <Text style={styles.formLabel}>Dados do cartão</Text>
-              <Text style={styles.formLabelSmall}>Nome do cartão</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Nome como está no cartão"
-                placeholderTextColor={COLORS.neutral700}
-                value={cardName}
-                onChangeText={setCardName}
-                autoCapitalize="words"
-              />
-              <CardField
-                postalCodeEnabled={false}
-                onCardChange={(d) => setCardComplete(d.complete)}
-                style={styles.cardField}
-                cardStyle={CARD_STYLE}
-              />
-              <Text style={styles.formLabelSmall}>CPF</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="000.000.000-00"
-                placeholderTextColor={COLORS.neutral700}
-                value={cpfCnpj}
-                onChangeText={handleCpfChange}
-                keyboardType="number-pad"
-                maxLength={14}
-              />
-              <TouchableOpacity
-                style={[styles.confirmButton, (!cardComplete || loading || confirming) && styles.confirmButtonDisabled]}
-                onPress={handleConfirmCard}
-                disabled={!cardComplete || loading || confirming}
-                activeOpacity={0.8}
-              >
-                {confirming ? <ActivityIndicator color="#FFF" /> : <Text style={styles.confirmButtonText}>{confirmLabel}</Text>}
-              </TouchableOpacity>
-              <Text style={styles.policyTitle}>Política de Cancelamento</Text>
-              {policyLines.map((line, i) => (
-                <Text key={i} style={styles.policyItem}>• {line}</Text>
-              ))}
-            </View>
-          )}
 
-          {selectedMethod === opt.type && opt.type === 'debito' && (
-            <View style={styles.expanded}>
-              <Text style={styles.formLabel}>Método de pagamento</Text>
-              <View style={styles.readOnlyField}>
-                <Text style={styles.readOnlyText}>Cartão de débito</Text>
-              </View>
-              <Text style={styles.formLabel}>Dados do cartão</Text>
-              <Text style={styles.formLabelSmall}>Nome do cartão</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Nome como está no cartão"
-                placeholderTextColor={COLORS.neutral700}
-                value={cardName}
-                onChangeText={setCardName}
-                autoCapitalize="words"
-              />
-              <CardField
-                postalCodeEnabled={false}
-                onCardChange={(d) => setCardComplete(d.complete)}
-                style={styles.cardField}
-                cardStyle={CARD_STYLE}
-              />
-              <Text style={styles.formLabelSmall}>CPF</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="000.000.000-00"
-                placeholderTextColor={COLORS.neutral700}
-                value={cpfCnpj}
-                onChangeText={handleCpfChange}
-                keyboardType="number-pad"
-                maxLength={14}
-              />
-              <TouchableOpacity
-                style={[styles.confirmButton, (!cardComplete || loading || confirming) && styles.confirmButtonDisabled]}
-                onPress={handleConfirmCard}
-                disabled={!cardComplete || loading || confirming}
-                activeOpacity={0.8}
-              >
-                {confirming ? <ActivityIndicator color="#FFF" /> : <Text style={styles.confirmButtonText}>{confirmLabel}</Text>}
-              </TouchableOpacity>
+              {savedCardsLoading ? (
+                <ActivityIndicator style={styles.savedCardsLoader} color={COLORS.black} />
+              ) : null}
+
+              {!savedCardsLoading && savedCards.length > 0 ? (
+                <View style={styles.savedModeRow}>
+                  <TouchableOpacity
+                    style={[styles.savedModeChip, cardEntryMode === 'saved' && styles.savedModeChipActive]}
+                    onPress={() => setCardEntryMode('saved')}
+                    activeOpacity={0.8}
+                  >
+                    <Text
+                      style={[
+                        styles.savedModeChipText,
+                        cardEntryMode === 'saved' && styles.savedModeChipTextActive,
+                      ]}
+                    >
+                      Cartão salvo
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.savedModeChip, cardEntryMode === 'new' && styles.savedModeChipActive]}
+                    onPress={() => setCardEntryMode('new')}
+                    activeOpacity={0.8}
+                  >
+                    <Text
+                      style={[
+                        styles.savedModeChipText,
+                        cardEntryMode === 'new' && styles.savedModeChipTextActive,
+                      ]}
+                    >
+                      Outro cartão
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {!savedCardsLoading && cardEntryMode === 'saved' && savedCards.length > 0 ? (
+                <>
+                  <Text style={styles.formLabel}>Selecione o cartão</Text>
+                  {savedCards.map((row) => (
+                    <TouchableOpacity
+                      key={row.id}
+                      style={[styles.savedCardRow, selectedSavedId === row.id && styles.savedCardRowSelected]}
+                      onPress={() => setSelectedSavedId(row.id)}
+                      activeOpacity={0.75}
+                    >
+                      <MaterialIcons name="credit-card" size={22} color={COLORS.black} />
+                      <View style={styles.savedCardTextCol}>
+                        <Text style={styles.savedCardTitle}>
+                          {(row.brand ?? 'cartão').replace(/\s/g, '')} {row.last_four ? `•••• ${row.last_four}` : ''}
+                        </Text>
+                        {row.holder_name ? (
+                          <Text style={styles.savedCardMeta} numberOfLines={1}>
+                            {row.holder_name}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <View style={[styles.radio, selectedSavedId === row.id && styles.radioSelected]}>
+                        {selectedSavedId === row.id ? <View style={styles.radioInner} /> : null}
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                  <Text style={styles.formLabelSmall}>CPF</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="000.000.000-00"
+                    placeholderTextColor={COLORS.neutral700}
+                    value={cpfCnpj}
+                    onChangeText={handleCpfChange}
+                    keyboardType="number-pad"
+                    maxLength={14}
+                  />
+                  <TouchableOpacity
+                    style={[
+                      styles.confirmButton,
+                      (!selectedSavedId || !validateCpf(onlyDigits(cpfCnpj)) || loading || confirming) &&
+                        styles.confirmButtonDisabled,
+                    ]}
+                    onPress={handleConfirmSavedCard}
+                    disabled={!selectedSavedId || !validateCpf(onlyDigits(cpfCnpj)) || loading || confirming}
+                    activeOpacity={0.8}
+                  >
+                    {confirming ? (
+                      <ActivityIndicator color="#FFF" />
+                    ) : (
+                      <Text style={styles.confirmButtonText}>{confirmLabel}</Text>
+                    )}
+                  </TouchableOpacity>
+                </>
+              ) : !savedCardsLoading ? (
+                <>
+                  <Text style={styles.formLabel}>Dados do cartão</Text>
+                  <Text style={styles.formLabelSmall}>Nome do cartão</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Nome como está no cartão"
+                    placeholderTextColor={COLORS.neutral700}
+                    value={cardName}
+                    onChangeText={setCardName}
+                    autoCapitalize="words"
+                  />
+                  <CardField
+                    postalCodeEnabled={false}
+                    onCardChange={(d) => setCardComplete(d.complete)}
+                    style={styles.cardField}
+                    cardStyle={CARD_STYLE}
+                  />
+                  <Text style={styles.formLabelSmall}>CPF</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="000.000.000-00"
+                    placeholderTextColor={COLORS.neutral700}
+                    value={cpfCnpj}
+                    onChangeText={handleCpfChange}
+                    keyboardType="number-pad"
+                    maxLength={14}
+                  />
+                  <TouchableOpacity
+                    style={[
+                      styles.confirmButton,
+                      (!cardComplete || loading || confirming) && styles.confirmButtonDisabled,
+                    ]}
+                    onPress={handleConfirmCard}
+                    disabled={!cardComplete || loading || confirming}
+                    activeOpacity={0.8}
+                  >
+                    {confirming ? (
+                      <ActivityIndicator color="#FFF" />
+                    ) : (
+                      <Text style={styles.confirmButtonText}>{confirmLabel}</Text>
+                    )}
+                  </TouchableOpacity>
+                </>
+              ) : null}
+
               <Text style={styles.policyTitle}>Política de Cancelamento</Text>
               {policyLines.map((line, i) => (
                 <Text key={i} style={styles.policyItem}>• {line}</Text>
@@ -331,13 +483,18 @@ const COLORS = {
   neutral300: '#f1f1f1',
   neutral400: '#e2e2e2',
   neutral700: '#767676',
+  /** Somente leitura (ex.: rótulo do método) — cinza mais fechado, não parece campo de digitação. */
+  readOnlyBg: '#E8EAEF',
+  /** Campos digitáveis — fundo bem claro. */
+  editableBg: '#FFFFFF',
+  editableBorder: '#D1D5DB',
 };
 
 const CARD_STYLE = {
-  backgroundColor: COLORS.neutral300,
+  backgroundColor: COLORS.editableBg,
   textColor: COLORS.black,
   placeholderColor: COLORS.neutral700,
-  borderColor: COLORS.neutral400,
+  borderColor: COLORS.editableBorder,
   borderWidth: 1,
   borderRadius: 12,
   fontSize: 16,
@@ -414,9 +571,9 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   input: {
-    backgroundColor: COLORS.neutral300,
+    backgroundColor: COLORS.editableBg,
     borderWidth: 1,
-    borderColor: COLORS.neutral400,
+    borderColor: COLORS.editableBorder,
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 14,
@@ -429,7 +586,7 @@ const styles = StyleSheet.create({
     marginVertical: 8,
   },
   readOnlyField: {
-    backgroundColor: COLORS.neutral300,
+    backgroundColor: COLORS.readOnlyBg,
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 14,
@@ -514,5 +671,61 @@ const styles = StyleSheet.create({
     color: COLORS.neutral700,
     lineHeight: 22,
     marginBottom: 12,
+  },
+  savedCardsLoader: {
+    marginVertical: 16,
+  },
+  savedModeRow: {
+    flexDirection: 'row',
+    marginBottom: 16,
+    marginTop: 4,
+  },
+  savedModeChip: {
+    flex: 1,
+    marginHorizontal: 4,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.neutral400,
+    alignItems: 'center',
+  },
+  savedModeChipActive: {
+    borderColor: COLORS.black,
+    backgroundColor: COLORS.neutral300,
+  },
+  savedModeChipText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.neutral700,
+  },
+  savedModeChipTextActive: {
+    color: COLORS.black,
+  },
+  savedCardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.neutral400,
+    marginBottom: 10,
+  },
+  savedCardRowSelected: {
+    borderColor: COLORS.black,
+    backgroundColor: COLORS.neutral300,
+  },
+  savedCardTextCol: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  savedCardTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: COLORS.black,
+  },
+  savedCardMeta: {
+    fontSize: 13,
+    color: COLORS.neutral700,
+    marginTop: 2,
   },
 });

@@ -19,6 +19,7 @@ export function PaymentConfirmedScreen({ navigation, route }: Props) {
   const [showBookingModal, setShowBookingModal] = useState(true);
   const booking = route.params?.booking;
   const immediateTrip = route.params?.immediateTrip === true;
+  const isCash = route.params?.paymentMethod === 'dinheiro';
 
   const destinationLabel = booking?.destination_address ?? 'destino';
   const totalPaidFormatted = booking
@@ -40,8 +41,12 @@ export function PaymentConfirmedScreen({ navigation, route }: Props) {
         <View style={styles.iconWrap}>
           <MaterialIcons name="check" size={48} color="#FFFFFF" />
         </View>
-        <Text style={styles.title}>Pagamento confirmado!</Text>
-        <Text style={styles.subtitleGrey}>Seu motorista já está a caminho.</Text>
+        <Text style={styles.title}>{isCash ? 'Pedido confirmado!' : 'Pagamento confirmado!'}</Text>
+        <Text style={styles.subtitleGrey}>
+          {isCash
+            ? 'O valor será pago em dinheiro ao motorista. Ele já está a caminho.'
+            : 'Seu motorista já está a caminho.'}
+        </Text>
         <Text style={styles.instruction}>
           Acompanhe em tempo real a localização e a previsão de chegada.
         </Text>
@@ -75,7 +80,11 @@ export function PaymentConfirmedScreen({ navigation, route }: Props) {
                   Saída {booking.departure} · Chegada {booking.arrival}.
                 </Text>
                 <Text style={styles.modalText}>Motorista: {booking.driver_name}.</Text>
-                <Text style={styles.modalTotalPaid}>Valor total pago: {totalPaidFormatted}</Text>
+                <Text style={styles.modalTotalPaid}>
+                  {isCash
+                    ? `Valor a pagar em dinheiro ao motorista: ${totalPaidFormatted}`
+                    : `Valor total pago: ${totalPaidFormatted}`}
+                </Text>
               </>
             ) : null}
             <Text style={styles.modalText}>
@@ -94,9 +103,17 @@ export function PaymentConfirmedScreen({ navigation, route }: Props) {
       <View style={styles.iconWrap}>
         <MaterialIcons name="check" size={48} color="#FFFFFF" />
       </View>
-      <Text style={styles.title}>Pagamento confirmado!</Text>
-      <Text style={styles.subtitle}>Sua viagem foi agendada com sucesso.</Text>
-      <Text style={styles.hint}>Você poderá acompanhar o status e detalhes em Atividades.</Text>
+      <Text style={styles.title}>{isCash ? 'Pedido confirmado!' : 'Pagamento confirmado!'}</Text>
+      <Text style={styles.subtitle}>
+        {isCash
+          ? 'Sua viagem foi agendada. O pagamento será feito em dinheiro diretamente ao motorista.'
+          : 'Sua viagem foi agendada com sucesso.'}
+      </Text>
+      <Text style={styles.hint}>
+        {isCash
+          ? 'Leve o valor combinado no dia da viagem. Acompanhe o status em Atividades.'
+          : 'Você poderá acompanhar o status e detalhes em Atividades.'}
+      </Text>
       <TouchableOpacity style={styles.primaryButton} onPress={goToActivities} activeOpacity={0.8}>
         <Text style={styles.primaryButtonText}>Ver em Atividades</Text>
       </TouchableOpacity>

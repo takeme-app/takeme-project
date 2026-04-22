@@ -22,6 +22,7 @@ import {
   loadClientScheduledTrips,
   compareTripsByDepartureAndBadge,
   tripFitsPassengersAndBags,
+  filterScheduledTripsByWhenSelection,
   type ClientScheduledTripItem,
 } from '../../lib/clientScheduledTrips';
 import { formatDriverRatingLabel, formatTripFareBrl } from '../../lib/tripDriverDisplay';
@@ -107,8 +108,8 @@ const FALLBACK_ORIGIN: Place = {
 const DEFAULT_DESTINATION_COORDS = { latitude: -7.3305, longitude: -35.3335 };
 
 /** Em "Planeje sua corrida" (imediata) mostramos mais endereços recentes; em "Procurando viagem" só 2. */
-const RECENT_LIST_SIZE_DEFAULT = 2;
-const RECENT_LIST_SIZE_PLAN = 10;
+const RECENT_LIST_SIZE_DEFAULT = 3;
+const RECENT_LIST_SIZE_PLAN = 3;
 
 export function SearchTripScreen({ navigation, route }: Props) {
   const mapRef = useRef<MapboxMapRef>(null);
@@ -140,7 +141,10 @@ export function SearchTripScreen({ navigation, route }: Props) {
   const [planWhenModalVisible, setPlanWhenModalVisible] = useState(false);
   const [tripCallout, setTripCallout] = useState<ScheduledTripItem | null>(null);
 
-  /** Lista filtrada por origem/destino (raio), capacidade e ordenada por saída + Take Me. Só exibe viagens quando há rota definida. */
+  /**
+   * Lista filtrada por origem/destino (raio), capacidade e **dia** («Agora» = só partidas hoje no fuso local).
+   * Mapa «Procurando viagem» / planeje na mesma tela não devem listar oferta só da próxima semana.
+   */
   const scheduledTrips = useMemo(() => {
     if (!origin?.latitude || !destination?.latitude) return [];
     const oLat = origin.latitude;
@@ -155,7 +159,9 @@ export function SearchTripScreen({ navigation, route }: Props) {
         Math.abs(t.longitude - dLng) <= ROUTE_MATCH_DEGREES &&
         tripFitsPassengersAndBags(t, LIST_PASSENGERS, LIST_BAGS)
     );
-    return [...filtered].sort(compareTripsByDepartureAndBadge);
+    const whenNow = { whenOption: 'now' as const, whenLabel: 'Agora' };
+    const byDay = filterScheduledTripsByWhenSelection(filtered, whenNow);
+    return [...byDay].sort(compareTripsByDepartureAndBadge);
   }, [allScheduledTrips, origin?.latitude, origin?.longitude, destination?.latitude, destination?.longitude]);
 
   /** Endereços recentes ordenados pela menor distância da origem (para a página Planeje sua corrida). */
@@ -937,6 +943,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
                 destination: destination ? { address: destination.address, latitude: destination.latitude, longitude: destination.longitude } : undefined,
                 scheduled_trip_id: trip.id,
                 immediateTrip: route.params?.immediateTrip,
+                scheduledTripDepartureAt: trip.departure_at,
               });
             }}
             disabled={tripsLoading || !destination || !selectedTripId}

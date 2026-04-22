@@ -12,7 +12,7 @@ export async function loadShipmentDriversForRoute(params: {
   destinationLng: number;
   hubDestination?: { latitude: number; longitude: number };
 }): Promise<{ items: ClientScheduledTripItem[]; error: string | null }> {
-  const { items, error } = await loadClientScheduledTrips();
+  const { items, error } = await loadClientScheduledTrips({ applyBookingsPromoToList: false });
   if (error) return { items: [], error };
   const destLat = params.hubDestination?.latitude ?? params.destinationLat;
   const destLng = params.hubDestination?.longitude ?? params.destinationLng;

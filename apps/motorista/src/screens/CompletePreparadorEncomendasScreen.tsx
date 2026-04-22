@@ -19,6 +19,7 @@ import { useAppAlert } from '../contexts/AppAlertContext';
 import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext';
 import { supabase } from '../lib/supabase';
 import { resolveWorkerBaseId } from '../lib/resolveWorkerBaseId';
+import { getGoogleMapsApiKey } from '../lib/googleMapsConfig';
 import { GoogleCityAutocomplete } from '../components/GoogleCityAutocomplete';
 import type { GoogleGeocodeResult } from '@take-me/shared';
 import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
@@ -104,8 +105,20 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
     const ageNum = parseInt(onlyDigits(age), 10);
     if (!ageNum || ageNum < 18 || ageNum > 100) { showAlert('Atenção', 'Informe uma idade válida (18–100).'); return; }
     if (!city.trim()) { showAlert('Atenção', 'Preencha a cidade.'); return; }
-    if (!cityResolved) {
-      showAlert('Atenção', 'Selecione uma cidade na lista de sugestões (ou digite ao menos 2 caracteres se não houver chave do Google).');
+    const mapsKeyCity = getGoogleMapsApiKey()?.trim();
+    if (mapsKeyCity) {
+      if (!cityResolved) {
+        showAlert(
+          'Atenção',
+          'Cidade: toque numa opção da lista até aparecer o ícone verde de confirmação ao lado do campo.',
+        );
+        return;
+      }
+    } else if (!cityResolved) {
+      showAlert(
+        'Atenção',
+        'Cidade: informe ao menos 2 caracteres ou configure EXPO_PUBLIC_GOOGLE_MAPS_API_KEY para buscar e confirmar na lista.',
+      );
       return;
     }
     const expNum = parseInt(onlyDigits(experienceYears), 10);

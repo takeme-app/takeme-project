@@ -1,5 +1,8 @@
 import { supabase } from './supabase';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import { bookingCardChargeAmountCents } from './bookingChargePreview';
+import { parseTimeSlotRange, toISODateFromUtcIso, toISODate } from './dateTimeSlots';
+import type { WhenTimeResult } from '../hooks/useWhenTimeSelection';
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -141,7 +144,77 @@ export function tripFitsPassengersAndBags(
   return trip.seats >= p && trip.bags >= b;
 }
 
-export async function loadClientScheduledTrips(): Promise<{
+/**
+ * Restringe ofertas pela escolha «Agora» vs data/horário agendados (mesmo critério que PlanRideScreen).
+ * «Agora» = apenas `departure_at` no **mesmo dia civil local** que hoje — não listar viagens só da próxima segunda, etc.
+ */
+export function filterScheduledTripsByWhenSelection(
+  trips: ClientScheduledTripItem[],
+  when: WhenTimeResult,
+  /** Referência de «hoje» (testes); padrão = relógio do aparelho. */
+  nowRef: Date = new Date(),
+): ClientScheduledTripItem[] {
+  let list = [...trips];
+  if (when.whenOption === 'now') {
+    const todayId = toISODate(nowRef);
+    list = list.filter((t) => t.departure_at && toISODateFromUtcIso(t.departure_at) === todayId);
+  } else if (when.whenOption === 'later' && when.scheduledDateId) {
+    const dateId = when.scheduledDateId;
+    const slotStr = when.scheduledTimeSlot;
+    list = list.filter((t) => {
+      if (!t.departure_at) return false;
+      const tripDate = toISODateFromUtcIso(t.departure_at);
+      if (tripDate !== dateId) return false;
+      if (!slotStr) return true;
+      const slot = parseTimeSlotRange(slotStr);
+      if (!slot) return true;
+      const dep = new Date(t.departure_at);
+      const depMinutes = dep.getHours() * 60 + dep.getMinutes();
+      return depMinutes >= slot.startMinutes && depMinutes < slot.endMinutes;
+    });
+  }
+  return list;
+}
+
+export type LoadClientScheduledTripsOptions = {
+  /**
+   * Quando true (padrão), aplica a mesma promoção ativa de `bookings` que o checkout usa,
+   * para o valor exibido na lista coincidir com o débito no cartão.
+   * Desligar em fluxos que reutilizam a lista mas não são reserva de passageiro (ex.: escolher motorista para encomenda).
+   */
+  applyBookingsPromoToList?: boolean;
+};
+
+type PromoBatchRow = { ord: number; promo_discount_cents?: number | null };
+
+async function applyBookingsPromoToTripListAmounts(items: ClientScheduledTripItem[], userId: string): Promise<void> {
+  if (items.length === 0) return;
+  const bases = items.map((it) => it.amount_cents);
+  if (!bases.some((b) => b != null && b >= 1)) return;
+
+  const p_amounts = bases.map((b) => (b != null && b >= 1 ? Math.floor(Number(b)) : 0));
+  const { data, error } = await supabase.rpc('apply_active_promotion_for_amounts', {
+    p_order_type: 'bookings',
+    p_user_id: userId,
+    p_amounts,
+  });
+  if (error || !Array.isArray(data)) return;
+
+  const byOrd = new Map<number, number>();
+  for (const row of data as PromoBatchRow[]) {
+    if (row?.ord != null) {
+      byOrd.set(Number(row.ord), Math.max(0, Math.floor(Number(row.promo_discount_cents ?? 0))));
+    }
+  }
+  for (let i = 0; i < items.length; i++) {
+    const base = bases[i];
+    if (base == null || base < 1) continue;
+    const disc = byOrd.get(i + 1) ?? 0;
+    items[i].amount_cents = bookingCardChargeAmountCents(base, disc);
+  }
+}
+
+export async function loadClientScheduledTrips(opts?: LoadClientScheduledTripsOptions): Promise<{
   items: ClientScheduledTripItem[];
   error: string | null;
 }> {
@@ -257,5 +330,20 @@ export async function loadClientScheduledTrips(): Promise<{
   }
 
   items.sort(compareTripsByDepartureAndBadge);
+
+  const applyPromo = opts?.applyBookingsPromoToList !== false;
+  if (applyPromo && items.length > 0) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user?.id) {
+      try {
+        await applyBookingsPromoToTripListAmounts(items, user.id);
+      } catch {
+        /* RPC ausente ou rede: mantém preço base da rota */
+      }
+    }
+  }
+
   return { items, error: null };
 }

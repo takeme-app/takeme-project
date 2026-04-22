@@ -42,27 +42,45 @@ export type ShipmentPlaceParam = {
   city?: string;
 };
 
-/** Dados comuns: destinatário + cotação após Recipient. */
-export type ShipmentRecipientQuoteParams = {
+/** Origem, destino, janela e tamanho do pacote (sem cotação nem destinatário). */
+export type ShipmentLegParams = {
   origin: ShipmentPlaceParam;
   destination: ShipmentPlaceParam;
   whenOption: 'now' | 'later';
   whenLabel?: string;
   packageSize: 'pequeno' | 'medio' | 'grande';
   packageSizeLabel: string;
-  recipient: ShipmentRecipientParam;
+};
+
+/** Valores da cotação e base após calcular o preço. */
+export type ShipmentPricingQuoteParams = {
   amountCents: number;
   pricingSubtotalCents: number;
   platformFeeCents: number;
   priceRouteBaseCents: number;
   pricingRouteId: string;
   adminPctApplied: number;
-  /**
-   * Base de hub resolvida na origem (`null` = sem base na região → escolha de motorista de viagem).
-   * Definido no Recipient antes de SelectShipmentDriver / ConfirmShipment.
-   */
+  /** Base de hub na origem (`null` = sem base na região). */
   resolvedBaseId?: string | null;
 };
+
+/** Após escolher o motorista: cotação + motorista; o destinatário é preenchido na tela seguinte. */
+export type ShipmentAfterDriverParams = ShipmentLegParams &
+  ShipmentPricingQuoteParams & {
+    clientPreferredDriverId: string;
+    scheduledTripDepartureAt?: string;
+    /** `scheduled_trips.id` da oferta escolhida (grava em `shipments.scheduled_trip_id`). */
+    scheduledTripId?: string;
+  };
+
+/** Dados comuns: destinatário + cotação (checkout). */
+export type ShipmentRecipientQuoteParams = ShipmentLegParams &
+  ShipmentPricingQuoteParams & {
+    recipient: ShipmentRecipientParam;
+    /** Dia da viagem do motorista escolhido (para limite mesmo destino / mesmo dia). */
+    scheduledTripDepartureAt?: string;
+    scheduledTripId?: string;
+  };
 
 /** Destinatário do envio */
 export type ShipmentRecipientParam = {
@@ -71,20 +89,16 @@ export type ShipmentRecipientParam = {
   email?: string;
   phone: string;
   instructions?: string;
+  /** @deprecated Preferir `photoUris`. */
   photoUri?: string;
+  /** Paths locais (file://) antes do upload; múltiplas fotos da encomenda. */
+  photoUris?: string[];
 };
 
 export type ShipmentStackParamList = {
   SelectShipmentAddress: undefined;
-  Recipient: {
-    origin: ShipmentPlaceParam;
-    destination: ShipmentPlaceParam;
-    whenOption: 'now' | 'later';
-    whenLabel?: string;
-    packageSize: 'pequeno' | 'medio' | 'grande';
-    packageSizeLabel: string;
-  };
-  SelectShipmentDriver: ShipmentRecipientQuoteParams;
+  SelectShipmentDriver: ShipmentLegParams;
+  Recipient: ShipmentAfterDriverParams;
   ConfirmShipment: ShipmentRecipientQuoteParams & {
     /**
      * Motorista de viagem escolhido pelo cliente (oferta em `shipments`; `base_id` pode existir para coleta na base).
@@ -129,7 +143,9 @@ export type DependentShipmentFormParams = {
   bagsCount: number;
   instructions?: string;
   dependentId?: string;
+  /** @deprecated Preferir `photoUris`. */
   photoUri?: string;
+  photoUris?: string[];
 };
 
 /** Origem, destino e janela após «Definir viagem» (antes de escolher motorista). */
@@ -203,12 +219,31 @@ export type TripStackParamList = {
   PlanRide: { origin?: TripPlaceParam; destination?: TripPlaceParam; scheduledDateId?: string; scheduledTimeSlot?: string };
   ChooseTime: undefined;
   SearchTrip: { destination?: { address: string; city?: string; latitude?: number; longitude?: number }; immediateTrip?: boolean };
-  ConfirmDetails: { driver?: TripDriverParam; origin?: TripPlaceParam; destination?: TripPlaceParam; scheduled_trip_id?: string; immediateTrip?: boolean };
-  Checkout: { driver?: TripDriverParam; origin?: TripPlaceParam; destination?: TripPlaceParam; scheduled_trip_id?: string; passengers?: TripPassengerParam[]; bags_count?: number; immediateTrip?: boolean };
+  ConfirmDetails: {
+    driver?: TripDriverParam;
+    origin?: TripPlaceParam;
+    destination?: TripPlaceParam;
+    scheduled_trip_id?: string;
+    immediateTrip?: boolean;
+    /** ISO da partida da `scheduled_trip` (limite mesmo destino / mesmo dia). */
+    scheduledTripDepartureAt?: string;
+  };
+  Checkout: {
+    driver?: TripDriverParam;
+    origin?: TripPlaceParam;
+    destination?: TripPlaceParam;
+    scheduled_trip_id?: string;
+    passengers?: TripPassengerParam[];
+    bags_count?: number;
+    immediateTrip?: boolean;
+    scheduledTripDepartureAt?: string;
+  };
   PaymentConfirmed: {
     booking?: PaymentConfirmedBookingParam;
     immediateTrip?: boolean;
     tripLive?: TripLiveDriverDisplay;
+    /** Quando `dinheiro`, textos da tela falam em pagamento no ato, não “já pago”. */
+    paymentMethod?: 'credito' | 'debito' | 'pix' | 'dinheiro';
   };
   DriverOnTheWay: TripLiveDriverDisplay | undefined;
   TripInProgress: TripLiveDriverDisplay | undefined;

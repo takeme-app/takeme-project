@@ -56,7 +56,6 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
     locality: null,
     adminArea: null,
   });
-  const [preferenceArea, setPreferenceArea] = useState('');
   const [experienceYears, setExperienceYears] = useState('');
 
   const [bankCode, setBankCode] = useState('');
@@ -159,19 +158,26 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       showAlert('Atenção', 'Preencha a cidade.');
       return;
     }
-    if (!cityResolved) {
-      showAlert('Atenção', 'Selecione uma cidade na lista de sugestões (ou digite ao menos 2 caracteres se não houver chave do Google).');
+    const mapsKey = getGoogleMapsApiKey()?.trim();
+    if (mapsKey) {
+      if (!cityResolved) {
+        showAlert(
+          'Atenção',
+          'Cidade: toque numa opção da lista de sugestões até aparecer o ícone verde de confirmação ao lado do campo.',
+        );
+        return;
+      }
+    } else if (!cityResolved) {
+      showAlert(
+        'Atenção',
+        'Cidade: informe ao menos 2 caracteres no nome ou configure EXPO_PUBLIC_GOOGLE_MAPS_API_KEY para buscar e confirmar na lista.',
+      );
       return;
     }
     if (isParceiro) {
       const expNum = parseInt(onlyDigits(experienceYears), 10);
       if (!expNum || expNum < 1 || expNum > 60) {
         showAlert('Atenção', 'Informe os anos de experiência (entre 1 e 60).');
-        return;
-      }
-    } else {
-      if (!preferenceArea.trim()) {
-        showAlert('Atenção', 'Preencha a área de preferência.');
         return;
       }
     }
@@ -230,17 +236,23 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       return;
     }
 
-    const mapsKey = getGoogleMapsApiKey()?.trim();
+    if (!mapsKey) {
+      showAlert(
+        'Atenção',
+        'Configure EXPO_PUBLIC_GOOGLE_MAPS_API_KEY para confirmar origem e destino de cada rota na lista (ícone verde). É obrigatório para validar o trajeto no cadastro.',
+      );
+      return;
+    }
     for (let i = 0; i < routes.length; i++) {
       const r = routes[i];
       if (!r.origin.trim() || !r.destination.trim()) {
         showAlert('Atenção', `Preencha origem e destino da rota ${i + 1}.`);
         return;
       }
-      if (mapsKey && (!r.originResolved || !r.destinationResolved)) {
+      if (!r.originResolved || !r.destinationResolved) {
         showAlert(
           'Atenção',
-          `Na rota ${i + 1}, toque em uma sugestão da lista para origem e destino (confirma o ponto no mapa para passageiros encontrarem sua viagem).`,
+          `Rota ${i + 1}: escolha origem e destino na lista de sugestões até aparecer o ícone verde ao lado de cada campo.`,
         );
         return;
       }
@@ -265,7 +277,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       cityLocality: cityMeta.locality,
       cityAdminArea: cityMeta.adminArea,
       cityResolvedFromMaps: cityResolved,
-      preferenceArea: isParceiro ? '' : preferenceArea.trim(),
+      preferenceArea: '',
       experienceYears: isParceiro ? onlyDigits(experienceYears) : '',
       bankCode: bankCode.trim(),
       agencyNumber: agencyNumber.trim(),
@@ -387,17 +399,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
               maxLength={2}
             />
           </FieldBlock>
-        ) : (
-          <FieldBlock label="Área de preferência">
-            <TextInput
-              style={styles.input}
-              placeholder="Ex: Bairro"
-              placeholderTextColor="#9CA3AF"
-              value={preferenceArea}
-              onChangeText={setPreferenceArea}
-            />
-          </FieldBlock>
-        )}
+        ) : null}
 
         {sectionTitle('Dados bancários')}
         <FieldBlock label="Banco">
@@ -527,13 +529,14 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
         {sectionTitle('Documentos')}
         <TouchableOpacity style={styles.uploadBox} onPress={() => pickImage(setCnhFrontUri)} activeOpacity={0.8}>
           <MaterialIcons name="cloud-upload" size={40} color="#9CA3AF" />
-          <Text style={styles.uploadTitle}>CNH frente e verso</Text>
-          <Text style={styles.uploadSub}>Envie a frente da CNH. Toque de novo em outra caixa para o verso.</Text>
+          <Text style={styles.uploadTitle}>CNH frente</Text>
+          <Text style={styles.uploadSub}>Envie a foto da frente da CNH.</Text>
           {cnhFrontUri ? <Text style={styles.uploadOk}>✓ Frente adicionada</Text> : null}
         </TouchableOpacity>
         <TouchableOpacity style={styles.uploadBox} onPress={() => pickImage(setCnhBackUri)} activeOpacity={0.8}>
           <MaterialIcons name="cloud-upload" size={40} color="#9CA3AF" />
-          <Text style={styles.uploadSub}>Clique para enviar o verso da CNH</Text>
+          <Text style={styles.uploadTitle}>CNH verso</Text>
+          <Text style={styles.uploadSub}>Envie a foto do verso da CNH.</Text>
           {cnhBackUri ? <Text style={styles.uploadOk}>✓ Verso adicionado</Text> : null}
         </TouchableOpacity>
 

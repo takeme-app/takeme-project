@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   View,
   TextInput,
@@ -6,7 +6,6 @@ import {
   StyleSheet,
   ScrollView,
   KeyboardAvoidingView,
-  ActivityIndicator,
   Image,
 } from 'react-native';
 import { Text } from '../../components/Text';
@@ -17,8 +16,6 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ShipmentStackParamList } from '../../navigation/types';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import * as ImagePicker from 'expo-image-picker';
-import { quoteShipmentForClient, type ShipmentQuoteOk } from '../../lib/shipmentQuote';
-import { resolveShipmentBaseId } from '../../lib/resolveShipmentBase';
 
 type Props = NativeStackScreenProps<ShipmentStackParamList, 'Recipient'>;
 
@@ -29,6 +26,8 @@ const COLORS = {
   neutral400: '#e2e2e2',
   neutral700: '#767676',
 };
+
+const MAX_ENCOMENDA_PHOTOS = 8;
 
 function formatPhone(value: string): string {
   const digits = value.replace(/\D/g, '').slice(0, 11);
@@ -41,70 +40,56 @@ function formatPhone(value: string): string {
 export function RecipientScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
-  const { origin, destination, whenOption, whenLabel, packageSize, packageSizeLabel } = route.params;
+  const {
+    origin,
+    destination,
+    whenOption,
+    whenLabel,
+    packageSize,
+    packageSizeLabel,
+    amountCents,
+    pricingSubtotalCents,
+    platformFeeCents,
+    priceRouteBaseCents,
+    pricingRouteId,
+    adminPctApplied,
+    resolvedBaseId,
+    clientPreferredDriverId,
+    scheduledTripDepartureAt,
+    scheduledTripId,
+  } = route.params;
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [instructions, setInstructions] = useState('');
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [quote, setQuote] = useState<ShipmentQuoteOk | null>(null);
-  const [quoteLoading, setQuoteLoading] = useState(true);
-  const [quoteError, setQuoteError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setQuoteLoading(true);
-    setQuoteError(null);
-    setQuote(null);
-    (async () => {
-      const res = await quoteShipmentForClient({
-        originAddress: origin.address,
-        destinationAddress: destination.address,
-        originLat: origin.latitude,
-        originLng: origin.longitude,
-        destinationLat: destination.latitude,
-        destinationLng: destination.longitude,
-        packageSize,
-      });
-      if (cancelled) return;
-      if (!res.ok) {
-        setQuoteError(res.error);
-        setQuote(null);
-      } else {
-        setQuote(res.quote);
-      }
-      setQuoteLoading(false);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    origin.address,
-    origin.latitude,
-    origin.longitude,
-    destination.address,
-    destination.latitude,
-    destination.longitude,
-    packageSize,
-  ]);
-
+  const [photoUris, setPhotoUris] = useState<string[]>([]);
   const handlePhoneChange = (text: string) => setPhone(formatPhone(text));
 
-  const pickImage = async () => {
+  const pickImages = async () => {
+    const remaining = MAX_ENCOMENDA_PHOTOS - photoUris.length;
+    if (remaining <= 0) {
+      showAlert('Fotos', `Máximo de ${MAX_ENCOMENDA_PHOTOS} fotos.`);
+      return;
+    }
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      showAlert('Permissão', 'Precisamos de acesso à galeria para adicionar uma foto da encomenda.');
+      showAlert('Permissão', 'Precisamos de acesso à galeria para adicionar fotos da encomenda.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.8,
+      allowsMultipleSelection: true,
+      quality: 0.85,
+      selectionLimit: remaining,
     });
-    if (!result.canceled && result.assets[0]?.uri) {
-      setPhotoUri(result.assets[0].uri);
+    if (!result.canceled && result.assets?.length) {
+      setPhotoUris((prev) =>
+        [...prev, ...result.assets.map((a) => a.uri)].slice(0, MAX_ENCOMENDA_PHOTOS)
+      );
     }
+  };
+
+  const removePhotoAt = (index: number) => {
+    setPhotoUris((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleFazerPedido = () => {
@@ -118,17 +103,13 @@ export function RecipientScreen({ navigation, route }: Props) {
       showAlert('Atenção', 'Preencha o telefone do destinatário com DDD e número.');
       return;
     }
-    if (!quote) {
-      showAlert('Valor', quoteError ?? 'Não foi possível calcular o valor do envio.');
-      return;
-    }
     const recipientPayload = {
       name: nameTrim,
       phone: phoneDigits,
       instructions: instructions.trim() || undefined,
-      photoUri: photoUri ?? undefined,
+      ...(photoUris.length ? { photoUris } : {}),
     };
-    const quoteParams = {
+    navigation.navigate('ConfirmShipment', {
       origin,
       destination,
       whenOption,
@@ -136,30 +117,17 @@ export function RecipientScreen({ navigation, route }: Props) {
       packageSize,
       packageSizeLabel,
       recipient: recipientPayload,
-      amountCents: quote.amountCents,
-      pricingSubtotalCents: quote.pricingSubtotalCents,
-      platformFeeCents: quote.platformFeeCents,
-      priceRouteBaseCents: quote.priceRouteBaseCents,
-      pricingRouteId: quote.pricingRouteId,
-      adminPctApplied: quote.adminPctApplied,
-    };
-    setLoading(true);
-    void (async () => {
-      try {
-        const resolvedBaseId = await resolveShipmentBaseId({
-          origin: { latitude: origin.latitude, longitude: origin.longitude },
-          originAddress: origin.address,
-        });
-        navigation.navigate('SelectShipmentDriver', {
-          ...quoteParams,
-          resolvedBaseId: resolvedBaseId ?? null,
-        });
-      } catch {
-        showAlert('Erro', 'Não foi possível verificar a base da região. Tente de novo.');
-      } finally {
-        setLoading(false);
-      }
-    })();
+      amountCents,
+      pricingSubtotalCents,
+      platformFeeCents,
+      priceRouteBaseCents,
+      pricingRouteId,
+      adminPctApplied,
+      resolvedBaseId,
+      clientPreferredDriverId,
+      scheduledTripDepartureAt,
+      scheduledTripId,
+    });
   };
 
   return (
@@ -214,56 +182,52 @@ export function RecipientScreen({ navigation, route }: Props) {
           numberOfLines={3}
         />
 
-        <Text style={styles.label}>Foto da encomenda (opcional)</Text>
-        {photoUri ? (
-          <View style={styles.photoPreviewOuter}>
-            <TouchableOpacity onPress={pickImage} activeOpacity={0.9} style={styles.photoPreviewTouchable}>
-              <Image source={{ uri: photoUri }} style={styles.photoThumb} resizeMode="cover" />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.photoRemoveBtn}
-              onPress={() => setPhotoUri(null)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityLabel="Remover foto"
-            >
-              <MaterialIcons name="close" size={22} color="#FFFFFF" />
-            </TouchableOpacity>
-            <Text style={styles.photoHint}>Toque na imagem para trocar · use ✕ para remover</Text>
-          </View>
-        ) : (
-          <TouchableOpacity style={styles.photoBox} onPress={pickImage} activeOpacity={0.8}>
+        <Text style={styles.label}>Fotos da encomenda (opcional, até {MAX_ENCOMENDA_PHOTOS})</Text>
+        {photoUris.length === 0 ? (
+          <TouchableOpacity style={styles.photoBox} onPress={pickImages} activeOpacity={0.8}>
             <MaterialIcons name="camera-alt" size={32} color={COLORS.neutral700} />
-            <Text style={styles.photoPlaceholderText}>Toque para adicionar</Text>
+            <Text style={styles.photoPlaceholderText}>Toque para adicionar uma ou mais fotos</Text>
           </TouchableOpacity>
+        ) : (
+          <View style={styles.photoGallery}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.photoGalleryRow}
+            >
+              {photoUris.map((uri, idx) => (
+                <View key={`${uri}-${idx}`} style={styles.photoThumbWrap}>
+                  <Image source={{ uri }} style={styles.photoThumbSmall} resizeMode="cover" />
+                  <TouchableOpacity
+                    style={styles.photoThumbRemove}
+                    onPress={() => removePhotoAt(idx)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityLabel="Remover foto"
+                  >
+                    <MaterialIcons name="close" size={18} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              {photoUris.length < MAX_ENCOMENDA_PHOTOS ? (
+                <TouchableOpacity style={styles.photoAddTile} onPress={pickImages} activeOpacity={0.85}>
+                  <MaterialIcons name="add-a-photo" size={28} color={COLORS.neutral700} />
+                </TouchableOpacity>
+              ) : null}
+            </ScrollView>
+            <Text style={styles.photoHint}>Toque em + para incluir mais · ✕ remove a foto</Text>
+          </View>
         )}
 
-        {quoteLoading ? (
-          <View style={styles.quoteRow}>
-            <ActivityIndicator size="small" color={COLORS.black} />
-            <Text style={styles.quoteHint}>Calculando valor do envio…</Text>
-          </View>
-        ) : quoteError ? (
-          <Text style={styles.quoteError}>{quoteError}</Text>
-        ) : quote ? (
-          <Text style={styles.quoteHint}>
-            Valor estimado: R$ {(quote.amountCents / 100).toFixed(2).replace('.', ',')} (subtotal + taxa da plataforma)
-          </Text>
-        ) : null}
+        <Text style={styles.quoteHint}>
+          Valor estimado: R$ {(amountCents / 100).toFixed(2).replace('.', ',')} (subtotal + taxa da plataforma)
+        </Text>
 
         <TouchableOpacity
-          style={[
-            styles.primaryButton,
-            (loading || quoteLoading || quoteError || !quote) && styles.primaryButtonDisabled,
-          ]}
+          style={styles.primaryButton}
           onPress={handleFazerPedido}
-          disabled={loading || quoteLoading || !!quoteError || !quote}
           activeOpacity={0.8}
         >
-          {loading ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
-          ) : (
-            <Text style={styles.primaryButtonText}>Fazer pedido</Text>
-          )}
+          <Text style={styles.primaryButtonText}>Fazer pedido</Text>
         </TouchableOpacity>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -299,36 +263,48 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 24,
   },
-  photoPreviewOuter: { marginBottom: 24, position: 'relative' },
-  photoPreviewTouchable: {
+  photoGallery: { marginBottom: 24 },
+  photoGalleryRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
+  photoThumbWrap: {
+    width: 88,
+    height: 88,
     borderRadius: 12,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: COLORS.neutral400,
+    position: 'relative',
+    marginRight: 10,
   },
-  photoThumb: { width: '100%', height: 200, backgroundColor: COLORS.neutral300 },
-  photoRemoveBtn: {
+  photoThumbSmall: { width: '100%', height: '100%', backgroundColor: COLORS.neutral300 },
+  photoThumbRemove: {
     position: 'absolute',
-    top: 10,
-    right: 10,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.65)',
+    top: 4,
+    right: 4,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.6)',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  photoAddTile: {
+    width: 88,
+    height: 88,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: COLORS.neutral400,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.neutral300,
+    marginRight: 0,
+  },
   photoHint: { fontSize: 12, color: COLORS.neutral700, marginTop: 10 },
   photoPlaceholderText: { fontSize: 14, color: COLORS.neutral700, marginTop: 8 },
-  quoteRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
   quoteHint: { fontSize: 13, color: COLORS.neutral700, marginBottom: 16 },
-  quoteError: { fontSize: 13, color: '#b53838', marginBottom: 16 },
   primaryButton: {
     backgroundColor: COLORS.black,
     paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',
   },
-  primaryButtonDisabled: { opacity: 0.6 },
   primaryButtonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
 });

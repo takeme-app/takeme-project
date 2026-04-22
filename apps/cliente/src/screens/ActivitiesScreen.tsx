@@ -136,7 +136,8 @@ export function ActivitiesScreen({ navigation }: Props) {
     );
   }, []);
 
-  const loadActivities = useCallback(async () => {
+  const loadActivities = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       setActivities([]);
@@ -354,7 +355,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
     setActivities(combined);
-    setLoading(false);
+    if (!silent) setLoading(false);
   }, []);
 
   useFocusEffect(
@@ -362,6 +363,51 @@ export function ActivitiesScreen({ navigation }: Props) {
       loadActivities();
     }, [loadActivities])
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || cancelled) return;
+      const uid = user.id;
+      channel = supabase
+        .channel(`client-activities-${uid}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'bookings', filter: `user_id=eq.${uid}` },
+          () => {
+            void loadActivities({ silent: true });
+          },
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'shipments', filter: `user_id=eq.${uid}` },
+          () => {
+            void loadActivities({ silent: true });
+          },
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'dependent_shipments', filter: `user_id=eq.${uid}` },
+          () => {
+            void loadActivities({ silent: true });
+          },
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'excursion_requests', filter: `user_id=eq.${uid}` },
+          () => {
+            void loadActivities({ silent: true });
+          },
+        )
+        .subscribe();
+    })();
+    return () => {
+      cancelled = true;
+      if (channel) void supabase.removeChannel(channel);
+    };
+  }, [loadActivities]);
 
   useEffect(() => {
     loadFilterPreferences();

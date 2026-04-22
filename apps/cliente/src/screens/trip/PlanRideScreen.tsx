@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { View, TouchableOpacity, StyleSheet, ScrollView, Modal, Pressable, Animated, Platform, ActivityIndicator, Image } from 'react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import { View, TouchableOpacity, StyleSheet, ScrollView, Modal, Pressable, Animated, ActivityIndicator, Image } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
@@ -14,12 +13,10 @@ import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
 import { formatRecentDestinationDisplay } from '../../lib/recentDestinations';
 import { useRecentDestinationsSorted } from '../../hooks/useRecentDestinationsSorted';
 import {
-  ALL_TIME_SLOTS,
-  getAvailableTimeSlots,
   toISODate,
-  formatDateDisplayLabel,
   parseTimeSlotRange,
   toISODateFromUtcIso,
+  getDateCarouselOptions,
 } from '../../lib/dateTimeSlots';
 import {
   loadClientScheduledTrips,
@@ -45,6 +42,7 @@ const DEFAULT_ORIGIN: Place = {
 };
 const DEFAULT_DESTINATION_COORDS = { latitude: -7.3305, longitude: -35.3335 };
 const TIME_SHEET_SLIDE = 450;
+const PLAN_RIDE_DAY_OPTIONS = getDateCarouselOptions();
 const ROUTE_MATCH_DEGREES = 0.15;
 const LIST_PASSENGERS = 1;
 const LIST_BAGS = 0;
@@ -87,6 +85,10 @@ export function PlanRideScreen({ navigation, route }: Props) {
       const pt = d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
       return `${pt} · ${scheduledTimeSlot.split(' - ')[0]}`;
     }
+    if (scheduledDateId) {
+      const d = new Date(scheduledDateId + 'T12:00:00');
+      return d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
+    }
     const today = new Date();
     return today.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
   });
@@ -95,8 +97,6 @@ export function PlanRideScreen({ navigation, route }: Props) {
   const [filterTimeSlot, setFilterTimeSlot] = useState<string | null>(() => scheduledTimeSlot ?? null);
   const [timeSheetVisible, setTimeSheetVisible] = useState(false);
   const [selectedDay, setSelectedDay] = useState<string>(() => toISODate(new Date()));
-  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const timeSheetOverlayOpacity = useRef(new Animated.Value(0)).current;
   const timeSheetTranslateY = useRef(new Animated.Value(TIME_SHEET_SLIDE)).current;
 
@@ -253,8 +253,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
   };
 
   const openTimeSheet = () => {
-    setSelectedDay(toISODate(new Date()));
-    setSelectedSlot(null);
+    setSelectedDay(filterDateId || toISODate(new Date()));
     timeSheetOverlayOpacity.setValue(0);
     timeSheetTranslateY.setValue(TIME_SHEET_SLIDE);
     setTimeSheetVisible(true);
@@ -264,19 +263,16 @@ export function PlanRideScreen({ navigation, route }: Props) {
     timeSheetOverlayOpacity.setValue(0);
     timeSheetTranslateY.setValue(TIME_SHEET_SLIDE);
     setTimeSheetVisible(false);
-    setSelectedSlot(null);
   };
 
   const handleSelectTime = () => {
-    if (selectedSlot) {
-      const d = new Date(selectedDay + 'T12:00:00');
-      const pt = d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
-      setDateLabel(`${pt} · ${selectedSlot.split(' - ')[0]}`);
-      setFilterDateId(selectedDay);
-      setFilterTimeSlot(selectedSlot);
-      setSelectedTripId(null);
-      closeTimeSheet();
-    }
+    const d = new Date(selectedDay + 'T12:00:00');
+    const pt = d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
+    setDateLabel(pt);
+    setFilterDateId(selectedDay);
+    setFilterTimeSlot(null);
+    setSelectedTripId(null);
+    closeTimeSheet();
   };
 
   const handleAgendar = useCallback(() => {
@@ -308,6 +304,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
         avatar_url: trip.driverAvatarUrl,
       },
       immediateTrip: false,
+      scheduledTripDepartureAt: trip.departure_at,
     });
   }, [selectedTripId, scheduledTrips, effectiveDestination, origin, navigation]);
 
@@ -444,7 +441,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
         )}
         {!tripsLoading && !tripsError && scheduledTrips.length === 0 && (
           <Text style={styles.tripsEmptyText}>
-            {!destinationReady ? 'Defina origem e destino para ver viagens disponíveis.' : 'Nenhuma viagem encontrada para esta rota e horário.'}
+            {!destinationReady ? 'Defina origem e destino para ver viagens disponíveis.' : 'Nenhuma viagem encontrada para esta rota e data.'}
           </Text>
         )}
         {!tripsLoading && scheduledTrips.map((trip) => (
@@ -515,63 +512,32 @@ export function PlanRideScreen({ navigation, route }: Props) {
           <Pressable style={styles.timeSheetOverlayTouchable} onPress={closeTimeSheet} />
           <Animated.View style={[styles.timeSheetContent, { transform: [{ translateY: timeSheetTranslateY }] }]} pointerEvents="box-none">
             <View style={styles.timeSheetHandle} />
-            <Text style={styles.timeSheetTitle}>Escolha a hora</Text>
-            <TouchableOpacity
-              style={styles.dateInput}
-              onPress={() => setShowDatePicker(true)}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.dateInputText}>{formatDateDisplayLabel(selectedDay)}</Text>
-              <MaterialIcons name="event" size={22} color={COLORS.neutral700} />
-            </TouchableOpacity>
-            {showDatePicker && (
-              <>
-                <DateTimePicker
-                  value={new Date(selectedDay + 'T12:00:00')}
-                  mode="date"
-                  display={Platform.OS === 'android' ? 'default' : 'spinner'}
-                  minimumDate={new Date()}
-                  onChange={(_, date) => {
-                    if (date) {
-                      setSelectedDay(toISODate(date));
-                      setSelectedSlot(null);
-                    }
-                    if (Platform.OS === 'android') {
-                      setShowDatePicker(false);
-                    }
-                  }}
-                  locale="pt-BR"
-                />
-                {Platform.OS === 'ios' && (
-                  <TouchableOpacity style={styles.datePickerDoneButton} onPress={() => setShowDatePicker(false)} activeOpacity={0.8}>
-                    <Text style={styles.datePickerDoneText}>Concluído</Text>
-                  </TouchableOpacity>
-                )}
-              </>
-            )}
+            <Text style={styles.timeSheetTitle}>Escolha o dia</Text>
             <ScrollView style={styles.timeSlotsScroll} contentContainerStyle={styles.timeSlotsContent}>
-              {getAvailableTimeSlots(selectedDay, ALL_TIME_SLOTS).map((slot) => (
+              {PLAN_RIDE_DAY_OPTIONS.map((opt) => (
                 <TouchableOpacity
-                  key={slot.label}
+                  key={opt.id}
                   style={styles.timeSlotRow}
-                  onPress={() => setSelectedSlot(slot.label)}
+                  onPress={() => setSelectedDay(opt.id)}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.timeSlotText}>{slot.label}</Text>
-                  <View style={[styles.timeRadio, selectedSlot === slot.label && styles.timeRadioSelected]}>
-                    {selectedSlot === slot.label && <View style={styles.timeRadioInner} />}
+                  <View>
+                    <Text style={styles.timeSlotText}>{opt.dayLabel}</Text>
+                    <Text style={styles.daySubLabel}>{opt.dateLabel}</Text>
+                  </View>
+                  <View style={[styles.timeRadio, selectedDay === opt.id && styles.timeRadioSelected]}>
+                    {selectedDay === opt.id && <View style={styles.timeRadioInner} />}
                   </View>
                 </TouchableOpacity>
               ))}
             </ScrollView>
             <View style={styles.timeSheetFooter}>
               <TouchableOpacity
-                style={[styles.timePrimaryButton, !selectedSlot && styles.timePrimaryButtonDisabled]}
+                style={styles.timePrimaryButton}
                 onPress={handleSelectTime}
-                disabled={!selectedSlot}
                 activeOpacity={0.8}
               >
-                <Text style={styles.timePrimaryButtonText}>Selecionar horário</Text>
+                <Text style={styles.timePrimaryButtonText}>Selecionar dia</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.timeCancelButton} onPress={closeTimeSheet}>
                 <Text style={styles.timeCancelButtonText}>Cancelar</Text>
@@ -778,7 +744,7 @@ const styles = StyleSheet.create({
   timeDayTabLabelTop: { fontSize: 14, fontWeight: '600', color: COLORS.neutral700 },
   timeDayTabLabelBottom: { fontSize: 12, fontWeight: '500', color: COLORS.neutral700, marginTop: 2 },
   timeDayTabTextSelected: { color: COLORS.black },
-  timeSlotsScroll: { maxHeight: 240 },
+  timeSlotsScroll: { maxHeight: 320 },
   timeSlotsContent: { paddingBottom: 24 },
   timeSlotRow: {
     flexDirection: 'row',
@@ -788,7 +754,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.neutral300,
   },
-  timeSlotText: { fontSize: 16, fontWeight: '500', color: COLORS.black },
+  timeSlotText: { fontSize: 16, fontWeight: '600', color: COLORS.black },
+  daySubLabel: { fontSize: 13, color: COLORS.neutral700, marginTop: 2 },
   timeRadio: {
     width: 22,
     height: 22,

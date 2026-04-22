@@ -6,9 +6,14 @@ import { getUserErrorMessage } from '../utils/errorMessage';
  * Renova a sessão e garante `stripe_customer_id` no perfil (mesmo fluxo do checkout de viagem),
  * para depois invocar `charge-booking` / cobrança de envio (`EDGE_CHARGE_SHIPMENT_SLUG`) com `Authorization: Bearer …`.
  */
-export async function ensureAccessTokenForStripeFunctions(): Promise<
-  { ok: true; accessToken: string } | { ok: false; message: string }
-> {
+export type EnsureStripeCustomerOptions = {
+  /** CPF só dígitos (11) — enviado à edge para registrar `br_cpf` no Customer Stripe. */
+  holderCpfDigits?: string;
+};
+
+export async function ensureAccessTokenForStripeFunctions(
+  opts?: EnsureStripeCustomerOptions,
+): Promise<{ ok: true; accessToken: string } | { ok: false; message: string }> {
   const {
     data: { session: sessionBefore },
   } = await supabase.auth.getSession();
@@ -23,8 +28,12 @@ export async function ensureAccessTokenForStripeFunctions(): Promise<
       message: getUserErrorMessage(refreshErr, 'Sessão expirada. Faça login novamente.'),
     };
   }
+  const cpf = opts?.holderCpfDigits?.replace(/\D/g, '') ?? '';
+  const body =
+    cpf.length === 11 ? { cpf } : undefined;
   const { data: ensureData, error: ensureErr } = await supabase.functions.invoke('ensure-stripe-customer', {
     headers: { Authorization: `Bearer ${accessToken}` },
+    body,
   });
   if (ensureErr) {
     const raw = await describeInvokeFailure(ensureData, ensureErr);

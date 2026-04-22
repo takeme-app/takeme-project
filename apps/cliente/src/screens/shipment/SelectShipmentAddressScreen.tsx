@@ -25,7 +25,7 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
 
   const handleConfirm = useCallback(
     (places: SelectedPlaces, when: WhenTimeResult) => {
-      navigation.navigate('Recipient', {
+      navigation.navigate('SelectShipmentDriver', {
         origin: {
           address: places.origin.address,
           latitude: places.origin.latitude,
@@ -73,7 +73,7 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
         destinationPlaceholder="Destino do envio"
         whenTitle="Para quando é o envio?"
         nowSubtitle="Envio imediato"
-        laterSubtitle="Agende para o horário que preferir"
+        laterSubtitle="Agende escolhendo o dia"
       />
       <PackageSizeSheet
         visible={sizeSheetVisible}

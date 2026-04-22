@@ -14,7 +14,7 @@ import {
   Share,
 } from 'react-native';
 import { Text } from '../../components/Text';
-import { AnimatedBottomSheet } from '../../components/AnimatedBottomSheet';
+import { useRootNavigation } from '../../navigation/RootNavigationContext';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -33,7 +33,6 @@ import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib/route';
 import { LiveDriverMapMarker } from '../../components/LiveDriverMapMarker';
 import { useScheduledTripLiveLocation } from '../../lib/useScheduledTripLiveLocation';
-import { getAvailableTimeSlots, ALL_TIME_SLOTS, toISODate } from '../../lib/dateTimeSlots';
 import { StatusBadge, clientViagemStatusBadge } from '../../components/StatusBadge';
 import type { TripLiveDriverDisplay } from '../../navigation/types';
 import { parsePassengerData } from '../../lib/clientBookingTripLive';
@@ -141,6 +140,7 @@ function shipmentPackageLabelPt(size: string): string {
 }
 
 export function TripDetailScreen({ navigation, route }: Props) {
+  const { navigateToTripStack } = useRootNavigation();
   const bookingId = route.params?.bookingId ?? '';
   const [detail, setDetail] = useState<BookingDetail | null>(null);
   const [tripShipments, setTripShipments] = useState<TripShipmentRow[]>([]);
@@ -150,8 +150,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
   const [routeDuration, setRouteDuration] = useState<string | null>(null);
   const [showCancelTripModal, setShowCancelTripModal] = useState(false);
   const [cancelLoading, setCancelLoading] = useState(false);
-  const [showRescheduleSheet, setShowRescheduleSheet] = useState(false);
-  const [selectedRescheduleSlot, setSelectedRescheduleSlot] = useState<string | null>(null);
+  const [showRescheduleConsentModal, setShowRescheduleConsentModal] = useState(false);
   const [supportSheetVisible, setSupportSheetVisible] = useState(false);
   /** `undefined` = ainda a carregar; `null` = sem linha em `booking_ratings`. */
   const [passengerBookingRating, setPassengerBookingRating] = useState<
@@ -159,7 +158,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
   >(undefined);
   const insets = useSafeAreaInsets();
 
-  async function handleCancelTrip() {
+  async function performBookingCancellation(): Promise<boolean> {
     setCancelLoading(true);
     try {
       await supabase
@@ -167,11 +166,44 @@ export function TripDetailScreen({ navigation, route }: Props) {
         .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
         .eq('id', bookingId);
       void tryOpenSupportTicket('reembolso', { booking_id: bookingId });
-      setShowCancelTripModal(false);
-      navigation.goBack();
+      return true;
+    } catch {
+      return false;
     } finally {
       setCancelLoading(false);
     }
+  }
+
+  async function handleCancelTrip() {
+    const ok = await performBookingCancellation();
+    if (ok) {
+      setShowCancelTripModal(false);
+      navigation.goBack();
+    } else {
+      Alert.alert('Erro', 'Não foi possível cancelar a viagem. Tente novamente.');
+    }
+  }
+
+  async function handleRescheduleConfirm() {
+    if (!detail) return;
+    const origin = {
+      address: detail.origin_address,
+      latitude: detail.origin_lat,
+      longitude: detail.origin_lng,
+    };
+    const destination = {
+      address: detail.destination_address,
+      latitude: detail.destination_lat,
+      longitude: detail.destination_lng,
+    };
+    const ok = await performBookingCancellation();
+    if (!ok) {
+      Alert.alert('Erro', 'Não foi possível cancelar a viagem para reagendar. Tente novamente.');
+      return;
+    }
+    setShowRescheduleConsentModal(false);
+    navigateToTripStack('PlanRide', { origin, destination });
+    navigation.goBack();
   }
 
   useEffect(() => {
@@ -873,7 +905,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
 
         {isInProgress && (
           <>
-            <TouchableOpacity style={styles.secondaryActionButton} activeOpacity={0.8} onPress={() => setShowRescheduleSheet(true)}>
+            <TouchableOpacity style={styles.secondaryActionButton} activeOpacity={0.8} onPress={() => setShowRescheduleConsentModal(true)}>
               <Text style={styles.secondaryActionButtonText}>Reagendar viagem</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.cancelButton} activeOpacity={0.8} onPress={() => setShowCancelTripModal(true)}>
@@ -902,34 +934,36 @@ export function TripDetailScreen({ navigation, route }: Props) {
         </View>
       </Modal>
 
-      <AnimatedBottomSheet visible={showRescheduleSheet} onClose={() => { setShowRescheduleSheet(false); setSelectedRescheduleSlot(null); }}>
-        <Text style={styles.rescheduleTitle}>Tem certeza que deseja reagendar esta viagem?</Text>
-        <Text style={styles.rescheduleSubtitle}>Escolha um novo horário de saída para esta viagem.</Text>
-        <Text style={styles.rescheduleWarning}>O reagendamento só é permitido no mesmo dia da data original.</Text>
-        <Text style={styles.sectionHeading}>Novo horário de saída</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rescheduleSlotsContent}>
-          {detail && getAvailableTimeSlots(toISODate(new Date(detail.created_at)), ALL_TIME_SLOTS).map((slot) => {
-            const timeLabel = slot.label.split(' - ')[0];
-            const isSelected = selectedRescheduleSlot === slot.label;
-            return (
-              <TouchableOpacity
-                key={slot.label}
-                style={[styles.rescheduleSlotChip, isSelected && styles.rescheduleSlotChipSelected]}
-                onPress={() => setSelectedRescheduleSlot(slot.label)}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.rescheduleSlotText, isSelected && styles.rescheduleSlotTextSelected]}>{timeLabel}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-        <TouchableOpacity style={styles.confirmModalPrimary} activeOpacity={0.8} onPress={() => { setShowRescheduleSheet(false); setSelectedRescheduleSlot(null); /* TODO: confirm reschedule */ }}>
-          <Text style={styles.confirmModalPrimaryText}>Confirmar reagendamento</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.confirmModalSecondary} activeOpacity={0.8} onPress={() => { setShowRescheduleSheet(false); setSelectedRescheduleSlot(null); }}>
-          <Text style={styles.confirmModalSecondaryText}>Cancelar</Text>
-        </TouchableOpacity>
-      </AnimatedBottomSheet>
+      <Modal visible={showRescheduleConsentModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.confirmModalBox}>
+            <Text style={styles.confirmModalTitle}>Reagendar viagem</Text>
+            <Text style={styles.confirmModalSubtitle}>
+              Para agendar uma nova corrida, a viagem atual será cancelada. O motorista será notificado e o reembolso seguirá a política do app. Deseja continuar?
+            </Text>
+            <TouchableOpacity
+              style={styles.confirmModalPrimary}
+              activeOpacity={0.8}
+              onPress={() => void handleRescheduleConfirm()}
+              disabled={cancelLoading}
+            >
+              {cancelLoading ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.confirmModalPrimaryText}>Sim, cancelar e agendar nova viagem</Text>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.confirmModalSecondary}
+              activeOpacity={0.8}
+              onPress={() => setShowRescheduleConsentModal(false)}
+              disabled={cancelLoading}
+            >
+              <Text style={styles.confirmModalSecondaryText}>Voltar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <TouchableOpacity style={[styles.fab, { bottom: Math.max(24, insets.bottom + 16) }]} onPress={() => setSupportSheetVisible(true)} activeOpacity={0.8}>
         <Image source={require('../../../assets/icons/icon-chat.png')} style={styles.fabIcon} />

@@ -51,10 +51,29 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const stripeSecret = Deno.env.get("STRIPE_SECRET_KEY");
+    const stripeSecretRaw = Deno.env.get("STRIPE_SECRET_KEY");
+    const stripeSecret = stripeSecretRaw?.trim() ?? "";
     if (!stripeSecret) {
       return new Response(
         JSON.stringify({ error: "Stripe não configurado (STRIPE_SECRET_KEY)" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (stripeSecret.startsWith("pk_")) {
+      return new Response(
+        JSON.stringify({
+          error:
+            "STRIPE_SECRET_KEY no projeto está com chave publicável (pk_…). Nas Edge Functions use a chave secreta da Stripe (sk_test_… / sk_live_… ou rk_…). Ajuste em Supabase → Project Settings → Edge Functions → Secrets.",
+        }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (!stripeSecret.startsWith("sk_") && !stripeSecret.startsWith("rk_")) {
+      return new Response(
+        JSON.stringify({
+          error:
+            "STRIPE_SECRET_KEY inválida: deve começar com sk_ ou rk_ (chave secreta ou restrita da Stripe).",
+        }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -62,16 +81,15 @@ Deno.serve(async (req) => {
     const userClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: `Bearer ${token}` } },
     });
-    const { data: claimsData, error: claimsError } = await userClient.auth.getClaims(token);
-    const claims = claimsData?.claims as { sub?: string; email?: string } | undefined;
-    const userId = claims?.sub;
-    if (claimsError || !userId) {
+    const { data: { user: authUser }, error: userError } = await userClient.auth.getUser(token);
+    if (userError || !authUser) {
       return new Response(
         JSON.stringify({ error: "Sessão inválida ou expirada" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
-    const userEmail = claims?.email ?? null;
+    const userId = authUser.id;
+    const userEmail = authUser.email ?? null;
 
     const body = (await req.json().catch(() => ({}))) as {
       payment_method_id?: string;
@@ -173,12 +191,16 @@ Deno.serve(async (req) => {
       );
     }
 
-    await admin.from("notifications").insert({
+    const { error: notifErr } = await admin.from("notifications").insert({
       user_id: userId,
       title: "Cartão cadastrado",
       message: "Seu cartão foi adicionado com sucesso.",
       category: "payment",
+      target_app_slug: "cliente",
     });
+    if (notifErr) {
+      console.warn("save-payment-method: notification insert (best-effort):", notifErr.message);
+    }
 
     return new Response(
       JSON.stringify({ ok: true }),

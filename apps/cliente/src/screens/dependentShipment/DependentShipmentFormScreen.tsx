@@ -7,6 +7,7 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -25,8 +26,11 @@ const COLORS = {
   background: '#FFFFFF',
   black: '#0d0d0d',
   neutral300: '#f1f1f1',
+  neutral400: '#e2e2e2',
   neutral700: '#767676',
 };
+
+const MAX_DEPENDENT_PHOTOS = 8;
 
 type Dependent = { id: string; full_name: string; status: string; contact_phone: string | null };
 
@@ -50,23 +54,34 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
   const [selectedDependent, setSelectedDependent] = useState<Dependent | null>(null);
   const [dependents, setDependents] = useState<Dependent[]>([]);
   const [loadingDependents, setLoadingDependents] = useState(true);
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [photoUris, setPhotoUris] = useState<string[]>([]);
 
-  const pickImage = async () => {
+  const pickImages = async () => {
+    const remaining = MAX_DEPENDENT_PHOTOS - photoUris.length;
+    if (remaining <= 0) {
+      showAlert('Fotos', `Máximo de ${MAX_DEPENDENT_PHOTOS} fotos.`);
+      return;
+    }
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      showAlert('Permissão', 'Precisamos de acesso à galeria para adicionar uma foto.');
+      showAlert('Permissão', 'Precisamos de acesso à galeria para adicionar fotos.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.8,
+      allowsMultipleSelection: true,
+      quality: 0.85,
+      selectionLimit: remaining,
     });
-    if (!result.canceled && result.assets[0]?.uri) {
-      setPhotoUri(result.assets[0].uri);
+    if (!result.canceled && result.assets?.length) {
+      setPhotoUris((prev) =>
+        [...prev, ...result.assets.map((a) => a.uri)].slice(0, MAX_DEPENDENT_PHOTOS)
+      );
     }
+  };
+
+  const removePhotoAt = (index: number) => {
+    setPhotoUris((prev) => prev.filter((_, i) => i !== index));
   };
 
   const loadDependents = useCallback(async () => {
@@ -122,7 +137,7 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
       bagsCount,
       instructions: instructions.trim() || undefined,
       dependentId: selectedDependent.id,
-      photoUri: photoUri ?? undefined,
+      ...(photoUris.length ? { photoUris } : {}),
     });
   };
 
@@ -260,17 +275,37 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
             numberOfLines={3}
           />
 
-          <Text style={styles.label}>Foto do dependente (opcional)</Text>
-          <TouchableOpacity style={styles.photoBox} onPress={pickImage} activeOpacity={0.8}>
-            {photoUri ? (
-              <Text style={styles.photoPlaceholderText} numberOfLines={1}>Foto selecionada</Text>
-            ) : (
-              <>
-                <MaterialIcons name="camera-alt" size={32} color={COLORS.neutral700} />
-                <Text style={styles.photoPlaceholderText}>Toque para adicionar</Text>
-              </>
-            )}
-          </TouchableOpacity>
+          <Text style={styles.label}>Fotos (opcional, até {MAX_DEPENDENT_PHOTOS})</Text>
+          {photoUris.length === 0 ? (
+            <TouchableOpacity style={styles.photoBox} onPress={pickImages} activeOpacity={0.8}>
+              <MaterialIcons name="camera-alt" size={32} color={COLORS.neutral700} />
+              <Text style={styles.photoPlaceholderText}>Toque para adicionar uma ou mais fotos</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.photoGallery}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoGalleryRow}>
+                {photoUris.map((uri, idx) => (
+                  <View key={`${uri}-${idx}`} style={styles.photoThumbWrap}>
+                    <Image source={{ uri }} style={styles.photoThumbSmall} resizeMode="cover" />
+                    <TouchableOpacity
+                      style={styles.photoThumbRemove}
+                      onPress={() => removePhotoAt(idx)}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      accessibilityLabel="Remover foto"
+                    >
+                      <MaterialIcons name="close" size={18} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                {photoUris.length < MAX_DEPENDENT_PHOTOS ? (
+                  <TouchableOpacity style={styles.photoAddTile} onPress={pickImages} activeOpacity={0.85}>
+                    <MaterialIcons name="add-a-photo" size={28} color={COLORS.neutral700} />
+                  </TouchableOpacity>
+                ) : null}
+              </ScrollView>
+              <Text style={styles.photoHintRow}>Toque em + para incluir mais</Text>
+            </View>
+          )}
 
           <TouchableOpacity style={styles.primaryButton} onPress={handleDefineTrip} activeOpacity={0.8}>
             <Text style={styles.primaryButtonText}>Definir viagem</Text>
@@ -417,13 +452,47 @@ const styles = StyleSheet.create({
   photoBox: {
     borderWidth: 2,
     borderStyle: 'dashed',
-    borderColor: '#E2E2E2',
+    borderColor: COLORS.neutral400,
     borderRadius: 12,
     minHeight: 120,
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
     marginBottom: 24,
   },
+  photoGallery: { marginBottom: 24 },
+  photoGalleryRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
+  photoThumbWrap: {
+    width: 88,
+    height: 88,
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+    marginRight: 10,
+  },
+  photoThumbSmall: { width: '100%', height: '100%', backgroundColor: COLORS.neutral300 },
+  photoThumbRemove: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoAddTile: {
+    width: 88,
+    height: 88,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: COLORS.neutral400,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.neutral300,
+  },
+  photoHintRow: { fontSize: 12, color: COLORS.neutral700, marginTop: 8 },
   photoPlaceholderText: { fontSize: 14, color: COLORS.neutral700, marginTop: 4 },
   primaryButton: {
     backgroundColor: COLORS.black,

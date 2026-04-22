@@ -18,8 +18,8 @@ export function ShipmentStack() {
       }}
     >
       <Stack.Screen name="SelectShipmentAddress" component={SelectShipmentAddressScreen} />
-      <Stack.Screen name="Recipient" component={RecipientScreen} />
       <Stack.Screen name="SelectShipmentDriver" component={SelectShipmentDriverScreen} />
+      <Stack.Screen name="Recipient" component={RecipientScreen} />
       <Stack.Screen name="ConfirmShipment" component={ConfirmShipmentScreen} />
       <Stack.Screen name="ShipmentSuccess" component={ShipmentSuccessScreen} />
     </Stack.Navigator>

@@ -10,7 +10,7 @@ import type { WhenTimeResult } from '../../hooks/useWhenTimeSelection';
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'DefineDependentTrip'>;
 
 export function DefineDependentTripScreen({ navigation, route }: Props) {
-  const { fullName, contactPhone, bagsCount, instructions, dependentId, photoUri } = route.params;
+  const { fullName, contactPhone, bagsCount, instructions, dependentId, photoUri, photoUris } = route.params;
 
   const handleConfirm = useCallback(
     (places: SelectedPlaces, when: WhenTimeResult) => {
@@ -34,10 +34,11 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
         bagsCount,
         instructions,
         dependentId,
-        photoUri,
+        ...(photoUris?.length ? { photoUris } : {}),
+        ...(photoUri ? { photoUri } : {}),
       });
     },
-    [navigation, fullName, contactPhone, bagsCount, instructions, dependentId, photoUri],
+    [navigation, fullName, contactPhone, bagsCount, instructions, dependentId, photoUri, photoUris],
   );
 
   return (
@@ -49,7 +50,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
       destinationPlaceholder="Para onde vai o dependente?"
       whenTitle="Para quando é a viagem?"
       nowSubtitle="Solicitar imediatamente"
-      laterSubtitle="Agende para o horário que preferir"
+      laterSubtitle="Agende escolhendo o dia"
     />
   );
 }
