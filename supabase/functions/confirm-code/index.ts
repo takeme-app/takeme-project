@@ -185,24 +185,10 @@ Deno.serve(async (req) => {
         })
         .eq("id", entity_id);
 
-      // Notificar passageiro
-      const { data: bookingFull } = await admin
-        .from("bookings")
-        .select("user_id")
-        .eq("id", entity_id)
-        .maybeSingle();
-      if (bookingFull?.user_id) {
-        const msg =
-          step === "pickup"
-            ? "Sua coleta foi confirmada pelo motorista."
-            : "Sua entrega foi confirmada. Boa viagem!";
-        await admin.from("notifications").insert({
-          user_id: bookingFull.user_id,
-          title: step === "pickup" ? "Coleta confirmada" : "Entrega confirmada",
-          message: msg,
-          category: "booking",
-        });
-      }
+      // As notificações para o passageiro ("Sua viagem está em andamento." /
+      // "Você chegou ao destino.") são geradas pelo trigger SQL
+      // `notify_client_booking_phase_change` em `public.bookings` — evita
+      // mensagens duplicadas quando este handler insere direto no inbox.
 
       return new Response(
         JSON.stringify({ ok: true, step, status: newStatus }),
