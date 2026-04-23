@@ -269,25 +269,11 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Notificar cliente.
-    // - `shipment`: notificação agora vem do trigger SQL
-    //   `notify_client_shipment_phase_change` (Fase 4) com texto literal do spec.
-    // - `dependent_shipment`: trigger específico ainda não existe (Fase 5);
-    //   mantemos o insert local até lá.
-    if (entity.user_id && entity_type === "dependent_shipment") {
-      const msg =
-        step === "pickup"
-          ? "A coleta do seu dependente foi confirmada."
-          : "A entrega do seu dependente foi confirmada.";
-      await admin.from("notifications").insert({
-        user_id: entity.user_id,
-        title:
-          step === "pickup" ? "Coleta confirmada" : "Entrega confirmada",
-        message: msg,
-        category: entity_type,
-        target_app_slug: "cliente",
-      });
-    }
+    // Notificações ao cliente agora são disparadas exclusivamente pelos
+    // triggers SQL (fonte única de verdade), com o texto literal do spec:
+    //   - `shipment`         -> notify_client_shipment_phase_change (Fase 4)
+    //   - `dependent_shipment` -> notify_client_dependent_shipment_phase_change (Fase 5)
+    //   - `booking`          -> notify_client_booking_phase_change (Fase 2)
 
     return new Response(
       JSON.stringify({ ok: true, step, status: newStatus }),
