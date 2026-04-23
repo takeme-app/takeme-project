@@ -460,6 +460,7 @@ Deno.serve(async (req) => {
         title: "Conta criada",
         message: "Seu cadastro foi enviado. Verificaremos seus documentos em breve.",
         category: "account",
+        target_app_slug: "motorista",
       });
       if (notifErr) console.error("[create-motorista-account] notifications", notifErr);
     }

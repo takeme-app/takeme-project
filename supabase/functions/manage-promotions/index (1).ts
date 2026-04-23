@@ -12,6 +12,73 @@ function isAdmin(user: { app_metadata?: Record<string, unknown> }): boolean {
   return user?.app_metadata?.role === "admin";
 }
 
+/** `target_audiences` → app_slug alvo do push (cliente x motorista). */
+function audienceToAppSlug(audience: string): "cliente" | "motorista" | null {
+  if (audience === "passengers") return "cliente";
+  if (
+    audience === "drivers" ||
+    audience === "preparers_shipments" ||
+    audience === "preparers_excursions"
+  ) {
+    return "motorista";
+  }
+  return null;
+}
+
+/**
+ * Dispara uma notification por usuário ativo em cada app alvo da promoção.
+ * Usa `profile_fcm_tokens` como fonte de verdade (devices com push habilitado),
+ * agrupando pelo `app_slug` derivado de `target_audiences`.
+ *
+ * Best-effort: qualquer falha é logada mas não interrompe a criação da promoção.
+ */
+async function broadcastPromotionNotification(
+  admin: ReturnType<typeof createClient>,
+  audiences: string[],
+  title: string,
+  message: string,
+): Promise<void> {
+  const targetSlugs = new Set<"cliente" | "motorista">();
+  for (const aud of audiences) {
+    const slug = audienceToAppSlug(aud);
+    if (slug) targetSlugs.add(slug);
+  }
+  if (targetSlugs.size === 0) return;
+
+  for (const slug of targetSlugs) {
+    const { data: devices, error: devErr } = await admin
+      .from("profile_fcm_tokens")
+      .select("profile_id")
+      .eq("app_slug", slug);
+    if (devErr) {
+      console.error(`[manage-promotions] fcm_tokens(${slug}) err:`, devErr.message);
+      continue;
+    }
+    const uniqueIds = Array.from(
+      new Set(((devices ?? []) as { profile_id: string }[]).map((d) => d.profile_id)),
+    ).filter(Boolean);
+    if (uniqueIds.length === 0) continue;
+
+    const rows = uniqueIds.map((uid) => ({
+      user_id: uid,
+      title,
+      message,
+      category: "offers_promotions",
+      target_app_slug: slug,
+    }));
+
+    const CHUNK = 500;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const { error: insErr } = await admin
+        .from("notifications")
+        .insert(rows.slice(i, i + CHUNK) as never);
+      if (insErr) {
+        console.error(`[manage-promotions] notifications insert(${slug}) err:`, insErr.message);
+      }
+    }
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -161,20 +228,20 @@ Deno.serve(async (req) => {
         );
       }
 
-      // Send notification if promotion is active
       if (data && data.is_active) {
         try {
-          const gainPct = data.gain_pct_to_worker || 0;
-          const title = data.title || 'Promoção';
-          // Notify all users
-          await admin.from('notifications').insert({
-            title: 'Nova promoção disponível! 🎉',
-            message: gainPct > 0
-              ? `${title} — Motoristas e preparadores ganham +${gainPct}% extra! Abra o app para participar.`
-              : `${title} — Aproveite descontos especiais! Abra o app para saber mais.`,
-            category: 'offers_promotions',
-          });
-        } catch (e) { console.error('[manage-promotions] notification error:', e); }
+          const gainPct = (data as { gain_pct_to_worker?: number }).gain_pct_to_worker || 0;
+          const promoTitle = (data as { title?: string }).title || "Promoção";
+          const audiences = ((data as { target_audiences?: string[] }).target_audiences ?? []) as string[];
+          const pushTitle = "Nova promoção disponível! 🎉";
+          const pushMessage =
+            gainPct > 0
+              ? `${promoTitle} — Motoristas e preparadores ganham +${gainPct}% extra! Abra o app para participar.`
+              : `${promoTitle} — Aproveite descontos especiais! Abra o app para saber mais.`;
+          await broadcastPromotionNotification(admin, audiences, pushTitle, pushMessage);
+        } catch (e) {
+          console.error("[manage-promotions] broadcast notification error:", e);
+        }
       }
 
       return new Response(JSON.stringify({ ok: true, promotion: data }), {

@@ -137,16 +137,17 @@ Deno.serve(async (req) => {
             message:
               "O motorista não respondeu a tempo. Sua solicitação foi cancelada e o valor será estornado.",
             category: assignment.entity_type,
+            target_app_slug: "cliente",
           } as never);
         }
 
-        // Notificar motorista
         await admin.from("notifications").insert({
           user_id: assignment.worker_id,
           title: "Solicitação expirada",
           message:
             "Você não respondeu a tempo e a solicitação foi cancelada.",
           category: assignment.entity_type,
+          target_app_slug: "motorista",
         } as never);
 
         // Disparar estorno via process-refund Edge Function
