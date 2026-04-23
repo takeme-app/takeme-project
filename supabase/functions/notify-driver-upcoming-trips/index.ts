@@ -114,7 +114,7 @@ Deno.serve(async (req) => {
       if (allowed) {
         const { error: insErr } = await admin.from("notifications").insert({
           user_id: t.driver_id,
-          title: "Falta 1 hora para iniciar sua próxima viagem",
+          title: "Falta 1 hora para iniciar sua próxima Viagem!",
           message: `Prepare-se para ${truncate(t.origin_address, 60) || "origem"} → ${truncate(t.destination_address, 60) || "destino"}. Toque para ver detalhes.`,
           category: "trip_upcoming_1h",
           target_app_slug: "motorista",
