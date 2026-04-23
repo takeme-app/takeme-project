@@ -20,6 +20,14 @@ import type { FirebaseMessagingTypes } from '@react-native-firebase/messaging';
 const ANDROID_CHANNEL_ID = 'cliente-default';
 const ANDROID_CHANNEL_NAME = 'Notificações Take Me';
 
+/**
+ * Canal dedicado a notificações “ao vivo” (sticky) — ex.: ETA do motorista
+ * atualizando por minuto. IMPORTANCE LOW garante que o Android não faça
+ * heads-up a cada update; apenas a notificação persistente é atualizada.
+ */
+export const ANDROID_LIVE_CHANNEL_ID = 'cliente-live';
+const ANDROID_LIVE_CHANNEL_NAME = 'Atividade em tempo real';
+
 type TapHandler = (
   data: Record<string, string | object> | undefined,
 ) => void;
@@ -32,7 +40,7 @@ type NotifeeModule = {
       cb: (event: { type: number; detail: { notification?: { data?: Record<string, string | object> } } }) => void,
     ) => () => void;
   };
-  AndroidImportance: { HIGH: number };
+  AndroidImportance: { HIGH: number; LOW: number };
   EventType: { PRESS: number };
 };
 
@@ -53,6 +61,11 @@ async function ensureAndroidChannel(nf: NotifeeModule): Promise<void> {
     name: ANDROID_CHANNEL_NAME,
     importance: nf.AndroidImportance.HIGH,
     sound: 'default',
+  });
+  await nf.default.createChannel({
+    id: ANDROID_LIVE_CHANNEL_ID,
+    name: ANDROID_LIVE_CHANNEL_NAME,
+    importance: nf.AndroidImportance.LOW,
   });
 }
 
