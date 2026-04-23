@@ -203,6 +203,19 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
           )}
         </TouchableOpacity>
 
+        {/* TEMPORÁRIO: permite pular o onboarding da Stripe e ir direto para a Home.
+            Remover quando o cadastro Stripe voltar a ser obrigatório no fluxo. */}
+        <TouchableOpacity
+          style={styles.btnSkip}
+          onPress={() => {
+            navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(subtype) }] });
+          }}
+          disabled={loading || checking}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.btnSkipText}>Configurar mais tarde</Text>
+        </TouchableOpacity>
+
         <Text style={styles.mandatoryNote}>
           O cadastro Stripe é obrigatório para acessar a plataforma.
         </Text>
@@ -306,6 +319,23 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#FFFFFF',
     fontFamily: 'Inter_600SemiBold',
+  },
+  btnSkip: {
+    width: '100%',
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  btnSkipText: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#6B7280',
+    fontFamily: 'Inter_500Medium',
   },
   mandatoryNote: {
     fontSize: 13,

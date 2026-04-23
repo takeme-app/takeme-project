@@ -14,6 +14,7 @@ import {
   Image,
   KeyboardAvoidingView,
   BackHandler,
+  Vibration,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar, setStatusBarHidden } from 'expo-status-bar';
@@ -60,8 +61,10 @@ import {
   computeNextNavigationCamera,
   createInitialBearingState,
   haversineMeters,
+  offsetLatLngByMeters,
   type DriverFix,
   type NavigationBearingState,
+  type NavigationEdgePadding,
 } from '../lib/navigationCamera';
 import { snapToRoutePolyline, trimPolylineFromSnap } from '../lib/routeSnap';
 import * as ImagePicker from 'expo-image-picker';
@@ -86,18 +89,51 @@ function trimRoutePolylineFromDriverSnap(driverPos: LatLng, poly: LatLng[]): Lat
  * Metros à frente do PIN para o centro da câmera (só com polyline de rota).
  * O centro “à frente” empurra o ícone do motorista para baixo na tela; manter moderado.
  */
-const NAV_LOOK_AHEAD_M = 44;
-/** Reserva para o mini-sheet sobre o mapa — padding inferior da câmera “seguir GPS”. */
-const NAV_MAP_EXTRA_BOTTOM_FOR_MINI_CARD_PX = 400;
-/**
- * O centro da câmera fica NAV_LOOK_AHEAD_M à frente do GPS → o PIN fica mais baixo que o centro visual.
- * Padding extra inferior para o ícone ficar acima do card flutuante ao tocar “minha localização”.
- */
-const NAV_LOOKAHEAD_ICON_BOTTOM_CLEARANCE_PX = 200;
+const NAV_LOOK_AHEAD_M = 70;
 /** Salto GPS entre leituras acima disso não entra no odômetro (ruído / teletransporte). */
 const ODOM_MAX_SEGMENT_M = 450;
-/** Câmera em modo seguir: 0 = sem animação entre fixes (evita “voar”/atraso vs. GPS). */
-const NAV_CAMERA_ANIMATION_MS = 0;
+/** Distância (m) do motorista à polyline para considerar "fora de rota" e recalcular. */
+const REROUTE_TRIGGER_M = 55;
+/** Cooldown entre recálculos automáticos consecutivos (ms). */
+const REROUTE_COOLDOWN_MS = 10_000;
+/** Número de fixes GPS fora da rota antes de acionar o recálculo (evita falso-positivo em curvas). */
+const REROUTE_MIN_CONSECUTIVE_FIXES = 2;
+/** Velocidade mínima (m/s) do motorista para considerar reroute — evita recalcular quando parado. */
+const REROUTE_MIN_SPEED_MPS = 1;
+/** Gatilho rápido por curva errada: >90° entre heading do GPS e bearing do segmento da rota. */
+const REROUTE_FAST_BEARING_DELTA_DEG = 90;
+/** Velocidade mínima (m/s) para habilitar o gatilho rápido por bearing. */
+const REROUTE_FAST_MIN_SPEED_MPS = 3;
+/** Fator do REROUTE_TRIGGER_M para o gatilho rápido (metade da distância normal). */
+const REROUTE_FAST_DISTANCE_FACTOR = 0.5;
+/** Janela que agrupa recálculos "frequentes" para decidir cooldown adaptativo. */
+const REROUTE_ADAPTIVE_WINDOW_MS = 60_000;
+/** Cooldown estendido quando o motorista recalcula múltiplas vezes na janela acima. */
+const REROUTE_ADAPTIVE_COOLDOWN_MS = 30_000;
+/** Número de reroutes na janela que ativa o cooldown estendido. */
+const REROUTE_ADAPTIVE_THRESHOLD = 2;
+/** Tempo mínimo de exibição do badge "Recalculando" para não piscar. */
+const REROUTE_BADGE_MIN_VISIBLE_MS = 1800;
+/** Timeout sem resposta → assume falha de rede e sinaliza badge vermelho. */
+const REROUTE_NETWORK_FAIL_AFTER_MS = 15_000;
+/** Duração da animação de entrada/saída do badge de reroute. */
+const REROUTE_BADGE_ANIM_MS = 220;
+/** Após este tempo, exibe countdown "~Ns" ao lado da mensagem para dar sensação de progresso. */
+const REROUTE_BADGE_ELAPSED_THRESHOLD_MS = 2_000;
+/** Vibração curta ao detectar desvio — feedback tátil universal (iOS + Android). */
+const REROUTE_HAPTIC_MS = 40;
+
+/**
+ * Recuo de zoom aplicado durante navegação ativa: valores positivos afastam a câmera do PIN.
+ * Cada unidade equivale aproximadamente a 2× mais área visível na tela.
+ * (O zoom base do SDK fica em ~17.75–19.5; com -1.8 fica em ~15.95–17.7 — rua completa visível.)
+ */
+const TRIP_NAV_ZOOM_OFFSET = 1.8;
+
+/** Intervalo do loop de dead-reckoning (ms) — ~60 fps. Aproxima a suavidade de Waze/Uber. */
+const DR_TICK_MS = 16;
+/** Duração da animação da câmera por tick: ~1.7× o tick para blending suave entre frames. */
+const DR_CAMERA_ANIM_MS = 28;
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ActiveTrip'>;
 
@@ -816,6 +852,110 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const navRafRef = useRef<number | null>(null);
   /** Polyline usada para snap + bearing da via (prioridade: rota dourada, senão trecho escuro). */
   const routeForSnapRef = useRef<LatLng[]>([]);
+  /**
+   * Polyline usada **somente** para detecção off-route. Ignora o fallback de linha reta
+   * (2 pontos) do trecho tracejado para não gerar falsos negativos quando o motorista
+   * está em uma rua paralela perto de uma diagonal abstrata.
+   */
+  const offRouteGuideRef = useRef<LatLng[]>([]);
+
+  /**
+   * Estado de dead-reckoning: produzido a cada fix GPS por applyHeadingUpCamera
+   * e consumido pelo loop de ~30fps para extrapolar a posição entre fixes.
+   */
+  type NavDRState = {
+    anchorLat: number;
+    anchorLng: number;
+    heading: number;
+    pitch: number;
+    zoomLevel: number;
+    padding: NavigationEdgePadding;
+    fixedAt: number;
+    speedMps: number;
+    lookAheadM: number;
+  };
+  const lastNavDRRef = useRef<NavDRState | null>(null);
+  const drIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /**
+   * Contador que força recálculo de rota ao ser incrementado (off-route detection).
+   * Adicionado como dep nos effects de gold e dashed route.
+   */
+  const [rerouteKey, setRerouteKey] = useState(0);
+  /** `true` enquanto o motorista está fora da rota e o app busca nova polyline. */
+  const [isRerouting, setIsRerouting] = useState(false);
+  /**
+   * Feedback imediato: o GPS mostra o motorista fora da polyline atual,
+   * mesmo antes do trigger consolidar o recálculo (2 fixes + cooldown).
+   * Mantém o badge visível durante toda a janela de desvio.
+   */
+  const [isOffRouteSoft, setIsOffRouteSoft] = useState(false);
+  const isOffRouteSoftRef = useRef(false);
+  /** Nenhuma polyline chegou após timeout → possivelmente sem conexão. */
+  const [rerouteNetworkError, setRerouteNetworkError] = useState(false);
+  /** Fixes consecutivos fora da rota; zera ao retornar. */
+  const rerouteOffCountRef = useRef(0);
+  /** Timestamp do último recálculo automático (cooldown). */
+  const rerouteLastAtRef = useRef(0);
+  /** Timestamps recentes de reroutes para habilitar cooldown adaptativo. */
+  const rerouteHistoryRef = useRef<number[]>([]);
+  /** AbortController do fetch de rota em voo; substituído a cada novo trigger. */
+  const rerouteAbortRef = useRef<AbortController | null>(null);
+  /** Instante em que o reroute atual começou — usado p/ respeitar visibilidade mínima do badge. */
+  const rerouteStartAtRef = useRef(0);
+  /** Timer que aciona badge de "sem conexão" quando o reroute demora. */
+  const rerouteNetworkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Último `rerouteKey` cujo fetch da rota dourada já completou com sucesso.
+   * Enquanto `handled < rerouteKey`, o badge segue visível mesmo se `stopsRouteCoords` mudar
+   * por outros motivos (ex.: fallback de linha reta do trecho tracejado).
+   */
+  const handledRerouteKeyRef = useRef(0);
+  /** Anim value (0 → 1) do badge: fade + slide-down curto ao entrar, reverso ao sair. */
+  const rerouteBadgeAnim = useRef(new Animated.Value(0)).current;
+  /** Mantém o `Animated.View` montado até a animação de saída terminar. */
+  const [rerouteBadgeMounted, setRerouteBadgeMounted] = useState(false);
+  /** Segundos decorridos desde o trigger — alimenta o countdown do badge. */
+  const [rerouteElapsedSec, setRerouteElapsedSec] = useState(0);
+
+  const triggerReroute = useCallback(() => {
+    const now = Date.now();
+    const history = rerouteHistoryRef.current;
+    while (history.length > 0 && now - history[0] > REROUTE_ADAPTIVE_WINDOW_MS) {
+      history.shift();
+    }
+    history.push(now);
+    rerouteLastAtRef.current = now;
+    rerouteStartAtRef.current = now;
+    rerouteAbortRef.current?.abort();
+    rerouteAbortRef.current = new AbortController();
+    if (rerouteNetworkTimerRef.current) clearTimeout(rerouteNetworkTimerRef.current);
+    rerouteNetworkTimerRef.current = setTimeout(() => {
+      setRerouteNetworkError(true);
+    }, REROUTE_NETWORK_FAIL_AFTER_MS);
+    setRerouteNetworkError(false);
+    setIsRerouting(true);
+    setRerouteKey((k) => k + 1);
+  }, []);
+  /** Ref estável para chamar triggerReroute dentro de closures de GPS sem precisar de deps. */
+  const triggerRerouteRef = useRef<() => void>(triggerReroute);
+  useEffect(() => {
+    triggerRerouteRef.current = triggerReroute;
+  }, [triggerReroute]);
+
+  /** Retorna o cooldown efetivo levando em conta reroutes frequentes (adaptativo). */
+  const getEffectiveRerouteCooldownMs = useCallback(() => {
+    const now = Date.now();
+    const history = rerouteHistoryRef.current;
+    const recent = history.filter((t) => now - t <= REROUTE_ADAPTIVE_WINDOW_MS);
+    return recent.length >= REROUTE_ADAPTIVE_THRESHOLD
+      ? REROUTE_ADAPTIVE_COOLDOWN_MS
+      : REROUTE_COOLDOWN_MS;
+  }, []);
+  const getEffectiveRerouteCooldownMsRef = useRef(getEffectiveRerouteCooldownMs);
+  useEffect(() => {
+    getEffectiveRerouteCooldownMsRef.current = getEffectiveRerouteCooldownMs;
+  }, [getEffectiveRerouteCooldownMs]);
 
   /** Distância percorrida nesta tela (soma dos trechos GPS; não é o tamanho da polyline planejada). */
   const odometerLastFixRef = useRef<{ lat: number; lng: number } | null>(null);
@@ -915,7 +1055,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // ---------------------------------------------------------------------------
 
   const applyHeadingUpCamera = useCallback(() => {
-    if (!followNavRef.current || !mapRef.current) return;
+    if (!followNavRef.current) return;
     const raw = latestDriverFixRef.current;
     if (!raw || !isValidGlobeCoordinate(raw.latitude, raw.longitude)) return;
     if (!navBearingStateRef.current) {
@@ -942,32 +1082,36 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     }
     /** Sem rota desenhada: centra no veículo (0 m à frente) para o PIN não descer em direção ao card. */
     const lookAheadM = guide.length >= 2 ? NAV_LOOK_AHEAD_M : 0;
-    const padding = buildNavigationPadding({
-      windowHeight,
-      safeTop: insets.top,
-      safeBottom: effectiveBottomInset,
-      extraBottomOverlayPx:
-        12 +
-        NAV_MAP_EXTRA_BOTTOM_FOR_MINI_CARD_PX +
-        (lookAheadM > 0 ? NAV_LOOKAHEAD_ICON_BOTTOM_CLEARANCE_PX : 0),
-    });
+    // Padding simples: topo reserva barra de status + header; base fica levemente acima do card inferior.
+    const padding: NavigationEdgePadding = {
+      paddingTop: insets.top + 56,
+      paddingBottom: effectiveBottomInset + 160,
+      paddingLeft: 14,
+      paddingRight: 14,
+    };
     const out = computeNextNavigationCamera({
       fix,
       compassHeadingDeg: compassHeadingRef.current,
       state: navBearingStateRef.current,
       lookAheadMeters: lookAheadM,
       roadCourseDeg,
+      bearingLerp: 0.25,
+      zoomLerp: 0.20,
     });
     navBearingStateRef.current = out.state;
-    mapRef.current.setNavigationCamera({
-      centerCoordinate: [out.center.longitude, out.center.latitude],
+    // Grava o estado para o loop de dead-reckoning consumir em ~30fps.
+    lastNavDRRef.current = {
+      anchorLat: fix.latitude,
+      anchorLng: fix.longitude,
       heading: out.heading,
       pitch: out.pitch,
-      zoomLevel: out.zoomLevel,
+      zoomLevel: out.zoomLevel - TRIP_NAV_ZOOM_OFFSET,
       padding,
-      animationDuration: NAV_CAMERA_ANIMATION_MS,
-    });
-  }, [windowHeight, insets.top, effectiveBottomInset]);
+      fixedAt: Date.now(),
+      speedMps: raw.speedMps != null && raw.speedMps > 0 ? raw.speedMps : 0,
+      lookAheadM,
+    };
+  }, [insets.top, effectiveBottomInset]);
 
   const scheduleNavFrame = useCallback(() => {
     if (!followNavRef.current) return;
@@ -995,9 +1139,70 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         cancelAnimationFrame(navRafRef.current);
         navRafRef.current = null;
       }
+      if (drIntervalRef.current != null) {
+        clearInterval(drIntervalRef.current);
+        drIntervalRef.current = null;
+      }
     },
     [],
   );
+
+  /**
+   * Loop de dead-reckoning (~30fps): extrapola a posição GPS entre fixes reais para que
+   * a câmera se mova de forma contínua em vez de saltar a cada 1 segundo.
+   *
+   * A cada tick:
+   *  1. Pega o último estado gerado por applyHeadingUpCamera (bearing suavizado, zoom, pitch, padding).
+   *  2. Calcula quanto o veículo andou desde aquele fix: Δd = speedMps × Δt.
+   *  3. Desloca o ponto âncora nessa distância na direção do bearing atual.
+   *  4. Re-aplica o look-ahead e chama setNavigationCamera com animationDuration curto (55 ms)
+   *     para cobrir o próximo tick — câmera sempre em movimento.
+   */
+  useEffect(() => {
+    if (!followMyLocation) {
+      if (drIntervalRef.current != null) {
+        clearInterval(drIntervalRef.current);
+        drIntervalRef.current = null;
+      }
+      return;
+    }
+    drIntervalRef.current = setInterval(() => {
+      // Guarda sincronizada com useLayoutEffect: para imediatamente ao sair do follow.
+      if (!followNavRef.current) return;
+      const nav = lastNavDRRef.current;
+      if (!nav || !mapRef.current) return;
+      const dtS = Math.min((Date.now() - nav.fixedAt) / 1000, 2.5);
+      // Extrapola o ponto GPS somente se o veículo estiver em movimento (> ~1.4 km/h)
+      const extrapolated =
+        nav.speedMps > 0.4
+          ? offsetLatLngByMeters(nav.anchorLat, nav.anchorLng, nav.heading, nav.speedMps * dtS)
+          : { latitude: nav.anchorLat, longitude: nav.anchorLng };
+      // Reaplica o look-ahead na direção do bearing atual
+      const center =
+        nav.lookAheadM > 0
+          ? offsetLatLngByMeters(
+              extrapolated.latitude,
+              extrapolated.longitude,
+              nav.heading,
+              nav.lookAheadM,
+            )
+          : extrapolated;
+      mapRef.current.setNavigationCamera({
+        centerCoordinate: [center.longitude, center.latitude],
+        heading: nav.heading,
+        pitch: nav.pitch,
+        zoomLevel: nav.zoomLevel,
+        padding: nav.padding,
+        animationDuration: DR_CAMERA_ANIM_MS,
+      });
+    }, DR_TICK_MS);
+    return () => {
+      if (drIntervalRef.current != null) {
+        clearInterval(drIntervalRef.current);
+        drIntervalRef.current = null;
+      }
+    };
+  }, [followMyLocation]);
 
   // ---------------------------------------------------------------------------
   // Location tracking
@@ -1052,9 +1257,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         }
         locationSub.current = await Location.watchPositionAsync(
           {
-            accuracy: Location.Accuracy?.Balanced ?? Location.Accuracy.High,
-            distanceInterval: 8,
-            timeInterval: 4000,
+            accuracy: Location.Accuracy?.BestForNavigation ?? Location.Accuracy.High,
+            distanceInterval: 3,
+            timeInterval: 1000,
           },
           (loc: any) => {
             if (!active) return;
@@ -1062,15 +1267,71 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             const lo = loc.coords.longitude;
             accumulateTripOdometer(la, lo);
             flushDriverPositionToUi(la, lo);
+            const speedMps =
+              typeof loc.coords.speed === 'number' && loc.coords.speed >= 0 ? loc.coords.speed : null;
+            const headingDeg =
+              typeof loc.coords.heading === 'number' && loc.coords.heading >= 0 ? loc.coords.heading : null;
             latestDriverFixRef.current = {
               latitude: la,
               longitude: lo,
-              speedMps:
-                typeof loc.coords.speed === 'number' && loc.coords.speed >= 0 ? loc.coords.speed : null,
-              headingDeg:
-                typeof loc.coords.heading === 'number' && loc.coords.heading >= 0 ? loc.coords.heading : null,
+              speedMps,
+              headingDeg,
               timestamp: Date.now(),
             };
+            // Detecção off-route: visual (badge + opacidade) funciona mesmo sem velocidade válida;
+            // o TRIGGER de recálculo exige speedMps >= REROUTE_MIN_SPEED_MPS para evitar loops parados.
+            const activeRoute = offRouteGuideRef.current;
+            if (activeRoute.length >= 2) {
+              const snapResult = snapToRoutePolyline(
+                { latitude: la, longitude: lo },
+                activeRoute,
+                REROUTE_TRIGGER_M,
+              );
+              const farAway = snapResult.distanceM > REROUTE_TRIGGER_M;
+              const halfDistance = snapResult.distanceM > REROUTE_TRIGGER_M * REROUTE_FAST_DISTANCE_FACTOR;
+              let fastBearingTrigger = false;
+              if (
+                halfDistance &&
+                headingDeg != null &&
+                (speedMps ?? 0) >= REROUTE_FAST_MIN_SPEED_MPS
+              ) {
+                const diff = Math.abs(((headingDeg - snapResult.segmentBearingDeg + 540) % 360) - 180);
+                fastBearingTrigger = diff > REROUTE_FAST_BEARING_DELTA_DEG;
+              }
+              // Feedback visual imediato (independe da velocidade vir nula).
+              const isOffSoft = farAway || fastBearingTrigger;
+              if (isOffSoft !== isOffRouteSoftRef.current) {
+                isOffRouteSoftRef.current = isOffSoft;
+                setIsOffRouteSoft(isOffSoft);
+                if (isOffSoft) {
+                  try {
+                    Vibration.vibrate(REROUTE_HAPTIC_MS);
+                  } catch {
+                    /* alguns devices/emuladores não expõem vibração */
+                  }
+                }
+              }
+              // Trigger de recálculo: exige velocidade mínima (ou o gatilho rápido de curva errada).
+              const canTrigger = (speedMps ?? 0) >= REROUTE_MIN_SPEED_MPS || fastBearingTrigger;
+              if (isOffSoft && canTrigger) {
+                rerouteOffCountRef.current += 1;
+                const needed = fastBearingTrigger ? 1 : REROUTE_MIN_CONSECUTIVE_FIXES;
+                const cooldown = getEffectiveRerouteCooldownMsRef.current();
+                if (
+                  rerouteOffCountRef.current >= needed &&
+                  Date.now() - rerouteLastAtRef.current > cooldown
+                ) {
+                  rerouteOffCountRef.current = 0;
+                  triggerRerouteRef.current();
+                }
+              } else if (!isOffSoft) {
+                rerouteOffCountRef.current = 0;
+              }
+            } else if (isOffRouteSoftRef.current) {
+              // Sem rota confiável → não dá para afirmar que está fora; desliga o badge.
+              isOffRouteSoftRef.current = false;
+              setIsOffRouteSoft(false);
+            }
             if (followNavRef.current) scheduleNavFrame();
           },
         );
@@ -1343,43 +1604,53 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (loading) return;
     let cancelled = false;
-    const routeOpts = { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() };
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const routeOpts = {
+      mapboxToken: getMapboxAccessToken(),
+      googleMapsApiKey: getGoogleMapsApiKey(),
+      signal,
+    };
+    const snapshotRerouteKey = rerouteKey;
 
     const stopPts = dedupeConsecutivePoints(collectRemainingStopPoints(stops, currentStopIndex));
+
+    // Usa a posição mais fresca disponível (ref > state), importante ao recalcular off-route.
+    const dpLive = driverPositionRef.current;
+    const dp =
+      dpLive && isValidGlobeCoordinate(dpLive.latitude, dpLive.longitude)
+        ? dpLive
+        : driverPosition;
+
+    const commit = (coords: LatLng[]) => {
+      setStopsRouteCoords(coords);
+      handledRerouteKeyRef.current = Math.max(handledRerouteKeyRef.current, snapshotRerouteKey);
+    };
 
     (async () => {
       if (stopPts.length >= 2) {
         const withDriver =
-          driverPosition &&
-          isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
-            ? dedupeConsecutivePoints([driverPosition, ...stopPts])
+          dp && isValidGlobeCoordinate(dp.latitude, dp.longitude)
+            ? dedupeConsecutivePoints([dp, ...stopPts])
             : stopPts;
         const r = await getMultiPointRoute(withDriver, routeOpts);
         if (!cancelled && r?.coordinates?.length) {
-          setStopsRouteCoords(r.coordinates);
+          commit(r.coordinates);
           return;
         }
       }
-      if (
-        driverPosition &&
-        isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) &&
-        stopPts.length === 1
-      ) {
-        const r = await getRouteWithDuration(driverPosition, stopPts[0]!, routeOpts);
+      if (dp && isValidGlobeCoordinate(dp.latitude, dp.longitude) && stopPts.length === 1) {
+        const r = await getRouteWithDuration(dp, stopPts[0]!, routeOpts);
         if (!cancelled && r?.coordinates?.length) {
-          setStopsRouteCoords(r.coordinates);
+          commit(r.coordinates);
           return;
         }
       }
       const navDest = resolveNavigationDestination(stops, currentStopIndex, finalDestination);
-      if (
-        driverPosition &&
-        isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude) &&
-        navDest
-      ) {
-        const r = await getRouteWithDuration(driverPosition, navDest, routeOpts);
+      if (dp && isValidGlobeCoordinate(dp.latitude, dp.longitude) && navDest) {
+        const r = await getRouteWithDuration(dp, navDest, routeOpts);
         if (!cancelled && r?.coordinates?.length) {
-          setStopsRouteCoords(r.coordinates);
+          commit(r.coordinates);
           return;
         }
       }
@@ -1388,8 +1659,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [loading, stops, finalDestination, driverPositionKey, currentStopIndex]);
+  }, [loading, stops, finalDestination, driverPositionKey, currentStopIndex, rerouteKey]);
 
   // Trecho imediato: GPS → alvo geograficamente mais próximo (paradas restantes + destino da viagem).
   useEffect(() => {
@@ -1431,9 +1703,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     setEtaSeconds(null);
 
     let cancelled = false;
+    const controller = new AbortController();
     const routeOpts = {
       mapboxToken: getMapboxAccessToken(),
       googleMapsApiKey: getGoogleMapsApiKey(),
+      signal: controller.signal,
     };
 
     const timer = setTimeout(() => {
@@ -1472,15 +1746,124 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
     return () => {
       cancelled = true;
+      controller.abort();
       clearTimeout(timer);
     };
-  }, [loading, driverPositionKey, currentStopIndex, stops, trip?.id, trip?.destination_address, tripDestLL]);
+  }, [loading, driverPositionKey, currentStopIndex, stops, trip?.id, trip?.destination_address, tripDestLL, rerouteKey]);
 
   useEffect(() => {
     if (stopsRouteCoords.length >= 2) routeForSnapRef.current = stopsRouteCoords;
     else if (nearestDashedCoords.length >= 2) routeForSnapRef.current = nearestDashedCoords;
     else routeForSnapRef.current = [];
+
+    // Detecção de off-route: só aceita polylines "reais" (> 2 pontos), nunca o fallback de linha reta.
+    if (stopsRouteCoords.length >= 2) {
+      offRouteGuideRef.current = stopsRouteCoords;
+    } else if (nearestDashedCoords.length > 2) {
+      offRouteGuideRef.current = nearestDashedCoords;
+    } else {
+      offRouteGuideRef.current = [];
+    }
+
+    // Reavalia o soft-off-route imediatamente contra a nova polyline para desligar o badge
+    // assim que a rota passar pelo motorista (não precisa esperar o próximo fix).
+    const guide = offRouteGuideRef.current;
+    const dp = driverPositionRef.current;
+    if (guide.length >= 2 && dp) {
+      const snapRes = snapToRoutePolyline(
+        { latitude: dp.latitude, longitude: dp.longitude },
+        guide,
+        REROUTE_TRIGGER_M,
+      );
+      const onRoute = snapRes.distanceM <= REROUTE_TRIGGER_M;
+      if (onRoute && isOffRouteSoftRef.current) {
+        isOffRouteSoftRef.current = false;
+        setIsOffRouteSoft(false);
+      }
+    }
   }, [stopsRouteCoords, nearestDashedCoords]);
+
+  /**
+   * Ao chegar a rota dourada correspondente ao último trigger de reroute, desliga o estado
+   * visual de "recalculando" respeitando o tempo mínimo de exibição do badge para evitar flicker.
+   * Só olha `stopsRouteCoords` (dourada) + `handledRerouteKeyRef` para evitar que o fallback
+   * tracejado (linha reta) apague o badge prematuramente.
+   */
+  useEffect(() => {
+    if (!isRerouting) return;
+    if (handledRerouteKeyRef.current < rerouteKey) return;
+    if (stopsRouteCoords.length < 2) return;
+    const elapsed = Date.now() - rerouteStartAtRef.current;
+    const remaining = Math.max(0, REROUTE_BADGE_MIN_VISIBLE_MS - elapsed);
+    const t = setTimeout(() => {
+      setIsRerouting(false);
+      setRerouteNetworkError(false);
+      if (rerouteNetworkTimerRef.current) {
+        clearTimeout(rerouteNetworkTimerRef.current);
+        rerouteNetworkTimerRef.current = null;
+      }
+    }, remaining);
+    return () => clearTimeout(t);
+  }, [isRerouting, rerouteKey, stopsRouteCoords]);
+
+  /** Limpeza final dos timers/abort de reroute ao desmontar a tela. */
+  useEffect(
+    () => () => {
+      rerouteAbortRef.current?.abort();
+      rerouteAbortRef.current = null;
+      if (rerouteNetworkTimerRef.current) {
+        clearTimeout(rerouteNetworkTimerRef.current);
+        rerouteNetworkTimerRef.current = null;
+      }
+    },
+    [],
+  );
+
+  /** Estado derivado: mostrar o badge quando qualquer fase do reroute está ativa. */
+  const shouldShowRerouteBadge = isRerouting || isOffRouteSoft || rerouteNetworkError;
+
+  /**
+   * Anima entrada/saída do badge (fade + slide-down). Mantém o node montado até a animação
+   * de saída concluir, evitando "desaparecimento instantâneo" que quebra a sensação de fluidez.
+   */
+  useEffect(() => {
+    if (shouldShowRerouteBadge) {
+      setRerouteBadgeMounted(true);
+      Animated.timing(rerouteBadgeAnim, {
+        toValue: 1,
+        duration: REROUTE_BADGE_ANIM_MS,
+        useNativeDriver: true,
+      }).start();
+    } else if (rerouteBadgeMounted) {
+      Animated.timing(rerouteBadgeAnim, {
+        toValue: 0,
+        duration: REROUTE_BADGE_ANIM_MS,
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) setRerouteBadgeMounted(false);
+      });
+    }
+  }, [shouldShowRerouteBadge, rerouteBadgeMounted, rerouteBadgeAnim]);
+
+  /**
+   * Tick de 1s para alimentar o countdown "~Ns" do badge enquanto o fetch de rota estiver em voo.
+   * Dá ao motorista a sensação de "algo acontecendo" em vez de UI parada.
+   */
+  useEffect(() => {
+    if (!isRerouting) {
+      if (rerouteElapsedSec !== 0) setRerouteElapsedSec(0);
+      return;
+    }
+    const tick = () => {
+      const el = Math.max(0, Math.round((Date.now() - rerouteStartAtRef.current) / 1000));
+      setRerouteElapsedSec(el);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+    // rerouteElapsedSec não entra na dep: senão reentra no effect a cada tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRerouting]);
 
   // Região inicial: paradas relevantes + destino (sem priorizar origem cadastrada da viagem).
   const mapInitialRegion = useMemo((): MapRegion => {
@@ -2248,23 +2631,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         initialRegion={mapInitialRegion}
         layoutBottomInset={Platform.OS === 'android' ? effectiveBottomInset : 0}
         onUserAdjustedMap={() => {
+          // Apenas sai do modo seguir — não re-centraliza, para o usuário poder ver o mapa livremente.
           setFollowMyLocation(false);
-          const fix = latestDriverFixRef.current;
-          if (
-            fix &&
-            mapRef.current &&
-            isValidGlobeCoordinate(fix.latitude, fix.longitude)
-          ) {
-            mapRef.current.easeToRegionNorthUp(
-              {
-                latitude: fix.latitude,
-                longitude: fix.longitude,
-                latitudeDelta: MY_LOCATION_NAV_DELTA,
-                longitudeDelta: MY_LOCATION_NAV_DELTA,
-              },
-              400,
-            );
-          }
         }}
       >
         {(goldLineForMap?.length ?? 0) >= 2 || immediateLegLineForMap.length >= 2 ? (
@@ -2275,7 +2643,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 coordinates={goldLineForMap}
                 strokeColor={GOLD}
                 strokeWidth={5}
-                lineOpacity={1}
+                lineOpacity={isRerouting || isOffRouteSoft ? 0.4 : 1}
                 aboveLayerID={MAPBOX_STREETS_ROUTE_ABOVE_LAYER_ID}
               />
             )}
@@ -2373,6 +2741,38 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           <MaterialIcons name="arrow-back" size={20} color={DARK} />
         </TouchableOpacity>
 
+        {rerouteBadgeMounted && (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.rerouteBadge,
+              rerouteNetworkError && styles.rerouteBadgeError,
+              {
+                top: insets.top + 12,
+                opacity: rerouteBadgeAnim,
+                transform: [
+                  {
+                    translateY: rerouteBadgeAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [-8, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
+            <ActivityIndicator size="small" color="#fff" />
+            <Text style={styles.rerouteBadgeText}>
+              {rerouteNetworkError
+                ? 'Sem conexão — reconectando…'
+                : isRerouting &&
+                    rerouteElapsedSec * 1000 >= REROUTE_BADGE_ELAPSED_THRESHOLD_MS
+                  ? `Recalculando rota… ${rerouteElapsedSec}s`
+                  : 'Recalculando rota…'}
+            </Text>
+          </Animated.View>
+        )}
+
         <TouchableOpacity
           style={[styles.myLocationBtn, { top: overlayTop, left: 14 }]}
           activeOpacity={0.8}
@@ -2389,23 +2789,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             mapRef={mapRef}
             floating={false}
             onBeforeZoom={() => {
+              // Apenas sai do follow — não re-centraliza para o usuário poder usar os controles livremente.
               setFollowMyLocation(false);
-              const fix = latestDriverFixRef.current;
-              if (
-                fix &&
-                mapRef.current &&
-                isValidGlobeCoordinate(fix.latitude, fix.longitude)
-              ) {
-                mapRef.current.easeToRegionNorthUp(
-                  {
-                    latitude: fix.latitude,
-                    longitude: fix.longitude,
-                    latitudeDelta: MY_LOCATION_NAV_DELTA,
-                    longitudeDelta: MY_LOCATION_NAV_DELTA,
-                  },
-                  280,
-                );
-              }
             }}
           />
         </View>
@@ -3117,6 +3502,35 @@ const styles = StyleSheet.create({
   },
 
   zoomWrap: { position: 'absolute' },
+
+  rerouteBadge: {
+    position: 'absolute',
+    alignSelf: 'center',
+    left: 0,
+    right: 0,
+    marginHorizontal: 72,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 18,
+    backgroundColor: 'rgba(17, 24, 39, 0.92)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  rerouteBadgeError: {
+    backgroundColor: 'rgba(185, 28, 28, 0.95)',
+  },
+  rerouteBadgeText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
 
   myLocationBtn: {
     position: 'absolute',
