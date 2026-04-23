@@ -269,20 +269,23 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Notificar cliente
-    if (entity.user_id) {
-      const label =
-        entity_type === "shipment" ? "encomenda" : "dependente";
+    // Notificar cliente.
+    // - `shipment`: notificação agora vem do trigger SQL
+    //   `notify_client_shipment_phase_change` (Fase 4) com texto literal do spec.
+    // - `dependent_shipment`: trigger específico ainda não existe (Fase 5);
+    //   mantemos o insert local até lá.
+    if (entity.user_id && entity_type === "dependent_shipment") {
       const msg =
         step === "pickup"
-          ? `A coleta da sua ${label} foi confirmada.`
-          : `A entrega da sua ${label} foi confirmada.`;
+          ? "A coleta do seu dependente foi confirmada."
+          : "A entrega do seu dependente foi confirmada.";
       await admin.from("notifications").insert({
         user_id: entity.user_id,
         title:
           step === "pickup" ? "Coleta confirmada" : "Entrega confirmada",
         message: msg,
         category: entity_type,
+        target_app_slug: "cliente",
       });
     }
 
