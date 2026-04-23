@@ -58,6 +58,13 @@ function resolveStripeConnectUrls(
   return { returnUrl, refreshUrl };
 }
 
+/** Stripe às vezes só aceita `account_onboarding` (ex.: conta ainda não elegível a `account_update`). */
+function shouldRetryAccountLinkAsOnboarding(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (!msg.includes("account_update")) return false;
+  return msg.includes("account_onboarding") || msg.includes("Valid types");
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -101,6 +108,9 @@ Deno.serve(async (req) => {
     const body = (await req.json().catch(() => ({}))) as {
       return_url?: string;
       refresh_url?: string;
+      link_type?: "onboarding" | "update";
+      /** Abre o Express Dashboard da conta conectada (pendências, repasses) — não é Account Link. */
+      flow?: "account_link" | "express_login";
     };
 
     const { returnUrl, refreshUrl } = resolveStripeConnectUrls(body, stripeSecret);
@@ -132,7 +142,33 @@ Deno.serve(async (req) => {
     const stripe = new Stripe(stripeSecret);
     let accountId = (wp.stripe_connect_account_id as string | null | undefined)?.trim() ?? "";
 
+    if (body.flow === "express_login") {
+      if (!accountId) {
+        return new Response(
+          JSON.stringify({ error: "Conta Stripe ainda não criada. Use primeiro o cadastro na Stripe." }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const loginLink = await stripe.accounts.createLoginLink(accountId);
+      return new Response(
+        JSON.stringify({
+          url: loginLink.url,
+          stripe_connect_account_id: accountId,
+          flow: "express_login",
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    const linkType = body.link_type === "update" ? "account_update" : "account_onboarding";
+
     if (!accountId) {
+      if (linkType === "account_update") {
+        return new Response(
+          JSON.stringify({ error: "Conta Stripe Connect ainda não foi criada — inicie o onboarding primeiro." }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
       const account = await stripe.accounts.create({
         type: "express",
         country: "BR",
@@ -149,15 +185,39 @@ Deno.serve(async (req) => {
         .eq("id", userId);
     }
 
-    const link = await stripe.accountLinks.create({
-      account: accountId,
-      type: "account_onboarding",
-      return_url: returnUrl,
-      refresh_url: refreshUrl,
-    });
+    let effectiveType: "account_onboarding" | "account_update" = linkType;
+    let link: Awaited<ReturnType<typeof stripe.accountLinks.create>>;
+    try {
+      link = await stripe.accountLinks.create({
+        account: accountId,
+        type: effectiveType,
+        return_url: returnUrl,
+        refresh_url: refreshUrl,
+      });
+    } catch (firstErr) {
+      if (linkType === "account_update" && shouldRetryAccountLinkAsOnboarding(firstErr)) {
+        console.info(
+          "stripe-connect-link: account_update recusado pela Stripe, repetindo com account_onboarding",
+          accountId,
+        );
+        effectiveType = "account_onboarding";
+        link = await stripe.accountLinks.create({
+          account: accountId,
+          type: "account_onboarding",
+          return_url: returnUrl,
+          refresh_url: refreshUrl,
+        });
+      } else {
+        throw firstErr;
+      }
+    }
 
     return new Response(
-      JSON.stringify({ url: link.url, stripe_connect_account_id: accountId }),
+      JSON.stringify({
+        url: link.url,
+        stripe_connect_account_id: accountId,
+        account_link_type: effectiveType,
+      }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {

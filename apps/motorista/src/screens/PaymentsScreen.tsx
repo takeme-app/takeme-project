@@ -72,7 +72,10 @@ export function PaymentsScreen({ navigation }: Props) {
   const [newPixKey, setNewPixKey] = useState('');
   const [savingPix, setSavingPix] = useState(false);
   const [stripeState, setStripeState] = useState<StripeConnectState>('none');
+  const [stripePendingVerification, setStripePendingVerification] = useState(0);
+  const [stripeAccountId, setStripeAccountId] = useState<string | null>(null);
   const [connectLoading, setConnectLoading] = useState(false);
+  const [expressLoginLoading, setExpressLoginLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -86,12 +89,15 @@ export function PaymentsScreen({ navigation }: Props) {
     const { data: wp } = await supabase
       .from('worker_profiles')
       .select(
-        'pix_key, stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_details_submitted'
+        'pix_key, stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_details_submitted, stripe_connect_requirements_due_count, stripe_connect_pending_verification_count'
       )
       .eq('id', user.id)
       .single();
     setPixKey(wp?.pix_key ?? null);
     setStripeState(getStripeConnectState(wp));
+    setStripePendingVerification(Number(wp?.stripe_connect_pending_verification_count ?? 0) || 0);
+    const acct = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? '';
+    setStripeAccountId(acct || null);
 
     const today = new Date();
     const start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
@@ -137,6 +143,8 @@ export function PaymentsScreen({ navigation }: Props) {
         body: {
           return_url: 'take-me-motorista://payments',
           refresh_url: 'take-me-motorista://payments',
+          link_type:
+            stripeState === 'action_required' || stripeState === 'in_review' ? 'update' : 'onboarding',
         },
       });
       const url = (res.data as { url?: unknown } | null)?.url;
@@ -153,6 +161,34 @@ export function PaymentsScreen({ navigation }: Props) {
     }
     setConnectLoading(false);
   };
+
+  const handleStripeExpressLogin = async () => {
+    setExpressLoginLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        Alert.alert('Erro', 'Sessão expirada. Faça login novamente.');
+        return;
+      }
+      const res = await supabase.functions.invoke('stripe-connect-link', {
+        body: { flow: 'express_login' },
+      });
+      const url = (res.data as { url?: unknown } | null)?.url;
+      const isHttp = typeof url === 'string' && /^https?:\/\//i.test(url.trim());
+      if (res.error || !isHttp) {
+        const msg = await describeInvokeFailure(res.data, res.error);
+        Alert.alert('Erro', msg || 'Não foi possível abrir o painel Stripe.');
+        return;
+      }
+      await Linking.openURL((url as string).trim());
+    } catch (e: any) {
+      Alert.alert('Erro', e?.message || 'Falha ao abrir o painel Stripe.');
+    } finally {
+      setExpressLoginLoading(false);
+    }
+  };
+
+  const showStripeExpressLink = Boolean(stripeAccountId) && stripeState !== 'active';
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -192,6 +228,11 @@ export function PaymentsScreen({ navigation }: Props) {
                 {pixKey ? 'Chave Pix cadastrada' : 'Cadastrar chave Pix'}
               </Text>
               {pixKey && <Text style={styles.pixCardValue}>{pixKey}</Text>}
+              <Text style={styles.pixCardHint}>
+                {stripeState === 'active'
+                  ? 'Usada para repasses manuais. O recebimento automático vai para a conta cadastrada na Stripe.'
+                  : 'Usada para receber repasses manuais da equipe Take Me.'}
+              </Text>
             </View>
             <MaterialIcons name="edit" size={20} color={GOLD} />
           </TouchableOpacity>
@@ -199,10 +240,25 @@ export function PaymentsScreen({ navigation }: Props) {
           {/* Recebimento automático via Stripe Connect (4 estados: none/incomplete/in_review/active) */}
           <StripeConnectCard
             state={stripeState}
+            pendingVerificationCount={stripePendingVerification}
             loading={connectLoading}
             onPressSetup={handleStripeConnectSetup}
           />
 
+          {showStripeExpressLink ? (
+            <TouchableOpacity
+              style={styles.stripeExpressLinkWrap}
+              onPress={handleStripeExpressLogin}
+              disabled={expressLoginLoading || connectLoading}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.stripeExpressLinkText}>
+                {expressLoginLoading
+                  ? 'Abrindo painel Stripe…'
+                  : 'Abrir painel Stripe do motorista (pendências e repasses)'}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
 
           {/* Transferências de hoje */}
           <Text style={styles.sectionTitle}>Transferências de hoje</Text>
@@ -311,7 +367,7 @@ type StripeCardCopy = {
   showArrow: boolean;
 };
 
-function stripeCardCopy(state: StripeConnectState): StripeCardCopy {
+function stripeCardCopy(state: StripeConnectState, pendingVerificationCount: number): StripeCardCopy {
   switch (state) {
     case 'active':
       return {
@@ -323,14 +379,35 @@ function stripeCardCopy(state: StripeConnectState): StripeCardCopy {
         showArrow: false,
       };
     case 'in_review':
+      if (pendingVerificationCount > 0) {
+        return {
+          title: 'Ação pendente',
+          subtitle:
+            'Falta concluir algo na Stripe para liberar o recebimento automático (PIX). Toque no cartão para o formulário. Na página, role até o fim, confirme e use Editar se aparecer. Abaixo: painel Stripe com pendências.',
+          borderColor: '#F59E0B',
+          titleColor: '#92400E',
+          clickable: true,
+          showArrow: true,
+        };
+      }
       return {
-        title: 'Cadastro Stripe em análise',
+        title: 'Ação pendente',
         subtitle:
-          'Recebemos seus dados. A Stripe está validando (até 2 dias úteis). Enquanto isso você já pode operar — avisaremos assim que o recebimento automático for liberado.',
+          'O recebimento automático só libera depois que a Stripe aprovar seu cadastro. Toque no cartão para o formulário; role até o fim e confirme. Abaixo: painel Stripe com pendências.',
         borderColor: '#F59E0B',
         titleColor: '#92400E',
-        clickable: false,
-        showArrow: false,
+        clickable: true,
+        showArrow: true,
+      };
+    case 'action_required':
+      return {
+        title: 'Ação necessária no cadastro Stripe',
+        subtitle:
+          'A Stripe pediu informações adicionais. Toque para abrir o formulário; role até o fim e confirme. Abaixo: painel Stripe com pendências.',
+        borderColor: '#F59E0B',
+        titleColor: '#92400E',
+        clickable: true,
+        showArrow: true,
       };
     case 'incomplete':
       return {
@@ -355,14 +432,16 @@ function stripeCardCopy(state: StripeConnectState): StripeCardCopy {
 
 function StripeConnectCard({
   state,
+  pendingVerificationCount,
   loading,
   onPressSetup,
 }: {
   state: StripeConnectState;
+  pendingVerificationCount: number;
   loading: boolean;
   onPressSetup: () => void;
 }) {
-  const copy = stripeCardCopy(state);
+  const copy = stripeCardCopy(state, pendingVerificationCount);
   return (
     <TouchableOpacity
       style={[styles.pixCard, { borderColor: copy.borderColor }]}
@@ -428,6 +507,7 @@ const styles = StyleSheet.create({
   pixCardContent: { flex: 1 },
   pixCardLabel: { fontSize: 12, color: '#9CA3AF', marginBottom: 2 },
   pixCardValue: { fontSize: 16, fontWeight: '600', color: '#111827' },
+  pixCardHint: { fontSize: 12, color: '#6B7280', marginTop: 6, lineHeight: 16 },
 
   sectionTitle: { fontSize: 17, fontWeight: '700', color: '#111827', marginBottom: 16 },
   emptyText: { fontSize: 14, color: '#9CA3AF', marginVertical: 12 },
@@ -446,6 +526,15 @@ const styles = StyleSheet.create({
 
   historyLink: { alignItems: 'center', marginTop: 28 },
   historyLinkText: { fontSize: 15, color: '#111827', textDecorationLine: 'underline', fontWeight: '500' },
+
+  stripeExpressLinkWrap: { alignItems: 'center', marginTop: -12, marginBottom: 28, paddingHorizontal: 8 },
+  stripeExpressLinkText: {
+    fontSize: 14,
+    color: '#1D4ED8',
+    textDecorationLine: 'underline',
+    fontWeight: '600',
+    textAlign: 'center',
+  },
 
   modalOverlay: { flex: 1, justifyContent: 'flex-end' },
   modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
