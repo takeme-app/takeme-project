@@ -19,6 +19,7 @@ import { onlyDigits } from '../../utils/formatCpf';
 import { useScheduledTripLiveLocation } from '../../lib/useScheduledTripLiveLocation';
 import { getRouteWithDuration, formatDuration } from '../../lib/route';
 import { LiveDriverMapMarker } from '../../components/LiveDriverMapMarker';
+import { useDriverEtaSticky } from '../../lib/useDriverEtaSticky';
 
 type Props = NativeStackScreenProps<TripFollowStackParamList, 'DriverOnTheWay'>;
 
@@ -49,15 +50,20 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
   const [pickupCode, setPickupCode] = useState<string | null>(null);
   const [passengerLines, setPassengerLines] = useState<{ label: string }[]>([]);
   const [bagsCount, setBagsCount] = useState<number | null>(null);
-  const [driverEtaText, setDriverEtaText] = useState<string | undefined>(undefined);
+  const [driverEtaSeconds, setDriverEtaSeconds] = useState<number | null>(null);
   const [driverRouteCoords, setDriverRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+
+  const driverEtaText = useMemo(
+    () => (driverEtaSeconds != null && driverEtaSeconds > 0 ? formatDuration(driverEtaSeconds) : undefined),
+    [driverEtaSeconds],
+  );
 
   const { coords: liveDriver } = useScheduledTripLiveLocation(live?.scheduledTripId ?? null);
 
   useEffect(() => {
     const o = live?.origin;
     if (!liveDriver || !o || !isValidTripCoordinate(o.latitude, o.longitude)) {
-      setDriverEtaText(undefined);
+      setDriverEtaSeconds(null);
       setDriverRouteCoords([]);
       return;
     }
@@ -69,9 +75,9 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
       );
       if (cancelled) return;
       if (rt?.durationSeconds && rt.durationSeconds > 0) {
-        setDriverEtaText(formatDuration(rt.durationSeconds));
+        setDriverEtaSeconds(rt.durationSeconds);
       } else {
-        setDriverEtaText(undefined);
+        setDriverEtaSeconds(null);
       }
       setDriverRouteCoords(rt?.coordinates?.length ? rt.coordinates : []);
     })();
@@ -79,6 +85,24 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
       cancelled = true;
     };
   }, [liveDriver?.latitude, liveDriver?.longitude, live?.origin]);
+
+  const stickyDeeplink = useMemo(
+    () => ({
+      route: 'DriverOnTheWay',
+      params: {
+        bookingId: live?.bookingId ?? undefined,
+        tripId: live?.scheduledTripId ?? undefined,
+      },
+    }),
+    [live?.bookingId, live?.scheduledTripId],
+  );
+
+  useDriverEtaSticky({
+    enabled: Boolean(live?.bookingId),
+    bookingId: live?.bookingId ?? null,
+    etaSeconds: driverEtaSeconds,
+    deeplink: stickyDeeplink,
+  });
 
   const mapRegion = useMemo(() => {
     const o = live?.origin;
