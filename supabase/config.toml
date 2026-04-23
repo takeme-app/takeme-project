@@ -52,6 +52,10 @@ verify_jwt = false
 [functions.process-refund]
 verify_jwt = false
 
+# Liberação de payouts: gateway não aceita ES256; a função valida service_role ou admin (getUser + worker_profiles).
+[functions.process-payouts]
+verify_jwt = false
+
 [functions.expire-assignments]
 verify_jwt = false
 

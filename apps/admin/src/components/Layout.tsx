@@ -26,8 +26,8 @@ const navTabsList = [
 
 /** Largura estimada por tab (px) — inclui padding e gap */
 const NAV_TAB_AVG_WIDTH = 95;
-/** Largura mínima reservada para logo + user block */
-const NAV_RESERVED_WIDTH = 420;
+/** Dois `gap: 8` entre os três blocos (logo | nav | user) em `navbarInner` */
+const NAV_INNER_GAP_TOTAL = 16;
 
 // Chevron right (>) para "Ver mais"
 const chevronRightSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
@@ -67,6 +67,9 @@ export default function Layout() {
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
   const accountTriggerRef = useRef<HTMLButtonElement | null>(null);
   const accountDropdownRef = useRef<HTMLDivElement | null>(null);
+  const headerInnerRef = useRef<HTMLDivElement | null>(null);
+  const measureLogoRef = useRef<HTMLDivElement | null>(null);
+  const measureUserRef = useRef<HTMLDivElement | null>(null);
 
   const updateAccountMenuPosition = useCallback(() => {
     const el = accountTriggerRef.current;
@@ -115,18 +118,37 @@ export default function Layout() {
     setAccountOpen(false);
   }, [location.pathname]);
 
-  // Dynamic max visible tabs based on screen width
   const [maxVisibleTabs, setMaxVisibleTabs] = useState(6);
-  useEffect(() => {
-    const calc = () => {
-      const available = window.innerWidth - NAV_RESERVED_WIDTH;
-      const fit = Math.max(2, Math.floor(available / NAV_TAB_AVG_WIDTH));
-      setMaxVisibleTabs(Math.min(fit, allowedNavTabs.length));
-    };
-    calc();
-    window.addEventListener('resize', calc);
-    return () => window.removeEventListener('resize', calc);
+
+  const recalcMaxVisibleTabs = useCallback(() => {
+    const inner = headerInnerRef.current;
+    const logoW = measureLogoRef.current?.offsetWidth ?? 100;
+    const userW = measureUserRef.current?.offsetWidth ?? 260;
+    const innerW = inner?.offsetWidth ?? Math.min(1233, Math.max(320, window.innerWidth - 48));
+    const navSlot = innerW - logoW - userW - NAV_INNER_GAP_TOTAL;
+    const fit = Math.max(2, Math.floor(Math.max(0, navSlot) / NAV_TAB_AVG_WIDTH));
+    setMaxVisibleTabs(Math.min(fit, allowedNavTabs.length));
   }, [allowedNavTabs.length]);
+
+  useLayoutEffect(() => {
+    recalcMaxVisibleTabs();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', recalcMaxVisibleTabs);
+      return () => window.removeEventListener('resize', recalcMaxVisibleTabs);
+    }
+    const ro = new ResizeObserver(() => recalcMaxVisibleTabs());
+    const inner = headerInnerRef.current;
+    const logoEl = measureLogoRef.current;
+    const userEl = measureUserRef.current;
+    if (inner) ro.observe(inner);
+    if (logoEl) ro.observe(logoEl);
+    if (userEl) ro.observe(userEl);
+    window.addEventListener('resize', recalcMaxVisibleTabs);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', recalcMaxVisibleTabs);
+    };
+  }, [recalcMaxVisibleTabs]);
 
   // When navigating from another module (e.g. encomendas → viagem detail),
   // keep that module's nav tab active instead of matching /viagens
@@ -203,8 +225,8 @@ export default function Layout() {
       })) : null) : null;
 
   const header = React.createElement('header', { style: webStyles.navbar },
-    React.createElement('div', { style: webStyles.navbarInner },
-      React.createElement('div', { style: webStyles.navLogo, onClick: () => navigate('/'), role: 'button' as const },
+    React.createElement('div', { ref: headerInnerRef, style: webStyles.navbarInner },
+      React.createElement('div', { ref: measureLogoRef, style: webStyles.navLogo, onClick: () => navigate('/'), role: 'button' as const },
         React.createElement(Logo, { variant: 'navbar' })),
       React.createElement('nav', { style: webStyles.navTabs },
         React.createElement('div', {
@@ -212,7 +234,7 @@ export default function Layout() {
         },
           ...navButtons,
           moreButton)),
-      React.createElement('div', { style: { ...webStyles.userBlock, position: 'relative' as const } },
+      React.createElement('div', { ref: measureUserRef, style: { ...webStyles.userBlock, position: 'relative' as const } },
         React.createElement('button', {
           ref: accountTriggerRef,
           type: 'button', style: webStyles.userButton, 'aria-label': 'Menu do usuário', 'aria-expanded': accountOpen,

@@ -238,6 +238,10 @@ async function handleAccountUpdated(
   const chargesNow = Boolean(account.charges_enabled);
   const payoutsNow = Boolean(account.payouts_enabled);
   const detailsNow = Boolean(account.details_submitted);
+  const requirementsDueNow =
+    (account.requirements?.currently_due?.length ?? 0) +
+    (account.requirements?.past_due?.length ?? 0);
+  const pendingVerificationNow = account.requirements?.pending_verification?.length ?? 0;
 
   // Ler estado anterior para detectar transição false → true e garantir idempotência.
   // subtype e incluido para resolver o deep link correto do push (Payments /
@@ -254,6 +258,8 @@ async function handleAccountUpdated(
       stripe_connect_charges_enabled: chargesNow,
       stripe_connect_payouts_enabled: payoutsNow,
       stripe_connect_details_submitted: detailsNow,
+      stripe_connect_requirements_due_count: requirementsDueNow,
+      stripe_connect_pending_verification_count: pendingVerificationNow,
       updated_at: now,
     } as never)
     .eq("stripe_connect_account_id", account.id);

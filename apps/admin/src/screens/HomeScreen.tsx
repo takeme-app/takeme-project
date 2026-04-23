@@ -369,7 +369,17 @@ export default function HomeScreen() {
 
   const hasPending = pending.pendingWorkers > 0 || pending.pendingPayouts > 0;
   const pendingSection = hasPending ? React.createElement('div', {
-    style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%', padding: '16px 20px', background: '#fffbeb', border: '1px solid #fbbf24', borderRadius: 16, boxSizing: 'border-box' as const },
+    style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%', padding: '16px 20px', background: '#fffbeb', border: '1px solid #fbbf24', borderRadius: 16, boxSizing: 'border-box' as const, cursor: 'pointer' },
+    onClick: () => navigate('/pagamentos'),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        navigate('/pagamentos');
+      }
+    },
+    role: 'button',
+    tabIndex: 0,
+    'aria-label': 'Abrir página de Pagamentos',
   },
     React.createElement('span', { style: { fontSize: 16, fontWeight: 700, color: '#92400e', ...font } }, 'Pendências que requerem atenção'),
     React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap' as const } },

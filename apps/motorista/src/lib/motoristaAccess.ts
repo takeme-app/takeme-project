@@ -10,6 +10,12 @@ export type StripeConnectState =
   | 'incomplete'
   /** Dados enviados (details_submitted=true), Stripe ainda não liberou charges_enabled. */
   | 'in_review'
+  /**
+   * Dados enviados, mas a Stripe pediu informações adicionais
+   * (`requirements.currently_due` ou `past_due` não vazios). Motorista precisa
+   * reabrir o Stripe via Account Link `account_update`.
+   */
+  | 'action_required'
   /** Conta totalmente habilitada (charges_enabled=true). */
   | 'active';
 
@@ -17,16 +23,22 @@ export type StripeConnectRow = {
   stripe_connect_account_id: string | null;
   stripe_connect_charges_enabled: boolean | null;
   stripe_connect_details_submitted: boolean | null;
+  stripe_connect_requirements_due_count?: number | null;
+  /** Campos já enviados, em análise pela Stripe (ex.: PEP do representante). */
+  stripe_connect_pending_verification_count?: number | null;
 };
 
 /**
- * Deriva o estado do onboarding Stripe Connect a partir das 3 flags espelhadas
+ * Deriva o estado do onboarding Stripe Connect a partir das flags espelhadas
  * pelo webhook `account.updated` (ou pela função `stripe-connect-sync`).
  */
 export function getStripeConnectState(row: StripeConnectRow | null | undefined): StripeConnectState {
   if (!row?.stripe_connect_account_id) return 'none';
   if (row.stripe_connect_charges_enabled === true) return 'active';
-  if (row.stripe_connect_details_submitted === true) return 'in_review';
+  if (row.stripe_connect_details_submitted === true) {
+    if ((row.stripe_connect_requirements_due_count ?? 0) > 0) return 'action_required';
+    return 'in_review';
+  }
   return 'incomplete';
 }
 
@@ -37,7 +49,7 @@ export function getStripeConnectState(row: StripeConnectRow | null | undefined):
  * é false — ver supabase/functions/charge-booking/index.ts).
  */
 export function canUseAppWithStripeState(state: StripeConnectState): boolean {
-  return state === 'active' || state === 'in_review';
+  return state === 'active' || state === 'in_review' || state === 'action_required';
 }
 
 /** @deprecated usar `getStripeConnectState` + `canUseAppWithStripeState`. */
@@ -59,7 +71,7 @@ export async function checkMotoristaCanAccessApp(userId: string): Promise<Motori
   const { data, error } = await supabase
     .from('worker_profiles')
     .select(
-      'status, subtype, stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_details_submitted'
+      'status, subtype, stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_details_submitted, stripe_connect_requirements_due_count, stripe_connect_pending_verification_count'
     )
     .eq('id', userId)
     .maybeSingle();

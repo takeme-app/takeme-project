@@ -162,6 +162,7 @@ Deno.serve(async (req) => {
           payouts_enabled: false,
           details_submitted: false,
           requirements_due_count: 0,
+          pending_verification_count: 0,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
@@ -177,6 +178,7 @@ Deno.serve(async (req) => {
       ...(account.requirements?.currently_due ?? []),
       ...(account.requirements?.past_due ?? []),
     ];
+    const pendingVerificationCount = account.requirements?.pending_verification?.length ?? 0;
 
     const now = new Date().toISOString();
     await admin
@@ -185,6 +187,8 @@ Deno.serve(async (req) => {
         stripe_connect_charges_enabled: chargesEnabled,
         stripe_connect_payouts_enabled: payoutsEnabled,
         stripe_connect_details_submitted: detailsSubmitted,
+        stripe_connect_requirements_due_count: requirementsDue.length,
+        stripe_connect_pending_verification_count: pendingVerificationCount,
         updated_at: now,
       } as never)
       .eq("id", userId);
@@ -235,6 +239,7 @@ Deno.serve(async (req) => {
         payouts_enabled: payoutsEnabled,
         details_submitted: detailsSubmitted,
         requirements_due_count: requirementsDue.length,
+        pending_verification_count: pendingVerificationCount,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );

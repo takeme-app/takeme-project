@@ -218,9 +218,10 @@ export const webStyles = {
     boxSizing: 'border-box' as const,
   },
   navbarInner: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', maxWidth: 1233, gap: 8 },
-  navLogo: { display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 },
-  navTabs: { display: 'flex', flex: '1 1 0', alignItems: 'center', justifyContent: 'center', minWidth: 0, gap: 0, overflow: 'visible' as const, position: 'relative' as const },
-  navTabGroup: { display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'nowrap' as const, gap: 0 },
+  navLogo: { display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0, position: 'relative' as const, zIndex: 0 },
+  /** Centralizado na faixa entre logo e user; quantidade de abas vem do Layout (ResizeObserver). */
+  navTabs: { display: 'flex', flex: '1 1 0', alignItems: 'center', justifyContent: 'center', minWidth: 0, gap: 0, overflow: 'visible' as const, position: 'relative' as const, zIndex: 1 },
+  navTabGroup: { display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'nowrap' as const, gap: 0, minWidth: 0 },
   navTab: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end',
     height: 48, padding: '14px 8px', cursor: 'pointer', background: 'none', border: 'none',

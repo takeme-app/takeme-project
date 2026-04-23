@@ -450,12 +450,15 @@ Apos aprovacao do cadastro (`worker_profiles.status = 'approved'`), TODOS os 4 s
 1. `StripeConnectSetupScreen`: chama Edge Function `stripe-connect-link` — cria conta **Express** BR (`card_payments` + `transfers`) e devolve um `account_links.url`. O `stripe_connect_account_id` e gravado em `worker_profiles` ja na criacao da conta (antes de abrir o Account Link).
 2. Abre o link no navegador do sistema. Deep links de retorno: `take-me-motorista://stripe-connect-return` (tela de setup) e `take-me-motorista://payments` (tela de pagamentos quando o motorista ja esta no app). A Stripe nao aceita deep links em `return_url`/`refresh_url`; a Edge Function `stripe-connect-bridge` serve paginas HTTPS que redirecionam para o scheme.
 3. Quando o motorista conclui o onboarding, o webhook `account.updated` espelha `stripe_connect_charges_enabled`, `stripe_connect_payouts_enabled` e `stripe_connect_details_submitted` em `worker_profiles`. Se o webhook nao chega, `stripe-connect-sync` age como fallback — consulta `accounts.retrieve` sob demanda (chamada pelas telas de setup/pagamentos).
-4. **Estado `in_review`**: `PaymentsScreen`/`StripeConnectSetupScreen` calculam `getStripeConnectState()` com quatro valores possiveis:
+4. **Estado `in_review`**: `PaymentsScreen`/`StripeConnectSetupScreen` calculam `getStripeConnectState()` com cinco valores possiveis:
    - `none`: sem `stripe_connect_account_id` → bloqueia app, botao "Configurar".
-   - `incomplete`: conta criada mas falta enviar dados (`details_submitted = false`) → abre Account Link para completar.
-   - `in_review`: `details_submitted = true` mas `charges_enabled = false` → **libera acesso ao app** com aviso "Em analise". Stripe esta validando documentos.
+   - `incomplete`: conta criada mas falta enviar dados (`details_submitted = false`) → abre Account Link `account_onboarding` para completar.
+   - `in_review`: `details_submitted = true`, `charges_enabled = false` e nenhum requisito pendente → **libera acesso ao app** com aviso "Em analise". Stripe esta validando documentos.
+   - `action_required`: `details_submitted = true` mas `stripe_connect_requirements_due_count > 0` (Stripe pediu informacoes adicionais via `requirements.currently_due`/`past_due`) → **libera acesso ao app** com CTA. O motorista precisa reabrir o Stripe via Account Link `account_update` (link de remediacao) para enviar os dados pendentes.
    - `active`: `charges_enabled = true` → recebimento automatico ativo.
-5. Gate `canUseAppWithStripeState` em `motoristaAccess.ts`: libera o app em `in_review` **e** `active`. Bloqueia apenas `none`/`incomplete`. O helper antigo `isStripeConnectReadyForApp` esta deprecado — novo codigo deve usar o state model.
+5. Gate `canUseAppWithStripeState` em `motoristaAccess.ts`: libera o app em `in_review`, `action_required` **e** `active`. Bloqueia apenas `none`/`incomplete`. O helper antigo `isStripeConnectReadyForApp` esta deprecado — novo codigo deve usar o state model.
+
+   A Edge Function `stripe-connect-link` aceita `link_type: 'onboarding' | 'update'` no body para diferenciar onboarding inicial de remediacao (default `onboarding`). A contagem de requisitos acionaveis vem de `stripe_connect_requirements_due_count` (`currently_due` + `past_due`). Itens apenas em `pending_verification` (ja enviados, em analise pela Stripe — ex.: PEP) espelham em `stripe_connect_pending_verification_count`; o app mostra texto alinhado ao painel Stripe sem CTA de `account_update` ate haver `currently_due`/`past_due`.
 6. **Notificacao de aprovacao**: quando `charges_enabled` transiciona `false → true` (via webhook OU sync), `stripe-webhook`/`stripe-connect-sync` inserem uma linha em `public.notifications` com `category='account_approved'` e `data.route` = deep link especifico do subtype:
    - `takeme`/`partner` → `Payments`
    - `shipments` → `PagamentosEncomendas`
