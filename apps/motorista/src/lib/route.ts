@@ -11,6 +11,11 @@ export type RouteWithDurationOptions = {
   googleMapsApiKey?: string;
   /** Token Mapbox — Directions v5. Tentado antes do Google e OSRM. */
   mapboxToken?: string;
+  /**
+   * Permite cancelar um fetch pendente quando o motorista sai da rota antes da resposta chegar.
+   * Todos os providers (Mapbox / Google / OSRM) recebem o mesmo signal.
+   */
+  signal?: AbortSignal;
 };
 
 function parseRoutePoint(p: RoutePoint): { lat: number; lng: number } | null {
@@ -55,6 +60,7 @@ function decodeGooglePolyline(encoded: string): RoutePoint[] {
 async function fetchMapboxDrivingRoute(
   points: Array<{ lat: number; lng: number }>,
   token: string,
+  signal?: AbortSignal,
 ): Promise<RouteResult | null> {
   if (points.length < 2) return null;
   const coordPath = points.map((p) => `${p.lng},${p.lat}`).join(';');
@@ -62,7 +68,7 @@ async function fetchMapboxDrivingRoute(
     `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coordPath}` +
     `?geometries=geojson&overview=full&access_token=${encodeURIComponent(token)}`;
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': 'TakeMe-Motorista/1.0' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'TakeMe-Motorista/1.0' }, signal });
     if (!res.ok) return null;
     const data = (await res.json()) as {
       code?: string;
@@ -100,6 +106,7 @@ async function fetchGoogleDrivingRoute(
   destination: string,
   waypoints: string | undefined,
   apiKey: string,
+  signal?: AbortSignal,
 ): Promise<RouteResult | null> {
   let url =
     `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}` +
@@ -107,7 +114,7 @@ async function fetchGoogleDrivingRoute(
     `&key=${encodeURIComponent(apiKey)}`;
   if (waypoints) url += `&waypoints=${encodeURIComponent(waypoints)}`;
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': 'TakeMe-Motorista/1.0' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'TakeMe-Motorista/1.0' }, signal });
     if (!res.ok) return null;
     const data = (await res.json()) as DirectionsResponse;
     if (data.status !== 'OK' || !data.routes?.[0]) return null;
@@ -136,23 +143,26 @@ export async function getRouteWithDuration(
   const b = parseRoutePoint(destination);
   if (!a || !b) return null;
 
+  const signal = options?.signal;
   const mapboxToken = options?.mapboxToken?.trim();
   if (mapboxToken) {
-    const m = await fetchMapboxDrivingRoute([a, b], mapboxToken);
+    const m = await fetchMapboxDrivingRoute([a, b], mapboxToken, signal);
     if (m) return m;
+    if (signal?.aborted) return null;
   }
 
   const key = options?.googleMapsApiKey?.trim();
   if (key) {
     const originStr = `${a.lat},${a.lng}`;
     const destStr = `${b.lat},${b.lng}`;
-    const g = await fetchGoogleDrivingRoute(originStr, destStr, undefined, key);
+    const g = await fetchGoogleDrivingRoute(originStr, destStr, undefined, key, signal);
     if (g) return g;
+    if (signal?.aborted) return null;
   }
 
   const url = `https://router.project-osrm.org/route/v1/driving/${a.lng},${a.lat};${b.lng},${b.lat}?overview=full&geometries=geojson`;
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': 'TakeMe-Motorista/1.0' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'TakeMe-Motorista/1.0' }, signal });
     if (!res.ok) return null;
     const data = (await res.json()) as {
       routes?: { geometry?: { coordinates?: [number, number][] }; duration?: number }[];
@@ -181,10 +191,12 @@ export async function getMultiPointRoute(
   const parsed = points.map(parseRoutePoint);
   if (parsed.some((p) => !p)) return null;
 
+  const signal = options?.signal;
   const mapboxToken = options?.mapboxToken?.trim();
   if (mapboxToken) {
-    const m = await fetchMapboxDrivingRoute(parsed as Array<{ lat: number; lng: number }>, mapboxToken);
+    const m = await fetchMapboxDrivingRoute(parsed as Array<{ lat: number; lng: number }>, mapboxToken, signal);
     if (m) return m;
+    if (signal?.aborted) return null;
   }
 
   const key = options?.googleMapsApiKey?.trim();
@@ -200,15 +212,16 @@ export async function getMultiPointRoute(
         .map((p) => `${p!.lat},${p!.lng}`)
         .join('|');
     }
-    const g = await fetchGoogleDrivingRoute(originStr, destStr, waypoints, key);
+    const g = await fetchGoogleDrivingRoute(originStr, destStr, waypoints, key, signal);
     if (g) return g;
+    if (signal?.aborted) return null;
   }
 
   const parts = parsed.map((p) => `${p!.lng},${p!.lat}`);
   const waypoints = parts.join(';');
   const url = `https://router.project-osrm.org/route/v1/driving/${waypoints}?overview=full&geometries=geojson`;
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': 'TakeMe-Motorista/1.0' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'TakeMe-Motorista/1.0' }, signal });
     if (!res.ok) return null;
     const data = (await res.json()) as {
       routes?: { geometry?: { coordinates?: [number, number][] }; duration?: number }[];
