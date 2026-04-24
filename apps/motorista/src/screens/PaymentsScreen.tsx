@@ -8,7 +8,6 @@ import {
   Modal,
   TextInput,
   KeyboardAvoidingView,
-  Platform,
   Alert,
   Linking,
 } from 'react-native';
@@ -34,7 +33,15 @@ type Props = CompositeScreenProps<
 
 const GOLD = '#C9A227';
 const CREAM = '#FFFBEB';
-const GOLD_BORDER = '#E6C94A';
+const WARN_BG = '#FFFBEB';
+const WARN_BORDER = '#F5D78A';
+const WARN_TITLE = '#92400E';
+const SUCCESS = '#16A34A';
+const SUCCESS_BG = '#F0FDF4';
+const SUCCESS_BORDER = '#BBF7D0';
+const MUTED = '#6B7280';
+const SUBTLE = '#9CA3AF';
+const INK = '#111827';
 
 type Transfer = DriverPaymentTransfer;
 
@@ -202,66 +209,56 @@ export function PaymentsScreen({ navigation }: Props) {
         <View style={styles.center}><ActivityIndicator size="large" color={GOLD} /></View>
       ) : (
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-          {/* Resumo do dia */}
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryLabel}>Recebido hoje</Text>
-            <Text style={styles.summaryAmount}>{formatCents(totalCents)}</Text>
-            <View style={styles.summaryDivider} />
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryRowLabel}>Corridas</Text>
-              <Text style={styles.summaryRowValue}>{rides}</Text>
-            </View>
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryRowLabel}>Gorjetas</Text>
-              <Text style={styles.summaryRowValue}>{tips}</Text>
+          {/* Hero: recebido hoje */}
+          <View style={styles.hero}>
+            <Text style={styles.heroLabel}>Recebido hoje</Text>
+            <Text style={styles.heroAmount}>{formatCents(totalCents)}</Text>
+            <View style={styles.heroChips}>
+              <View style={styles.chip}>
+                <Text style={styles.chipValue}>{rides}</Text>
+                <Text style={styles.chipLabel}>{rides === 1 ? 'corrida' : 'corridas'}</Text>
+              </View>
+              <View style={styles.chipDivider} />
+              <View style={styles.chip}>
+                <Text style={styles.chipValue}>{tips}</Text>
+                <Text style={styles.chipLabel}>{tips === 1 ? 'gorjeta' : 'gorjetas'}</Text>
+              </View>
             </View>
           </View>
 
-          {/* Chave Pix */}
-          <TouchableOpacity
-            style={styles.pixCard}
-            onPress={() => { setNewPixKey(pixKey ?? ''); setEditPixVisible(true); }}
-            activeOpacity={0.8}
-          >
-            <View style={styles.pixCardContent}>
-              <Text style={styles.pixCardLabel}>
-                {pixKey ? 'Chave Pix cadastrada' : 'Cadastrar chave Pix'}
-              </Text>
-              {pixKey && <Text style={styles.pixCardValue}>{pixKey}</Text>}
-              <Text style={styles.pixCardHint}>
-                {stripeState === 'active'
-                  ? 'Usada para repasses manuais. O recebimento automático vai para a conta cadastrada na Stripe.'
-                  : 'Usada para receber repasses manuais da equipe Take Me.'}
-              </Text>
-            </View>
-            <MaterialIcons name="edit" size={20} color={GOLD} />
-          </TouchableOpacity>
+          {/* Seção: Conta de recebimento */}
+          <Text style={styles.sectionTitle}>Conta de recebimento</Text>
 
-          {/* Recebimento automático via Stripe Connect (4 estados: none/incomplete/in_review/active) */}
-          <StripeConnectCard
+          <StripeConnectBlock
             state={stripeState}
             pendingVerificationCount={stripePendingVerification}
             loading={connectLoading}
             onPressSetup={handleStripeConnectSetup}
+            showExpressLink={showStripeExpressLink}
+            expressLoginLoading={expressLoginLoading}
+            onPressExpress={handleStripeExpressLogin}
           />
 
-          {showStripeExpressLink ? (
-            <TouchableOpacity
-              style={styles.stripeExpressLinkWrap}
-              onPress={handleStripeExpressLogin}
-              disabled={expressLoginLoading || connectLoading}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.stripeExpressLinkText}>
-                {expressLoginLoading
-                  ? 'Abrindo painel Stripe…'
-                  : 'Abrir painel Stripe do motorista (pendências e repasses)'}
+          {/* Linha Pix compacta */}
+          <TouchableOpacity
+            style={styles.pixRow}
+            onPress={() => { setNewPixKey(pixKey ?? ''); setEditPixVisible(true); }}
+            activeOpacity={0.7}
+          >
+            <View style={styles.pixRowIcon}>
+              <Text style={styles.pixRowDiamond}>◆</Text>
+            </View>
+            <View style={styles.pixRowInfo}>
+              <Text style={styles.pixRowLabel}>Chave Pix (repasses manuais)</Text>
+              <Text style={styles.pixRowValue} numberOfLines={1}>
+                {pixKey ? pixKey : 'Toque para cadastrar'}
               </Text>
-            </TouchableOpacity>
-          ) : null}
+            </View>
+            <MaterialIcons name="edit" size={18} color={SUBTLE} />
+          </TouchableOpacity>
 
           {/* Transferências de hoje */}
-          <Text style={styles.sectionTitle}>Transferências de hoje</Text>
+          <Text style={[styles.sectionTitle, { marginTop: 32 }]}>Transferências de hoje</Text>
 
           {transfers.length === 0 ? (
             <Text style={styles.emptyText}>Nenhuma transferência hoje.</Text>
@@ -358,111 +355,124 @@ export function PaymentsScreen({ navigation }: Props) {
   );
 }
 
-type StripeCardCopy = {
+type StripeBlockCopy = {
   title: string;
   subtitle: string;
-  borderColor: string;
-  titleColor?: string;
-  clickable: boolean;
-  showArrow: boolean;
+  ctaLabel: string;
+  tone: 'warn' | 'neutral';
 };
 
-function stripeCardCopy(state: StripeConnectState, pendingVerificationCount: number): StripeCardCopy {
+function stripeBlockCopy(state: StripeConnectState, pendingVerificationCount: number): StripeBlockCopy | null {
   switch (state) {
     case 'active':
-      return {
-        title: '✓ Recebimento automático ativo',
-        subtitle: 'Seus pagamentos são depositados automaticamente via PIX.',
-        borderColor: '#22C55E',
-        titleColor: '#22C55E',
-        clickable: false,
-        showArrow: false,
-      };
+      return null; // Estado ok — usamos badge verde, sem card
     case 'in_review':
-      if (pendingVerificationCount > 0) {
-        return {
-          title: 'Ação pendente',
-          subtitle:
-            'Falta concluir algo na Stripe para liberar o recebimento automático (PIX). Toque no cartão para o formulário. Na página, role até o fim, confirme e use Editar se aparecer. Abaixo: painel Stripe com pendências.',
-          borderColor: '#F59E0B',
-          titleColor: '#92400E',
-          clickable: true,
-          showArrow: true,
-        };
-      }
       return {
-        title: 'Ação pendente',
+        title: 'Ação pendente na Stripe',
         subtitle:
-          'O recebimento automático só libera depois que a Stripe aprovar seu cadastro. Toque no cartão para o formulário; role até o fim e confirme. Abaixo: painel Stripe com pendências.',
-        borderColor: '#F59E0B',
-        titleColor: '#92400E',
-        clickable: true,
-        showArrow: true,
+          pendingVerificationCount > 0
+            ? 'Falta concluir algo para liberar o recebimento automático.'
+            : 'Aguardando aprovação da Stripe. Toque para revisar o cadastro.',
+        ctaLabel: 'Revisar cadastro',
+        tone: 'warn',
       };
     case 'action_required':
       return {
-        title: 'Ação necessária no cadastro Stripe',
-        subtitle:
-          'A Stripe pediu informações adicionais. Toque para abrir o formulário; role até o fim e confirme. Abaixo: painel Stripe com pendências.',
-        borderColor: '#F59E0B',
-        titleColor: '#92400E',
-        clickable: true,
-        showArrow: true,
+        title: 'A Stripe pediu informações adicionais',
+        subtitle: 'Complete o formulário para não interromper seus recebimentos.',
+        ctaLabel: 'Completar cadastro',
+        tone: 'warn',
       };
     case 'incomplete':
       return {
-        title: 'Concluir configuração Stripe',
-        subtitle: 'Seu cadastro ainda não foi finalizado — toque para retomar o onboarding.',
-        borderColor: '#F59E0B',
-        titleColor: '#92400E',
-        clickable: true,
-        showArrow: true,
+        title: 'Cadastro Stripe incompleto',
+        subtitle: 'Finalize o cadastro para ativar o recebimento automático via PIX.',
+        ctaLabel: 'Retomar cadastro',
+        tone: 'warn',
       };
     case 'none':
     default:
       return {
         title: 'Ativar recebimento automático',
-        subtitle: 'Configure para receber automaticamente via PIX após cada viagem.',
-        borderColor: GOLD_BORDER,
-        clickable: true,
-        showArrow: true,
+        subtitle: 'Receba via PIX automaticamente após cada viagem.',
+        ctaLabel: 'Configurar Stripe',
+        tone: 'neutral',
       };
   }
 }
 
-function StripeConnectCard({
+function StripeConnectBlock({
   state,
   pendingVerificationCount,
   loading,
   onPressSetup,
+  showExpressLink,
+  expressLoginLoading,
+  onPressExpress,
 }: {
   state: StripeConnectState;
   pendingVerificationCount: number;
   loading: boolean;
   onPressSetup: () => void;
+  showExpressLink: boolean;
+  expressLoginLoading: boolean;
+  onPressExpress: () => void;
 }) {
-  const copy = stripeCardCopy(state, pendingVerificationCount);
+  if (state === 'active') {
+    return (
+      <View style={styles.statusActive}>
+        <MaterialIcons name="check-circle" size={18} color={SUCCESS} />
+        <Text style={styles.statusActiveText}>Recebimento automático ativo</Text>
+      </View>
+    );
+  }
+
+  const copy = stripeBlockCopy(state, pendingVerificationCount);
+  if (!copy) return null;
+
+  const isWarn = copy.tone === 'warn';
+
   return (
-    <TouchableOpacity
-      style={[styles.pixCard, { borderColor: copy.borderColor }]}
-      onPress={copy.clickable && !loading ? onPressSetup : undefined}
-      activeOpacity={copy.clickable ? 0.8 : 1}
-      disabled={loading || !copy.clickable}
-    >
-      <View style={styles.pixCardContent}>
-        <Text style={[styles.pixCardLabel, copy.titleColor ? { color: copy.titleColor } : null]}>
+    <View style={[styles.stripeBlock, isWarn ? styles.stripeBlockWarn : styles.stripeBlockNeutral]}>
+      <View style={styles.stripeBlockHeader}>
+        {isWarn ? (
+          <MaterialIcons name="info-outline" size={18} color={WARN_TITLE} style={{ marginRight: 8 }} />
+        ) : null}
+        <Text style={[styles.stripeBlockTitle, isWarn && { color: WARN_TITLE }]}>
           {copy.title}
         </Text>
-        <Text style={[styles.pixCardValue, { fontSize: 12, color: '#6B7280' }]}>
-          {copy.subtitle}
-        </Text>
       </View>
-      {loading ? (
-        <ActivityIndicator size="small" color={GOLD} />
-      ) : copy.showArrow ? (
-        <MaterialIcons name="arrow-forward" size={20} color={GOLD} />
+      <Text style={styles.stripeBlockSubtitle}>{copy.subtitle}</Text>
+
+      <TouchableOpacity
+        style={[styles.stripeCta, isWarn ? styles.stripeCtaWarn : styles.stripeCtaNeutral]}
+        onPress={onPressSetup}
+        disabled={loading}
+        activeOpacity={0.85}
+      >
+        {loading ? (
+          <ActivityIndicator size="small" color="#FFFFFF" />
+        ) : (
+          <>
+            <Text style={styles.stripeCtaText}>{copy.ctaLabel}</Text>
+            <MaterialIcons name="arrow-forward" size={16} color="#FFFFFF" />
+          </>
+        )}
+      </TouchableOpacity>
+
+      {showExpressLink ? (
+        <TouchableOpacity
+          style={styles.expressLink}
+          onPress={onPressExpress}
+          disabled={expressLoginLoading || loading}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.expressLinkText}>
+            {expressLoginLoading ? 'Abrindo painel Stripe…' : 'Abrir painel Stripe'}
+          </Text>
+        </TouchableOpacity>
       ) : null}
-    </TouchableOpacity>
+    </View>
   );
 }
 
@@ -477,41 +487,100 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6',
   },
-  headerTitle: { fontSize: 17, fontWeight: '700', color: '#111827' },
-  scroll: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 20 },
+  headerTitle: { fontSize: 17, fontWeight: '700', color: INK },
+  scroll: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 24 },
 
-  summaryCard: {
-    backgroundColor: '#F3F4F6',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
-  },
-  summaryLabel: { fontSize: 14, color: '#9CA3AF', textAlign: 'center', marginBottom: 6 },
-  summaryAmount: { fontSize: 36, fontWeight: '700', color: '#111827', textAlign: 'center', marginBottom: 16 },
-  summaryDivider: { height: 1, backgroundColor: '#E5E7EB', marginBottom: 12 },
-  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-  summaryRowLabel: { fontSize: 15, color: '#9CA3AF' },
-  summaryRowValue: { fontSize: 15, fontWeight: '700', color: '#111827' },
-
-  pixCard: {
+  /* Hero */
+  hero: { alignItems: 'center', marginBottom: 32 },
+  heroLabel: { fontSize: 13, color: SUBTLE, marginBottom: 4, letterSpacing: 0.3 },
+  heroAmount: { fontSize: 40, fontWeight: '700', color: INK, marginBottom: 16, letterSpacing: -0.5 },
+  heroChips: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: CREAM,
-    borderWidth: 1.5,
-    borderColor: GOLD_BORDER,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginBottom: 28,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
   },
-  pixCardContent: { flex: 1 },
-  pixCardLabel: { fontSize: 12, color: '#9CA3AF', marginBottom: 2 },
-  pixCardValue: { fontSize: 16, fontWeight: '600', color: '#111827' },
-  pixCardHint: { fontSize: 12, color: '#6B7280', marginTop: 6, lineHeight: 16 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  chipValue: { fontSize: 15, fontWeight: '700', color: INK },
+  chipLabel: { fontSize: 13, color: MUTED },
+  chipDivider: { width: 1, height: 14, backgroundColor: '#E5E7EB', marginHorizontal: 14 },
 
-  sectionTitle: { fontSize: 17, fontWeight: '700', color: '#111827', marginBottom: 16 },
-  emptyText: { fontSize: 14, color: '#9CA3AF', marginVertical: 12 },
+  /* Seções */
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: SUBTLE,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 12,
+  },
 
+  /* Stripe block */
+  stripeBlock: {
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  stripeBlockWarn: { backgroundColor: WARN_BG, borderColor: WARN_BORDER },
+  stripeBlockNeutral: { backgroundColor: '#F9FAFB', borderColor: '#E5E7EB' },
+  stripeBlockHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  stripeBlockTitle: { fontSize: 15, fontWeight: '700', color: INK, flexShrink: 1 },
+  stripeBlockSubtitle: { fontSize: 13, color: MUTED, lineHeight: 18, marginBottom: 12 },
+  stripeCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  stripeCtaWarn: { backgroundColor: '#B45309' },
+  stripeCtaNeutral: { backgroundColor: INK },
+  stripeCtaText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+  expressLink: { alignItems: 'center', paddingVertical: 10, marginTop: 4 },
+  expressLinkText: {
+    fontSize: 13,
+    color: WARN_TITLE,
+    textDecorationLine: 'underline',
+    fontWeight: '500',
+  },
+
+  /* Status ativo */
+  statusActive: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: SUCCESS_BG,
+    borderWidth: 1,
+    borderColor: SUCCESS_BORDER,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 12,
+  },
+  statusActiveText: { fontSize: 14, fontWeight: '600', color: SUCCESS },
+
+  /* Pix row */
+  pixRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 12,
+  },
+  pixRowIcon: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: CREAM, alignItems: 'center', justifyContent: 'center',
+  },
+  pixRowDiamond: { fontSize: 16, color: GOLD },
+  pixRowInfo: { flex: 1 },
+  pixRowLabel: { fontSize: 12, color: SUBTLE, marginBottom: 2 },
+  pixRowValue: { fontSize: 15, fontWeight: '600', color: INK },
+
+  /* Transferências */
+  emptyText: { fontSize: 14, color: SUBTLE, marginVertical: 8 },
   transferRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 12 },
   pixIconCircle: {
     width: 44, height: 44, borderRadius: 22,
@@ -519,23 +588,15 @@ const styles = StyleSheet.create({
   },
   pixIconDiamond: { fontSize: 20, color: GOLD },
   transferInfo: { flex: 1 },
-  transferAmount: { fontSize: 16, fontWeight: '700', color: '#111827' },
-  transferMeta: { fontSize: 13, color: '#9CA3AF', marginTop: 2 },
-  transferDate: { fontSize: 14, color: '#9CA3AF' },
+  transferAmount: { fontSize: 16, fontWeight: '700', color: INK },
+  transferMeta: { fontSize: 13, color: SUBTLE, marginTop: 2 },
+  transferDate: { fontSize: 14, color: SUBTLE },
   sep: { height: 1, backgroundColor: '#F3F4F6' },
 
-  historyLink: { alignItems: 'center', marginTop: 28 },
-  historyLinkText: { fontSize: 15, color: '#111827', textDecorationLine: 'underline', fontWeight: '500' },
+  historyLink: { alignItems: 'center', marginTop: 24 },
+  historyLinkText: { fontSize: 14, color: MUTED, textDecorationLine: 'underline', fontWeight: '500' },
 
-  stripeExpressLinkWrap: { alignItems: 'center', marginTop: -12, marginBottom: 28, paddingHorizontal: 8 },
-  stripeExpressLinkText: {
-    fontSize: 14,
-    color: '#1D4ED8',
-    textDecorationLine: 'underline',
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-
+  /* Modal */
   modalOverlay: { flex: 1, justifyContent: 'flex-end' },
   modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
   sheet: {
@@ -551,15 +612,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
   },
   sheetHeaderContent: { paddingHorizontal: 24, paddingTop: 8, paddingBottom: 20 },
-  sheetTitle: { fontSize: 22, fontWeight: '700', color: '#111827', marginBottom: 12 },
-  sheetSubtitle: { fontSize: 16, color: '#6B7280', lineHeight: 24 },
+  sheetTitle: { fontSize: 22, fontWeight: '700', color: INK, marginBottom: 12 },
+  sheetSubtitle: { fontSize: 16, color: MUTED, lineHeight: 24 },
   sheetDivider: { height: 1, backgroundColor: '#E5E7EB' },
   sheetBody: { paddingHorizontal: 24, paddingTop: 24, gap: 12 },
-  inputLabel: { fontSize: 15, fontWeight: '600', color: '#111827' },
+  inputLabel: { fontSize: 15, fontWeight: '600', color: INK },
   textInput: {
     backgroundColor: '#F3F4F6', borderRadius: 12,
     paddingHorizontal: 16, paddingVertical: 16,
-    fontSize: 16, color: '#111827',
+    fontSize: 16, color: INK,
   },
   btnPrimary: {
     backgroundColor: '#0d0d0d', borderRadius: 12,
