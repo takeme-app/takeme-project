@@ -31,7 +31,14 @@ export function usePlatformSettings(): UsePlatformSettingsReturn {
         if (!error && data) {
           const map: Record<string, any> = {};
           data.forEach((row: PlatformSetting) => {
-            map[row.key] = row.value?.value ?? row.value;
+            const v = row.value;
+            if (v && typeof v === 'object') {
+              if ('value' in v) map[row.key] = (v as any).value;
+              else if ('percentage' in v) map[row.key] = (v as any).percentage;
+              else map[row.key] = v;
+            } else {
+              map[row.key] = v;
+            }
           });
           setSettings(map);
         }
@@ -47,11 +54,16 @@ export function usePlatformSettings(): UsePlatformSettingsReturn {
     const { data: session } = await (supabase as any).auth.getSession();
     const userId = session?.session?.user?.id;
 
+    // Mantém o formato já em uso na BD: default_admin_pct usa { percentage },
+    // demais chaves seguem { value: ... }. Isto garante compatibilidade com
+    // RPCs que leem value->>'percentage'.
+    const payload = key === 'default_admin_pct' ? { percentage: value } : { value };
+
     const { error } = await (supabase as any)
       .from('platform_settings')
       .upsert({
         key,
-        value: { value },
+        value: payload,
         updated_at: new Date().toISOString(),
         updated_by: userId || null,
       }, { onConflict: 'key' });

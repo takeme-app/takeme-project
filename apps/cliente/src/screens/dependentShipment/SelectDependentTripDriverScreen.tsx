@@ -16,6 +16,7 @@ import type { DependentShipmentStackParamList, TripDriverParam } from '../../nav
 import { loadShipmentDriversForRoute } from '../../lib/loadShipmentDriversForRoute';
 import type { ClientScheduledTripItem } from '../../lib/clientScheduledTrips';
 import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'SelectDependentTripDriver'>;
 
@@ -25,8 +26,6 @@ const COLORS = {
   neutral300: '#f1f1f1',
   neutral700: '#767676',
 };
-
-const PLACEHOLDER_AMOUNT_CENTS = 5000;
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 
@@ -51,6 +50,7 @@ function toTripDriverParam(sel: ClientScheduledTripItem): TripDriverParam {
 
 export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
+  const { showAlert } = useAppAlert();
   const {
     origin,
     destination,
@@ -105,11 +105,19 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
   const handleContinue = () => {
     const sel = items.find((i) => i.id === selectedId);
     if (!sel) return;
+    const amountCents = sel.amount_cents;
+    if (amountCents == null || !Number.isFinite(amountCents) || amountCents < 1) {
+      showAlert(
+        'Preço indisponível',
+        'Esta viagem ainda não tem preço configurado. Escolha outra opção ou contate o suporte.',
+      );
+      return;
+    }
     const driver = toTripDriverParam(sel);
     navigation.navigate('ConfirmDependentShipment', {
       ...legParams,
       driver,
-      amountCents: sel.amount_cents ?? PLACEHOLDER_AMOUNT_CENTS,
+      amountCents,
       scheduledTripDepartureAt: sel.departure_at,
     });
   };

@@ -19,10 +19,89 @@ type DraftBookingBody = {
   passenger_count?: number;
   bags_count?: number;
   passenger_data?: unknown;
+  /** Mantidos apenas por compatibilidade; edge recomputa via RPC. */
   promotion_id?: string;
   promo_discount_cents?: number;
   admin_pct_applied?: number;
 };
+
+type OrderPricing = {
+  total_cents: number;
+  base_cents: number;
+  surcharges_cents: number;
+  admin_fee_cents: number;
+  promo_gain_cents: number;
+  promo_discount_cents: number;
+  worker_earning_cents: number;
+  admin_earning_cents: number;
+  admin_pct_applied: number;
+  gain_pct_applied: number;
+  discount_pct_applied: number;
+};
+
+type PromoLookup = {
+  promotion_id: string | null;
+  gain_pct: number;
+  discount_pct: number;
+  promo_worker_route_id: string | null;
+};
+
+async function loadPromotionForRoute(
+  admin: SupabaseClient,
+  orderType: 'bookings' | 'shipments' | 'dependent_shipments' | 'excursions',
+  userId: string,
+  baseCents: number,
+  workerRouteId: string | null,
+  pricingRouteId: string | null
+): Promise<PromoLookup> {
+  const { data, error } = await admin.rpc('apply_active_promotion', {
+    p_order_type: orderType,
+    p_user_id: userId,
+    p_amount_cents: baseCents,
+    p_worker_route_id: workerRouteId,
+    p_pricing_route_id: pricingRouteId,
+  });
+  if (error) {
+    console.error('[charge-booking] apply_active_promotion:', error.message);
+    return { promotion_id: null, gain_pct: 0, discount_pct: 0, promo_worker_route_id: null };
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    promotion_id: (row?.promotion_id as string | null) ?? null,
+    gain_pct: Number(row?.gain_pct ?? 0),
+    discount_pct: Number(row?.discount_pct ?? 0),
+    promo_worker_route_id: (row?.promo_worker_route_id as string | null) ?? null,
+  };
+}
+
+async function computePricing(
+  admin: SupabaseClient,
+  baseCents: number,
+  surchargesCents: number,
+  adminPct: number,
+  gainPct: number,
+  discountPct: number
+): Promise<OrderPricing | { error: string }> {
+  const { data, error } = await admin.rpc('compute_order_pricing', {
+    p_base_cents: baseCents,
+    p_surcharges_cents: surchargesCents,
+    p_admin_pct: adminPct,
+    p_gain_pct: gainPct,
+    p_discount_pct: discountPct,
+  });
+  if (error) return { error: error.message };
+  return data as OrderPricing;
+}
+
+async function getDefaultAdminPct(admin: SupabaseClient): Promise<number> {
+  const { data } = await admin
+    .from('platform_settings')
+    .select('value')
+    .eq('key', 'default_admin_pct')
+    .maybeSingle();
+  const pct = Number((data?.value as { percentage?: number } | null)?.percentage);
+  return Number.isFinite(pct) && pct >= 0 ? pct : 15;
+}
 
 async function stripeFetch(
   secretKey: string,
@@ -295,14 +374,50 @@ Deno.serve(async (req) => {
         });
       }
 
-      // Promoção passada pelo cliente
-      const promoDiscountCents = Math.max(0, Math.floor(Number(draft.promo_discount_cents ?? 0)));
-      const promoAdminPct = Number(draft.admin_pct_applied ?? 0);
-      const promoId = (draft.promotion_id as string | undefined)?.trim() ?? null;
-      const chargeAmountCents = Math.max(1, amountCents - promoDiscountCents);
-      const platformFeeCents = promoAdminPct > 0
-        ? Math.round((amountCents - promoDiscountCents) * promoAdminPct / 100)
-        : 0;
+      // Resolve rota do motorista + pricing_route_id (para matching de promoção).
+      const { data: routeInfo } = await admin
+        .from("scheduled_trips")
+        .select("route_id, worker_routes:route_id (id, pricing_route_id)")
+        .eq("id", sid)
+        .maybeSingle();
+      const workerRouteId =
+        (routeInfo?.route_id as string | null | undefined) ?? null;
+      const pricingRouteId =
+        ((routeInfo?.worker_routes as { pricing_route_id?: string | null } | null)
+          ?.pricing_route_id as string | null | undefined) ?? null;
+
+      // Pricing canônico: RPC apply_active_promotion + compute_order_pricing.
+      const promo = await loadPromotionForRoute(
+        admin,
+        "bookings",
+        userId,
+        amountCents,
+        workerRouteId,
+        pricingRouteId
+      );
+      const baseAdminPct = await getDefaultAdminPct(admin);
+      const pricing = await computePricing(
+        admin,
+        amountCents,
+        0,
+        baseAdminPct,
+        promo.gain_pct,
+        promo.discount_pct
+      );
+      if ("error" in pricing) {
+        return new Response(JSON.stringify({ error: `Falha no cálculo de preço: ${pricing.error}` }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const chargeAmountCents = Math.max(1, pricing.total_cents);
+      const promoId = promo.promotion_id;
+      const promoDiscountCents = pricing.promo_discount_cents;
+      const promoGainCents = pricing.promo_gain_cents;
+      const platformFeeCents = pricing.admin_fee_cents;
+      const workerEarningCents = pricing.worker_earning_cents;
+      const adminEarningCents = pricing.admin_earning_cents;
 
       const driverId = (tripRow.driver_id as string | undefined)?.trim() ?? "";
       let connectAccountId: string | null = null;
@@ -317,22 +432,15 @@ Deno.serve(async (req) => {
         // Só aplica split quando a Stripe habilitou o destino (charges_enabled). Caso contrário
         // cobra sem transfer_data — o repasse fica para depois via payouts manuais.
         connectAccountId = rawAcct && wp?.stripe_connect_charges_enabled === true ? rawAcct : null;
-        const workerPayoutPreview = chargeAmountCents - platformFeeCents;
-        const payout = Number.isFinite(workerPayoutPreview) ? Math.max(0, Math.floor(workerPayoutPreview)) : null;
-        if (connectAccountId && payout != null) {
-          if (payout > chargeAmountCents) {
+        if (connectAccountId) {
+          // PDF split: motorista recebe worker_earning; plataforma retém admin_earning.
+          if (workerEarningCents < 0 || workerEarningCents > chargeAmountCents) {
             return new Response(
-              JSON.stringify({ error: "Inconsistência de valores da reserva (repasse > total)" }),
+              JSON.stringify({ error: "Inconsistência de valores da reserva (repasse inválido)" }),
               { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             );
           }
-          applicationFeeCents = chargeAmountCents - payout;
-          if (applicationFeeCents < 0) {
-            return new Response(
-              JSON.stringify({ error: "Taxa de aplicação inválida para Stripe Connect" }),
-              { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            );
-          }
+          applicationFeeCents = adminEarningCents;
         }
       }
 
@@ -346,7 +454,10 @@ Deno.serve(async (req) => {
         "payment_method_types[0]": "card",
         "metadata[scheduled_trip_id]": sid,
         "metadata[user_id]": userId,
+        "metadata[worker_earning_cents]": String(workerEarningCents),
+        "metadata[admin_earning_cents]": String(adminEarningCents),
       });
+      if (promoId) piParams.set("metadata[promotion_id]", promoId);
       if (connectAccountId && applicationFeeCents != null) {
         piParams.set("application_fee_amount", String(applicationFeeCents));
         piParams.set("transfer_data[destination]", connectAccountId);
@@ -385,10 +496,6 @@ Deno.serve(async (req) => {
         typeof pi.amount === "number" && Number.isFinite(pi.amount) && Math.floor(pi.amount) >= 1
           ? Math.floor(pi.amount)
           : chargeAmountCents;
-      /** Integridade: amount_cents = pricing_subtotal_cents + platform_fee_cents (ver migration). */
-      let feeStored = Math.max(0, Math.floor(platformFeeCents));
-      if (feeStored > billedCents) feeStored = 0;
-      const subtotalStored = Math.max(0, billedCents - feeStored);
 
       const passengerDataJson = draft.passenger_data ?? [];
       const insertRow = {
@@ -404,12 +511,16 @@ Deno.serve(async (req) => {
         bags_count: bags,
         passenger_data: passengerDataJson,
         price_route_base_cents: amountCents,
-        pricing_subtotal_cents: subtotalStored,
-        platform_fee_cents: feeStored,
-        pricing_surcharges_cents: 0,
+        pricing_subtotal_cents: workerEarningCents,
+        pricing_surcharges_cents: pricing.surcharges_cents,
+        platform_fee_cents: platformFeeCents,
         promo_discount_cents: promoDiscountCents,
+        promo_gain_cents: promoGainCents,
+        worker_earning_cents: workerEarningCents,
+        admin_earning_cents: adminEarningCents,
         promotion_id: promoId || null,
-        admin_pct_applied: promoAdminPct || null,
+        promo_worker_route_id: promo.promo_worker_route_id,
+        admin_pct_applied: pricing.admin_pct_applied,
         amount_cents: billedCents,
         status: "paid",
         paid_at: new Date().toISOString(),
@@ -459,7 +570,7 @@ Deno.serve(async (req) => {
     // ── Modo legado: reserva pending já criada ──
     const { data: booking, error: bookingErr } = await admin
       .from("bookings")
-      .select("id, user_id, amount_cents, status, worker_payout_cents, scheduled_trips(driver_id)")
+      .select("id, user_id, amount_cents, status, worker_payout_cents, worker_earning_cents, admin_earning_cents, scheduled_trips(driver_id)")
       .eq("id", bookingId)
       .eq("user_id", userId)
       .single();
@@ -500,13 +611,21 @@ Deno.serve(async (req) => {
       // Split Connect só com charges_enabled; caso contrário pagamento manual.
       connectAccountId = rawAcct && wp?.stripe_connect_charges_enabled === true ? rawAcct : null;
 
-      const workerPayout = booking.worker_payout_cents;
-      const payout =
-        workerPayout != null && Number.isFinite(Number(workerPayout))
-          ? Math.max(0, Math.floor(Number(workerPayout)))
-          : null;
-
-      if (connectAccountId && payout != null) {
+      // Prioridade: usa o split persistido no booking (worker_earning/admin_earning);
+      // fallback para worker_payout_cents (legado gerado pela constraint antiga).
+      const adminEarningStored = Number(booking.admin_earning_cents);
+      const workerEarningStored = Number(booking.worker_earning_cents);
+      if (
+        connectAccountId &&
+        Number.isFinite(adminEarningStored) &&
+        adminEarningStored >= 0
+      ) {
+        applicationFeeCents = Math.floor(adminEarningStored);
+      } else if (connectAccountId) {
+        const workerPayout = Number(booking.worker_payout_cents ?? workerEarningStored ?? 0);
+        const payout = Number.isFinite(workerPayout)
+          ? Math.max(0, Math.floor(workerPayout))
+          : 0;
         if (payout > amountCents) {
           return new Response(
             JSON.stringify({ error: "Inconsistência de valores da reserva (repasse > total)" }),
@@ -514,12 +633,6 @@ Deno.serve(async (req) => {
           );
         }
         applicationFeeCents = amountCents - payout;
-        if (applicationFeeCents < 0) {
-          return new Response(
-            JSON.stringify({ error: "Taxa de aplicação inválida para Stripe Connect" }),
-            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
       }
     }
 

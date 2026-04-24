@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -15,6 +15,14 @@ import { PaymentMethodSection, type PaymentMethodType } from '../../components/P
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
+import {
+  computeOrderPricing,
+  formatPricingBreakdown,
+  normalizeApplyPromotion,
+  PricingDenominatorOverflowError,
+  type PricingResult,
+} from '@take-me/shared';
+import { snapshotFromPricingResult } from '../../lib/orderPricingSnapshot';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'ConfirmDependentShipment'>;
 
@@ -53,6 +61,81 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   } = route.params;
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [pricingPreview, setPricingPreview] = useState<PricingResult | null>(null);
+  const [appliedPromotionId, setAppliedPromotionId] = useState<string | null>(null);
+  const [appliedPromoWorkerRouteId, setAppliedPromoWorkerRouteId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!amountCents || amountCents < 1) {
+      setPricingPreview(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      let adminPct = 15;
+      try {
+        const { data: setting } = await supabase
+          .from('platform_settings')
+          .select('value')
+          .eq('key', 'default_admin_pct')
+          .maybeSingle();
+        const raw = setting?.value as { percentage?: number; value?: number } | null;
+        const n = Number(raw?.percentage ?? raw?.value);
+        if (Number.isFinite(n) && n >= 0) adminPct = n;
+      } catch {
+        /* fallback 15% */
+      }
+
+      const { data: { user } } = await supabase.auth.getUser();
+      let gainPct = 0;
+      let discountPct = 0;
+      let promotionId: string | null = null;
+      let promoWorkerRouteId: string | null = null;
+      if (user) {
+        try {
+          const { data: promoRows } = await supabase.rpc('apply_active_promotion', {
+            p_order_type: 'dependent_shipments',
+            p_user_id: user.id,
+            p_amount_cents: amountCents,
+          });
+          const applied = normalizeApplyPromotion(
+            Array.isArray(promoRows) ? (promoRows[0] as any) : (promoRows as any),
+          );
+          gainPct = applied.gainPct;
+          discountPct = applied.discountPct;
+          promotionId = applied.promotionId;
+          promoWorkerRouteId = applied.promoWorkerRouteId;
+        } catch {
+          /* promo indisponível */
+        }
+      }
+
+      try {
+        const preview = computeOrderPricing({
+          baseCents: amountCents,
+          surchargesCents: 0,
+          adminPct,
+          gainPct,
+          discountPct,
+        });
+        if (!cancelled) {
+          setPricingPreview(preview);
+          setAppliedPromotionId(promotionId);
+          setAppliedPromoWorkerRouteId(promoWorkerRouteId);
+        }
+      } catch (err) {
+        if (!cancelled) setPricingPreview(null);
+        if (err instanceof PricingDenominatorOverflowError) {
+          /* noop: config inválida; UI manterá fallback */
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [amountCents]);
+
+  const displayTotalCents = pricingPreview?.totalCents ?? amountCents;
 
   const uploadPhotoAndGetPath = useCallback(
     async (userId: string, localUri: string): Promise<string | null> => {
@@ -73,8 +156,17 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     [],
   );
 
-  const amountFormatted = `R$ ${(amountCents / 100).toFixed(2).replace('.', ',')}`;
+  const amountFormatted = `R$ ${(displayTotalCents / 100).toFixed(2).replace('.', ',')}`;
+  const formatBRL = (cents: number) => `R$ ${(cents / 100).toFixed(2).replace('.', ',')}`;
   const contactDisplay = formatPhoneDisplay(contactPhone);
+
+  const pricingInsertRow = useMemo(() => {
+    if (!pricingPreview) return null;
+    return snapshotFromPricingResult(pricingPreview, {
+      promotionId: appliedPromotionId,
+      promoWorkerRouteId: appliedPromoWorkerRouteId,
+    });
+  }, [pricingPreview, appliedPromotionId, appliedPromoWorkerRouteId]);
 
   const handleConfirmPayment = useCallback(
     async (params: { method: PaymentMethodType; paymentMethodId?: string }) => {
@@ -102,6 +194,18 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         if (photoUri) {
           photoUrl = await uploadPhotoAndGetPath(user.id, photoUri);
         }
+        const pricingFields = pricingInsertRow ?? {
+          amount_cents: amountCents,
+          pricing_subtotal_cents: amountCents,
+          platform_fee_cents: 0,
+          pricing_surcharges_cents: 0,
+          promo_discount_cents: 0,
+          promo_gain_cents: 0,
+          price_route_base_cents: amountCents,
+          worker_earning_cents: amountCents,
+          admin_earning_cents: 0,
+          admin_pct_applied: 0,
+        };
         const { data: row, error } = await supabase
           .from('dependent_shipments')
           .insert({
@@ -120,7 +224,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
             when_option: whenOption,
             scheduled_at: whenOption === 'later' ? null : null,
             payment_method: paymentMethodDb,
-            amount_cents: amountCents,
+            ...pricingFields,
             status,
             photo_url: photoUrl,
           })
@@ -182,6 +286,9 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
       amountCents,
       navigation,
       showAlert,
+      pricingInsertRow,
+      photoUri,
+      uploadPhotoAndGetPath,
     ]
   );
 
@@ -211,14 +318,32 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           <Text style={styles.summaryMeta}>Para: {destination.address}</Text>
           <Text style={styles.summaryMeta}>Quando: {whenOption === 'later' && whenLabel ? whenLabel : 'Agora'}</Text>
           <View style={styles.divider} />
-          <View style={styles.totalRow}>
-            <Text style={styles.summaryLabel}>Total</Text>
-            <Text style={styles.summaryPrice}>{amountFormatted}</Text>
-          </View>
+          {pricingPreview ? (
+            formatPricingBreakdown(pricingPreview).map((line, idx) => {
+              const abs = Math.abs(line.valueCents);
+              const val = line.valueCents < 0 ? `- ${formatBRL(abs)}` : formatBRL(abs);
+              return line.isTotal ? (
+                <View key={`${line.label}-${idx}`} style={styles.totalRow}>
+                  <Text style={styles.summaryLabel}>{line.label}</Text>
+                  <Text style={styles.summaryPrice}>{val}</Text>
+                </View>
+              ) : (
+                <View key={`${line.label}-${idx}`} style={styles.breakdownRow}>
+                  <Text style={styles.summaryMeta}>{line.label}</Text>
+                  <Text style={styles.summaryMeta}>{val}</Text>
+                </View>
+              );
+            })
+          ) : (
+            <View style={styles.totalRow}>
+              <Text style={styles.summaryLabel}>Total</Text>
+              <Text style={styles.summaryPrice}>{amountFormatted}</Text>
+            </View>
+          )}
         </View>
 
         <PaymentMethodSection
-          amountCents={amountCents}
+          amountCents={displayTotalCents}
           selectedMethod={selectedPaymentMethod}
           onSelectMethod={setSelectedPaymentMethod}
           onConfirmPayment={handleConfirmPayment}
@@ -255,4 +380,5 @@ const styles = StyleSheet.create({
   summaryPrice: { fontSize: 16, fontWeight: '700', color: COLORS.black },
   divider: { height: 1, backgroundColor: '#ddd', marginVertical: 12 },
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
+  breakdownRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
 });

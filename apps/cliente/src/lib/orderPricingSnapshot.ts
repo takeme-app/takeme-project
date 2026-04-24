@@ -1,10 +1,12 @@
 /**
  * Colunas de snapshot de precificação em pedidos (bookings, shipments, dependent_shipments).
- * Regra do banco: amount_cents = pricing_subtotal_cents + platform_fee_cents.
+ * No modelo gross-up (PDF): amount_cents = worker_earning_cents + admin_earning_cents.
  *
- * Quando o fluxo ainda não calcula surcharges/promo/rota de catálogo, usamos repasse
- * “plano”: subtotal = valor ao passageiro antes da taxa de plataforma, taxa explícita ou zero.
+ * Campos adicionais `worker_earning_cents`, `admin_earning_cents` e `promo_gain_cents`
+ * refletem o split explícito — usados por process-payouts e telas de repasse.
  */
+
+import type { PricingResult } from '@take-me/shared';
 
 export type OrderPricingSnapshotInsert = {
   price_route_base_cents: number;
@@ -13,6 +15,13 @@ export type OrderPricingSnapshotInsert = {
   pricing_surcharges_cents: number;
   promo_discount_cents: number;
   amount_cents: number;
+  /** Ganho promocional extra repassado ao worker (cents). */
+  promo_gain_cents?: number;
+  /** Split do total: o quanto o worker recebe (cents). */
+  worker_earning_cents?: number;
+  /** Split do total: o quanto a plataforma recebe (cents). */
+  admin_earning_cents?: number;
+  admin_pct_applied?: number;
 };
 
 function clampNonNegativeInt(n: number): number {
@@ -93,6 +102,10 @@ export function shipmentOrderInsertFromQuoteParams(params: {
   platformFeeCents: number;
   amountCents: number;
   adminPctApplied: number;
+  /** Campos opcionais do split PDF (quando a cotação já aplicou gross-up). */
+  surchargesCents?: number;
+  workerEarningCents?: number;
+  adminEarningCents?: number;
 }): OrderPricingSnapshotInsert & {
   pricing_route_id: string | null;
   admin_pct_applied: number;
@@ -102,9 +115,52 @@ export function shipmentOrderInsertFromQuoteParams(params: {
     price_route_base_cents: clampNonNegativeInt(params.priceRouteBaseCents),
     pricing_subtotal_cents: clampNonNegativeInt(params.pricingSubtotalCents),
     platform_fee_cents: clampNonNegativeInt(params.platformFeeCents),
-    pricing_surcharges_cents: 0,
+    pricing_surcharges_cents: clampNonNegativeInt(params.surchargesCents ?? 0),
     promo_discount_cents: 0,
+    promo_gain_cents: 0,
     amount_cents: clampNonNegativeInt(params.amountCents),
+    worker_earning_cents:
+      params.workerEarningCents != null
+        ? clampNonNegativeInt(params.workerEarningCents)
+        : clampNonNegativeInt(params.pricingSubtotalCents),
+    admin_earning_cents:
+      params.adminEarningCents != null
+        ? clampNonNegativeInt(params.adminEarningCents)
+        : clampNonNegativeInt(params.platformFeeCents),
     admin_pct_applied: params.adminPctApplied,
+  };
+}
+
+/**
+ * Snapshot completo para INSERT em qualquer pedido (bookings/shipments/etc.) a partir
+ * do resultado do `computeOrderPricing` (shared). Formato gross-up do PDF.
+ */
+export function snapshotFromPricingResult(
+  result: PricingResult,
+  opts: {
+    promotionId?: string | null;
+    pricingRouteId?: string | null;
+    promoWorkerRouteId?: string | null;
+  } = {}
+): OrderPricingSnapshotInsert & {
+  pricing_route_id: string | null;
+  promotion_id: string | null;
+  promo_worker_route_id: string | null;
+  admin_pct_applied: number;
+} {
+  return {
+    price_route_base_cents: clampNonNegativeInt(result.baseCents),
+    pricing_subtotal_cents: clampNonNegativeInt(result.baseCents),
+    pricing_surcharges_cents: clampNonNegativeInt(result.surchargesCents),
+    platform_fee_cents: clampNonNegativeInt(result.adminFeeCents),
+    promo_discount_cents: clampNonNegativeInt(result.promoDiscountCents),
+    promo_gain_cents: clampNonNegativeInt(result.promoGainCents),
+    amount_cents: clampNonNegativeInt(result.totalCents),
+    worker_earning_cents: clampNonNegativeInt(result.workerEarningCents),
+    admin_earning_cents: clampNonNegativeInt(result.adminEarningCents),
+    admin_pct_applied: Number(result.adminPctApplied ?? 0),
+    pricing_route_id: opts.pricingRouteId ?? null,
+    promotion_id: opts.promotionId ?? null,
+    promo_worker_route_id: opts.promoWorkerRouteId ?? null,
   };
 }

@@ -61,7 +61,13 @@ function formatTime(iso: string | null): string {
   } catch { return '—'; }
 }
 
-type Promotion = { id: string; title: string; description: string };
+type Promotion = {
+  id: string;
+  title: string;
+  description: string;
+  gain_pct_to_worker?: number | null;
+  discount_pct_to_passenger?: number | null;
+};
 
 export function HomeEncomendasScreen() {
   const navigation = useNavigation<any>();
@@ -153,7 +159,7 @@ export function HomeEncomendasScreen() {
     try {
       const { data: promoData } = await supabase
         .from('promotions')
-        .select('id, title, description')
+        .select('id, title, description, gain_pct_to_worker, discount_pct_to_passenger')
         .eq('is_active', true)
         .eq('target_type', 'preparador_encomendas')
         .maybeSingle();
@@ -389,8 +395,13 @@ export function HomeEncomendasScreen() {
             <View style={styles.promoIconWrap}>
               <Text style={styles.promoEmoji}>🎁</Text>
             </View>
-            <Text style={styles.promoTitle}>{promoModal?.title ?? 'Bônus de Feriado!'}</Text>
-            <Text style={styles.promoDesc}>{promoModal?.description ?? '+15% de bônus em todas as entregas realizadas no feriado.'}</Text>
+            <Text style={styles.promoTitle}>{promoModal?.title ?? 'Promoção ativa'}</Text>
+            <Text style={styles.promoDesc}>
+              {promoModal?.description
+                ?? (promoModal?.gain_pct_to_worker
+                  ? `+${Number(promoModal.gain_pct_to_worker).toFixed(0)}% de bônus em todas as entregas realizadas durante a campanha.`
+                  : 'Promoção ativa para preparador de encomendas.')}
+            </Text>
             <TouchableOpacity style={styles.promoBtnPrimary} onPress={() => setPromoModal(null)} activeOpacity={0.85}>
               <Text style={styles.promoBtnPrimaryText}>Estou ciente</Text>
             </TouchableOpacity>

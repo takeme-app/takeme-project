@@ -11,8 +11,13 @@ import { supabase } from '../../lib/supabase';
 
 type Props = NativeStackScreenProps<ColetasExcursoesStackParamList, 'EmbarqueConcluido'>;
 
+function formatBRL(cents: number | null | undefined): string {
+  const v = typeof cents === 'number' && Number.isFinite(cents) ? cents : 0;
+  return (v / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
 export function EmbarqueConcluidoScreen({ navigation, route }: Props) {
-  const { boarded, justified, totalExcursion, excursionId } = route.params;
+  const { boarded, justified, totalExcursion, excursionId, totalAmountCents } = route.params;
   const [destinationQuery, setDestinationQuery] = useState<string | null>(null);
 
   useEffect(() => {
@@ -64,7 +69,10 @@ export function EmbarqueConcluidoScreen({ navigation, route }: Props) {
             <View style={styles.stats}>
               <StatRow label="Passageiros embarcados" value={String(boarded)} />
               <StatRow label="Ausentes justificados" value={String(justified)} />
-              <StatRow label="Total da excursão" value={String(totalExcursion)} />
+              <StatRow label="Passageiros cadastrados" value={String(totalExcursion)} />
+              {typeof totalAmountCents === 'number' && totalAmountCents > 0 ? (
+                <StatRow label="Total da excursão" value={formatBRL(totalAmountCents)} />
+              ) : null}
             </View>
           </View>
         </View>

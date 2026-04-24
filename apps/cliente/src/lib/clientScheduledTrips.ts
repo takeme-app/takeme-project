@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import { getUserErrorMessage } from '../utils/errorMessage';
-import { bookingCardChargeAmountCents } from './bookingChargePreview';
+import { computeOrderPricing, PricingDenominatorOverflowError } from '@take-me/shared';
 import { parseTimeSlotRange, toISODateFromUtcIso, toISODate } from './dateTimeSlots';
 import type { WhenTimeResult } from '../hooks/useWhenTimeSelection';
 
@@ -185,32 +185,97 @@ export type LoadClientScheduledTripsOptions = {
   applyBookingsPromoToList?: boolean;
 };
 
-type PromoBatchRow = { ord: number; promo_discount_cents?: number | null };
+type PromoBatchRow = {
+  ord: number;
+  gain_pct?: number | string | null;
+  discount_pct?: number | string | null;
+  promotion_id?: string | null;
+};
 
-async function applyBookingsPromoToTripListAmounts(items: ClientScheduledTripItem[], userId: string): Promise<void> {
-  if (items.length === 0) return;
-  const bases = items.map((it) => it.amount_cents);
-  if (!bases.some((b) => b != null && b >= 1)) return;
-
-  const p_amounts = bases.map((b) => (b != null && b >= 1 ? Math.floor(Number(b)) : 0));
-  const { data, error } = await supabase.rpc('apply_active_promotion_for_amounts', {
-    p_order_type: 'bookings',
-    p_user_id: userId,
-    p_amounts,
-  });
-  if (error || !Array.isArray(data)) return;
-
-  const byOrd = new Map<number, number>();
-  for (const row of data as PromoBatchRow[]) {
-    if (row?.ord != null) {
-      byOrd.set(Number(row.ord), Math.max(0, Math.floor(Number(row.promo_discount_cents ?? 0))));
-    }
+async function readDefaultAdminPct(): Promise<number> {
+  const sb = supabase as { from: (table: string) => any };
+  const { data } = await sb
+    .from('platform_settings')
+    .select('value')
+    .eq('key', 'default_admin_pct')
+    .maybeSingle();
+  const raw = data?.value;
+  if (raw && typeof raw === 'object') {
+    const pct = Number((raw as { percentage?: unknown; value?: unknown }).percentage ?? (raw as { value?: unknown }).value);
+    if (Number.isFinite(pct) && pct >= 0) return pct;
   }
+  return 15;
+}
+
+/**
+ * Ajusta os `amount_cents` exibidos na lista aplicando o gross-up canônico
+ * (admin_pct + ganho_motorista − desconto_passageiro) com a promoção ativa que
+ * incidiria sobre a rota da viagem. Resultado é exatamente o total que será
+ * cobrado no cartão em CheckoutScreen.
+ */
+async function applyPricingToTripListAmounts(
+  items: ClientScheduledTripItem[],
+  userId: string,
+  adminPct: number,
+  workerRouteIdByTripId: Map<string, string | null>,
+): Promise<void> {
+  if (items.length === 0) return;
+
+  const groups = new Map<string | 'none', number[]>();
+  items.forEach((it, idx) => {
+    const routeKey = workerRouteIdByTripId.get(it.id) ?? 'none';
+    const arr = groups.get(routeKey) ?? [];
+    arr.push(idx);
+    groups.set(routeKey, arr);
+  });
+
+  const applied = new Map<number, { gainPct: number; discountPct: number }>();
+
+  await Promise.all(
+    [...groups.entries()].map(async ([routeKey, idxs]) => {
+      const p_amounts = idxs.map((i) => {
+        const base = items[i].amount_cents;
+        return base != null && base >= 1 ? Math.floor(Number(base)) : 0;
+      });
+      const payload: Record<string, unknown> = {
+        p_order_type: 'bookings',
+        p_user_id: userId,
+        p_amounts,
+      };
+      if (routeKey !== 'none') payload.p_worker_route_id = routeKey;
+
+      const { data, error } = await supabase.rpc('apply_active_promotion_for_amounts', payload);
+      if (error || !Array.isArray(data)) return;
+
+      for (const row of data as PromoBatchRow[]) {
+        const ord = row?.ord != null ? Number(row.ord) : NaN;
+        if (!Number.isFinite(ord) || ord < 1) continue;
+        const globalIdx = idxs[ord - 1];
+        if (globalIdx == null) continue;
+        applied.set(globalIdx, {
+          gainPct: Math.max(0, Number(row.gain_pct ?? 0)),
+          discountPct: Math.max(0, Number(row.discount_pct ?? 0)),
+        });
+      }
+    }),
+  );
+
   for (let i = 0; i < items.length; i++) {
-    const base = bases[i];
+    const base = items[i].amount_cents;
     if (base == null || base < 1) continue;
-    const disc = byOrd.get(i + 1) ?? 0;
-    items[i].amount_cents = bookingCardChargeAmountCents(base, disc);
+    const promo = applied.get(i) ?? { gainPct: 0, discountPct: 0 };
+    try {
+      const pricing = computeOrderPricing({
+        baseCents: base,
+        surchargesCents: 0,
+        adminPct,
+        gainPct: promo.gainPct,
+        discountPct: promo.discountPct,
+      });
+      items[i].amount_cents = pricing.totalCents;
+    } catch (e) {
+      if (e instanceof PricingDenominatorOverflowError) continue;
+    }
   }
 }
 
@@ -338,7 +403,12 @@ export async function loadClientScheduledTrips(opts?: LoadClientScheduledTripsOp
     } = await supabase.auth.getUser();
     if (user?.id) {
       try {
-        await applyBookingsPromoToTripListAmounts(items, user.id);
+        const adminPct = await readDefaultAdminPct();
+        const workerRouteByTripId = new Map<string, string | null>();
+        for (const t of trips) {
+          workerRouteByTripId.set(t.id, (t.route_id as string | null) ?? null);
+        }
+        await applyPricingToTripListAmounts(items, user.id, adminPct, workerRouteByTripId);
       } catch {
         /* RPC ausente ou rede: mantém preço base da rota */
       }
