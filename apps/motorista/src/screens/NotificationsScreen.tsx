@@ -184,7 +184,9 @@ export function NotificationsScreen({ navigation }: Props) {
 
       const map: Record<string, boolean> = {};
       PREF_KEYS.forEach(({ key }) => {
-        map[key] = true;
+        // `disable_all` é uma ação negativa: por padrão vem DESLIGADO
+        // (usuário recebe notificações). Demais preferências começam ligadas.
+        map[key] = key === 'disable_all' ? false : true;
       });
       (data ?? []).forEach((row: { key: string; enabled: boolean }) => {
         map[row.key] = row.enabled;
