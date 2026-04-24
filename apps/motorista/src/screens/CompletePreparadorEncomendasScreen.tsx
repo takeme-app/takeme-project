@@ -177,10 +177,21 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
 
       const baseId = await resolveWorkerBaseId(cityMeta.locality, cityMeta.adminArea, city.trim());
 
+      const { data: existing } = await supabase
+        .from('worker_profiles')
+        .select('id, status')
+        .eq('id', userId)
+        .maybeSingle();
+
+      // Finaliza etapa 4: promove draft 'inactive' para 'pending' (aguarda aprovação admin).
+      // Preserva estados posteriores (under_review/approved/rejected/suspended).
+      const nextStatus =
+        !existing || existing.status === 'inactive' ? 'pending' : existing.status;
+
       const workerPayload = {
         role: 'preparer' as const,
         subtype: 'shipments' as const,
-        status: 'inactive' as const,
+        status: nextStatus,
         cpf: cpfDigits,
         age: ageNum,
         city: city.trim(),
@@ -191,12 +202,6 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
         base_id: baseId,
         updated_at: nowIso,
       };
-
-      const { data: existing } = await supabase
-        .from('worker_profiles')
-        .select('id')
-        .eq('id', userId)
-        .maybeSingle();
 
       if (existing?.id) {
         const { error: upErr } = await supabase
