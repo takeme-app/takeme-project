@@ -558,11 +558,16 @@ export default function PromocoesScreen() {
                 description: row.descricao || '',
                 start_at: row.startAtIso,
                 end_at: row.endAtIso,
-                target_audiences: [row.tipoPublico],
-                discount_type: row.tipoDesconto === 'Percentual' ? 'percentage' : 'fixed',
+                target_audiences: row.rawTargetAudiences,
+                discount_type: row.rawDiscountType,
                 discount_value: row.valorDesconto,
-                applies_to: row.aplicaA ? row.aplicaA.split(', ') : [],
+                applies_to: row.rawAppliesTo,
                 is_active: false,
+                gain_pct_to_worker: row.rawGainPctToWorker,
+                discount_pct_to_passenger: row.rawDiscountPctToPassenger,
+                worker_route_id: row.rawWorkerRouteId,
+                pricing_route_id: row.rawPricingRouteId,
+                origin_city: row.rawOriginCity,
               });
               const [data, counts] = await Promise.all([fetchPromocoes(), fetchPromocaoCounts()]);
               setPromoData(data);

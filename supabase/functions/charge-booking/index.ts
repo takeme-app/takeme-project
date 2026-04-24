@@ -22,7 +22,6 @@ type DraftBookingBody = {
   /** Mantidos apenas por compatibilidade; edge recomputa via RPC. */
   promotion_id?: string;
   promo_discount_cents?: number;
-  admin_pct_applied?: number;
 };
 
 type OrderPricing = {
@@ -130,6 +129,41 @@ async function stripeFetch(
 async function stripeRefundPaymentIntent(secretKey: string, paymentIntentId: string): Promise<void> {
   const params = new URLSearchParams({ payment_intent: paymentIntentId });
   await stripeFetch(secretKey, "POST", "/refunds", params);
+}
+
+type CardFunding = "credit" | "debit" | "prepaid" | "unknown";
+
+/**
+ * Lê `card.funding` (`credit`/`debit`/`prepaid`/`unknown`) do PaymentMethod.
+ * Usado para validar a intenção do cliente (cartão "combo" no BR é roteado pelo emissor;
+ * sem este check, débito e crédito chegam idênticos no Stripe).
+ */
+async function fetchPaymentMethodFunding(
+  secretKey: string,
+  paymentMethodId: string,
+): Promise<CardFunding | null> {
+  try {
+    const pm = (await stripeFetch(
+      secretKey,
+      "GET",
+      `/payment_methods/${paymentMethodId}`,
+    )) as { card?: { funding?: string } };
+    const f = pm.card?.funding;
+    if (f === "credit" || f === "debit" || f === "prepaid" || f === "unknown") return f;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function fundingMismatchMessage(intent: "credit" | "debit", funding: CardFunding): string | null {
+  if (intent === "debit" && funding === "credit") {
+    return "Este cartão é processado como crédito pelo emissor; tente a opção 'Cartão de crédito' ou pague via Pix.";
+  }
+  if (intent === "credit" && funding === "debit") {
+    return "Este cartão é débito; selecione 'Cartão de débito' para concluir.";
+  }
+  return null;
 }
 
 function resolveTripPriceCents(
@@ -263,6 +297,10 @@ Deno.serve(async (req) => {
       draft_booking?: DraftBookingBody;
       payment_method_id?: string;
       stripe_payment_method_id?: string;
+      /** "card" (default) ou "pix"; pix só é aceito no modo legado (booking_id já criado pelo cliente). */
+      payment_method_kind?: "card" | "pix";
+      /** Quando "card", indica a intenção do usuário (selecionado em PaymentMethodSection). */
+      card_intent?: "credit" | "debit";
     };
     const bookingId = body.booking_id?.trim();
     const paymentMethodIdSupabase = body.payment_method_id?.trim();
@@ -270,6 +308,10 @@ Deno.serve(async (req) => {
     const draft = body.draft_booking;
     const hasDraft = Boolean(draft?.scheduled_trip_id?.trim());
     const hasLegacyBooking = Boolean(bookingId);
+    const paymentMethodKind: "card" | "pix" =
+      body.payment_method_kind === "pix" ? "pix" : "card";
+    const cardIntent: "credit" | "debit" | null =
+      body.card_intent === "credit" || body.card_intent === "debit" ? body.card_intent : null;
 
     if (hasDraft && hasLegacyBooking) {
       return new Response(
@@ -288,19 +330,47 @@ Deno.serve(async (req) => {
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
 
-    const pmRes = await resolveStripePaymentMethodId(
-      admin,
-      userId,
-      paymentMethodIdSupabase,
-      stripePaymentMethodIdFromClient
-    );
-    if ("error" in pmRes) {
-      return new Response(JSON.stringify({ error: pmRes.error }), {
-        status: pmRes.status,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    if (paymentMethodKind === "pix" && hasDraft) {
+      return new Response(
+        JSON.stringify({
+          error: "Pix exige booking_id (reserva pré-criada). Crie a reserva como pending antes de chamar a cobrança Pix.",
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
-    const stripePaymentMethodId = pmRes.pm;
+
+    let stripePaymentMethodId = "";
+    let cardFunding: CardFunding | null = null;
+    if (paymentMethodKind === "card") {
+      const pmRes = await resolveStripePaymentMethodId(
+        admin,
+        userId,
+        paymentMethodIdSupabase,
+        stripePaymentMethodIdFromClient
+      );
+      if ("error" in pmRes) {
+        return new Response(JSON.stringify({ error: pmRes.error }), {
+          status: pmRes.status,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      stripePaymentMethodId = pmRes.pm;
+
+      // Validação de funding vs intenção (cartão "combo" no BR é roteado pelo emissor;
+      // sem este check, a chamada Stripe é idêntica para débito e crédito).
+      if (cardIntent) {
+        cardFunding = await fetchPaymentMethodFunding(stripeSecret, stripePaymentMethodId);
+        if (cardFunding) {
+          const mismatch = fundingMismatchMessage(cardIntent, cardFunding);
+          if (mismatch) {
+            return new Response(JSON.stringify({ error: mismatch }), {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
+        }
+      }
+    }
 
     const { data: profile } = await admin.from("profiles").select("stripe_customer_id").eq("id", userId).single();
     const customerId = profile?.stripe_customer_id as string | null | undefined;
@@ -457,6 +527,8 @@ Deno.serve(async (req) => {
         "metadata[worker_earning_cents]": String(workerEarningCents),
         "metadata[admin_earning_cents]": String(adminEarningCents),
       });
+      if (cardIntent) piParams.set("metadata[requested_card_intent]", cardIntent);
+      if (cardFunding) piParams.set("metadata[card_funding]", cardFunding);
       if (promoId) piParams.set("metadata[promotion_id]", promoId);
       if (connectAccountId && applicationFeeCents != null) {
         piParams.set("application_fee_amount", String(applicationFeeCents));
@@ -636,6 +708,69 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── Pix (modo legado): a reserva já está pending; confirma o webhook depois ──
+    if (paymentMethodKind === "pix") {
+      const pixParams = new URLSearchParams({
+        amount: String(amountCents),
+        currency: "brl",
+        customer: customerId,
+        "payment_method_types[]": "pix",
+        confirm: "true",
+        "metadata[booking_id]": bookingId!,
+        "metadata[user_id]": userId,
+      });
+      if (connectAccountId && applicationFeeCents != null) {
+        pixParams.set("application_fee_amount", String(applicationFeeCents));
+        pixParams.set("transfer_data[destination]", connectAccountId);
+        pixParams.set("metadata[stripe_connect_destination]", connectAccountId);
+      }
+      const piPix = (await stripeFetch(stripeSecret, "POST", "/payment_intents", pixParams)) as {
+        id?: string;
+        status?: string;
+        last_payment_error?: { message?: string };
+        next_action?: {
+          type?: string;
+          pix_display_qr_code?: {
+            image_url_png?: string;
+            hosted_voucher_url?: string;
+            data?: string;
+          };
+        };
+      };
+      if (piPix.status === "succeeded" || piPix.status === "requires_capture") {
+        // Caminho raro (Pix com saldo já casado): grava PI já; webhook vai promover status.
+        await admin
+          .from("bookings")
+          .update({ stripe_payment_intent_id: piPix.id ?? null, updated_at: new Date().toISOString() } as never)
+          .eq("id", bookingId!)
+          .eq("user_id", userId);
+        return new Response(
+          JSON.stringify({ ok: true, booking_id: bookingId, amount_cents: amountCents }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      if (piPix.status === "requires_action" && piPix.next_action?.type === "pix_display_qr_code") {
+        const qr = piPix.next_action.pix_display_qr_code;
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            pix_requires_payment: true,
+            booking_id: bookingId,
+            payment_intent_id: piPix.id ?? null,
+            image_url_png: qr?.image_url_png ?? null,
+            hosted_voucher_url: qr?.hosted_voucher_url ?? null,
+            pix_copy_paste: qr?.data ?? null,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const errMsg = piPix.last_payment_error?.message ?? `Pix não disponível (status=${piPix.status ?? "?"})`;
+      return new Response(JSON.stringify({ error: errMsg }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const piParams = new URLSearchParams({
       amount: String(amountCents),
       currency: "brl",
@@ -646,6 +781,8 @@ Deno.serve(async (req) => {
       "metadata[booking_id]": bookingId,
       "metadata[user_id]": userId,
     });
+    if (cardIntent) piParams.set("metadata[requested_card_intent]", cardIntent);
+    if (cardFunding) piParams.set("metadata[card_funding]", cardFunding);
     if (connectAccountId && applicationFeeCents != null) {
       piParams.set("application_fee_amount", String(applicationFeeCents));
       piParams.set("transfer_data[destination]", connectAccountId);

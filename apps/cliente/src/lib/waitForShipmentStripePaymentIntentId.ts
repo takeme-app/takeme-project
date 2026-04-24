@@ -4,7 +4,7 @@ import { supabase } from './supabase';
  * Aguarda o webhook `stripe-webhook` gravar `stripe_payment_intent_id` após Pix (ou outro fluxo assíncrono).
  */
 export async function waitForShipmentStripePaymentIntentId(
-  table: 'shipments' | 'dependent_shipments',
+  table: 'shipments' | 'dependent_shipments' | 'bookings',
   id: string,
   opts?: { timeoutMs?: number; intervalMs?: number },
 ): Promise<boolean> {

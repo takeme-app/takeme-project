@@ -2161,6 +2161,14 @@ export async function fetchPromocoes(): Promise<PromocaoListItem[]> {
     valorDesconto: p.discount_value,
     aplicaA: mapAppliesTo(p.applies_to || []),
     status: p.is_active ? 'Ativo' as const : 'Inativo' as const,
+    rawTargetAudiences: Array.isArray(p.target_audiences) ? p.target_audiences : [],
+    rawAppliesTo: Array.isArray(p.applies_to) ? p.applies_to : [],
+    rawDiscountType: p.discount_type === 'fixed' ? 'fixed' : 'percentage',
+    rawDiscountPctToPassenger: Number(p.discount_pct_to_passenger ?? 0),
+    rawGainPctToWorker: Number(p.gain_pct_to_worker ?? 0),
+    rawWorkerRouteId: p.worker_route_id ?? null,
+    rawPricingRouteId: p.pricing_route_id ?? null,
+    rawOriginCity: p.origin_city ?? null,
   }));
 }
 

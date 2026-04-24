@@ -45,6 +45,36 @@ type Row = {
   preparer_id?: string | null;
 };
 
+type CardFunding = "credit" | "debit" | "prepaid" | "unknown";
+
+async function fetchPaymentMethodFunding(
+  secretKey: string,
+  paymentMethodId: string,
+): Promise<CardFunding | null> {
+  try {
+    const pm = (await stripeFetch(
+      secretKey,
+      "GET",
+      `/payment_methods/${paymentMethodId}`,
+    )) as { card?: { funding?: string } };
+    const f = pm.card?.funding;
+    if (f === "credit" || f === "debit" || f === "prepaid" || f === "unknown") return f;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function fundingMismatchMessage(intent: "credit" | "debit", funding: CardFunding): string | null {
+  if (intent === "debit" && funding === "credit") {
+    return "Este cartão é processado como crédito pelo emissor; tente a opção 'Cartão de crédito' ou pague via Pix.";
+  }
+  if (intent === "credit" && funding === "debit") {
+    return "Este cartão é débito; selecione 'Cartão de débito' para concluir.";
+  }
+  return null;
+}
+
 async function resolveConnectDestination(
   admin: ReturnType<typeof createClient>,
   workerUserId: string | null | undefined
@@ -105,11 +135,15 @@ Deno.serve(async (req) => {
       dependent_shipment_id?: string;
       payment_method_id?: string;
       stripe_payment_method_id?: string;
+      /** Quando cartão, intenção do usuário ("credit"/"debit") para metadata + funding mismatch. */
+      card_intent?: "credit" | "debit";
     };
     const shipmentId = body.shipment_id?.trim();
     const dependentId = body.dependent_shipment_id?.trim();
     const paymentMethodIdSupabase = body.payment_method_id?.trim();
     const stripePaymentMethodIdFromClient = body.stripe_payment_method_id?.trim();
+    const cardIntent: "credit" | "debit" | null =
+      body.card_intent === "credit" || body.card_intent === "debit" ? body.card_intent : null;
 
     if ((!shipmentId && !dependentId) || (shipmentId && dependentId)) {
       return new Response(
@@ -301,6 +335,20 @@ Deno.serve(async (req) => {
       stripePaymentMethodId = pmRow.provider_id as string;
     }
 
+    let cardFunding: CardFunding | null = null;
+    if (cardIntent) {
+      cardFunding = await fetchPaymentMethodFunding(stripeSecret, stripePaymentMethodId);
+      if (cardFunding) {
+        const mismatch = fundingMismatchMessage(cardIntent, cardFunding);
+        if (mismatch) {
+          return new Response(JSON.stringify({ error: mismatch }), {
+            status: 400,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      }
+    }
+
     // Split Stripe Connect: se worker (motorista ou preparador) tem Connect ativo,
     // faz transfer_data[destination] com application_fee_amount = admin_earning_cents.
     // Caso preparador_encomendas (shipment.preparer_id): PDF exige admin_pct = 0,
@@ -331,6 +379,8 @@ Deno.serve(async (req) => {
       [`metadata[${metaKey}]`]: id,
       "metadata[user_id]": userId,
     });
+    if (cardIntent) piParams.set("metadata[requested_card_intent]", cardIntent);
+    if (cardFunding) piParams.set("metadata[card_funding]", cardFunding);
     if (connectDestination && applicationFeeCents != null) {
       piParams.set("application_fee_amount", String(applicationFeeCents));
       piParams.set("transfer_data[destination]", connectDestination);

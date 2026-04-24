@@ -296,6 +296,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
             headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
             body: {
               shipment_id: shipmentId,
+              card_intent: params.method === 'credito' ? 'credit' : 'debit',
               ...(hasSavedPm
                 ? { payment_method_id: params.savedPaymentMethodId!.trim() }
                 : { stripe_payment_method_id: params.paymentMethodId!.trim() }),

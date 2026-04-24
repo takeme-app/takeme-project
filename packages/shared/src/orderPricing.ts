@@ -138,15 +138,8 @@ export function formatPricingBreakdown(r: PricingResult): Array<{ label: string;
 
   if (r.promoGainCents > 0) {
     lines.push({
-      label: `Ganho promocional (${r.gainPctApplied.toFixed(2).replace(/\.?0+$/, '')}%)`,
+      label: `Bônus motorista (${r.gainPctApplied.toFixed(2).replace(/\.?0+$/, '')}%)`,
       valueCents: r.promoGainCents,
-    });
-  }
-
-  if (r.promoDiscountCents > 0) {
-    lines.push({
-      label: `Desconto promocional (${r.discountPctApplied.toFixed(2).replace(/\.?0+$/, '')}%)`,
-      valueCents: -r.promoDiscountCents,
     });
   }
 
@@ -154,6 +147,13 @@ export function formatPricingBreakdown(r: PricingResult): Array<{ label: string;
     lines.push({
       label: `Taxa da plataforma (${r.adminPctApplied.toFixed(2).replace(/\.?0+$/, '')}%)`,
       valueCents: r.adminFeeCents,
+    });
+  }
+
+  if (r.promoDiscountCents > 0) {
+    lines.push({
+      label: `Desconto (${r.discountPctApplied.toFixed(2).replace(/\.?0+$/, '')}%)`,
+      valueCents: -r.promoDiscountCents,
     });
   }
 
