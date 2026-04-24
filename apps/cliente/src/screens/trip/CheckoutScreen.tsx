@@ -6,6 +6,9 @@ import {
   ScrollView,
   Platform,
   Image,
+  Alert,
+  Clipboard,
+  Linking,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -45,6 +48,8 @@ import {
 import { snapshotFromPricingResult } from '../../lib/orderPricingSnapshot';
 import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmParams } from '../../components/PaymentMethodSection';
 import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
+import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
+import { waitForShipmentStripePaymentIntentId } from '../../lib/waitForShipmentStripePaymentIntentId';
 
 const supabasePublicUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 
@@ -115,6 +120,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
   const [appliedPromotionId, setAppliedPromotionId] = useState<string | null>(null);
   const [appliedPromoWorkerRouteId, setAppliedPromoWorkerRouteId] = useState<string | null>(null);
   const [workerRouteId, setWorkerRouteId] = useState<string | null>(null);
+  const [pricingRouteId, setPricingRouteId] = useState<string | null>(null);
 
   const driver = route.params?.driver ?? DEFAULT_DRIVER;
   const origin = route.params?.origin;
@@ -163,18 +169,23 @@ export function CheckoutScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (!scheduledTripId) {
       setWorkerRouteId(null);
+      setPricingRouteId(null);
       return;
     }
     let cancelled = false;
     (async () => {
       const { data } = await supabase
         .from('scheduled_trips')
-        .select('route_id')
+        .select('route_id, worker_routes:route_id(pricing_route_id)')
         .eq('id', scheduledTripId)
         .maybeSingle();
       if (!cancelled) {
         const rid = (data?.route_id as string | null | undefined) ?? null;
+        const wr = (data as { worker_routes?: { pricing_route_id?: string | null } | null } | null)
+          ?.worker_routes;
+        const prid = wr?.pricing_route_id ?? null;
         setWorkerRouteId(rid);
+        setPricingRouteId(prid);
       }
     })();
     return () => {
@@ -220,6 +231,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
             p_amount_cents: routePriceCents,
           };
           if (workerRouteId) payload.p_worker_route_id = workerRouteId;
+          if (pricingRouteId) payload.p_pricing_route_id = pricingRouteId;
           const { data: promoRows } = await supabase.rpc('apply_active_promotion', payload);
           const row = Array.isArray(promoRows) ? promoRows[0] : promoRows;
           const applied = normalizeApplyPromotion(row as any);
@@ -260,7 +272,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [routePriceCents, workerRouteId]);
+  }, [routePriceCents, workerRouteId, pricingRouteId]);
 
   useEffect(() => {
     if (!scheduledTripId) {
@@ -410,6 +422,8 @@ export function CheckoutScreen({ navigation, route }: Props) {
               ...(hasSavedPm
                 ? { payment_method_id: params.savedPaymentMethodId!.trim() }
                 : { stripe_payment_method_id: params.paymentMethodId!.trim() }),
+              payment_method_kind: 'card',
+              card_intent: params.method === 'credito' ? 'credit' : 'debit',
               draft_booking: {
                 scheduled_trip_id: scheduledTripId,
                 origin_address: origin.address,
@@ -422,7 +436,6 @@ export function CheckoutScreen({ navigation, route }: Props) {
                 bags_count: bagsCount,
                 passenger_data,
                 promotion_id: appliedPromotionId || undefined,
-                admin_pct_applied: previewToUse.adminPctApplied,
               },
             },
           });
@@ -480,6 +493,88 @@ export function CheckoutScreen({ navigation, route }: Props) {
           if (!bookingId) {
             showAlert('Erro', 'Não foi possível obter o identificador da reserva.');
             return;
+          }
+
+          if (params.method === 'pix') {
+            // Pix: cobra via Stripe (mesma engine de envios). Reserva pré-criada como pending;
+            // o webhook stripe-webhook promove para `paid` após o pagamento real do usuário no banco.
+            const stripeCtx = await ensureAccessTokenForStripeFunctions();
+            const cancelBooking = async () => {
+              await supabase
+                .from('bookings')
+                .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+                .eq('id', bookingId);
+            };
+            if (!stripeCtx.ok) {
+              await cancelBooking();
+              showAlert('Pagamento', stripeCtx.message);
+              return;
+            }
+            const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke(
+              'charge-booking',
+              {
+                headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
+                body: { booking_id: bookingId, payment_method_kind: 'pix' },
+              },
+            );
+            if (chargeFnError) {
+              const raw = await describeInvokeFailure(chargeData, chargeFnError);
+              const chargeErrMsg = getUserErrorMessage({ message: raw }, raw);
+              await cancelBooking();
+              showAlert(
+                'Pagamento',
+                chargeErrMsg || 'Não foi possível iniciar o Pix; a reserva foi cancelada.',
+              );
+              return;
+            }
+            const pixBody = chargeData as {
+              ok?: boolean;
+              pix_requires_payment?: boolean;
+              image_url_png?: string | null;
+              hosted_voucher_url?: string | null;
+              pix_copy_paste?: string | null;
+            } | null;
+            if (pixBody?.pix_requires_payment) {
+              const paste = typeof pixBody.pix_copy_paste === 'string' ? pixBody.pix_copy_paste.trim() : '';
+              if (paste) {
+                try {
+                  await Clipboard.setString(paste);
+                } catch {
+                  /* ignore */
+                }
+              }
+              const hosted = typeof pixBody.hosted_voucher_url === 'string' ? pixBody.hosted_voucher_url.trim() : '';
+              await new Promise<void>((resolve) => {
+                const msg = paste
+                  ? 'Copiamos o código Pix para a área de transferência. Abra o comprovante no navegador se preferir; depois pague no app do banco. Quando concluir, toque em Continuar.'
+                  : 'Abra o comprovante Pix no navegador, pague no app do banco e toque em Continuar.';
+                const buttons: { text: string; onPress?: () => void }[] = [];
+                if (hosted) {
+                  buttons.push({
+                    text: 'Abrir comprovante',
+                    onPress: () => {
+                      void Linking.openURL(hosted);
+                    },
+                  });
+                }
+                buttons.push({ text: 'Continuar', onPress: () => resolve() });
+                Alert.alert('Pix', msg, buttons, { cancelable: false });
+              });
+              const paid = await waitForShipmentStripePaymentIntentId('bookings', bookingId);
+              if (!paid) {
+                await cancelBooking();
+                showAlert(
+                  'Pix',
+                  'Não detectamos o pagamento a tempo. A reserva foi cancelada; você pode tentar novamente.',
+                );
+                return;
+              }
+              chargedAmountCents = previewToUse.totalCents;
+            } else if (pixBody?.ok !== true) {
+              await cancelBooking();
+              showAlert('Pagamento', 'Resposta inesperada do servidor ao iniciar Pix.');
+              return;
+            }
           }
         }
 

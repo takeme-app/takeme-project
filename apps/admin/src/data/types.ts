@@ -426,6 +426,15 @@ export interface PromocaoListItem {
   valorDesconto: number;
   aplicaA: string;
   status: 'Ativo' | 'Inativo';
+  /** Raw para reuso em ações (ex.: duplicar) sem perder os códigos técnicos. */
+  rawTargetAudiences: string[];
+  rawAppliesTo: string[];
+  rawDiscountType: 'percentage' | 'fixed';
+  rawDiscountPctToPassenger: number;
+  rawGainPctToWorker: number;
+  rawWorkerRouteId: string | null;
+  rawPricingRouteId: string | null;
+  rawOriginCity: string | null;
 }
 
 // ── Pagamentos / Payouts ────────────────────────────────────────────

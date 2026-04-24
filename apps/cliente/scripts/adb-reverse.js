@@ -5,19 +5,45 @@
  * Rode com o celular conectado antes de abrir o app (ou use npm run android:run que chama isso).
  */
 const path = require('path');
+const os = require('os');
+const fs = require('fs');
 const { spawnSync } = require('child_process');
 
+const isWindows = process.platform === 'win32';
+const ADB_BIN = isWindows ? 'adb.exe' : 'adb';
+
 function findAdb() {
-  const candidates = [
-    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Android', 'Sdk', 'platform-tools', 'adb.exe'),
-    process.env.ANDROID_HOME && path.join(process.env.ANDROID_HOME, 'platform-tools', 'adb.exe'),
-  ].filter(Boolean);
+  const candidates = [];
+
+  if (isWindows && process.env.LOCALAPPDATA) {
+    candidates.push(path.join(process.env.LOCALAPPDATA, 'Android', 'Sdk', 'platform-tools', ADB_BIN));
+  }
+  if (process.env.ANDROID_HOME) {
+    candidates.push(path.join(process.env.ANDROID_HOME, 'platform-tools', ADB_BIN));
+  }
+  if (process.env.ANDROID_SDK_ROOT) {
+    candidates.push(path.join(process.env.ANDROID_SDK_ROOT, 'platform-tools', ADB_BIN));
+  }
+
+  // Caminhos padrão por plataforma
+  const home = os.homedir();
+  if (!isWindows && home) {
+    if (process.platform === 'darwin') {
+      candidates.push(path.join(home, 'Library', 'Android', 'sdk', 'platform-tools', ADB_BIN));
+    }
+    candidates.push(path.join(home, 'Android', 'Sdk', 'platform-tools', ADB_BIN));
+  }
+
   for (const p of candidates) {
     try {
-      const fs = require('fs');
       if (p && fs.existsSync(p)) return p;
     } catch (_) {}
   }
+
+  // Fallback: confia no PATH.
+  const probe = spawnSync(ADB_BIN, ['version'], { encoding: 'utf8', shell: false });
+  if (probe.status === 0) return ADB_BIN;
+
   return null;
 }
 
@@ -48,7 +74,14 @@ function resolveAdbSerial(adbPath) {
 function main() {
   const adb = findAdb();
   if (!adb) {
-    console.error('adb não encontrado. Defina ANDROID_HOME ou use Android Studio (Sdk em %LOCALAPPDATA%\\Android\\Sdk).');
+    const hint = isWindows
+      ? '%LOCALAPPDATA%\\Android\\Sdk'
+      : process.platform === 'darwin'
+        ? '~/Library/Android/sdk'
+        : '~/Android/Sdk';
+    console.error(
+      `adb não encontrado. Defina ANDROID_HOME/ANDROID_SDK_ROOT, adicione platform-tools ao PATH, ou instale o SDK em ${hint}.`
+    );
     process.exit(1);
   }
 

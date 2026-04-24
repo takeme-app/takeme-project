@@ -243,6 +243,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
             body: {
               dependent_shipment_id: shipmentId,
               stripe_payment_method_id: params.paymentMethodId,
+              card_intent: params.method === 'credito' ? 'credit' : 'debit',
             },
           });
           const chargeErrMsg =
