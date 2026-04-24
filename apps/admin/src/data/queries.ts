@@ -1699,6 +1699,64 @@ export async function fetchPreparadores(): Promise<PreparadorListItem[]> {
   });
 }
 
+/**
+ * Lista preparadores cadastrados em `worker_profiles` por subtype.
+ * Alinhado ao Figma (898-20340): cada linha é um preparador, não um pedido.
+ * Campos origem/destino/previsão vêm como "—" porque não se aplicam ao cadastro do worker.
+ * `dataInicio` usa `created_at` (data do cadastro) para permitir filtros por período.
+ * `status` é derivado de `worker_profiles.status`: approved→Em andamento, pending/under_review→Agendado,
+ * inactive/rejected→Cancelado.
+ */
+export async function fetchPreparadoresWorkersBySubtype(
+  subtype: 'excursions' | 'shipments',
+): Promise<PreparadorListItem[]> {
+  if (!isSupabaseConfigured) return [];
+
+  const { data: workers, error } = await sb
+    .from('worker_profiles')
+    .select('id, status, created_at')
+    .eq('role', 'preparer')
+    .eq('subtype', subtype)
+    .order('created_at', { ascending: false })
+    .limit(200);
+
+  if (error || !workers || workers.length === 0) return [];
+
+  const workerIds = (workers as any[]).map((w) => w.id as string);
+  const { data: profilesData } = await supabase
+    .from('profiles')
+    .select('id, full_name, rating')
+    .in('id', workerIds);
+
+  const profileMap = new Map<string, { full_name: string | null; rating: number | null }>();
+  (profilesData ?? []).forEach((p: any) => {
+    profileMap.set(p.id, { full_name: p.full_name ?? null, rating: p.rating != null ? Number(p.rating) : null });
+  });
+
+  const statusLabel = (raw: string): PreparadorListItem['status'] => {
+    if (raw === 'approved') return 'Em andamento';
+    if (raw === 'pending' || raw === 'under_review') return 'Agendado';
+    if (raw === 'rejected' || raw === 'inactive') return 'Cancelado';
+    return 'Agendado';
+  };
+
+  return (workers as any[]).map((w) => {
+    const prof = profileMap.get(w.id);
+    const created: string = w.created_at ?? '';
+    return {
+      id: w.id,
+      nome: prof?.full_name ?? 'Preparador',
+      origem: '—',
+      destino: '—',
+      dataInicio: created ? `${fmtDate(created)}\n${fmtTime(created)}` : '—',
+      rawDate: created ? created.slice(0, 10) : '',
+      previsao: '—',
+      avaliacao: prof?.rating ?? null,
+      status: statusLabel(String(w.status ?? '')),
+    };
+  });
+}
+
 export async function fetchPreparadorById(id: string): Promise<PreparadorListItem | null> {
   if (!isSupabaseConfigured) return null;
   const { data, error } = await (supabase as any)

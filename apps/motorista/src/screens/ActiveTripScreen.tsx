@@ -15,6 +15,7 @@ import {
   KeyboardAvoidingView,
   BackHandler,
   Vibration,
+  Linking,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar, setStatusBarHidden } from 'expo-status-bar';
@@ -2194,6 +2195,144 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   };
 
   /**
+   * Liga para o contacto da parada aberta no sheet de detalhes.
+   * Resolve o número via RPC `driver_get_trip_stop_contact` (passageiro usa
+   * `profiles.phone`, dependente/encomenda guardam o telefone na própria linha).
+   */
+  const handleCallStopContact = async () => {
+    const stop = detailSheetStop;
+    if (!stop) return;
+
+    let stopId = stop.id;
+    if (isSyntheticTripStopId(stopId)) {
+      const resolvedId = await resolveSyntheticTripStopId(tripId, stop);
+      if (!resolvedId) {
+        showAlert(
+          'Contacto',
+          'Não foi possível sincronizar esta parada com o servidor. Tente novamente em alguns segundos.',
+        );
+        return;
+      }
+      stopId = resolvedId;
+    }
+
+    try {
+      const { data, error } = await supabase.rpc(
+        'driver_get_trip_stop_contact' as never,
+        { p_trip_stop_id: stopId } as never,
+      );
+      if (error) {
+        showAlert('Contacto', getUserErrorMessage(error));
+        return;
+      }
+      const payload = (data ?? {}) as { ok?: boolean; error?: string; phone?: string | null };
+      if (payload.ok === false) {
+        showAlert(
+          'Contacto',
+          payload.error === 'forbidden'
+            ? 'Sem permissão para ver este contacto.'
+            : 'Não foi possível obter o contacto desta parada.',
+        );
+        return;
+      }
+      const digits = onlyDigits(String(payload.phone ?? ''));
+      if (digits.length < 8) {
+        showAlert('Contacto', 'Nenhum telefone disponível para esta parada.');
+        return;
+      }
+      await Linking.openURL(`tel:${digits}`);
+    } catch (e) {
+      showAlert('Contacto', getUserErrorMessage(e));
+    }
+  };
+
+  /**
+   * Cancelamento de coleta no sheet de detalhes (passageiro/dependente não
+   * compareceu ou coleta desistida no local). Chama `driver_cancel_pickup`
+   * que marca a parada de pickup — e o dropoff da mesma entidade — como
+   * `skipped`, permitindo avançar a rota sem mexer em bookings/shipments.
+   */
+  const handleCancelPickup = () => {
+    const stop = detailSheetStop;
+    if (!stop) return;
+
+    const isPackage = stop.stopType === 'package_pickup';
+    const isDep = stop.stopType === 'dependent_pickup';
+    const title = isPackage
+      ? isPackagePickupAtBase(stop)
+        ? 'Cancelar retirada?'
+        : 'Cancelar coleta?'
+      : isDep
+        ? 'Cancelar embarque do dependente?'
+        : 'Cancelar embarque?';
+    const message = isPackage
+      ? 'A coleta será ignorada e a rota avança para a próxima parada. A encomenda continua no sistema — fale com o suporte se precisar de cancelamento definitivo.'
+      : isDep
+        ? 'O embarque e o desembarque deste dependente serão ignorados e a rota avança para a próxima parada. Use só quando o responsável/dependente não comparecer.'
+        : 'O embarque e o desembarque deste passageiro serão ignorados e a rota avança para a próxima parada. Use só em caso de não comparecimento do passageiro.';
+
+    Alert.alert(title, message, [
+      { text: 'Voltar', style: 'cancel' },
+      {
+        text: 'Sim, cancelar',
+        style: 'destructive',
+        onPress: () => void runCancelPickup(stop),
+      },
+    ]);
+  };
+
+  const runCancelPickup = async (stop: Stop) => {
+    let stopId = stop.id;
+    if (isSyntheticTripStopId(stopId)) {
+      const resolvedId = await resolveSyntheticTripStopId(tripId, stop);
+      if (!resolvedId) {
+        showAlert(
+          'Paradas',
+          'Não foi possível sincronizar esta parada com o servidor. Tente novamente em alguns segundos.',
+        );
+        return;
+      }
+      stopId = resolvedId;
+    }
+
+    try {
+      const { data, error } = await supabase.rpc(
+        'driver_cancel_pickup' as never,
+        { p_trip_stop_id: stopId } as never,
+      );
+      if (error) {
+        showAlert('Erro', getUserErrorMessage(error));
+        return;
+      }
+      const payload = (data ?? {}) as { ok?: boolean; error?: string };
+      if (payload.ok === false) {
+        const err = String(payload.error ?? '');
+        const msg =
+          err === 'forbidden'
+            ? 'Sem permissão para cancelar esta parada.'
+            : err === 'stop_not_found'
+              ? 'Parada não encontrada.'
+              : err === 'not_a_pickup'
+                ? 'Esta parada não pode ser cancelada.'
+                : 'Não foi possível cancelar a parada.';
+        showAlert('Erro', msg);
+        return;
+      }
+    } catch (e) {
+      showAlert('Erro', getUserErrorMessage(e));
+      return;
+    }
+
+    const fresh = await reloadTripStops();
+    syncCloseDetailOnly();
+    const nextIndex = computeFirstIncompleteStopIndex(fresh);
+    setCurrentStopIndex(nextIndex);
+    if (nextIndex >= fresh.length) {
+      setTimeout(() => openFinalize(), 120);
+    }
+  };
+
+  /**
    * Dois Modais transparentes abertos ao mesmo tempo no iOS costumam roubar toques:
    * o sheet de detalhes ficava “por cima” do de confirmação → “Iniciar embarque” parecia morto.
    * Fechamos o sheet e abrimos só o modal de confirmação; ao voltar, reabrimos o sheet.
@@ -2921,7 +3060,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             <Text style={styles.detailTitle}>
               {detailSheetTitle(detailSheetStop)}
             </Text>
-            <TouchableOpacity style={styles.iconCircleBtn} activeOpacity={0.7}>
+            <TouchableOpacity
+              style={styles.iconCircleBtn}
+              onPress={() => void handleCallStopContact()}
+              activeOpacity={0.7}
+            >
               <MaterialIcons name="phone" size={20} color={DARK} />
             </TouchableOpacity>
           </View>
@@ -2968,7 +3111,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                         : 'Iniciar embarque'}
                   </Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.cancelBtn} activeOpacity={0.7}>
+                <TouchableOpacity
+                  style={styles.cancelBtn}
+                  onPress={handleCancelPickup}
+                  activeOpacity={0.7}
+                >
                   <Text style={styles.cancelBtnText}>
                     {detailSheetStop.stopType === 'package_pickup'
                       ? isPackagePickupAtBase(detailSheetStop)

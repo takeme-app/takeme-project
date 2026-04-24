@@ -72,7 +72,7 @@ class ReactNativeDelegate: ExpoReactNativeFactoryDelegate {
 #if targetEnvironment(simulator)
     return RCTBundleURLProvider.jsBundleURL(
       forBundleRoot: bundleRoot,
-      packagerHost: "127.0.0.1:8082",
+      packagerHost: "127.0.0.1:8083",
       enableDev: true,
       enableMinification: false,
       inlineSourceMap: false
