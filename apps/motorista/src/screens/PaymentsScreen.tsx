@@ -22,6 +22,7 @@ import { fetchDriverPaymentTransfers, type DriverPaymentTransfer } from '../lib/
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { describeInvokeFailure } from '../utils/edgeFunctionResponse';
 import { getStripeConnectState, type StripeConnectState } from '../lib/motoristaAccess';
+import { StripeConnectBlock } from '../components/StripeConnectBlock';
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Payments'>,
@@ -30,12 +31,6 @@ type Props = CompositeScreenProps<
 
 const GOLD = '#C9A227';
 const CREAM = '#FFFBEB';
-const WARN_BG = '#FFFBEB';
-const WARN_BORDER = '#F5D78A';
-const WARN_TITLE = '#92400E';
-const SUCCESS = '#16A34A';
-const SUCCESS_BG = '#F0FDF4';
-const SUCCESS_BORDER = '#BBF7D0';
 const MUTED = '#6B7280';
 const SUBTLE = '#9CA3AF';
 const INK = '#111827';
@@ -177,7 +172,17 @@ export function PaymentsScreen({ navigation }: Props) {
       <StatusBar style="dark" />
 
       <View style={styles.header}>
+        <View style={styles.headerSide} />
         <Text style={styles.headerTitle}>Pagamentos</Text>
+        <View style={styles.headerSide}>
+          <TouchableOpacity
+            style={styles.bellBtn}
+            onPress={() => navigation.navigate('Notifications')}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="notifications-none" size={22} color={INK} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {loading ? (
@@ -254,139 +259,28 @@ export function PaymentsScreen({ navigation }: Props) {
   );
 }
 
-type StripeBlockCopy = {
-  title: string;
-  subtitle: string;
-  ctaLabel: string;
-  tone: 'warn' | 'neutral';
-};
-
-function stripeBlockCopy(state: StripeConnectState, pendingVerificationCount: number): StripeBlockCopy | null {
-  switch (state) {
-    case 'active':
-      return null; // Estado ok — usamos badge verde, sem card
-    case 'in_review':
-      return {
-        title: 'Ação pendente na Stripe',
-        subtitle:
-          pendingVerificationCount > 0
-            ? 'Falta concluir algo para liberar o recebimento automático.'
-            : 'Aguardando aprovação da Stripe. Toque para revisar o cadastro.',
-        ctaLabel: 'Revisar cadastro',
-        tone: 'warn',
-      };
-    case 'action_required':
-      return {
-        title: 'A Stripe pediu informações adicionais',
-        subtitle: 'Complete o formulário para não interromper seus recebimentos.',
-        ctaLabel: 'Completar cadastro',
-        tone: 'warn',
-      };
-    case 'incomplete':
-      return {
-        title: 'Cadastro Stripe incompleto',
-        subtitle: 'Finalize o cadastro para ativar o recebimento automático via PIX.',
-        ctaLabel: 'Retomar cadastro',
-        tone: 'warn',
-      };
-    case 'none':
-    default:
-      return {
-        title: 'Ativar recebimento automático',
-        subtitle: 'Receba via PIX automaticamente após cada viagem.',
-        ctaLabel: 'Configurar Stripe',
-        tone: 'neutral',
-      };
-  }
-}
-
-function StripeConnectBlock({
-  state,
-  pendingVerificationCount,
-  loading,
-  onPressSetup,
-  showExpressLink,
-  expressLoginLoading,
-  onPressExpress,
-}: {
-  state: StripeConnectState;
-  pendingVerificationCount: number;
-  loading: boolean;
-  onPressSetup: () => void;
-  showExpressLink: boolean;
-  expressLoginLoading: boolean;
-  onPressExpress: () => void;
-}) {
-  if (state === 'active') {
-    return (
-      <View style={styles.statusActive}>
-        <MaterialIcons name="check-circle" size={18} color={SUCCESS} />
-        <Text style={styles.statusActiveText}>Recebimento automático ativo</Text>
-      </View>
-    );
-  }
-
-  const copy = stripeBlockCopy(state, pendingVerificationCount);
-  if (!copy) return null;
-
-  const isWarn = copy.tone === 'warn';
-
-  return (
-    <View style={[styles.stripeBlock, isWarn ? styles.stripeBlockWarn : styles.stripeBlockNeutral]}>
-      <View style={styles.stripeBlockHeader}>
-        {isWarn ? (
-          <MaterialIcons name="info-outline" size={18} color={WARN_TITLE} style={{ marginRight: 8 }} />
-        ) : null}
-        <Text style={[styles.stripeBlockTitle, isWarn && { color: WARN_TITLE }]}>
-          {copy.title}
-        </Text>
-      </View>
-      <Text style={styles.stripeBlockSubtitle}>{copy.subtitle}</Text>
-
-      <TouchableOpacity
-        style={[styles.stripeCta, isWarn ? styles.stripeCtaWarn : styles.stripeCtaNeutral]}
-        onPress={onPressSetup}
-        disabled={loading}
-        activeOpacity={0.85}
-      >
-        {loading ? (
-          <ActivityIndicator size="small" color="#FFFFFF" />
-        ) : (
-          <>
-            <Text style={styles.stripeCtaText}>{copy.ctaLabel}</Text>
-            <MaterialIcons name="arrow-forward" size={16} color="#FFFFFF" />
-          </>
-        )}
-      </TouchableOpacity>
-
-      {showExpressLink ? (
-        <TouchableOpacity
-          style={styles.expressLink}
-          onPress={onPressExpress}
-          disabled={expressLoginLoading || loading}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.expressLinkText}>
-            {expressLoginLoading ? 'Abrindo painel Stripe…' : 'Abrir painel Stripe'}
-          </Text>
-        </TouchableOpacity>
-      ) : null}
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
-    paddingHorizontal: 20,
-    paddingTop: 8 + SCREEN_TOP_EXTRA_PADDING,
-    paddingBottom: 12,
+    flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 8 + SCREEN_TOP_EXTRA_PADDING,
+    paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6',
   },
-  headerTitle: { fontSize: 17, fontWeight: '700', color: INK },
+  headerSide: { width: 40, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700', color: INK },
+  bellBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   scroll: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 24 },
 
   /* Hero */
@@ -415,52 +309,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     marginBottom: 12,
   },
-
-  /* Stripe block */
-  stripeBlock: {
-    borderRadius: 14,
-    padding: 16,
-    borderWidth: 1,
-    marginBottom: 12,
-  },
-  stripeBlockWarn: { backgroundColor: WARN_BG, borderColor: WARN_BORDER },
-  stripeBlockNeutral: { backgroundColor: '#F9FAFB', borderColor: '#E5E7EB' },
-  stripeBlockHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
-  stripeBlockTitle: { fontSize: 15, fontWeight: '700', color: INK, flexShrink: 1 },
-  stripeBlockSubtitle: { fontSize: 13, color: MUTED, lineHeight: 18, marginBottom: 12 },
-  stripeCta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 12,
-    borderRadius: 10,
-  },
-  stripeCtaWarn: { backgroundColor: '#B45309' },
-  stripeCtaNeutral: { backgroundColor: INK },
-  stripeCtaText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
-  expressLink: { alignItems: 'center', paddingVertical: 10, marginTop: 4 },
-  expressLinkText: {
-    fontSize: 13,
-    color: WARN_TITLE,
-    textDecorationLine: 'underline',
-    fontWeight: '500',
-  },
-
-  /* Status ativo */
-  statusActive: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: SUCCESS_BG,
-    borderWidth: 1,
-    borderColor: SUCCESS_BORDER,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    marginBottom: 12,
-  },
-  statusActiveText: { fontSize: 14, fontWeight: '600', color: SUCCESS },
 
   /* Transferências */
   emptyText: { fontSize: 14, color: SUBTLE, marginVertical: 8 },

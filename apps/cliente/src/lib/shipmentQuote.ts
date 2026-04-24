@@ -1,9 +1,24 @@
 /**
- * Precificação de encomendas (cliente) alinhada ao catálogo `pricing_routes`
- * com `role_type = 'preparer_shipments'` e ao snapshot do banco:
- * pricing_subtotal_cents = base (trecho × tamanho) + adicionais − promo;
- * platform_fee_cents = round(subtotal × admin_pct / 100);
- * amount_cents = subtotal + platform_fee.
+ * Precificação de encomendas (cliente) com hierarquia em 3 níveis:
+ *
+ *   1) Override do preparador:
+ *        worker_profiles.shipment_delivery_fee_cents / shipment_per_km_fee_cents
+ *   2) Padrão global do admin:
+ *        platform_settings.shipment_base_delivery_fee_cents / km_price_cents
+ *   3) Fallback em catálogo:
+ *        pricing_routes (role_type='preparer_shipments', is_active=true)
+ *
+ * Base do trecho = (delivery_fee ?? 0) + km * (per_km_fee ?? 0) quando há qualquer override
+ * efetivo (1 ou 2). Caso contrário, cai no catálogo antigo (3). Multiplicador por tamanho
+ * entra depois da base (pequeno/médio/grande). Comissão:
+ *
+ * - Com override ativo (1 ou 2) → platform_settings.default_admin_pct.percentage
+ * - Sem override (fallback em pricing_routes) → route.admin_pct
+ *
+ * Snapshot esperado no banco:
+ *   pricing_subtotal_cents = base × pkg_mult
+ *   platform_fee_cents     = round(subtotal × admin_pct / 100)
+ *   amount_cents           = subtotal + platform_fee
  */
 
 import { supabase } from './supabase';
@@ -30,6 +45,9 @@ const PACKAGE_SIZE_MULT: Record<'pequeno' | 'medio' | 'grande', number> = {
   medio: 1.12,
   grande: 1.28,
 };
+
+/** Fallback para `default_admin_pct` quando a linha não existir — espelha o seed da plataforma. */
+const DEFAULT_ADMIN_PCT_FALLBACK = 15;
 
 function clampInt(n: number): number {
   if (!Number.isFinite(n)) return 0;
@@ -174,10 +192,7 @@ function catalogBaseCentsFixed(route: PreparerShipmentPricingRoute): number {
 
 async function catalogBaseCentsAsync(
   route: PreparerShipmentPricingRoute,
-  originLat: number,
-  originLng: number,
-  destLat: number,
-  destLng: number
+  km: number
 ): Promise<number> {
   const mode = route.pricing_mode;
   const pc = route.price_cents;
@@ -185,14 +200,101 @@ async function catalogBaseCentsAsync(
     return catalogBaseCentsFixed(route);
   }
   if (mode === 'per_km') {
-    const km = await billableKmForShipment(originLat, originLng, destLat, destLng);
     return clampInt(km * pc);
   }
   return clampInt(pc);
 }
 
+type PricingDefaults = {
+  /** Override do preparador (se houver). */
+  preparer: {
+    shipment_delivery_fee_cents: number | null;
+    shipment_per_km_fee_cents: number | null;
+  } | null;
+  /** Padrão global do admin. */
+  globals: {
+    km_price_cents: number | null;
+    shipment_base_delivery_fee_cents: number | null;
+    default_admin_pct: number | null;
+  };
+  /** Catálogo antigo (fallback). */
+  routes: PreparerShipmentPricingRoute[];
+};
+
+type PlatformSettingRow = { key: string; value: unknown };
+type WorkerPricingRow = {
+  shipment_delivery_fee_cents: number | null;
+  shipment_per_km_fee_cents: number | null;
+};
+
+function parseIntValue(raw: unknown, field = 'value'): number | null {
+  if (raw == null) return null;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+  if (typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>;
+    const n = obj[field];
+    if (typeof n === 'number' && Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+/** Lê em paralelo: override do preparador + padrões globais + catálogo. */
+async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults> {
+  const sb = supabase as { from: (t: string) => any };
+
+  const settingsPromise = sb
+    .from('platform_settings')
+    .select('key, value')
+    .in('key', ['km_price_cents', 'shipment_base_delivery_fee_cents', 'default_admin_pct']);
+
+  const routesPromise = sb
+    .from('pricing_routes')
+    .select(
+      'id, origin_address, destination_address, pricing_mode, price_cents, admin_pct, role_type, is_active, created_at'
+    )
+    .eq('role_type', 'preparer_shipments')
+    .eq('is_active', true);
+
+  const preparerPromise = preparerId
+    ? sb
+        .from('worker_profiles')
+        .select('shipment_delivery_fee_cents, shipment_per_km_fee_cents')
+        .eq('id', preparerId)
+        .maybeSingle()
+    : Promise.resolve({ data: null });
+
+  const [settingsRes, routesRes, prepRes] = await Promise.all([
+    settingsPromise,
+    routesPromise,
+    preparerPromise,
+  ]);
+
+  const settingsRows = ((settingsRes.data ?? []) as PlatformSettingRow[]) || [];
+  const settingMap = new Map(settingsRows.map((row) => [row.key, row.value]));
+
+  const globals = {
+    km_price_cents: parseIntValue(settingMap.get('km_price_cents')),
+    shipment_base_delivery_fee_cents: parseIntValue(
+      settingMap.get('shipment_base_delivery_fee_cents'),
+    ),
+    default_admin_pct: parseIntValue(settingMap.get('default_admin_pct'), 'percentage'),
+  };
+
+  const routes = ((routesRes.data ?? []) as PreparerShipmentPricingRoute[]) || [];
+
+  const prepRow = (prepRes.data ?? null) as WorkerPricingRow | null;
+  const preparer = prepRow
+    ? {
+        shipment_delivery_fee_cents: prepRow.shipment_delivery_fee_cents ?? null,
+        shipment_per_km_fee_cents: prepRow.shipment_per_km_fee_cents ?? null,
+      }
+    : null;
+
+  return { preparer, globals, routes };
+}
+
 export type ShipmentQuoteOk = {
-  pricingRouteId: string;
+  pricingRouteId: string | null;
   priceRouteBaseCents: number;
   pricingSubtotalCents: number;
   platformFeeCents: number;
@@ -210,57 +312,72 @@ export async function quoteShipmentForClient(params: {
   destinationLat: number;
   destinationLng: number;
   packageSize: 'pequeno' | 'medio' | 'grande';
+  /** Quando informado, aplica override do preparador (nível 1 da hierarquia). */
+  preparerId?: string;
 }): Promise<ShipmentQuoteResponse> {
-  const sb = supabase as { from: (t: string) => any };
-  const { data, error } = await sb
-    .from('pricing_routes')
-    .select(
-      'id, origin_address, destination_address, pricing_mode, price_cents, admin_pct, role_type, is_active, created_at'
-    )
-    .eq('role_type', 'preparer_shipments')
-    .eq('is_active', true);
-
-  if (error) {
+  let defaults: PricingDefaults;
+  try {
+    defaults = await readPricingDefaults(params.preparerId);
+  } catch {
     return { ok: false, error: 'Não foi possível carregar a tabela de preços. Tente novamente.' };
   }
 
-  const rows = (data ?? []) as PreparerShipmentPricingRoute[];
-  if (!rows.length) {
-    return {
-      ok: false,
-      error:
-        'Ainda não há preços de encomenda cadastrados. Peça ao administrador para incluir um trecho (preferencialmente por km) em Pagamentos.',
-    };
-  }
-
-  const route = pickBestRoutePreferPerKm(rows, params.originAddress, params.destinationAddress);
-  if (!route) {
-    return { ok: false, error: 'Não foi possível definir o preço do envio. Tente novamente ou contate o suporte.' };
-  }
-
-  const baseCatalog = await catalogBaseCentsAsync(
-    route,
+  const km = await billableKmForShipment(
     params.originLat,
     params.originLng,
     params.destinationLat,
-    params.destinationLng
+    params.destinationLng,
   );
+
+  // Tarifas efetivas após precedência (preparador > admin global).
+  const effPerKm =
+    defaults.preparer?.shipment_per_km_fee_cents ?? defaults.globals.km_price_cents ?? null;
+  const effDelivery =
+    defaults.preparer?.shipment_delivery_fee_cents ??
+    defaults.globals.shipment_base_delivery_fee_cents ??
+    null;
+  const hasOverride = effPerKm != null || effDelivery != null;
+
+  // Route do catálogo (pode ser usada como base ou apenas como FK/âncora histórica).
+  const bestRoute = pickBestRoutePreferPerKm(
+    defaults.routes,
+    params.originAddress,
+    params.destinationAddress,
+  );
+
+  let baseCents: number;
+  let adminPctApplied: number;
+
+  if (hasOverride) {
+    baseCents = clampInt((effDelivery ?? 0) + km * (effPerKm ?? 0));
+    const pct = defaults.globals.default_admin_pct;
+    adminPctApplied = pct != null && Number.isFinite(pct) && pct >= 0 ? pct : DEFAULT_ADMIN_PCT_FALLBACK;
+  } else if (bestRoute) {
+    baseCents = await catalogBaseCentsAsync(bestRoute, km);
+    const routePct = Number(bestRoute.admin_pct ?? 0);
+    adminPctApplied = Number.isFinite(routePct) && routePct >= 0 ? routePct : 0;
+  } else {
+    return {
+      ok: false,
+      error:
+        'Ainda não há preços de encomenda configurados. Peça ao administrador para definir os valores padrão em Configurações.',
+    };
+  }
+
   const pkgMul = PACKAGE_SIZE_MULT[params.packageSize];
-  const pricingSubtotalCents = clampInt(baseCatalog * pkgMul);
-  const adminPct = Number(route.admin_pct ?? 0);
-  const safePct = Number.isFinite(adminPct) && adminPct >= 0 ? adminPct : 0;
-  const platformFeeCents = clampInt((pricingSubtotalCents * safePct) / 100);
+  const pricingSubtotalCents = clampInt(baseCents * pkgMul);
+  const platformFeeCents = clampInt((pricingSubtotalCents * adminPctApplied) / 100);
   const amountCents = pricingSubtotalCents + platformFeeCents;
 
   return {
     ok: true,
     quote: {
-      pricingRouteId: route.id,
-      priceRouteBaseCents: baseCatalog,
+      pricingRouteId: bestRoute?.id ?? null,
+      priceRouteBaseCents: baseCents,
       pricingSubtotalCents,
       platformFeeCents,
       amountCents,
-      adminPctApplied: safePct,
+      adminPctApplied,
     },
   };
 }

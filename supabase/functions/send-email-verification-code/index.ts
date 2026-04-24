@@ -207,6 +207,37 @@ Deno.serve(async (req) => {
       }
     }
 
+    /**
+     * Dedupe idempotente: se houve um código gerado nos últimos ~8 segundos para o mesmo
+     * (email, purpose), trata como duplicata (duplo-toque no app, retry de rede, etc.) e
+     * devolve `ok: true` sem gerar outro código nem enviar outro e-mail. Isso evita que o
+     * usuário receba 2 mensagens com códigos diferentes e que o primeiro código fique
+     * inutilizado pelo `delete`/`insert` do segundo disparo.
+     */
+    const dedupeWindowIso = new Date(Date.now() - 8 * 1000).toISOString();
+    const { data: recent, error: recentErr } = await supabase
+      .from("email_verification_codes")
+      .select("id")
+      .eq("email", emailNorm)
+      .eq("purpose", purpose)
+      .gt("expires_at", new Date().toISOString())
+      .gt("created_at", dedupeWindowIso)
+      .limit(1)
+      .maybeSingle();
+    if (recentErr) {
+      console.warn("[send-email-verification-code] dedupe recent lookup:", recentErr);
+    }
+    if (recent?.id) {
+      console.log(
+        "[send-email-verification-code] código recente ainda válido — retornando ok idempotente",
+        { emailNorm, purpose },
+      );
+      return new Response(JSON.stringify({ ok: true, deduped: true }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const { error: delErr } = await supabase
       .from("email_verification_codes")
       .delete()

@@ -86,14 +86,15 @@ export function applyPromotionToSnapshot(
 
 /** Campos de precificação para INSERT em `shipments` (snapshot + FK do trecho). */
 export function shipmentOrderInsertFromQuoteParams(params: {
-  pricingRouteId: string;
+  /** Pode ser null quando o preço veio de override (preparador/admin) sem catálogo associado. */
+  pricingRouteId: string | null;
   priceRouteBaseCents: number;
   pricingSubtotalCents: number;
   platformFeeCents: number;
   amountCents: number;
   adminPctApplied: number;
 }): OrderPricingSnapshotInsert & {
-  pricing_route_id: string;
+  pricing_route_id: string | null;
   admin_pct_applied: number;
 } {
   return {

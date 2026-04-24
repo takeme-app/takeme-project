@@ -48,6 +48,11 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
   const inputRefs = useRef<(TextInput | null)[]>([]);
+  /**
+   * Guarda síncrona contra duplo-toque em "Reenviar código" — evita dois disparos
+   * paralelos para a edge function `send-email-verification-code`.
+   */
+  const resendingRef = useRef(false);
 
   const code = digits.join('');
   const isComplete = code.length === CODE_LENGTH;
@@ -175,10 +180,12 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
   };
 
   const handleResendCode = async () => {
+    if (resendingRef.current) return;
+    resendingRef.current = true;
     setResendLoading(true);
     try {
       const fnName = channel === 'phone' ? 'send-phone-verification-code' : 'send-email-verification-code';
-      const fnBody = channel === 'phone' ? { phone, purpose: 'signup' } : { email: email.trim() };
+      const fnBody = channel === 'phone' ? { phone, purpose: 'signup' } : { email: email.trim(), purpose: 'signup' };
       const { data: resendData, error: fnError } = await supabase.functions.invoke(fnName, { body: fnBody });
       const resendPayload = parseInvokeData(resendData);
       if (resendPayload?.error != null) {
@@ -199,6 +206,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
     } catch (err: unknown) {
       showAlert('Erro', getUserErrorMessage(err, 'Não foi possível reenviar o código.'));
     } finally {
+      resendingRef.current = false;
       setResendLoading(false);
     }
   };

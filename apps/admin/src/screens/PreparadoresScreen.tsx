@@ -9,7 +9,7 @@ import {
   webStyles,
   filterIconSvg,
 } from '../styles/webStyles';
-import { fetchPreparadores, fetchPreparadoresEncomendas } from '../data/queries';
+import { fetchPreparadores } from '../data/queries';
 import type { PreparadorListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -40,7 +40,6 @@ const avatarColors: Record<string, string> = {
 
 type PrepRow = {
   id: string;
-  workerId: string;
   nome: string;
   origem: string;
   destino: string;
@@ -49,7 +48,6 @@ type PrepRow = {
   previsao: string;
   avaliacao: number;
   status: 'Em andamento' | 'Agendado' | 'Cancelado' | 'Concluído';
-  connect: import('../data/types').WorkerConnectStatus | null;
 };
 
 const statusChipParaRow: Record<Exclude<FiltroStatusChip, 'todos'>, PrepRow['status']> = {
@@ -248,14 +246,18 @@ export default function PreparadoresScreen() {
   useEffect(() => {
     let cancelled = false;
     setDataLoading(true);
-    const fetchFn = activeTab === 'encomendas' ? fetchPreparadoresEncomendas : fetchPreparadores;
-    fetchFn().then((items) => { if (!cancelled) { setPreparadoresData(items); setDataLoading(false); } });
+    // NOTE: fetchPreparadoresEncomendas foi removido (commit d214526). Enquanto o fluxo
+    // de preparador de encomendas não volta, a aba "Encomendas" exibe estado vazio e
+    // a aba "Excursões" usa fetchPreparadores (que consulta excursion_requests).
+    const promise = activeTab === 'excursoes'
+      ? fetchPreparadores()
+      : Promise.resolve([] as PreparadorListItem[]);
+    promise.then((items) => { if (!cancelled) { setPreparadoresData(items); setDataLoading(false); } });
     return () => { cancelled = true; };
   }, [activeTab]);
 
   const tableRows: PrepRow[] = useMemo(() => preparadoresData.map((p) => ({
     id: p.id,
-    workerId: p.workerId || p.id,
     nome: p.nome,
     origem: p.origem,
     destino: p.destino,
@@ -264,7 +266,6 @@ export default function PreparadoresScreen() {
     previsao: p.previsao,
     avaliacao: p.avaliacao ?? 0,
     status: p.status,
-    connect: p.connect ?? null,
   })), [preparadoresData]);
 
   // ── filteredData: base for KPIs and chart ───────────────────────────
@@ -532,17 +533,7 @@ export default function PreparadoresScreen() {
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           },
         }, React.createElement('span', { style: { color: '#fff', fontSize: 14, fontWeight: 600, ...font } }, initial)),
-        React.createElement('span', { style: { fontWeight: 500, ...cellTextEllipsis } }, row.nome),
-        (() => {
-          const c = row.connect;
-          if (!c?.accountId) {
-            return React.createElement('span', { title: 'Sem Stripe Connect', style: { fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 999, background: '#fee2e2', color: '#991b1b', whiteSpace: 'nowrap' as const, ...font } }, 'sem Connect');
-          }
-          if (c.chargesEnabled && c.payoutsEnabled) {
-            return React.createElement('span', { title: 'Stripe Connect ativo', style: { fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 999, background: '#dcfce7', color: '#166534', whiteSpace: 'nowrap' as const, ...font } }, 'Connect OK');
-          }
-          return React.createElement('span', { title: `charges=${c.chargesEnabled} payouts=${c.payoutsEnabled} details=${c.detailsSubmitted}`, style: { fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 999, background: '#fef3c7', color: '#92400e', whiteSpace: 'nowrap' as const, ...font } }, 'Connect pendente');
-        })()),
+        React.createElement('span', { style: { fontWeight: 500, ...cellTextEllipsis } }, row.nome)),
       // Origem
       React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, maxWidth: tableCols[1].flex.startsWith('0 0') ? tableCols[1].minWidth : undefined, fontWeight: 500 } },
         React.createElement('span', { style: cellTextEllipsis }, row.origem)),
@@ -584,13 +575,13 @@ export default function PreparadoresScreen() {
       },
         React.createElement('button', {
           type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar',
-          onClick: () => navigate(`/preparadores/${row.workerId}`, { state: { tab: activeTab } }),
+          onClick: () => navigate(`/preparadores/${row.id}`, { state: { tab: activeTab } }),
         }, eyeActionSvg),
         React.createElement('button', {
           type: 'button',
           style: webStyles.viagensActionBtn,
           'aria-label': 'Editar',
-          onClick: () => navigate(`/preparadores/${row.workerId}/editar`, { state: { tab: activeTab } }),
+          onClick: () => navigate(`/preparadores/${row.id}/editar`, { state: { tab: activeTab } }),
         }, pencilActionSvg)));
   });
 
