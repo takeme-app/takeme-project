@@ -9,43 +9,40 @@ import {
   ActivityIndicator,
   NativeSyntheticEvent,
   TextInputKeyPressEventData,
-  Dimensions,
   ScrollView,
   TouchableWithoutFeedback,
   Keyboard,
 } from 'react-native';
 import { Text } from '../components/Text';
+import { MaterialIcons } from '@expo/vector-icons';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { RootStackParamList, DriverType } from '../navigation/types';
+import type { RootStackParamList, RegistrationType } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { getUserErrorMessage } from '../utils/errorMessage';
 import { parseInvokeData, parseInvokeError } from '../utils/edgeFunctionResponse';
 import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext';
 
+function isDriverRegistration(t: string | undefined): t is RegistrationType {
+  return t === 'take_me' || t === 'parceiro' || t === 'preparador_excursões' || t === 'preparador_encomendas';
+}
+
 type Props = NativeStackScreenProps<RootStackParamList, 'VerifyEmail'>;
 
 const CODE_LENGTH = 4;
-const OTP_GAP = 10;
-const CONTENT_PADDING = 48;
-
-function getOtpBoxSize(): number {
-  const { width } = Dimensions.get('window');
-  const available = width - CONTENT_PADDING;
-  const boxSize = (available - OTP_GAP * (CODE_LENGTH - 1)) / CODE_LENGTH;
-  return Math.min(85, Math.max(34, Math.floor(boxSize)));
-}
 
 export function VerifyEmailScreen({ navigation, route }: Props) {
-  const { email, password, fullName: fullNameParam, phone: phoneParam, registrationType } = route.params;
+  const { email, password, fullName: fullNameParam, phone: phoneParam, registrationType, channel: channelParam } = route.params;
   const fullName = fullNameParam ?? '';
   const phone = phoneParam ?? '';
-  const driverType: DriverType | undefined =
-    registrationType === 'take_me' || registrationType === 'parceiro' ? registrationType : undefined;
+  const channel: 'email' | 'phone' = channelParam === 'phone' ? 'phone' : 'email';
+  const driverRegistration: RegistrationType | null = isDriverRegistration(registrationType)
+    ? registrationType
+    : null;
   const { showAlert } = useAppAlert();
-  const { setDeferred } = useDeferredDriverSignup();
+  const { setDriverType } = useDeferredDriverSignup();
   const [digits, setDigits] = useState<string[]>(() => Array.from({ length: CODE_LENGTH }, () => ''));
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -54,7 +51,6 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
 
   const code = digits.join('');
   const isComplete = code.length === CODE_LENGTH;
-  const otpBoxSize = getOtpBoxSize();
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
@@ -95,18 +91,26 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
     if (!isComplete) return;
     setLoading(true);
     try {
-      const deferCreate = Boolean(driverType);
-      const { data: fnData, error: fnError } = await supabase.functions.invoke('verify-email-code', {
-        body: {
-          email: email.trim(),
-          code,
-          password,
-          fullName,
-          phone,
-          /** Sempre booleano: motorista não cria conta no Auth nesta etapa. */
-          defer_create: deferCreate,
-        },
-      });
+      const fnName = channel === 'phone' ? 'verify-phone-code' : 'verify-email-code';
+      const fnBody: Record<string, unknown> =
+        channel === 'phone'
+          ? {
+              phone,
+              code,
+              password,
+              fullName,
+              ...(driverRegistration ? { driver_type: driverRegistration } : {}),
+            }
+          : {
+              email: email.trim(),
+              code,
+              password,
+              fullName,
+              phone,
+              ...(driverRegistration ? { driver_type: driverRegistration } : {}),
+            };
+
+      const { data: fnData, error: fnError } = await supabase.functions.invoke(fnName, { body: fnBody });
 
       const payload = parseInvokeData(fnData);
 
@@ -124,34 +128,43 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
         return;
       }
 
-      if (deferCreate) {
-        const token = payload?.token;
-        if (driverType && typeof token === 'string' && token.length > 0) {
-          setDeferred({
-            verificationToken: token,
-            email: email.trim().toLowerCase(),
-            password,
-            driverType,
-          });
-          navigation.navigate('CompleteDriverRegistration', { driverType });
+      // Quando o cadastro é por telefone, a conta é criada com e-mail fake
+      // no formato `{phoneDigits}@takeme.com` (ver verify-phone-code). Logamos
+      // com esse e-mail + senha — o `login-with-phone` dispensa esse passo em
+      // fluxos de login futuro (ele encontra o e-mail via profiles.phone).
+      const phoneDigits = phone.replace(/\D/g, '');
+      const { error: signInError } =
+        channel === 'phone'
+          ? await supabase.auth.signInWithPassword({
+              email: `${phoneDigits}@takeme.com`,
+              password,
+            })
+          : await supabase.auth.signInWithPassword({ email, password });
+      if (signInError) {
+        showAlert(
+          'Login',
+          getUserErrorMessage(
+            signInError,
+            'Conta criada, mas não foi possível entrar automaticamente. Use suas credenciais na tela de login.'
+          )
+        );
+        setLoading(false);
+        return;
+      }
+
+      if (driverRegistration) {
+        setDriverType(driverRegistration);
+        if (driverRegistration === 'preparador_excursões') {
+          navigation.reset({ index: 0, routes: [{ name: 'CompletePreparadorExcursoes' }] });
+        } else if (driverRegistration === 'preparador_encomendas') {
+          navigation.reset({ index: 0, routes: [{ name: 'CompletePreparadorEncomendas' }] });
         } else {
-          showAlert(
-            'Cadastro motorista',
-            'O servidor confirmou o código, mas não devolveu o token de continuação. Faça o deploy da função verify-email-code mais recente e defina DRIVER_DEFERRED_SIGNUP_SECRET (ou SUPABASE_JWT_SECRET com 16+ caracteres) no Supabase.\n\nSe você já recebeu e-mail de boas-vindas, esse e-mail pode ter sido cadastrado antes — use outro e-mail ou faça login.'
-          );
+          navigation.reset({
+            index: 0,
+            routes: [{ name: 'CompleteDriverRegistration', params: { driverType: driverRegistration } }],
+          });
         }
       } else {
-        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-        if (signInError) {
-          showAlert(
-            'Login',
-            getUserErrorMessage(
-              signInError,
-              'Não foi possível entrar após confirmar o e-mail. Tente fazer login manualmente.'
-            )
-          );
-          return;
-        }
         navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
       }
     } catch (err: unknown) {
@@ -164,9 +177,9 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
   const handleResendCode = async () => {
     setResendLoading(true);
     try {
-      const { data: resendData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
-        body: { email: email.trim() },
-      });
+      const fnName = channel === 'phone' ? 'send-phone-verification-code' : 'send-email-verification-code';
+      const fnBody = channel === 'phone' ? { phone, purpose: 'signup' } : { email: email.trim() };
+      const { data: resendData, error: fnError } = await supabase.functions.invoke(fnName, { body: fnBody });
       const resendPayload = parseInvokeData(resendData);
       if (resendPayload?.error != null) {
         showAlert('Erro', String(resendPayload.error));
@@ -190,32 +203,51 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
     }
   };
 
+  const title = channel === 'phone' ? 'Vamos confirmar seu telefone' : 'Vamos confirmar seu e-mail';
+  const subtitleLine1 =
+    channel === 'phone' ? 'Enviamos um código para seu WhatsApp.' : 'Enviamos um código para seu e-mail.';
+  const subtitleLine2 = 'Digite abaixo para confirmar.';
+
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-      <KeyboardAvoidingView style={styles.container} behavior="padding" keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior="padding"
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+      >
         <StatusBar style="dark" />
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" showsVerticalScrollIndicator={false}>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
+        >
           <View style={[styles.content, { paddingTop: insets.top + 96 }]}>
-            <Text style={styles.title}>Confirme seu e-mail</Text>
-            <Text style={styles.subtitle}>Digite o código de 4 dígitos enviado para seu e-mail.</Text>
+            <View style={styles.header}>
+              <Text style={styles.title}>{title}</Text>
+              <Text style={styles.subtitle}>
+                {subtitleLine1}
+                {'\n'}
+                {subtitleLine2}
+              </Text>
+            </View>
 
             <View style={styles.otpWrapper}>
               {Array.from({ length: CODE_LENGTH }, (_, index) => index).map((index) => {
                 const isFocused = focusedIndex === index;
+                const hasValue = digits[index]?.length > 0;
                 return (
                   <TextInput
                     key={index}
                     ref={(el) => { inputRefs.current[index] = el; }}
                     style={[
                       styles.otpInput,
-                      {
-                        width: otpBoxSize,
-                        height: otpBoxSize,
-                        borderRadius: otpBoxSize / 2,
-                        marginHorizontal: OTP_GAP / 2,
-                        fontSize: Math.round(otpBoxSize * 0.4),
-                      },
-                      isFocused ? styles.otpInputFocused : styles.otpInputDefault,
+                      isFocused
+                        ? styles.otpInputFocused
+                        : hasValue
+                          ? styles.otpInputFilled
+                          : styles.otpInputDefault,
                     ]}
                     value={digits[index]}
                     onChangeText={(v) => setDigit(index, v)}
@@ -230,23 +262,44 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
               })}
             </View>
 
-            <TouchableOpacity style={styles.resendLink} onPress={handleResendCode} disabled={resendLoading}>
-              {resendLoading ? <ActivityIndicator size="small" color="#2563EB" /> : <Text style={styles.resendLinkText}>Reenviar código</Text>}
+            <TouchableOpacity
+              style={styles.resendLink}
+              onPress={handleResendCode}
+              disabled={resendLoading}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              {resendLoading ? (
+                <ActivityIndicator size="small" color="#767676" />
+              ) : (
+                <Text style={styles.resendLinkText}>Reenviar código</Text>
+              )}
             </TouchableOpacity>
           </View>
         </ScrollView>
 
-        <View style={[styles.footer, { paddingBottom: insets.bottom }]}>
-          <TouchableOpacity style={styles.footerBackButton} onPress={() => navigation.goBack()} activeOpacity={0.7} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-            <Text style={styles.footerBack}>←</Text>
+        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 8) + 8 }]}>
+          <TouchableOpacity
+            style={styles.footerBackButton}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Voltar"
+          >
+            <MaterialIcons name="arrow-back" size={22} color="#0D0D0D" />
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.confirmButton, isComplete && styles.confirmButtonActive, loading && styles.confirmButtonDisabled]}
+            style={[styles.confirmButton, isComplete ? styles.confirmButtonActive : styles.confirmButtonDisabled]}
             onPress={handleConfirm}
             disabled={!isComplete || loading}
             activeOpacity={0.8}
           >
-            {loading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={[styles.confirmButtonText, isComplete && styles.confirmButtonTextActive]}>Confirmar</Text>}
+            {loading ? (
+              <ActivityIndicator color={isComplete ? '#FFFFFF' : '#767676'} />
+            ) : (
+              <Text style={[styles.confirmButtonText, isComplete ? styles.confirmButtonTextActive : styles.confirmButtonTextDisabled]}>
+                Confirmar código
+              </Text>
+            )}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -258,21 +311,70 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   scroll: { flex: 1 },
   scrollContent: { flexGrow: 1, paddingBottom: 24 },
-  content: { paddingHorizontal: 24, alignItems: 'center' },
-  title: { color: '#0D0D0D', textAlign: 'center', fontSize: 24, fontWeight: '600', marginBottom: 8 },
-  subtitle: { color: '#767676', textAlign: 'center', fontSize: 14, lineHeight: 21, marginBottom: 32 },
-  otpWrapper: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 28 },
-  otpInput: { fontWeight: '700', color: '#0D0D0D', textAlign: 'center', padding: 0 },
+  content: { paddingHorizontal: 16, alignItems: 'stretch' },
+  header: { alignItems: 'center', marginBottom: 48 },
+  title: {
+    color: '#0D0D0D',
+    textAlign: 'center',
+    fontSize: 24,
+    fontWeight: '600',
+    lineHeight: 30,
+    marginBottom: 4,
+  },
+  subtitle: {
+    color: '#767676',
+    textAlign: 'center',
+    fontSize: 14,
+    fontWeight: '400',
+    lineHeight: 21,
+  },
+  otpWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 24,
+  },
+  otpInput: {
+    flex: 1,
+    height: 85,
+    borderRadius: 999,
+    textAlign: 'center',
+    fontSize: 28,
+    fontWeight: '600',
+    color: '#0D0D0D',
+    padding: 0,
+  },
   otpInputDefault: { backgroundColor: '#F1F1F1', borderWidth: 0 },
-  otpInputFocused: { backgroundColor: '#FFFFFF', borderWidth: 2, borderColor: '#0D0D0D' },
+  otpInputFilled: { backgroundColor: '#F1F1F1', borderWidth: 0 },
+  otpInputFocused: { backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: '#0D0D0D' },
   resendLink: { paddingVertical: 8, alignSelf: 'center' },
-  resendLinkText: { fontSize: 14, fontWeight: '500', color: '#2563EB' },
-  footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24, paddingTop: 24 },
-  footerBackButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
-  footerBack: { fontSize: 22, color: '#000000', fontWeight: '600' },
-  confirmButton: { backgroundColor: '#E5E7EB', paddingVertical: 14, paddingHorizontal: 28, borderRadius: 12, minWidth: 160 },
+  resendLinkText: { fontSize: 14, fontWeight: '600', color: '#0D0D0D' },
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+  footerBackButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F1F1F1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmButton: {
+    height: 48,
+    minWidth: 104,
+    paddingHorizontal: 24,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmButtonDisabled: { backgroundColor: '#F1F1F1' },
   confirmButtonActive: { backgroundColor: '#0D0D0D' },
-  confirmButtonDisabled: { opacity: 1 },
-  confirmButtonText: { fontSize: 16, fontWeight: '600', color: '#9CA3AF' },
+  confirmButtonText: { fontSize: 16, fontWeight: '500' },
+  confirmButtonTextDisabled: { color: '#767676' },
   confirmButtonTextActive: { color: '#FFFFFF' },
 });

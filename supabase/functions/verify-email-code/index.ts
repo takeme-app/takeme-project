@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-// --- Token HMAC (motorista defer_create); tudo neste arquivo para colar no painel Supabase ---
+// --- Token HMAC (password reset) ---
 const _encoder = new TextEncoder();
 
 function _base64UrlEncode(bytes: Uint8Array): string {
@@ -24,32 +24,35 @@ async function _hmacSha256Hex(secret: string, message: string): Promise<string> 
   return [...arr].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-type _DeferredDriverPayload = { email: string; exp: number };
-
-async function signDeferredDriverToken(email: string, secret: string, ttlSeconds: number): Promise<string> {
-  const norm = email.trim().toLowerCase();
-  const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
-  const payload: _DeferredDriverPayload = { email: norm, exp };
-  const payloadJson = JSON.stringify(payload);
-  const payloadB64 = _base64UrlEncode(_encoder.encode(payloadJson));
-  const sig = await _hmacSha256Hex(secret, payloadB64);
-  return `${payloadB64}.${sig}`;
-}
-
-function getDeferredDriverSecret(): string {
-  const a = Deno.env.get("DRIVER_DEFERRED_SIGNUP_SECRET");
-  if (a && a.trim().length >= 16) return a.trim();
-  const b = Deno.env.get("SUPABASE_JWT_SECRET");
-  if (b && b.trim().length >= 16) return b.trim();
-  const c = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (c && c.trim().length >= 32) return c.trim().slice(0, 64);
-  throw new Error("Defina DRIVER_DEFERRED_SIGNUP_SECRET ou SUPABASE_JWT_SECRET (mín. 16 caracteres)");
-}
-
 function getPasswordResetSecret(): string {
   const a = Deno.env.get("PASSWORD_RESET_TOKEN_SECRET");
   if (a && a.trim().length >= 16) return a.trim();
-  return getDeferredDriverSecret();
+  const b = Deno.env.get("DRIVER_DEFERRED_SIGNUP_SECRET");
+  if (b && b.trim().length >= 16) return b.trim();
+  const c = Deno.env.get("SUPABASE_JWT_SECRET");
+  if (c && c.trim().length >= 16) return c.trim();
+  const d = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (d && d.trim().length >= 32) return d.trim().slice(0, 64);
+  throw new Error("Defina PASSWORD_RESET_TOKEN_SECRET ou SUPABASE_JWT_SECRET (mín. 16 caracteres)");
+}
+
+type RegistrationType = "take_me" | "parceiro" | "preparador_excursões" | "preparador_encomendas";
+
+function parseRegistrationType(raw: unknown): RegistrationType | null {
+  if (raw === "take_me" || raw === "parceiro" || raw === "preparador_excursões" || raw === "preparador_encomendas") {
+    return raw;
+  }
+  return null;
+}
+
+function mapDriverTypeToSubtype(t: RegistrationType): {
+  role: "driver" | "preparer";
+  subtype: "takeme" | "partner" | "excursions" | "shipments";
+} {
+  if (t === "take_me") return { role: "driver", subtype: "takeme" };
+  if (t === "parceiro") return { role: "driver", subtype: "partner" };
+  if (t === "preparador_excursões") return { role: "preparer", subtype: "excursions" };
+  return { role: "preparer", subtype: "shipments" };
 }
 
 type AuthUserLike = {
@@ -169,15 +172,18 @@ Deno.serve(async (req) => {
       password?: string;
       fullName?: string;
       phone?: string;
-      defer_create?: boolean | string | number;
+      driver_type?: string;
       password_reset?: boolean | string | number;
     };
-    const { email, code, password, fullName, phone, defer_create, password_reset } = body;
-    /** Aceita boolean ou string (alguns clientes serializam diferente). Motorista: só valida e-mail, sem criar auth. */
-    const wantsDeferredDriverSignup =
-      defer_create === true || defer_create === "true" || defer_create === 1;
+    const { email, code, password, fullName, phone, driver_type, password_reset } = body;
     const wantsPasswordReset =
       password_reset === true || password_reset === "true" || password_reset === 1;
+    /**
+     * Quando informado, cria também a linha draft em `worker_profiles` logo após criar o
+     * usuário no Auth. Evita a criação tardia (antiga rota `defer_create`/`FinalizeRegistration`),
+     * persistindo o cadastro mesmo que o motorista abandone a etapa 2.
+     */
+    const registrationType = parseRegistrationType(driver_type);
 
     if (!email || !code || typeof email !== "string" || typeof code !== "string") {
       return new Response(
@@ -186,7 +192,6 @@ Deno.serve(async (req) => {
       );
     }
     if (
-      !wantsDeferredDriverSignup &&
       !wantsPasswordReset &&
       (!password || typeof password !== "string" || password.length < 6)
     ) {
@@ -253,7 +258,7 @@ Deno.serve(async (req) => {
 
     const phoneDigits = typeof phone === "string" ? phone.replace(/\D/g, "").trim() || null : null;
 
-    console.log("[verify-email-code] deferred driver signup:", wantsDeferredDriverSignup);
+    console.log("[verify-email-code] registration_type:", registrationType ?? "(none)");
     console.log("[verify-email-code] password reset:", wantsPasswordReset);
 
     if (wantsPasswordReset) {
@@ -291,27 +296,6 @@ Deno.serve(async (req) => {
               "Configuração do servidor incompleta (token de redefinição). Defina PASSWORD_RESET_TOKEN_SECRET ou SUPABASE_JWT_SECRET.",
           }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
-      }
-    }
-
-    /** Motorista: não cria usuário em Auth aqui — só prova de e-mail (token HMAC para create-motorista-account). */
-    if (wantsDeferredDriverSignup) {
-      try {
-        const secret = getDeferredDriverSecret();
-        const signed = await signDeferredDriverToken(email, secret, 7 * 24 * 3600);
-        return new Response(
-          JSON.stringify({ ok: true, token: signed }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      } catch (e) {
-        console.error("[verify-email-code] deferred token", e);
-        return new Response(
-          JSON.stringify({
-            error:
-              "Configuração do servidor incompleta (segredo do token). Defina DRIVER_DEFERRED_SIGNUP_SECRET ou SUPABASE_JWT_SECRET.",
-          }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
     }
@@ -364,9 +348,40 @@ Deno.serve(async (req) => {
       );
     }
 
+    const newUserId = createData?.user?.id;
+
+    // Para motoristas/preparadores: cria já a linha draft em worker_profiles (status 'inactive')
+    // com o role/subtype correto. A etapa 2 (Complete seu perfil) fará UPDATE dessa linha.
+    // Se o INSERT falhar, fazemos rollback do Auth user para permitir nova tentativa e
+    // retornamos 500 — o app não deve seguir para a etapa 4 com conta órfã.
+    if (newUserId && registrationType) {
+      const { role, subtype } = mapDriverTypeToSubtype(registrationType);
+      const { error: wpErr } = await admin.from("worker_profiles").insert({
+        id: newUserId,
+        role,
+        subtype,
+        status: "inactive",
+      });
+      if (wpErr) {
+        console.error("[verify-email-code] worker_profiles insert:", wpErr);
+        try {
+          await admin.auth.admin.deleteUser(newUserId);
+        } catch (delErr) {
+          console.error("[verify-email-code] rollback auth.admin.deleteUser:", delErr);
+        }
+        return new Response(
+          JSON.stringify({
+            error:
+              "Não foi possível concluir seu cadastro agora. Tente novamente em instantes; se persistir, contate o suporte.",
+            debug: wpErr.message,
+          }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    }
+
     await sendWelcomeEmail(email, fullName);
 
-    const newUserId = createData?.user?.id;
     if (newUserId) {
       await admin.from("notifications").insert({
         user_id: newUserId,
@@ -377,7 +392,7 @@ Deno.serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ ok: true }),
+      JSON.stringify({ ok: true, user_id: newUserId ?? null }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {

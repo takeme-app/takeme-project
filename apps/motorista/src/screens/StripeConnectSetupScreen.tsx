@@ -13,7 +13,7 @@ import {
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -24,7 +24,6 @@ import {
   subtypeToMainRoute,
   type StripeConnectState,
 } from '../lib/motoristaAccess';
-import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { describeInvokeFailure } from '../utils/edgeFunctionResponse';
 
 function isOpenableHttpUrl(url: unknown): url is string {
@@ -40,6 +39,7 @@ const GOLD = '#C9A227';
 
 export function StripeConnectSetupScreen({ navigation, route }: Props) {
   const subtype = route.params?.subtype ?? 'takeme';
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
   const [stripeState, setStripeState] = useState<StripeConnectState>('none');
@@ -108,6 +108,21 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
       }
     };
     const sub = AppState.addEventListener('change', onAppState);
+    return () => sub.remove();
+  }, [syncStripeGateFromServer]);
+
+  // Volta do Stripe via deep link: em alguns dispositivos o URL chega sem repetir
+  // o ciclo de foco/AppState da forma esperada — forçar sync ao receber o scheme.
+  useEffect(() => {
+    const onUrl = ({ url }: { url: string }) => {
+      if (url.includes('stripe-connect-return')) {
+        void syncStripeGateFromServer();
+      }
+    };
+    const sub = Linking.addEventListener('url', onUrl);
+    void Linking.getInitialURL().then((u) => {
+      if (u?.includes('stripe-connect-return')) void syncStripeGateFromServer();
+    });
     return () => sub.remove();
   }, [syncStripeGateFromServer]);
 
@@ -244,19 +259,25 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
+      <View style={[styles.navbar, { paddingTop: Math.max(8, insets.top > 0 ? 8 : 12) }]}>
+        <View style={styles.backBtnPlaceholder} />
+        <Text style={styles.navbarTitle}>Configurar recebimento</Text>
+        <View style={styles.backBtnPlaceholder} />
+      </View>
+
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* Icon */}
+        <View style={styles.hero}>
+          <Text style={styles.heroTitle}>Configure seu recebimento</Text>
+          <Text style={styles.heroSubtitle}>
+            Para receber seus ganhos automaticamente via PIX após cada viagem, configure sua conta de recebimento.
+          </Text>
+        </View>
+
         <View style={styles.iconContainer}>
           <View style={styles.iconCircle}>
             <MaterialIcons name="account-balance" size={48} color={GOLD} />
           </View>
         </View>
-
-        {/* Title */}
-        <Text style={styles.title}>Configure seu recebimento</Text>
-        <Text style={styles.subtitle}>
-          Para receber seus ganhos automaticamente via PIX apos cada viagem, configure sua conta de recebimento.
-        </Text>
 
         {/* Benefits */}
         <View style={styles.benefitsCard}>
@@ -315,6 +336,21 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
           )}
         </TouchableOpacity>
 
+        <TouchableOpacity
+          style={styles.btnRefresh}
+          onPress={() => {
+            void syncStripeGateFromServer();
+          }}
+          disabled={loading || checking}
+          activeOpacity={0.75}
+        >
+          {checking ? (
+            <ActivityIndicator size="small" color="#1D4ED8" />
+          ) : (
+            <Text style={styles.btnRefreshText}>Já concluí no site da Stripe — toque para atualizar</Text>
+          )}
+        </TouchableOpacity>
+
         {stripeAccountId ? (
           <TouchableOpacity
             onPress={handleExpressLogin}
@@ -330,8 +366,6 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         ) : null}
 
-        {/* TEMPORÁRIO: permite pular o onboarding da Stripe e ir direto para a Home.
-            Remover quando o cadastro Stripe voltar a ser obrigatório no fluxo. */}
         <TouchableOpacity
           style={styles.btnSkip}
           onPress={() => {
@@ -340,17 +374,16 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
           disabled={loading || checking}
           activeOpacity={0.7}
         >
-          <Text style={styles.btnSkipText}>Configurar mais tarde</Text>
+          <Text style={styles.btnSkipText}>Pular esta etapa</Text>
         </TouchableOpacity>
-
-
-        <Text style={styles.mandatoryNote}>
-          O cadastro Stripe é obrigatório para acessar a plataforma.
+        <Text style={styles.skipHint}>
+          Você pode configurar depois em Configurações → Pagamentos, mas precisará disso para receber pagamentos.
         </Text>
       </ScrollView>
     </SafeAreaView>
   );
 }
+
 
 function BenefitRow({ icon, text }: { icon: string; text: string }) {
   return (
@@ -364,44 +397,60 @@ function BenefitRow({ icon, text }: { icon: string; text: string }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
+  navbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  navbarTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0D0D0D',
+  },
+  backBtnPlaceholder: { width: 36, height: 36 },
   scroll: {
-    paddingHorizontal: 24,
-    paddingTop: 40 + SCREEN_TOP_EXTRA_PADDING,
+    paddingHorizontal: 20,
+    paddingTop: 8,
     paddingBottom: 40,
     alignItems: 'center',
+  },
+  hero: {
+    width: '100%',
+    marginBottom: 20,
+  },
+  heroTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#0D0D0D',
+    lineHeight: 30,
+    marginBottom: 8,
+    fontFamily: 'Inter_700Bold',
+  },
+  heroSubtitle: {
+    fontSize: 14,
+    color: '#767676',
+    lineHeight: 20,
+    fontFamily: 'Inter_400Regular',
   },
   iconContainer: { marginBottom: 24 },
   iconCircle: {
     width: 96,
     height: 96,
     borderRadius: 48,
-    backgroundColor: '#FFFBEB',
+    backgroundColor: '#FFF8E6',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#111827',
-    textAlign: 'center',
-    marginBottom: 12,
-    fontFamily: 'Inter_700Bold',
-  },
-  subtitle: {
-    fontSize: 15,
-    color: '#6B7280',
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: 28,
-    fontFamily: 'Inter_400Regular',
-  },
   benefitsCard: {
     width: '100%',
-    backgroundColor: '#F9FAFB',
-    borderRadius: 16,
-    padding: 20,
-    gap: 16,
-    marginBottom: 20,
+    backgroundColor: '#F1F1F1',
+    borderRadius: 12,
+    padding: 18,
+    gap: 14,
+    marginBottom: 16,
   },
   benefitRow: {
     flexDirection: 'row',
@@ -410,7 +459,7 @@ const styles = StyleSheet.create({
   },
   benefitText: {
     fontSize: 14,
-    color: '#374151',
+    color: '#0D0D0D',
     flex: 1,
     fontFamily: 'Inter_500Medium',
   },
@@ -418,58 +467,73 @@ const styles = StyleSheet.create({
     width: '100%',
     flexDirection: 'row',
     gap: 10,
-    backgroundColor: '#F0F9FF',
+    backgroundColor: '#F1F1F1',
     borderRadius: 12,
     padding: 14,
-    marginBottom: 28,
+    marginBottom: 20,
     alignItems: 'flex-start',
   },
   infoText: {
     fontSize: 13,
-    color: '#6B7280',
+    color: '#767676',
     flex: 1,
     lineHeight: 18,
     fontFamily: 'Inter_400Regular',
   },
   btnPrimary: {
     width: '100%',
-    height: 52,
-    borderRadius: 14,
-    backgroundColor: '#C9A227',
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: '#0D0D0D',
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 16,
+    marginBottom: 12,
   },
   btnPrimaryText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
     color: '#FFFFFF',
     fontFamily: 'Inter_600SemiBold',
   },
-  btnSkip: {
+  btnRefresh: {
     width: '100%',
-    height: 48,
-    borderRadius: 14,
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
+    minHeight: 44,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: '#F1F1F1',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 12,
+  },
+  btnRefreshText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#0D0D0D',
+    textAlign: 'center',
+    fontFamily: 'Inter_600SemiBold',
+  },
+  btnSkip: {
+    width: '100%',
+    alignItems: 'center',
+    paddingVertical: 14,
+    marginBottom: 4,
   },
   btnSkipText: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#6B7280',
-    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0D0D0D',
+    fontFamily: 'Inter_600SemiBold',
   },
-  mandatoryNote: {
-    fontSize: 13,
-    color: '#6B7280',
+  skipHint: {
+    fontSize: 12,
+    color: '#767676',
     textAlign: 'center',
-    paddingVertical: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    lineHeight: 16,
     fontFamily: 'Inter_400Regular',
   },
   pendingCard: {
@@ -481,21 +545,21 @@ const styles = StyleSheet.create({
   successTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#111827',
+    color: '#0D0D0D',
     marginTop: 16,
     fontFamily: 'Inter_700Bold',
   },
   successSubtitle: {
-    fontSize: 15,
-    color: '#6B7280',
+    fontSize: 14,
+    color: '#767676',
     textAlign: 'center',
     marginTop: 8,
-    lineHeight: 22,
+    lineHeight: 20,
     fontFamily: 'Inter_400Regular',
   },
   expressLinkText: {
     fontSize: 14,
-    color: '#1D4ED8',
+    color: '#0D0D0D',
     textDecorationLine: 'underline',
     fontWeight: '600',
     textAlign: 'center',

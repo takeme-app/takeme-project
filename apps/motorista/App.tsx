@@ -21,7 +21,7 @@ import {
 } from '@expo-google-fonts/inter';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import Mapbox from '@rnmapbox/maps';
-import { RootNavigator } from './src/navigation/RootNavigator';
+import { RootNavigator, type RootInitialRouteName } from './src/navigation/RootNavigator';
 import { AppAlertProvider } from './src/contexts/AppAlertContext';
 import { RegistrationFormProvider } from './src/contexts/RegistrationFormContext';
 import { DeferredDriverSignupProvider } from './src/contexts/DeferredDriverSignupContext';
@@ -37,13 +37,8 @@ if (mapboxToken) {
   Mapbox.setAccessToken(mapboxToken);
 }
 
-type InitialRouteName =
-  | 'Welcome'
-  | 'Main'
-  | 'MainExcursoes'
-  | 'MainEncomendas'
-  | 'MotoristaPendingApproval'
-  | 'StripeConnectSetup';
+type InitialRouteName = RootInitialRouteName;
+type InitialRoute = { name: InitialRouteName; params?: Record<string, unknown> };
 
 const SPLASH_MIN_MS = 500;
 /** Se as fontes não carregarem (rede/emulador), segue com fonte do sistema. */
@@ -85,7 +80,7 @@ export default function App() {
   }, []);
 
   const [ready, setReady] = useState(false);
-  const [initialRoute, setInitialRoute] = useState<InitialRouteName>('Welcome');
+  const [initialRoute, setInitialRoute] = useState<InitialRoute>({ name: 'Welcome' });
   const [splashTimedOut, setSplashTimedOut] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const startTimeRef = useRef<number>(Date.now());
@@ -106,20 +101,33 @@ export default function App() {
     };
   }, []);
 
-  const runSessionInit = useCallback(async (): Promise<InitialRouteName> => {
+  const runSessionInit = useCallback(async (): Promise<InitialRoute> => {
     const {
       data: { session },
     } = await supabase.auth.getSession();
-    if (!session?.user) return 'Welcome';
+    if (!session?.user) return { name: 'Welcome' };
 
     const gate = await checkMotoristaCanAccessApp(session.user.id);
-    if (gate.kind === 'error' || gate.kind === 'missing_profile') {
+    if (gate.kind === 'error') {
       await supabase.auth.signOut();
-      return 'Welcome';
+      return { name: 'Welcome' };
     }
-    if (gate.kind === 'pending') return 'MotoristaPendingApproval';
-    if (gate.kind === 'needs_stripe_connect') return 'StripeConnectSetup';
-    return subtypeToMainRoute(gate.subtype);
+    // Sessão válida mas sem worker_profile (insert falhou na verify-(email|phone)-code).
+    // Não desloga: leva ao SignUpType, que detecta a sessão e cria a linha draft on demand.
+    if (gate.kind === 'missing_profile') {
+      return { name: 'SignUpType' };
+    }
+    // Conta + worker_profile draft (status='inactive'): retoma exatamente na etapa 2.
+    if (gate.kind === 'needs_profile_completion') {
+      const rt = gate.registrationType;
+      if (rt === 'preparador_excursões') return { name: 'CompletePreparadorExcursoes' };
+      if (rt === 'preparador_encomendas') return { name: 'CompletePreparadorEncomendas' };
+      const driverType: 'take_me' | 'parceiro' = rt === 'parceiro' ? 'parceiro' : 'take_me';
+      return { name: 'CompleteDriverRegistration', params: { driverType } };
+    }
+    if (gate.kind === 'pending') return { name: 'MotoristaPendingApproval' };
+    if (gate.kind === 'needs_stripe_connect') return { name: 'StripeConnectSetup' };
+    return { name: subtypeToMainRoute(gate.subtype) };
   }, []);
 
   useEffect(() => {
@@ -142,13 +150,17 @@ export default function App() {
       mounted = false;
       SplashScreen.hideAsync().catch(() => {});
       setSplashTimedOut(true);
-      setInitialRoute('Welcome');
+      setInitialRoute({ name: 'Welcome' });
       setReady(true);
     }, SESSION_INIT_MS);
 
     (async () => {
       try {
-        const route = await withTimeout(runSessionInit(), SESSION_INIT_MS, 'Welcome' as InitialRouteName);
+        const route = await withTimeout(
+          runSessionInit(),
+          SESSION_INIT_MS,
+          { name: 'Welcome' } as InitialRoute,
+        );
         const elapsed = Date.now() - startTimeRef.current;
         const wait = Math.max(0, SPLASH_MIN_MS - elapsed);
         await new Promise((r) => setTimeout(r, wait));
@@ -159,7 +171,7 @@ export default function App() {
         setReady(true);
       } catch (_) {
         if (!mounted) return;
-        setInitialRoute('Welcome');
+        setInitialRoute({ name: 'Welcome' });
         await SplashScreen.hideAsync().catch(() => {});
         setReady(true);
       } finally {
@@ -181,7 +193,7 @@ export default function App() {
       setInitialRoute(route);
       setSplashTimedOut(false);
     } catch (_) {
-      setInitialRoute('Welcome');
+      setInitialRoute({ name: 'Welcome' });
       setSplashTimedOut(false);
     } finally {
       setRetrying(false);
@@ -223,7 +235,7 @@ export default function App() {
         <AppAlertProvider>
           <DeferredDriverSignupProvider>
             <RegistrationFormProvider>
-              <RootNavigator initialRouteName={initialRoute} />
+              <RootNavigator initialRouteName={initialRoute.name} initialRouteParams={initialRoute.params} />
             </RegistrationFormProvider>
           </DeferredDriverSignupProvider>
         </AppAlertProvider>

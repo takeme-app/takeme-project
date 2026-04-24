@@ -34,6 +34,7 @@ const PASSWORD_MIN_LEN = 8;
 
 type EmailCheckStatus = 'idle' | 'checking' | EmailAvailability | 'format';
 
+/** Máscara progressiva de telefone BR: `(xx) xxxxx-xxxx` / `(xx) xxxx-xxxx`. */
 function formatPhone(value: string): string {
   const digits = value.replace(/\D/g, '').slice(0, 11);
   if (digits.length === 0) return '';
@@ -42,45 +43,64 @@ function formatPhone(value: string): string {
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
 }
 
-function isDeferredRegistration(t: string | undefined): boolean {
-  return t === 'take_me' || t === 'parceiro' || t === 'preparador_excursões' || t === 'preparador_encomendas';
+/**
+ * Decide se o conteúdo do campo unificado é tratado como telefone ou e-mail.
+ * Regra: começa com dígito/+/(/espaço → telefone. Qualquer outra coisa → e-mail.
+ */
+function detectChannel(raw: string): 'email' | 'phone' {
+  const trimmed = raw.trim();
+  if (!trimmed) return 'email';
+  return /^[+(\s\d]/.test(trimmed) ? 'phone' : 'email';
 }
 
 export function SignUpScreen({ navigation, route }: Props) {
   const registrationType = route.params?.registrationType;
-  const driverFirst = isDeferredRegistration(registrationType);
   const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
-  const { setDeferred } = useDeferredDriverSignup();
-  const [fullName, setFullName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
+  const { setDriverType } = useDeferredDriverSignup();
+
+  // Campo único: pode conter telefone formatado ou e-mail.
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [hidePassword, setHidePassword] = useState(true);
   const [hideConfirm, setHideConfirm] = useState(true);
   const [agreeTerms, setAgreeTerms] = useState(false);
+  const [agreeOffers, setAgreeOffers] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Feedback inline do e-mail (formato + checagem de existência no servidor).
   const [emailStatus, setEmailStatus] = useState<EmailCheckStatus>('idle');
   const [emailStatusMsg, setEmailStatusMsg] = useState<string | null>(null);
-  const [emailTouched, setEmailTouched] = useState(false);
+  const [identifierTouched, setIdentifierTouched] = useState(false);
   const [passwordTouched, setPasswordTouched] = useState(false);
   const [confirmTouched, setConfirmTouched] = useState(false);
 
   const openTerms = () => navigation.navigate('TermsOfUse');
   const openPrivacy = () => navigation.navigate('PrivacyPolicy');
 
-  const handlePhoneChange = (text: string) => setPhone(formatPhone(text));
+  const channel = useMemo(() => detectChannel(identifier), [identifier]);
 
-  const emailNormalized = email.trim();
-  const emailFormatValid = useMemo(() => isValidEmailFormat(emailNormalized), [emailNormalized]);
+  // Aplica máscara de telefone quando o conteúdo parece telefone; senão mantém literal.
+  const handleIdentifierChange = useCallback((text: string) => {
+    if (detectChannel(text) === 'phone') {
+      setIdentifier(formatPhone(text));
+    } else {
+      setIdentifier(text);
+    }
+  }, []);
+
+  const emailNormalized = channel === 'email' ? identifier.trim() : '';
+  const phoneDigits = channel === 'phone' ? identifier.replace(/\D/g, '') : '';
+  const emailFormatValid = useMemo(
+    () => (channel === 'email' ? isValidEmailFormat(emailNormalized) : false),
+    [channel, emailNormalized]
+  );
+  const phoneValid = channel === 'phone' && phoneDigits.length >= 10 && phoneDigits.length <= 11;
 
   // Checagem de existência do e-mail no servidor, com debounce + race guard.
   const lastQueryRef = useRef<string>('');
   useEffect(() => {
-    if (!emailNormalized) {
+    if (channel !== 'email' || !emailNormalized) {
       setEmailStatus('idle');
       setEmailStatusMsg(null);
       return;
@@ -107,9 +127,9 @@ export function SignUpScreen({ navigation, route }: Props) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [emailNormalized, emailFormatValid]);
+  }, [channel, emailNormalized, emailFormatValid]);
 
-  const handleEmailBlur = useCallback(() => setEmailTouched(true), []);
+  const handleIdentifierBlur = useCallback(() => setIdentifierTouched(true), []);
   const handlePasswordBlur = useCallback(() => setPasswordTouched(true), []);
   const handleConfirmBlur = useCallback(() => setConfirmTouched(true), []);
 
@@ -117,28 +137,37 @@ export function SignUpScreen({ navigation, route }: Props) {
   const passwordsMatch = password.length > 0 && password === confirmPassword;
 
   const formReadyToSubmit =
-    emailFormatValid &&
-    (emailStatus === 'available' || emailStatus === 'error') &&
+    (channel === 'email'
+      ? emailFormatValid && (emailStatus === 'available' || emailStatus === 'error')
+      : phoneValid) &&
     passwordValid &&
     passwordsMatch &&
+    agreeTerms &&
     !loading;
 
   const handleContinue = async () => {
-    setEmailTouched(true);
+    setIdentifierTouched(true);
     setPasswordTouched(true);
     setConfirmTouched(true);
 
-    if (!emailFormatValid) {
-      showAlert('Atenção', 'Informe um e-mail válido.');
-      return;
-    }
-    if (emailStatus === 'taken') {
-      showAlert('Atenção', emailStatusMsg ?? 'Este e-mail já está cadastrado.');
-      return;
-    }
-    if (emailStatus === 'checking') {
-      showAlert('Aguarde', 'Ainda estamos verificando o e-mail.');
-      return;
+    if (channel === 'email') {
+      if (!emailFormatValid) {
+        showAlert('Atenção', 'Informe um e-mail válido.');
+        return;
+      }
+      if (emailStatus === 'taken') {
+        showAlert('Atenção', emailStatusMsg ?? 'Este e-mail já está cadastrado.');
+        return;
+      }
+      if (emailStatus === 'checking') {
+        showAlert('Aguarde', 'Ainda estamos verificando o e-mail.');
+        return;
+      }
+    } else {
+      if (!phoneValid) {
+        showAlert('Atenção', 'Informe um telefone válido com DDD (10 ou 11 dígitos).');
+        return;
+      }
     }
     if (!passwordValid) {
       showAlert('Atenção', `A senha deve ter no mínimo ${PASSWORD_MIN_LEN} caracteres.`);
@@ -148,73 +177,24 @@ export function SignUpScreen({ navigation, route }: Props) {
       showAlert('Atenção', 'As senhas não coincidem.');
       return;
     }
+    if (!agreeTerms) {
+      showAlert('Atenção', 'Aceite os Termos de Uso e a Política de Privacidade.');
+      return;
+    }
     if (!isSupabaseConfigured) {
       showAlert('Erro', 'Supabase não configurado. Verifique o .env.');
       return;
     }
 
-    if (driverFirst) {
-      if (!registrationType) return;
-      setLoading(true);
-      try {
-        const { data: fnData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
-          body: { email: emailNormalized, purpose: 'signup', checkEmailOnly: true },
-        });
-        const apiErrorMsg =
-          fnData && typeof fnData === 'object' && fnData !== null && 'error' in fnData
-            ? String((fnData as { error: unknown }).error)
-            : null;
-        if (apiErrorMsg) {
-          setEmailStatus('taken');
-          setEmailStatusMsg(apiErrorMsg);
-          showAlert('Atenção', apiErrorMsg);
-          return;
-        }
-        if (fnError) {
-          const bodyError = await parseInvokeError(fnError);
-          if (bodyError) {
-            setEmailStatus('taken');
-            setEmailStatusMsg(bodyError);
-            showAlert('Atenção', bodyError);
-            return;
-          }
-          throw fnError;
-        }
-        setDeferred({ email: emailNormalized, password, driverType: registrationType });
-        if (registrationType === 'preparador_excursões') {
-          navigation.navigate('CompletePreparadorExcursoes');
-        } else if (registrationType === 'preparador_encomendas') {
-          navigation.navigate('CompletePreparadorEncomendas');
-        } else {
-          navigation.navigate('CompleteDriverRegistration', { driverType: registrationType });
-        }
-      } catch (err: unknown) {
-        showAlert('Atenção', getUserErrorMessage(err, 'Não foi possível validar o e-mail. Tente novamente.'));
-      } finally {
-        setLoading(false);
-      }
-      return;
-    }
-
-    const phoneDigits = phone.replace(/\D/g, '');
-    if (!fullName.trim()) {
-      showAlert('Atenção', 'Preencha seu nome.');
-      return;
-    }
-    if (!agreeTerms) {
-      showAlert('Atenção', 'Aceite os Termos de Uso e a Política de Privacidade.');
-      return;
-    }
-    if (phoneDigits.length < 10) {
-      showAlert('Atenção', 'Preencha o telefone com DDD e número.');
-      return;
-    }
-
     setLoading(true);
     try {
-      const { data: fnData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
-        body: { email: emailNormalized, phone: phoneDigits },
-      });
+      const fnName = channel === 'email' ? 'send-email-verification-code' : 'send-phone-verification-code';
+      const fnBody: Record<string, unknown> =
+        channel === 'email'
+          ? { email: emailNormalized, purpose: 'signup' }
+          : { phone: phoneDigits, purpose: 'signup' };
+
+      const { data: fnData, error: fnError } = await supabase.functions.invoke(fnName, { body: fnBody });
       const apiErrorMsg =
         fnData && typeof fnData === 'object' && fnData !== null && 'error' in fnData
           ? String((fnData as { error: unknown }).error)
@@ -234,11 +214,16 @@ export function SignUpScreen({ navigation, route }: Props) {
         throw fnError;
       }
 
+      if (registrationType) {
+        setDriverType(registrationType);
+      }
+
       navigation.navigate('VerifyEmail', {
-        email: emailNormalized,
+        email: channel === 'email' ? emailNormalized : '',
         password,
-        fullName: fullName.trim(),
-        phone: phoneDigits,
+        fullName: '',
+        phone: channel === 'phone' ? phoneDigits : '',
+        channel,
         ...(registrationType && { registrationType }),
       });
     } catch (err: unknown) {
@@ -248,24 +233,27 @@ export function SignUpScreen({ navigation, route }: Props) {
     }
   };
 
-  const emailHintState = useMemo(() => {
-    if (!emailTouched && emailStatus !== 'checking') return null;
-    if (!emailNormalized) return null;
-    if (emailStatus === 'format') return { kind: 'error', text: 'E-mail em formato inválido.' };
-    if (emailStatus === 'checking') return { kind: 'muted', text: 'Verificando e-mail…' };
+  const identifierHint = useMemo(() => {
+    if (!identifierTouched && emailStatus !== 'checking') return null;
+    if (!identifier.trim()) return null;
+    if (channel === 'phone') {
+      if (!phoneValid) {
+        return { kind: 'error' as const, text: 'Informe DDD + número (10 ou 11 dígitos).' };
+      }
+      return null;
+    }
+    if (emailStatus === 'format') return { kind: 'error' as const, text: 'E-mail em formato inválido.' };
+    if (emailStatus === 'checking') return { kind: 'muted' as const, text: 'Verificando e-mail…' };
     if (emailStatus === 'taken')
-      return {
-        kind: 'error',
-        text: emailStatusMsg ?? 'Este e-mail já está cadastrado.',
-      };
-    if (emailStatus === 'available') return { kind: 'ok', text: 'E-mail disponível.' };
+      return { kind: 'error' as const, text: emailStatusMsg ?? 'Este e-mail já está cadastrado.' };
+    if (emailStatus === 'available') return { kind: 'ok' as const, text: 'E-mail disponível.' };
     if (emailStatus === 'error')
       return {
-        kind: 'muted',
+        kind: 'muted' as const,
         text: 'Não foi possível validar agora. Continuaremos ao clicar em Continuar.',
       };
     return null;
-  }, [emailNormalized, emailStatus, emailStatusMsg, emailTouched]);
+  }, [channel, emailStatus, emailStatusMsg, identifier, identifierTouched, phoneValid]);
 
   const passwordHint = useMemo(() => {
     if (!passwordTouched || password.length === 0) return null;
@@ -284,9 +272,15 @@ export function SignUpScreen({ navigation, route }: Props) {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <StatusBar style="dark" />
-      <View style={[styles.header, { paddingTop: Math.max(12, insets.top) }]}>
-        <TouchableOpacity style={styles.backButtonCircle} onPress={() => navigation.goBack()} activeOpacity={0.7}>
-          <Text style={styles.backArrow}>←</Text>
+      <View style={[styles.navbar, { paddingTop: Math.max(12, insets.top + 8) }]}>
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={() => navigation.goBack()}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel="Voltar"
+        >
+          <MaterialIcons name="arrow-back" size={22} color="#0D0D0D" />
         </TouchableOpacity>
       </View>
 
@@ -296,65 +290,41 @@ export function SignUpScreen({ navigation, route }: Props) {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.title}>Preencha seus dados para começar</Text>
-        <Text style={styles.titleHint}>
-          {driverFirst
-            ? 'Na próxima etapa você completará seu cadastro com documentos e informações adicionais.'
-            : 'E-mail e senha serão confirmados após você completar o cadastro na próxima tela.'}
-        </Text>
-
-        {!driverFirst ? (
-          <>
-            <TextInput
-              style={styles.input}
-              placeholder="Nome e sobrenome"
-              placeholderTextColor="#9CA3AF"
-              value={fullName}
-              onChangeText={setFullName}
-              autoCapitalize="words"
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="(00) 00000-0000"
-              placeholderTextColor="#9CA3AF"
-              value={phone}
-              onChangeText={handlePhoneChange}
-              keyboardType="phone-pad"
-            />
-          </>
-        ) : null}
+        <View style={styles.hero}>
+          <Text style={styles.heroTitle}>Preencha seus dados para começar</Text>
+        </View>
 
         <View style={styles.fieldGroup}>
           <TextInput
             style={[
               styles.input,
               styles.inputWithHint,
-              emailHintState?.kind === 'error' ? styles.inputError : null,
-              emailHintState?.kind === 'ok' ? styles.inputOk : null,
+              identifierHint?.kind === 'error' ? styles.inputError : null,
+              identifierHint?.kind === 'ok' ? styles.inputOk : null,
             ]}
-            placeholder="Email"
-            placeholderTextColor="#9CA3AF"
-            value={email}
-            onChangeText={setEmail}
-            onBlur={handleEmailBlur}
+            placeholder="Telefone ou email"
+            placeholderTextColor="#767676"
+            value={identifier}
+            onChangeText={handleIdentifierChange}
+            onBlur={handleIdentifierBlur}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="email-address"
-            textContentType="emailAddress"
+            textContentType={channel === 'phone' ? 'telephoneNumber' : 'emailAddress'}
           />
-          {emailHintState && (
+          {identifierHint && (
             <View style={styles.hintRow}>
               {emailStatus === 'checking' ? (
-                <ActivityIndicator size="small" color="#6B7280" style={styles.hintSpinner} />
+                <ActivityIndicator size="small" color="#767676" style={styles.hintSpinner} />
               ) : null}
               <Text
                 style={[
                   styles.hintText,
-                  emailHintState.kind === 'error' && styles.hintError,
-                  emailHintState.kind === 'ok' && styles.hintOk,
+                  identifierHint.kind === 'error' && styles.hintError,
+                  identifierHint.kind === 'ok' && styles.hintOk,
                 ]}
               >
-                {emailHintState.text}
+                {identifierHint.text}
               </Text>
             </View>
           )}
@@ -370,8 +340,8 @@ export function SignUpScreen({ navigation, route }: Props) {
                 passwordHint?.kind === 'error' ? styles.inputError : null,
                 passwordHint?.kind === 'ok' ? styles.inputOk : null,
               ]}
-              placeholder={`Senha (mín. ${PASSWORD_MIN_LEN} caracteres)`}
-              placeholderTextColor="#9CA3AF"
+              placeholder="Insira sua senha"
+              placeholderTextColor="#767676"
               value={password}
               onChangeText={setPassword}
               onBlur={handlePasswordBlur}
@@ -381,7 +351,11 @@ export function SignUpScreen({ navigation, route }: Props) {
               textContentType="newPassword"
             />
             <TouchableOpacity style={styles.eyeButton} onPress={() => setHidePassword((v) => !v)}>
-              <MaterialIcons name={hidePassword ? 'visibility' : 'visibility-off'} size={22} color="#6B7280" style={styles.eyeIconCenter} />
+              <MaterialIcons
+                name={hidePassword ? 'visibility' : 'visibility-off'}
+                size={22}
+                color="#767676"
+              />
             </TouchableOpacity>
           </View>
           {passwordHint && (
@@ -407,8 +381,8 @@ export function SignUpScreen({ navigation, route }: Props) {
                 confirmHint?.kind === 'error' ? styles.inputError : null,
                 confirmHint?.kind === 'ok' ? styles.inputOk : null,
               ]}
-              placeholder="Confirme a senha"
-              placeholderTextColor="#9CA3AF"
+              placeholder="Confirme sua nova senha"
+              placeholderTextColor="#767676"
               value={confirmPassword}
               onChangeText={setConfirmPassword}
               onBlur={handleConfirmBlur}
@@ -418,7 +392,11 @@ export function SignUpScreen({ navigation, route }: Props) {
               textContentType="newPassword"
             />
             <TouchableOpacity style={styles.eyeButton} onPress={() => setHideConfirm((v) => !v)}>
-              <MaterialIcons name={hideConfirm ? 'visibility' : 'visibility-off'} size={22} color="#6B7280" style={styles.eyeIconCenter} />
+              <MaterialIcons
+                name={hideConfirm ? 'visibility' : 'visibility-off'}
+                size={22}
+                color="#767676"
+              />
             </TouchableOpacity>
           </View>
           {confirmHint && (
@@ -435,7 +413,7 @@ export function SignUpScreen({ navigation, route }: Props) {
         </View>
 
         <TouchableOpacity
-          style={[styles.continueButton, (!formReadyToSubmit || loading) && styles.continueButtonDisabled]}
+          style={[styles.continueButton, !formReadyToSubmit && styles.continueButtonDisabled]}
           activeOpacity={0.8}
           onPress={handleContinue}
           disabled={loading}
@@ -443,23 +421,46 @@ export function SignUpScreen({ navigation, route }: Props) {
           {loading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.continueButtonText}>Continuar</Text>}
         </TouchableOpacity>
 
-        {!driverFirst ? (
-          <View style={styles.checkboxRow}>
-            <TouchableOpacity onPress={() => setAgreeTerms((v) => !v)} activeOpacity={0.7} style={styles.checkboxTouch}>
-              <View style={[styles.checkbox, agreeTerms && styles.checkboxChecked]}>{agreeTerms && <Text style={styles.checkmark}>✓</Text>}</View>
-            </TouchableOpacity>
-            <View style={styles.checkboxLabelWrap}>
-              <Text style={styles.checkboxLabelInline}>Concordo com os </Text>
-              <TouchableOpacity onPress={openTerms} activeOpacity={0.7} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
-                <Text style={styles.link}>Termos de Uso</Text>
-              </TouchableOpacity>
-              <Text style={styles.checkboxLabelInline}> e a </Text>
-              <TouchableOpacity onPress={openPrivacy} activeOpacity={0.7} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
-                <Text style={styles.link}>Política de Privacidade.</Text>
-              </TouchableOpacity>
+        <View style={styles.checkboxRow}>
+          <TouchableOpacity
+            onPress={() => setAgreeTerms((v) => !v)}
+            activeOpacity={0.7}
+            style={styles.checkboxTouch}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: agreeTerms }}
+          >
+            <View style={[styles.checkbox, agreeTerms && styles.checkboxChecked]}>
+              {agreeTerms && <Text style={styles.checkmark}>✓</Text>}
             </View>
+          </TouchableOpacity>
+          <View style={styles.checkboxLabelWrap}>
+            <Text style={styles.checkboxLabelInline}>Concordo com os </Text>
+            <TouchableOpacity onPress={openTerms} activeOpacity={0.7} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
+              <Text style={styles.link}>Termos de Uso</Text>
+            </TouchableOpacity>
+            <Text style={styles.checkboxLabelInline}> e a </Text>
+            <TouchableOpacity onPress={openPrivacy} activeOpacity={0.7} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
+              <Text style={styles.link}>Política de Privacidade.</Text>
+            </TouchableOpacity>
           </View>
-        ) : null}
+        </View>
+
+        <View style={styles.checkboxRow}>
+          <TouchableOpacity
+            onPress={() => setAgreeOffers((v) => !v)}
+            activeOpacity={0.7}
+            style={styles.checkboxTouch}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: agreeOffers }}
+          >
+            <View style={[styles.checkbox, agreeOffers && styles.checkboxChecked]}>
+              {agreeOffers && <Text style={styles.checkmark}>✓</Text>}
+            </View>
+          </TouchableOpacity>
+          <View style={styles.checkboxLabelWrap}>
+            <Text style={styles.checkboxLabelInline}>Aceito receber ofertas e comunicações do Take Me.</Text>
+          </View>
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -467,46 +468,91 @@ export function SignUpScreen({ navigation, route }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
-  header: { paddingHorizontal: 24, paddingBottom: 16 },
-  backButtonCircle: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
-  backArrow: { fontSize: 22, color: '#000000', fontWeight: '600' },
-  scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 24 },
-  title: { fontSize: 24, fontWeight: '700', color: '#000000', marginTop: 32, marginBottom: 8, lineHeight: 28, textAlign: 'center' },
-  titleHint: { fontSize: 13, color: '#6B7280', marginBottom: 24, textAlign: 'center', paddingHorizontal: 8 },
-  input: {
-    backgroundColor: '#F9FAFB',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
+  navbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingBottom: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  backBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F1F1F1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: 16 },
+  hero: { marginTop: 24, marginBottom: 32 },
+  heroTitle: {
+    fontSize: 24,
+    fontWeight: '600',
+    color: '#0D0D0D',
+    lineHeight: 30,
+    textAlign: 'center',
+  },
+  input: {
+    backgroundColor: '#F1F1F1',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    height: 48,
     fontSize: 16,
-    color: '#000000',
-    marginBottom: 16,
+    color: '#0D0D0D',
+    marginBottom: 12,
   },
   inputWithHint: { marginBottom: 6 },
-  inputError: { borderColor: '#DC2626' },
-  inputOk: { borderColor: '#059669' },
-  fieldGroup: { marginBottom: 10 },
+  inputError: { borderWidth: 1, borderColor: '#DC2626' },
+  inputOk: { borderWidth: 1, borderColor: '#059669' },
+  fieldGroup: { marginBottom: 12 },
   passwordRow: { position: 'relative', marginBottom: 0 },
   inputPassword: { paddingRight: 48 },
-  eyeButton: { position: 'absolute', right: 12, top: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' },
-  eyeIconCenter: { marginTop: -3 },
+  eyeButton: {
+    position: 'absolute',
+    right: 8,
+    top: 0,
+    bottom: 6,
+    width: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   hintRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6, paddingHorizontal: 4 },
   hintSpinner: { marginRight: 6 },
-  hintText: { fontSize: 12, color: '#6B7280', marginBottom: 6, paddingHorizontal: 4 },
+  hintText: { fontSize: 12, color: '#767676', marginBottom: 6, paddingHorizontal: 4 },
   hintError: { color: '#DC2626' },
   hintOk: { color: '#059669' },
-  continueButton: { backgroundColor: '#000000', paddingVertical: 16, borderRadius: 12, alignItems: 'center', marginTop: 8, marginBottom: 24 },
-  continueButtonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
-  continueButtonDisabled: { opacity: 0.5 },
-  checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 16 },
-  checkboxTouch: { marginRight: 12, marginTop: 2 },
-  checkboxLabelWrap: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },
-  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center' },
-  checkboxChecked: { backgroundColor: '#000000', borderColor: '#000000' },
+  continueButton: {
+    backgroundColor: '#0D0D0D',
+    height: 48,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  continueButtonText: { fontSize: 16, fontWeight: '500', color: '#FFFFFF' },
+  continueButtonDisabled: { backgroundColor: '#9A9A9A' },
+  checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 },
+  checkboxTouch: { marginRight: 8, marginTop: 2 },
+  checkboxLabelWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: '#767676',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxChecked: { backgroundColor: '#0D0D0D', borderColor: '#0D0D0D' },
   checkmark: { fontSize: 14, color: '#FFFFFF', fontWeight: '700' },
-  checkboxLabelInline: { fontSize: 14, color: '#374151', lineHeight: 20 },
-  link: { color: '#2563EB', fontWeight: '600' },
+  checkboxLabelInline: { fontSize: 12, color: '#767676', lineHeight: 18, fontWeight: '600' },
+  link: { color: '#016DF9', fontWeight: '600' },
 });

@@ -1,31 +1,22 @@
-import React, { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import type { RegistrationType } from '../navigation/types';
 
 /**
- * Mantém e-mail, senha e tipo de cadastro até "Enviar cadastro".
- * Usado por motoristas e preparadores (todos os 4 tipos).
+ * Estado leve para o fluxo de cadastro em 3 etapas.
+ *
+ * Desde a refatoração "Onboarding Motorista 3 Etapas", a conta no Auth é criada
+ * logo após o PIN (Etapa 1), então credenciais passam a viver na sessão do Supabase.
+ * Este contexto agora serve apenas para lembrar o `driverType` entre as telas
+ * `SignUp → VerifyEmail → CompleteDriverRegistration → FinalizeRegistration → StripeConnectSetup`.
  */
 type DeferredState = {
-  verificationToken: string | null;
-  email: string | null;
-  password: string | null;
   driverType: RegistrationType | null;
 };
 
-const initial: DeferredState = {
-  verificationToken: null,
-  email: null,
-  password: null,
-  driverType: null,
-};
+const initial: DeferredState = { driverType: null };
 
 type ContextValue = DeferredState & {
-  setDeferred: (p: {
-    email: string;
-    password: string;
-    driverType: RegistrationType;
-    verificationToken?: string | null;
-  }) => void;
+  setDriverType: (driverType: RegistrationType) => void;
   clearDeferred: () => void;
   isReady: boolean;
 };
@@ -35,32 +26,20 @@ const DeferredDriverSignupContext = createContext<ContextValue | null>(null);
 export function DeferredDriverSignupProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<DeferredState>(initial);
 
-  const setDeferred = useCallback((p: {
-    email: string;
-    password: string;
-    driverType: RegistrationType;
-    verificationToken?: string | null;
-  }) => {
-    setState({
-      verificationToken: p.verificationToken ?? null,
-      email: p.email.trim().toLowerCase(),
-      password: p.password,
-      driverType: p.driverType,
-    });
+  const setDriverType = useCallback((driverType: RegistrationType) => {
+    setState({ driverType });
   }, []);
 
   const clearDeferred = useCallback(() => {
     setState(initial);
   }, []);
 
-  const isReady = Boolean(state.email && state.password && state.driverType);
-
-  const value: ContextValue = {
-    ...state,
-    setDeferred,
+  const value = useMemo<ContextValue>(() => ({
+    driverType: state.driverType,
+    setDriverType,
     clearDeferred,
-    isReady,
-  };
+    isReady: Boolean(state.driverType),
+  }), [state.driverType, setDriverType, clearDeferred]);
 
   return (
     <DeferredDriverSignupContext.Provider value={value}>

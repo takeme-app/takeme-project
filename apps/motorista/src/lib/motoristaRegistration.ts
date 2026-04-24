@@ -28,9 +28,17 @@ export type MotoristaVehicleInput = {
   passenger_capacity: number;
 };
 
-export type RegisterMotoristaWithAuthInput = {
-  email: string;
-  password: string;
+/**
+ * Após a refatoração "Onboarding Motorista 3 Etapas" a conta no Auth é criada
+ * no momento da verificação do PIN (Etapa 1). Esta função assume o usuário logado
+ * e faz UPDATE do `worker_profiles` (linha draft já existente) + INSERT de
+ * veículo/rotas. **Não cria mais conta no Auth.**
+ *
+ * Dados bancários não são mais recebidos aqui — o recebimento é configurado via
+ * Stripe Connect na Etapa 3.
+ */
+export type FinalizeMotoristaProfileInput = {
+  userId: string;
   driverType: RegistrationType;
   fullName: string;
   phoneDigits: string | null;
@@ -41,30 +49,21 @@ export type RegisterMotoristaWithAuthInput = {
   cityAdminArea: string | null;
   preferenceArea: string | null;
   experienceYears: number | null;
-  bankCode: string | null;
-  agencyNumber: string | null;
-  accountNumber: string | null;
-  pixKey: string | null;
   ownsVehicle: boolean;
   vehicle: MotoristaVehicleInput | null;
   routes: MotoristaRouteInput[];
 };
 
-function formatAuthErr(e: { message?: string } | null): string {
-  return (e?.message && String(e.message).trim()) || 'Erro de autenticação.';
+function formatSupabaseErr(e: { message?: string; details?: string; hint?: string } | null): string {
+  if (!e) return '';
+  return [e.message, e.details, e.hint].filter(Boolean).join(' — ');
 }
 
-/**
- * Cria usuário (signUp), perfil e dados de motorista só com cliente Supabase + RLS.
- * worker_profiles.status = inactive até o admin alterar (ex. approved).
- */
-export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuthInput): Promise<{ userId: string }> {
+export async function finalizeMotoristaProfile(input: FinalizeMotoristaProfileInput): Promise<{ userId: string }> {
   const {
-    email,
-    password,
+    userId,
     driverType,
     fullName,
-    phoneDigits,
     cpfDigits,
     age,
     city,
@@ -72,82 +71,26 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
     cityAdminArea,
     preferenceArea,
     experienceYears,
-    bankCode,
-    agencyNumber,
-    accountNumber,
-    pixKey,
     ownsVehicle,
     vehicle,
     routes,
   } = input;
 
-  const emailNorm = email.trim().toLowerCase();
   const subtypeDb = mapDriverTypeToSubtypeDb(driverType);
   const nowIso = new Date().toISOString();
 
-  const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
-    email: emailNorm,
-    password,
-    options: {
-      // Não passamos phone aqui para evitar unique_violation no trigger handle_new_user.
-      // O telefone é salvo no profiles.update logo abaixo.
-      data: {
-        full_name: fullName.trim() || undefined,
-      },
-    },
-  });
-
-  if (signUpErr) {
-    const m = formatAuthErr(signUpErr).toLowerCase();
-    if (m.includes('already') || m.includes('registered') || m.includes('exists')) {
-      throw new Error('Este e-mail já está cadastrado. Faça login ou use outro e-mail.');
-    }
-    throw new Error(formatAuthErr(signUpErr));
-  }
-
-  let userId = signUpData.user?.id;
-  let session = signUpData.session;
-
-  if (!userId) {
-    throw new Error('Cadastro não retornou usuário. Tente novamente.');
-  }
-
-  if (!session) {
-    const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
-      email: emailNorm,
-      password,
-    });
-    if (signInErr) {
-      throw new Error(
-        `${formatAuthErr(signInErr)}\n\n` +
-          'Se o projeto exige confirmação de e-mail no Auth, desative-a para este fluxo ou confirme o e-mail antes de concluir o cadastro.'
-      );
-    }
-    session = signInData.session;
-    userId = signInData.user?.id ?? userId;
-  }
-
-  if (!session?.user?.id) {
-    throw new Error(
-      'Sessão não disponível após criar a conta. Confirme o e-mail ou, em Authentication → Sign in, desative "Confirm email" para cadastro direto.'
-    );
-  }
-
-  userId = session.user.id;
-
+  // 1) profiles: full_name / cpf / city (telefone pessoal, se desejável, fica fora)
   const { data: profRow, error: profSelErr } = await supabase
     .from('profiles')
     .select('id')
     .eq('id', userId)
     .maybeSingle();
-
   if (profSelErr || !profRow) {
     throw new Error(
-      'Perfil base (profiles) não encontrado após criar a conta. Verifique o trigger on_auth_user_created em auth.users no Supabase.'
+      'Perfil base (profiles) não encontrado. Verifique o trigger on_auth_user_created em auth.users.'
     );
   }
 
-  // phoneDigits é o telefone do veículo — não vai para profiles.phone (telefone pessoal).
   const { error: profileErr } = await supabase
     .from('profiles')
     .update({
@@ -157,46 +100,73 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
       updated_at: nowIso,
     })
     .eq('id', userId);
-
   if (profileErr) {
-    throw new Error(
-      [profileErr.message, profileErr.details, profileErr.hint].filter(Boolean).join(' — ') ||
-        'Falha ao atualizar perfil (profiles).'
-    );
+    throw new Error(formatSupabaseErr(profileErr) || 'Falha ao atualizar perfil (profiles).');
   }
 
+  // 2) worker_profiles: UPDATE da linha draft (criada junto do Auth na Etapa 1).
+  //    Se, por algum motivo, a linha não existir (fluxo legado, falha na Etapa 1),
+  //    tenta criar antes de prosseguir.
   const ageForDb =
     age !== null && age !== undefined && Number.isFinite(age) ? Math.round(age) : null;
-
   const baseId = await resolveWorkerBaseId(cityLocality, cityAdminArea, city?.trim() ?? '');
 
-  const { error: workerErr } = await supabase.from('worker_profiles').insert({
-    id: userId,
-    role: 'driver',
-    subtype: subtypeDb,
-    status: 'inactive',
-    cpf: cpfDigits,
-    age: ageForDb,
-    city: city?.trim() || null,
-    base_id: baseId,
-    experience_years: experienceYears,
-    bank_code: bankCode?.trim() || null,
-    bank_agency: agencyNumber?.trim() || null,
-    bank_account: accountNumber?.trim() || null,
-    pix_key: pixKey?.trim() || null,
-    has_own_vehicle: ownsVehicle,
-    preference_area: preferenceArea?.trim() || null,
-    created_at: nowIso,
-    updated_at: nowIso,
-  });
+  const { data: existingWorker } = await supabase
+    .from('worker_profiles')
+    .select('id, role, subtype, status')
+    .eq('id', userId)
+    .maybeSingle();
 
-  if (workerErr) {
-    throw new Error(
-      [workerErr.message, workerErr.details, workerErr.hint].filter(Boolean).join(' — ') ||
-        'Falha ao criar perfil de motorista (worker_profiles). Rode a migration worker_profiles_insert_own.'
-    );
+  const roleDb: 'driver' | 'preparer' =
+    driverType === 'take_me' || driverType === 'parceiro' ? 'driver' : 'preparer';
+
+  if (!existingWorker) {
+    const { error: wpInsErr } = await supabase.from('worker_profiles').insert({
+      id: userId,
+      role: roleDb,
+      subtype: subtypeDb,
+      status: 'inactive',
+      cpf: cpfDigits,
+      age: ageForDb,
+      city: city?.trim() || null,
+      base_id: baseId,
+      experience_years: experienceYears,
+      has_own_vehicle: ownsVehicle,
+      preference_area: preferenceArea?.trim() || null,
+      created_at: nowIso,
+      updated_at: nowIso,
+    });
+    if (wpInsErr) {
+      throw new Error(
+        formatSupabaseErr(wpInsErr) ||
+          'Falha ao criar perfil de motorista. Rode a migration worker_profiles_insert_own.'
+      );
+    }
+  } else {
+    const { error: wpUpErr } = await supabase
+      .from('worker_profiles')
+      .update({
+        role: roleDb,
+        subtype: subtypeDb,
+        cpf: cpfDigits,
+        age: ageForDb,
+        city: city?.trim() || null,
+        base_id: baseId,
+        experience_years: experienceYears,
+        has_own_vehicle: ownsVehicle,
+        preference_area: preferenceArea?.trim() || null,
+        updated_at: nowIso,
+      })
+      .eq('id', userId);
+    if (wpUpErr) {
+      throw new Error(
+        formatSupabaseErr(wpUpErr) ||
+          'Falha ao atualizar perfil de motorista (worker_profiles).'
+      );
+    }
   }
 
+  // 3) vehicles (se aplicável)
   if (ownsVehicle && vehicle) {
     const { error: vehErr } = await supabase.from('vehicles').insert({
       worker_id: userId,
@@ -208,9 +178,7 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
       is_active: true,
     });
     if (vehErr) {
-      throw new Error(
-        [vehErr.message, vehErr.details, vehErr.hint].filter(Boolean).join(' — ') || 'Falha ao salvar veículo.'
-      );
+      throw new Error(formatSupabaseErr(vehErr) || 'Falha ao salvar veículo.');
     }
   }
 
@@ -221,6 +189,7 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
     /* ignore */
   }
 
+  // 4) worker_routes (só para motoristas; preparadores enviam 0 rotas)
   for (const r of routes) {
     const payload: Record<string, unknown> = {
       worker_id: userId,
@@ -247,14 +216,11 @@ export async function registerMotoristaWithAuth(input: RegisterMotoristaWithAuth
       .select('id')
       .single();
     if (routeErr || !insertedRoute?.id) {
-      throw new Error(
-        [routeErr?.message, routeErr?.details, routeErr?.hint].filter(Boolean).join(' — ') || 'Falha ao salvar rotas.'
-      );
+      throw new Error(formatSupabaseErr(routeErr ?? null) || 'Falha ao salvar rotas.');
     }
     const ensured = await ensureWorkerRouteHasCoordinates(supabase, insertedRoute.id as string);
     if (!ensured.ok) {
-      // Cadastro segue; sem chave Google o motorista pode geocodificar depois em Minhas rotas / cronograma.
-      console.warn('[registerMotoristaWithAuth] Coordenadas da rota:', ensured.message);
+      console.warn('[finalizeMotoristaProfile] Coordenadas da rota:', ensured.message);
     }
   }
 

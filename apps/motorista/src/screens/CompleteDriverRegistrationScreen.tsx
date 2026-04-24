@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   View,
   TextInput,
@@ -6,7 +6,8 @@ import {
   StyleSheet,
   ScrollView,
   KeyboardAvoidingView,
-  Platform,
+  Linking,
+  Alert,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,7 +18,6 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { useRegistrationForm, newRoute, type RouteFormEntry } from '../contexts/RegistrationFormContext';
-import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext';
 import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
 import { formatPhoneBR } from '../utils/formatPhone';
 import { formatCurrencyBRLInput } from '../utils/formatCurrency';
@@ -25,6 +25,9 @@ import { GooglePlacesAutocomplete } from '../components/GooglePlacesAutocomplete
 import { GoogleCityAutocomplete } from '../components/GoogleCityAutocomplete';
 import type { GoogleGeocodeResult } from '@take-me/shared';
 import { getGoogleMapsApiKey } from '../lib/googleMapsConfig';
+import { supabase } from '../lib/supabase';
+
+const CRIMINAL_RECORD_URL = 'https://www.gov.br/pf/pt-br/assuntos/atendimento-ao-cidadao/certidoes';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CompleteDriverRegistration'>;
 
@@ -37,15 +40,67 @@ function FieldBlock({ label, children }: { label: string; children: ReactNode })
   );
 }
 
+type UploadFieldProps = {
+  label: string;
+  labelIcon?: ReactNode;
+  labelHint?: string;
+  title: string;
+  caption?: string;
+  selected?: boolean;
+  selectedLabel?: string | null;
+  onPress: () => void;
+};
+
+function UploadField({
+  label,
+  labelIcon,
+  labelHint,
+  title,
+  caption,
+  selected,
+  selectedLabel,
+  onPress,
+}: UploadFieldProps) {
+  return (
+    <View style={styles.uploadWrap}>
+      <View style={styles.uploadLabelRow}>
+        {labelIcon ? <View style={styles.uploadLabelIcon}>{labelIcon}</View> : null}
+        <Text style={styles.uploadLabelText}>{label}</Text>
+      </View>
+      {labelHint ? <Text style={styles.uploadLabelHint}>{labelHint}</Text> : null}
+      <TouchableOpacity style={styles.uploadBox} onPress={onPress} activeOpacity={0.8}>
+        <View style={styles.uploadIconWrap}>
+          <MaterialIcons name="cloud-upload" size={26} color="#0D0D0D" />
+        </View>
+        <View style={styles.uploadTextWrap}>
+          <Text style={styles.uploadTitle}>{title}</Text>
+          {caption ? <Text style={styles.uploadCaption}>{caption}</Text> : null}
+        </View>
+        {selected && selectedLabel ? (
+          <Text style={styles.uploadOk}>✓ {selectedLabel}</Text>
+        ) : null}
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
   const { driverType } = route.params;
-  const { email, password, driverType: deferredDriverType, isReady } = useDeferredDriverSignup();
   const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
   const { setFormData } = useRegistrationForm();
 
-  const credentialsReady =
-    isReady && deferredDriverType === driverType && Boolean(email && password);
+  // A conta no Auth foi criada na Etapa 1 (VerifyEmail). Aqui só habilitamos o envio
+  // quando há sessão ativa — se a sessão caiu (app fechado), o Splash devolve pro Login.
+  const [credentialsReady, setCredentialsReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      if (!cancelled) setCredentialsReady(Boolean(data.user?.id));
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const [fullName, setFullName] = useState('');
   const [cpf, setCpf] = useState('');
@@ -57,11 +112,6 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
     adminArea: null,
   });
   const [experienceYears, setExperienceYears] = useState('');
-
-  const [bankCode, setBankCode] = useState('');
-  const [agencyNumber, setAgencyNumber] = useState('');
-  const [accountNumber, setAccountNumber] = useState('');
-  const [pixKey, setPixKey] = useState('');
 
   const isParceiro = driverType !== 'take_me';
   const isExcursoes = driverType === 'preparador_excursões';
@@ -81,7 +131,6 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
 
   const [cnhFrontUri, setCnhFrontUri] = useState<string | null>(null);
   const [cnhBackUri, setCnhBackUri] = useState<string | null>(null);
-  const [willPresentCriminalRecord, setWillPresentCriminalRecord] = useState(false);
   const [criminalRecordUri, setCriminalRecordUri] = useState<string | null>(null);
   const [vehicleDocUri, setVehicleDocUri] = useState<string | null>(null);
   const [vehiclePhotosUris, setVehiclePhotosUris] = useState<string[]>([]);
@@ -125,6 +174,31 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       setVehiclePhotosUris((prev) => [...prev, ...result.assets.map((a) => a.base64 ? `data:image/jpeg;base64,${a.base64}` : a.uri)]);
   };
 
+  const pickCnh = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      showAlert('Permissão', 'É necessário permitir acesso às fotos para enviar a CNH.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: true,
+      selectionLimit: 2,
+      quality: 0.8,
+      base64: true,
+    });
+    if (result.canceled || result.assets.length === 0) return;
+    const toUri = (a: ImagePicker.ImagePickerAsset) =>
+      a.base64 ? `data:image/jpeg;base64,${a.base64}` : a.uri;
+    if (result.assets.length >= 2) {
+      setCnhFrontUri(toUri(result.assets[0]));
+      setCnhBackUri(toUri(result.assets[1]));
+    } else {
+      if (!cnhFrontUri) setCnhFrontUri(toUri(result.assets[0]));
+      else setCnhBackUri(toUri(result.assets[0]));
+    }
+  };
+
   const updateRoute = (id: string, patch: Partial<RouteFormEntry>) => {
     setRoutes((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   };
@@ -136,8 +210,8 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
   };
 
   const validateAndSubmit = () => {
-    if (!credentialsReady || !email || !password) {
-      showAlert('Atenção', 'Volte e informe e-mail e senha no cadastro inicial antes de enviar.');
+    if (!credentialsReady) {
+      showAlert('Atenção', 'Sessão não encontrada. Entre novamente para continuar o cadastro.');
       return;
     }
     if (!fullName.trim()) {
@@ -180,10 +254,6 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
         showAlert('Atenção', 'Informe os anos de experiência (entre 1 e 60).');
         return;
       }
-    }
-    if (!bankCode.trim() || !agencyNumber.trim() || !accountNumber.trim() || !pixKey.trim()) {
-      showAlert('Atenção', 'Preencha todos os dados bancários.');
-      return;
     }
 
     const requiresVehicle = !isExcursoes && (isParceiro || ownsVehicle);
@@ -231,10 +301,6 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       showAlert('Atenção', 'Envie a CNH (frente e verso).');
       return;
     }
-    if (willPresentCriminalRecord && !criminalRecordUri) {
-      showAlert('Atenção', 'Envie o documento de antecedentes ou desmarque a opção.');
-      return;
-    }
 
     if (!mapsKey) {
       showAlert(
@@ -279,10 +345,6 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       cityResolvedFromMaps: cityResolved,
       preferenceArea: '',
       experienceYears: isParceiro ? onlyDigits(experienceYears) : '',
-      bankCode: bankCode.trim(),
-      agencyNumber: agencyNumber.trim(),
-      accountNumber: accountNumber.trim(),
-      pixKey: pixKey.trim(),
       ownsVehicle: requiresVehicle,
       vehicleYear: onlyDigits(vehicleYear),
       vehicleModel: vehicleModel.trim(),
@@ -297,7 +359,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       })),
       acceptedTerms,
       acceptedNotifications,
-      willPresentCriminalRecord,
+      willPresentCriminalRecord: Boolean(criminalRecordUri),
       cnhFrontUri,
       cnhBackUri,
       criminalRecordUri,
@@ -312,20 +374,44 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
   return (
     <KeyboardAvoidingView style={styles.container} behavior="padding">
       <StatusBar style="dark" />
-      <View style={[styles.header, { paddingTop: insets.top }]}>
+      <View style={[styles.navbar, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity
           style={styles.backBtn}
-          onPress={() =>
-            navigation.canGoBack()
-              ? navigation.goBack()
-              : navigation.navigate('SignUp', { registrationType: driverType })
-          }
+          onPress={() => {
+            if (navigation.canGoBack()) {
+              navigation.goBack();
+              return;
+            }
+            // Retomada via reset: não há como voltar no stack. Pede confirmação para sair
+            // do cadastro e leva o usuário de volta ao Welcome (deslogado).
+            Alert.alert(
+              'Sair do cadastro?',
+              'Você perderá o progresso desta etapa e voltará para a tela inicial. Você poderá retomar depois entrando com a sua conta.',
+              [
+                { text: 'Continuar cadastro', style: 'cancel' },
+                {
+                  text: 'Sair',
+                  style: 'destructive',
+                  onPress: async () => {
+                    try {
+                      await supabase.auth.signOut();
+                    } catch (err) {
+                      console.warn('[CompleteDriverRegistration] signOut:', err);
+                    }
+                    navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
+                  },
+                },
+              ],
+            );
+          }}
           activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel="Voltar"
         >
-          <MaterialIcons name="arrow-back" size={24} color="#000" />
+          <MaterialIcons name="arrow-back" size={22} color="#0D0D0D" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Complete seu cadastro</Text>
-        <View style={styles.headerRight} />
+        <Text style={styles.navbarTitle}>Complete seu cadastro</Text>
+        <View style={styles.navbarRight} />
       </View>
 
       <ScrollView
@@ -334,17 +420,19 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.pageTitle}>Complete seu cadastro</Text>
-        <Text style={styles.pageSubtitle}>
-          Preencha suas informações para que possamos validar seu perfil {subtitleLabel[driverType]}
-        </Text>
+        <View style={styles.hero}>
+          <Text style={styles.heroTitle}>Complete seu cadastro</Text>
+          <Text style={styles.heroSubtitle}>
+            Preencha suas informações para que possamos validar seu perfil {subtitleLabel[driverType]}
+          </Text>
+        </View>
 
         {sectionTitle('Dados básicos')}
         <FieldBlock label="Nome completo">
           <TextInput
             style={styles.input}
             placeholder="Digite seu nome completo"
-            placeholderTextColor="#9CA3AF"
+            placeholderTextColor="#767676"
             value={fullName}
             onChangeText={setFullName}
           />
@@ -352,8 +440,8 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
         <FieldBlock label="CPF">
           <TextInput
             style={styles.input}
-            placeholder="Ex: 123.456.789-00"
-            placeholderTextColor="#9CA3AF"
+            placeholder="Ex: 123.456.789-99"
+            placeholderTextColor="#767676"
             value={cpf}
             onChangeText={(t) => setCpf(formatCpf(t))}
             keyboardType="number-pad"
@@ -364,7 +452,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
           <TextInput
             style={styles.input}
             placeholder="Ex: 25 anos"
-            placeholderTextColor="#9CA3AF"
+            placeholderTextColor="#767676"
             value={age}
             onChangeText={(t) => setAge(onlyDigits(t).slice(0, 3))}
             keyboardType="number-pad"
@@ -373,7 +461,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
         </FieldBlock>
         <FieldBlock label="Cidade">
           <GoogleCityAutocomplete
-            placeholder="Busque sua cidade (ex: São Luís)"
+            placeholder="Digite sua cidade"
             value={city}
             onChangeText={setCity}
             onSelectPlace={(p: GoogleGeocodeResult) => {
@@ -392,7 +480,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
             <TextInput
               style={styles.input}
               placeholder="Ex: 5"
-              placeholderTextColor="#9CA3AF"
+              placeholderTextColor="#767676"
               value={experienceYears}
               onChangeText={(t) => setExperienceYears(onlyDigits(t).slice(0, 2))}
               keyboardType="number-pad"
@@ -400,45 +488,6 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
             />
           </FieldBlock>
         ) : null}
-
-        {sectionTitle('Dados bancários')}
-        <FieldBlock label="Banco">
-          <TextInput
-            style={styles.input}
-            placeholder="Ex: 0001 ou nome do banco"
-            placeholderTextColor="#9CA3AF"
-            value={bankCode}
-            onChangeText={setBankCode}
-          />
-        </FieldBlock>
-        <FieldBlock label="Agência">
-          <TextInput
-            style={styles.input}
-            placeholder="Ex: 0000"
-            placeholderTextColor="#9CA3AF"
-            value={agencyNumber}
-            onChangeText={setAgencyNumber}
-          />
-        </FieldBlock>
-        <FieldBlock label="Conta">
-          <TextInput
-            style={styles.input}
-            placeholder="Ex: 12345678-9"
-            placeholderTextColor="#9CA3AF"
-            value={accountNumber}
-            onChangeText={setAccountNumber}
-          />
-        </FieldBlock>
-        <FieldBlock label="Chave Pix">
-          <TextInput
-            style={styles.input}
-            placeholder="Ex: nome@gmail.com"
-            placeholderTextColor="#9CA3AF"
-            value={pixKey}
-            onChangeText={setPixKey}
-            autoCapitalize="none"
-          />
-        </FieldBlock>
 
         {!isExcursoes ? sectionTitle('Veículo de transporte') : null}
         {(!isExcursoes && !isParceiro) ? (
@@ -474,7 +523,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
               <TextInput
                 style={styles.input}
                 placeholder="Ex: 2020"
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor="#767676"
                 value={vehicleYear}
                 onChangeText={(t) => setVehicleYear(onlyDigits(t).slice(0, 4))}
                 keyboardType="number-pad"
@@ -485,7 +534,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
               <TextInput
                 style={styles.input}
                 placeholder="Ex: Honda Civic"
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor="#767676"
                 value={vehicleModel}
                 onChangeText={setVehicleModel}
               />
@@ -494,7 +543,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
               <TextInput
                 style={styles.input}
                 placeholder="Ex: ABC1D23"
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor="#767676"
                 value={licensePlate}
                 onChangeText={(t) => setLicensePlate(t.toUpperCase())}
                 autoCapitalize="characters"
@@ -505,7 +554,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
               <TextInput
                 style={styles.input}
                 placeholder="Ex: (11) 98765-4321"
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor="#767676"
                 value={vehiclePhone}
                 onChangeText={(t) => setVehiclePhone(formatPhoneBR(t))}
                 keyboardType="phone-pad"
@@ -516,7 +565,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
               <TextInput
                 style={styles.input}
                 placeholder={isParceiro ? 'Ex: 15' : 'Ex: 4'}
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor="#767676"
                 value={passengerCapacity}
                 onChangeText={(t) => setPassengerCapacity(onlyDigits(t).slice(0, isParceiro ? 2 : 1))}
                 keyboardType="number-pad"
@@ -527,68 +576,59 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
         ) : null}
 
         {sectionTitle('Documentos')}
-        <TouchableOpacity style={styles.uploadBox} onPress={() => pickImage(setCnhFrontUri)} activeOpacity={0.8}>
-          <MaterialIcons name="cloud-upload" size={40} color="#9CA3AF" />
-          <Text style={styles.uploadTitle}>CNH frente</Text>
-          <Text style={styles.uploadSub}>Envie a foto da frente da CNH.</Text>
-          {cnhFrontUri ? <Text style={styles.uploadOk}>✓ Frente adicionada</Text> : null}
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.uploadBox} onPress={() => pickImage(setCnhBackUri)} activeOpacity={0.8}>
-          <MaterialIcons name="cloud-upload" size={40} color="#9CA3AF" />
-          <Text style={styles.uploadTitle}>CNH verso</Text>
-          <Text style={styles.uploadSub}>Envie a foto do verso da CNH.</Text>
-          {cnhBackUri ? <Text style={styles.uploadOk}>✓ Verso adicionado</Text> : null}
-        </TouchableOpacity>
 
-        <View style={styles.checkboxRow}>
-          <TouchableOpacity
-            onPress={() => setWillPresentCriminalRecord((v) => !v)}
-            activeOpacity={0.7}
-            style={styles.checkboxHitArea}
-            accessibilityRole="checkbox"
-            accessibilityState={{ checked: willPresentCriminalRecord }}
-          >
-            <View style={[styles.checkbox, willPresentCriminalRecord && styles.checkboxChecked]}>
-              {willPresentCriminalRecord ? <Text style={styles.checkmark}>✓</Text> : null}
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.checkboxLabelWrap}
-            onPress={() => setWillPresentCriminalRecord((v) => !v)}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.checkLabelStandalone}>Apresentar Antecedentes Criminais</Text>
-          </TouchableOpacity>
-        </View>
-        {willPresentCriminalRecord ? (
-          <TouchableOpacity style={styles.uploadBox} onPress={() => pickImage(setCriminalRecordUri)} activeOpacity={0.8}>
-            <MaterialIcons name="cloud-upload" size={40} color="#9CA3AF" />
-            <Text style={styles.uploadSub}>Clique para fazer o upload</Text>
-            {criminalRecordUri ? <Text style={styles.uploadOk}>✓ Documento adicionado</Text> : null}
-          </TouchableOpacity>
-        ) : null}
+        <UploadField
+          label="CNH (frente e verso)"
+          title="Upload frente e verso"
+          caption={`Aceitamos RG, CNH ou documento\nde identificação válido com foto.`}
+          selected={Boolean(cnhFrontUri) || Boolean(cnhBackUri)}
+          selectedLabel={cnhFrontUri && cnhBackUri ? 'Frente e verso adicionados' : cnhFrontUri ? 'Frente adicionada — falta o verso' : cnhBackUri ? 'Verso adicionado — falta a frente' : null}
+          onPress={pickCnh}
+        />
+
+        <UploadField
+          label="Antecedentes Criminais"
+          labelIcon={
+            <TouchableOpacity
+              onPress={() => Linking.openURL(CRIMINAL_RECORD_URL)}
+              hitSlop={8}
+              accessibilityRole="link"
+              accessibilityLabel="Abrir site da Polícia Federal"
+            >
+              <MaterialIcons name="info-outline" size={16} color="#0D0D0D" />
+            </TouchableOpacity>
+          }
+          title={`Emitir documento no site\nda Polícia Federal`}
+          caption={`O arquivo deve ter sido emitido\nnos últimos 90 dias.`}
+          selected={Boolean(criminalRecordUri)}
+          selectedLabel={criminalRecordUri ? 'Documento adicionado' : null}
+          onPress={() => pickImage(setCriminalRecordUri)}
+        />
 
         {(!isExcursoes && (isParceiro || ownsVehicle)) ? (
           <>
-            <TouchableOpacity style={styles.uploadBox} onPress={() => pickImage(setVehicleDocUri)} activeOpacity={0.8}>
-              <MaterialIcons name="cloud-upload" size={40} color="#9CA3AF" />
-              <Text style={styles.uploadTitle}>Documento do veículo</Text>
-              <Text style={styles.uploadSub}>Clique para fazer o upload</Text>
-              {vehicleDocUri ? <Text style={styles.uploadOk}>✓ Adicionado</Text> : null}
-            </TouchableOpacity>
-            <Text style={styles.photosSectionTitle}>Fotos do veículo</Text>
-            <Text style={styles.photosSectionHint}>Envie ao menos 4 fotos</Text>
-            <TouchableOpacity style={styles.uploadBox} onPress={pickMultipleImages} activeOpacity={0.8}>
-              <MaterialIcons name="cloud-upload" size={40} color="#9CA3AF" />
-              <Text style={styles.uploadSub}>Clique para fazer upload (múltiplas fotos)</Text>
-              {vehiclePhotosUris.length > 0 ? (
-                <Text style={styles.uploadOk}>✓ {vehiclePhotosUris.length} foto(s)</Text>
-              ) : null}
-            </TouchableOpacity>
+            <UploadField
+              label="Documento do veículo"
+              title="Clique pra fazer o upload"
+              selected={Boolean(vehicleDocUri)}
+              selectedLabel={vehicleDocUri ? 'Documento adicionado' : null}
+              onPress={() => pickImage(setVehicleDocUri)}
+            />
+            <UploadField
+              label="Fotos do veículo"
+              labelHint="Máx. 4 fotos, 20MB"
+              title="Clique para fazer upload (múltiplas fotos)"
+              selected={vehiclePhotosUris.length > 0}
+              selectedLabel={vehiclePhotosUris.length > 0 ? `${vehiclePhotosUris.length} foto(s) adicionadas` : null}
+              onPress={pickMultipleImages}
+            />
           </>
         ) : null}
 
-        {sectionTitle('Rotas e valores')}
+        <View style={styles.routesHeader}>
+          <Text style={styles.sectionTitle}>Rotas e valores</Text>
+          <Text style={styles.routesSubtitle}>Defina suas rotas e preços.</Text>
+        </View>
         {routes.map((r, index) => (
           <View key={r.id} style={styles.routeCard}>
             <View style={styles.routeCardHeader}>
@@ -643,11 +683,11 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
               }
               hasResolvedCoords={r.destinationResolved ?? false}
             />
-            <FieldBlock label="Valor sugerido por passageiro">
+            <FieldBlock label="Valor sugerido por pessoa">
               <TextInput
                 style={styles.input}
                 placeholder="Ex: R$ 50,00"
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor="#767676"
                 value={r.suggestedPrice ? `R$ ${r.suggestedPrice}` : ''}
                 onChangeText={(t) => {
                   const cleaned = t.replace(/R\$\s?/i, '');
@@ -657,12 +697,12 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
               />
             </FieldBlock>
             {index === 0 ? (
-              <Text style={styles.helperBelowField}>Este valor será usado como referência por passageiro nesta rota.</Text>
+              <Text style={styles.helperBelowField}>Informe o valor que deseja receber pelo serviço.</Text>
             ) : null}
           </View>
         ))}
-        <TouchableOpacity style={styles.textLinkWrap} onPress={addRouteRow} activeOpacity={0.7}>
-          <Text style={styles.textLink}>+ Adicionar mais rota</Text>
+        <TouchableOpacity style={styles.pillButton} onPress={addRouteRow} activeOpacity={0.7}>
+          <Text style={styles.pillButtonText}>Adicionar nova rota</Text>
         </TouchableOpacity>
 
         <View style={styles.checksSection}>
@@ -711,7 +751,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
               activeOpacity={0.7}
             >
               <Text style={styles.checkLabelStandalone}>
-                Aceito receber notificações e avisos de corridas.
+                Aceito receber ofertas e comunicações do Take Me.
               </Text>
             </TouchableOpacity>
           </View>
@@ -728,7 +768,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
           {!credentialsReady ? (
             <Text style={styles.credentialsHint}>Conclua a verificação do e-mail para habilitar o envio.</Text>
           ) : null}
-          <TouchableOpacity onPress={() => navigation.navigate('Login')} style={styles.backToLogin}>
+          <TouchableOpacity onPress={() => navigation.navigate('Login')} style={styles.backToLogin} activeOpacity={0.7}>
             <Text style={styles.backToLoginText}>Voltar para o login</Text>
           </TouchableOpacity>
         </View>
@@ -739,116 +779,298 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 12 },
-  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 17, fontWeight: '600', color: '#000' },
-  headerRight: { width: 40 },
-  scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 24, paddingTop: 8 },
-  pageTitle: { fontSize: 22, fontWeight: '700', color: '#111827', marginBottom: 8 },
-  pageSubtitle: { fontSize: 14, color: '#6B7280', marginBottom: 24 },
-  sectionTitle: { fontSize: 16, fontWeight: '600', color: '#111827', marginBottom: 12, marginTop: 8 },
-  fieldBlock: { marginBottom: 16 },
-  fieldLabel: { fontSize: 14, fontWeight: '500', color: '#111827', marginBottom: 8 },
-  questionLabel: { fontSize: 14, fontWeight: '500', color: '#111827', marginBottom: 10 },
-  helperBelowField: { fontSize: 13, color: '#6B7280', marginTop: -8, marginBottom: 12 },
-  input: {
-    backgroundColor: '#F3F4F6',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 16,
-    color: '#000',
-  },
-  uploadBox: {
-    borderWidth: 2,
-    borderStyle: 'dashed',
-    borderColor: '#D1D5DB',
-    borderRadius: 12,
-    padding: 24,
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  uploadTitle: { fontSize: 15, fontWeight: '600', color: '#374151', marginTop: 8 },
-  uploadSub: { fontSize: 13, color: '#6B7280', marginTop: 4, textAlign: 'center' },
-  uploadOk: { fontSize: 13, color: '#059669', marginTop: 6, fontWeight: '600' },
-  photosSectionTitle: { fontSize: 15, fontWeight: '600', color: '#111827', marginBottom: 4 },
-  photosSectionHint: { fontSize: 13, color: '#6B7280', marginBottom: 8 },
-  radioRow: { flexDirection: 'row', gap: 28, marginBottom: 16 },
-  radioOption: { flexDirection: 'row', alignItems: 'center' },
-  radioOptionSelected: {},
-  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#9CA3AF', alignItems: 'center', justifyContent: 'center', marginRight: 8 },
-  radioSelected: { borderColor: '#000' },
-  radioInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#000' },
-  radioLabel: { fontSize: 16, color: '#111827' },
-  checksSection: { marginTop: 8, marginBottom: 8 },
-  checkboxRow: {
+
+  navbar: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 22,
-    minHeight: 28,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    backgroundColor: '#FFFFFF',
   },
-  checkboxHitArea: {
-    paddingVertical: 4,
-    paddingRight: 16,
-    justifyContent: 'flex-start',
-  },
-  checkboxLabelWrap: {
-    flex: 1,
-    paddingTop: 2,
-    paddingLeft: 2,
+  backBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F1F1F1',
+    alignItems: 'center',
     justifyContent: 'center',
   },
-  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center' },
-  checkboxChecked: { backgroundColor: '#000', borderColor: '#000' },
-  checkmark: { fontSize: 14, color: '#FFF', fontWeight: '700' },
-  checkLabelStandalone: {
-    fontSize: 15,
-    color: '#374151',
-    lineHeight: 22,
+  navbarTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0D0D0D',
+    textAlign: 'center',
+    flex: 1,
   },
-  termsText: {
-    fontSize: 15,
-    color: '#374151',
-    lineHeight: 22,
+  navbarRight: { width: 40 },
+
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: 16, paddingTop: 16 },
+
+  hero: {
+    marginBottom: 24,
   },
-  linkInline: {
-    color: '#2563EB',
+  heroTitle: {
+    fontSize: 24,
     fontWeight: '600',
-    fontSize: 15,
-    lineHeight: 22,
-    textDecorationLine: 'underline',
+    color: '#0D0D0D',
+    marginBottom: 4,
   },
-  textLinkWrap: { marginBottom: 16 },
-  textLink: { fontSize: 14, color: '#2563EB', fontWeight: '500', textDecorationLine: 'underline' },
-  footerInScroll: {
-    marginTop: 28,
-    paddingTop: 24,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
+  heroSubtitle: {
+    fontSize: 14,
+    color: '#767676',
+    lineHeight: 21,
   },
+
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#767676',
+    marginBottom: 12,
+    marginTop: 16,
+  },
+  routesHeader: {
+    marginBottom: 8,
+    marginTop: 16,
+  },
+  routesSubtitle: {
+    fontSize: 14,
+    color: '#767676',
+    marginTop: -4,
+    marginBottom: 4,
+    lineHeight: 21,
+  },
+
+  fieldBlock: { marginBottom: 8 },
+  fieldLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0D0D0D',
+    marginBottom: 8,
+  },
+  questionLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0D0D0D',
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  helperBelowField: {
+    fontSize: 12,
+    color: '#767676',
+    marginTop: -4,
+    marginBottom: 8,
+    lineHeight: 18,
+  },
+
+  input: {
+    backgroundColor: '#F1F1F1',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 0,
+    height: 44,
+    fontSize: 16,
+    color: '#0D0D0D',
+  },
+
+  uploadWrap: { marginBottom: 8 },
+  uploadLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+    minHeight: 24,
+  },
+  uploadLabelIcon: { width: 16, height: 16, alignItems: 'center', justifyContent: 'center' },
+  uploadLabelText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0D0D0D',
+  },
+  uploadLabelHint: {
+    fontSize: 12,
+    color: '#545454',
+    marginBottom: 8,
+    marginTop: -4,
+  },
+  uploadBox: {
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#767676',
+    borderRadius: 12,
+    paddingVertical: 24,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    gap: 16,
+  },
+  uploadIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#FFF8E6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  uploadTextWrap: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  uploadTitle: {
+    fontSize: 16,
+    color: '#767676',
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  uploadCaption: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#767676',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  uploadOk: {
+    fontSize: 12,
+    color: '#059669',
+    fontWeight: '600',
+    marginTop: -4,
+  },
+
+  radioRow: { flexDirection: 'column', gap: 4, marginBottom: 12 },
+  radioOption: { flexDirection: 'row', alignItems: 'center', minHeight: 40 },
+  radioOptionSelected: {},
+  radio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#767676',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    marginLeft: 10,
+  },
+  radioSelected: { borderColor: '#0D0D0D' },
+  radioInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#0D0D0D' },
+  radioLabel: { fontSize: 14, fontWeight: '600', color: '#0D0D0D' },
+
+  pillButton: {
+    height: 48,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 16,
+  },
+  pillButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#0D0D0D',
+  },
+
   routeCard: {
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: '#F1F1F1',
     borderRadius: 12,
-    padding: 14,
-    marginBottom: 16,
-    backgroundColor: '#FAFAFA',
+    padding: 12,
+    marginBottom: 12,
+    backgroundColor: '#FFFFFF',
+    gap: 4,
   },
   routeCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 4,
   },
-  routeCardTitle: { fontSize: 15, fontWeight: '600', color: '#111827' },
-  routeRemove: { fontSize: 14, color: '#DC2626', fontWeight: '600' },
-  submitBtn: { backgroundColor: '#000', paddingVertical: 16, borderRadius: 12, alignItems: 'center' },
+  routeCardTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0D0D0D',
+  },
+  routeRemove: {
+    fontSize: 12,
+    color: '#DC2626',
+    fontWeight: '600',
+  },
+
+  checksSection: { marginTop: 8, marginBottom: 8 },
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+    minHeight: 40,
+  },
+  checkboxHitArea: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxLabelWrap: {
+    flex: 1,
+    paddingVertical: 11,
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#767676',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxChecked: {
+    backgroundColor: '#0D0D0D',
+    borderColor: '#0D0D0D',
+  },
+  checkmark: { fontSize: 12, color: '#FFF', fontWeight: '700' },
+  checkLabelStandalone: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#767676',
+    lineHeight: 18,
+  },
+  termsText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#767676',
+    lineHeight: 18,
+  },
+  linkInline: {
+    color: '#016DF9',
+    fontWeight: '600',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+
+  footerInScroll: {
+    marginTop: 24,
+    gap: 8,
+  },
+  submitBtn: {
+    backgroundColor: '#0D0D0D',
+    height: 48,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   submitBtnDisabled: { opacity: 0.45 },
-  submitBtnText: { fontSize: 16, fontWeight: '600', color: '#FFF' },
-  credentialsHint: { fontSize: 13, color: '#6B7280', textAlign: 'center', marginTop: 10 },
-  backToLogin: { alignItems: 'center', marginTop: 20, paddingBottom: 8 },
-  backToLoginText: { fontSize: 14, color: '#2563EB', fontWeight: '500' },
+  submitBtnText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
+  credentialsHint: {
+    fontSize: 12,
+    color: '#767676',
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  backToLogin: {
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  backToLoginText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0D0D0D',
+  },
 });
