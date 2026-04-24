@@ -461,6 +461,19 @@ export function TripDetailScreen({ navigation, route }: Props) {
     ['pending', 'paid', 'confirmed'].includes(b);
   const isInProgress = Boolean(detail && allowsClientTripActions);
   const isCompleted = Boolean(detail && isTripCompleted && !isBookingCancelled);
+  /**
+   * Cancelamento/reagendamento pelo passageiro só fazem sentido antes do motorista iniciar.
+   * Com `scheduled_trips.status === 'active'` (embarque em curso) estes fluxos passam a pertencer
+   * ao motorista (cancelar embarque); esconder aqui evita duplicar ação e dar refund indevido.
+   */
+  const canPassengerCancelOrReschedule = isInProgress && t !== 'active';
+
+  useEffect(() => {
+    if (!canPassengerCancelOrReschedule) {
+      setShowCancelTripModal(false);
+      setShowRescheduleConsentModal(false);
+    }
+  }, [canPassengerCancelOrReschedule]);
   const driverOnWay = useMemo(() => {
     if (!detail) return false;
     const bs = (detail.status ?? '').toLowerCase();
@@ -995,7 +1008,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
           )}
         </View>
 
-        {isInProgress && (
+        {canPassengerCancelOrReschedule && (
           <>
             <TouchableOpacity style={styles.secondaryActionButton} activeOpacity={0.8} onPress={() => setShowRescheduleConsentModal(true)}>
               <Text style={styles.secondaryActionButtonText}>Reagendar viagem</Text>

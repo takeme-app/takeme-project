@@ -1,0 +1,4 @@
+<resources>
+  <!-- Debug: nome curto e distinto no launcher (evita dois ícones truncados iguais). -->
+  <string name="app_name">Cliente Take Me</string>
+</resources>

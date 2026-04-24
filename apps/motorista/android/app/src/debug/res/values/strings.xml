@@ -1,0 +1,4 @@
+<resources>
+  <!-- Debug: nome curto e distinto no launcher (evita confusão com o app cliente). -->
+  <string name="app_name">Motorista Take Me</string>
+</resources>

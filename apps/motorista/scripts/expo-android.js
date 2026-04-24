@@ -1,5 +1,5 @@
 /**
- * expo run:android com adb reverse na porta do Metro (8082 no app motorista; cliente usa 8081).
+ * expo run:android com adb reverse na porta do Metro (8083 no motorista; cliente 8081, fallback 8082).
  * Device físico via USB: sem reverse, "Unable to load script".
  *
  * Uso:
@@ -14,7 +14,7 @@ const { findAdb, resolveAdbSerial } = require('./adb-reverse');
 const appDir = path.resolve(__dirname, '..');
 const noBundler = process.argv.includes('--no-bundler');
 
-process.env.REACT_NATIVE_PACKAGER_PORT = process.env.REACT_NATIVE_PACKAGER_PORT || '8082';
+process.env.REACT_NATIVE_PACKAGER_PORT = process.env.REACT_NATIVE_PACKAGER_PORT || '8083';
 
 console.log(
   '\n[Android] O JavaScript só carrega com o Metro rodando (na raiz: npm run motorista, porta ' +
@@ -100,7 +100,7 @@ if (noBundler) {
   console.log('\n[android:run] Metro deve estar em outro terminal: npm start (porta ' + process.env.REACT_NATIVE_PACKAGER_PORT + ')\n');
 }
 
-const metroPort = process.env.REACT_NATIVE_PACKAGER_PORT || '8082';
+const metroPort = process.env.REACT_NATIVE_PACKAGER_PORT || '8083';
 const args = ['expo', 'run:android'];
 // Com Metro externo (`--no-bundler`), o Expo não aceita `--port` junto; a porta vem do build (REACT_NATIVE_PACKAGER_PORT).
 if (noBundler) {
@@ -122,7 +122,7 @@ const result = spawnSync('npx', args, {
   shell: true,
 });
 
-// `expo run:android --no-bundler` costuma abrir o dev client na porta 8081; neste monorepo o Metro do motorista é outra (ex.: 8082).
+// `expo run:android --no-bundler` costuma abrir o dev client na porta 8081; neste monorepo o Metro do motorista é 8083 (evita colisão com cliente em 8082).
 if (noBundler && (result.status === 0 || result.status === null)) {
   const adb = findAdb();
   if (adb) {

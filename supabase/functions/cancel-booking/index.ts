@@ -91,13 +91,15 @@ Deno.serve(async (req) => {
       amount_cents: number | null;
       stripe_payment_intent_id: string | null;
       scheduled_trip_id: string;
-      scheduled_trips: { departure_at: string | null } | null;
+      scheduled_trips:
+        | { departure_at: string | null; status: string | null }
+        | null;
     };
 
     const { data: bookingRaw, error: bookingErr } = await admin
       .from("bookings")
       .select(
-        "id, user_id, status, amount_cents, stripe_payment_intent_id, scheduled_trip_id, scheduled_trips:scheduled_trip_id(departure_at)"
+        "id, user_id, status, amount_cents, stripe_payment_intent_id, scheduled_trip_id, scheduled_trips:scheduled_trip_id(departure_at, status)"
       )
       .eq("id", bookingId)
       .maybeSingle();
@@ -123,6 +125,34 @@ Deno.serve(async (req) => {
       return new Response(
         JSON.stringify({
           error: `Reserva não pode ser cancelada (status atual: ${booking.status}).`,
+        }),
+        {
+          status: 409,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    // Defesa em profundidade: passageiro não cancela quando o motorista já iniciou
+    // a viagem (scheduled_trip em execução/encerrada). A partir daí o fluxo pertence
+    // ao motorista ("cancelar embarque") e o reembolso segue política de no-show.
+    const tripStatus = (booking.scheduled_trips?.status ?? "")
+      .toString()
+      .toLowerCase();
+    const blockedTripStatuses = new Set([
+      "active",
+      "in_progress",
+      "completed",
+      "cancelled",
+      "canceled",
+    ]);
+    if (blockedTripStatuses.has(tripStatus)) {
+      return new Response(
+        JSON.stringify({
+          error:
+            tripStatus === "active" || tripStatus === "in_progress"
+              ? "A viagem já foi iniciada pelo motorista. Fale com o motorista ou com o suporte."
+              : `Viagem não pode mais ser cancelada (status: ${tripStatus}).`,
         }),
         {
           status: 409,

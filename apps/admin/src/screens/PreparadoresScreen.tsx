@@ -9,7 +9,7 @@ import {
   webStyles,
   filterIconSvg,
 } from '../styles/webStyles';
-import { fetchPreparadores } from '../data/queries';
+import { fetchPreparadoresWorkersBySubtype } from '../data/queries';
 import type { PreparadorListItem } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -246,13 +246,13 @@ export default function PreparadoresScreen() {
   useEffect(() => {
     let cancelled = false;
     setDataLoading(true);
-    // NOTE: fetchPreparadoresEncomendas foi removido (commit d214526). Enquanto o fluxo
-    // de preparador de encomendas não volta, a aba "Encomendas" exibe estado vazio e
-    // a aba "Excursões" usa fetchPreparadores (que consulta excursion_requests).
-    const promise = activeTab === 'excursoes'
-      ? fetchPreparadores()
-      : Promise.resolve([] as PreparadorListItem[]);
-    promise.then((items) => { if (!cancelled) { setPreparadoresData(items); setDataLoading(false); } });
+    // Lista vem de `worker_profiles` (role=preparer) filtrada por subtype.
+    // Origem/destino/previsão ficam como "—" porque o cadastro do preparador
+    // não carrega pedido específico; detalhes por pedido ficam em /atendimentos.
+    const subtype = activeTab === 'excursoes' ? 'excursions' : 'shipments';
+    fetchPreparadoresWorkersBySubtype(subtype).then((items) => {
+      if (!cancelled) { setPreparadoresData(items); setDataLoading(false); }
+    });
     return () => { cancelled = true; };
   }, [activeTab]);
 
