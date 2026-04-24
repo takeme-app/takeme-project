@@ -72,6 +72,8 @@ export type RootStackParamList = {
     fullName?: string;
     phone?: string;
     registrationType?: RegistrationType;
+    /** Canal usado no envio do OTP. `phone` ainda é arquitetural (stub WhatsApp). */
+    channel?: 'email' | 'phone';
   };
   /** Cadastro completo — motorista (take_me / parceiro). */
   CompleteDriverRegistration: { driverType: RegistrationType };

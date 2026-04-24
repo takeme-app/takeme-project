@@ -84,7 +84,9 @@ A migration mais recente aplicada em produção (21/abr/2026) é `worker_routes_
 | delete-account | Exclusão de conta |
 | confirm-code | Validação de códigos de pickup/delivery |
 | request-data-export | Cópia dos dados (LGPD) — JSON + PDF por e-mail, bloqueio 5 min |
-| create-motorista-account | Cadastro programático de motorista/preparador |
+| create-motorista-account | _Legado_ — não mais usado pelo app. Conta criada em `verify-email-code` apos PIN. |
+| send-phone-verification-code | **Stub** — envia OTP por telefone (WhatsApp Cloud API pendente) |
+| verify-phone-code | **Stub** — valida OTP de telefone e cria conta em `auth.users (phone)` |
 | manage-admin-users | CRUD de usuários admin |
 | manage-pricing-routes | CRUD de rotas de preço |
 | dispatch-notification-fcm | Envio FCM de push |
@@ -153,6 +155,14 @@ Conta Stripe da plataforma: `acct_1Sz56zRY2dpdoOzu` ("Takeme"). Repetir o checkl
 
 - Cadastro e login com e-mail (código de verificação) e login por telefone.
 - JWT com JWT Signing Keys (ES256). A função `request-data-export` usa `getClaims(token)` + `admin.getUserById` para compatibilidade com o novo formato.
+
+### Onboarding motorista — 3 etapas (23/abr/2026)
+
+- Fluxo atual: `SignUp` (Etapa 1/3) → `VerifyEmail` (PIN) → `CompleteDriverRegistration`/`CompletePreparador*` (Etapa 2/3) → `FinalizeRegistration` → `StripeConnectSetup` (Etapa 3/3, com botão **Pular esta etapa**).
+- **Conta é criada no Auth logo após o PIN** (não mais no `FinalizeRegistration`). A edge `verify-email-code` faz `auth.admin.createUser(...)` + `insert worker_profiles (status='inactive')` quando `driver_type` é informado. Isso corrige o bug em que o cadastro era perdido se o app fechasse entre etapas.
+- Campos bancários foram **removidos** da tela "Complete seu perfil" (eram redigitados no Stripe Connect). A coleta de conta bancária é feita apenas no Stripe Connect.
+- Componente reutilizável `OnboardingStepHeader` visualiza "Etapa X de 3" nas 3 telas.
+- **Telefone/WhatsApp:** arquitetura pronta (toggle no `SignUp`, migration `phone_verification_codes` com RLS `service_role`, edge functions `send-phone-verification-code` e `verify-phone-code`), porém o envio real via Meta WhatsApp Cloud API **ainda não está integrado**. Em dev os stubs retornam `dev_code` na resposta para permitir testar o fluxo ponta-a-ponta; em produção (`APP_ENV=prod`) o código não é devolvido. A tela de SignUp exibe aviso "Envio via WhatsApp chegará em breve" quando o usuário seleciona "Telefone".
 
 ### Sincronização Supabase ⇄ repositório — 21/abr/2026
 

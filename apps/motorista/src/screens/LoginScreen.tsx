@@ -20,6 +20,7 @@ import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { signInWithOAuthProvider } from '../lib/oauth';
 import { checkMotoristaCanAccessApp, getMotoristaPendingCopy, subtypeToMainRoute } from '../lib/motoristaAccess';
+import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
 import { syncMotoristaProfileFcmToken } from '../lib/motoristaFcm';
 
@@ -27,6 +28,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
 
 export function LoginScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
+  const { setDriverType } = useDeferredDriverSignup();
   const [phoneOrEmail, setPhoneOrEmail] = useState('');
   const [password, setPassword] = useState('');
   const [hidePassword, setHidePassword] = useState(true);
@@ -55,11 +57,42 @@ export function LoginScreen({ navigation }: Props) {
       showAlert('Erro', gate.message);
       return;
     }
+    // Usuário já criou conta (Auth + worker_profile draft), mas abandonou a etapa 2.
+    // Retomamos exatamente na tela "Complete seu perfil" correspondente ao tipo escolhido.
+    if (gate.kind === 'needs_profile_completion') {
+      await syncMotoristaProfileFcmToken();
+      const rt = gate.registrationType;
+      if (rt === 'preparador_excursões') {
+        setDriverType(rt);
+        navigation.reset({ index: 0, routes: [{ name: 'CompletePreparadorExcursoes' }] });
+        return;
+      }
+      if (rt === 'preparador_encomendas') {
+        setDriverType(rt);
+        navigation.reset({ index: 0, routes: [{ name: 'CompletePreparadorEncomendas' }] });
+        return;
+      }
+      // driver/takeme ou driver/partner (ou fallback null → assume take_me).
+      const driverType: 'take_me' | 'parceiro' = rt === 'parceiro' ? 'parceiro' : 'take_me';
+      setDriverType(driverType);
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'CompleteDriverRegistration', params: { driverType } }],
+      });
+      return;
+    }
+    // Conta existe no Auth mas faltou a linha em worker_profiles (ex.: insert falhou na
+    // verify-email-code). Mantemos a sessão e levamos o usuário para escolher o tipo
+    // de cadastro — o SignUpType detecta a sessão e insere a linha draft antes de seguir.
     if (gate.kind === 'missing_profile') {
-      await supabase.auth.signOut();
       showAlert(
-        'Perfil de motorista',
-        'Não encontramos cadastro de motorista para esta conta. Use a conta correta ou conclua o cadastro de motorista.'
+        'Finalize seu cadastro',
+        'Você já tem uma conta, mas ainda precisa escolher o tipo de cadastro para continuar.',
+        {
+          onClose: () => {
+            navigation.reset({ index: 0, routes: [{ name: 'SignUpType' }] });
+          },
+        }
       );
       return;
     }

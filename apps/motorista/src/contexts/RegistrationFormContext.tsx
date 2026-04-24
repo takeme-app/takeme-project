@@ -28,10 +28,17 @@ export type RegistrationFormData = {
   cityResolvedFromMaps: boolean;
   preferenceArea: string;
   experienceYears: string;
-  bankCode: string;
-  agencyNumber: string;
-  accountNumber: string;
-  pixKey: string;
+  /**
+   * @deprecated Dados bancários foram movidos para o Stripe Connect (Etapa 3).
+   * Mantidos como opcionais para preservar tipos antigos; novos fluxos enviam `null`.
+   */
+  bankCode?: string;
+  /** @deprecated ver bankCode. */
+  agencyNumber?: string;
+  /** @deprecated ver bankCode. */
+  accountNumber?: string;
+  /** @deprecated ver bankCode. */
+  pixKey?: string;
   ownsVehicle: boolean;
   vehicleYear: string;
   vehicleModel: string;
@@ -69,10 +76,6 @@ const defaultFormData: RegistrationFormData = {
   cityResolvedFromMaps: false,
   preferenceArea: '',
   experienceYears: '',
-  bankCode: '',
-  agencyNumber: '',
-  accountNumber: '',
-  pixKey: '',
   ownsVehicle: true,
   vehicleYear: '',
   vehicleModel: '',

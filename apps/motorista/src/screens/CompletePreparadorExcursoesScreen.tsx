@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   View,
   TextInput,
@@ -6,7 +6,7 @@ import {
   StyleSheet,
   ScrollView,
   KeyboardAvoidingView,
-  Platform,
+  Alert,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,13 +16,13 @@ import type { RootStackParamList } from '../navigation/types';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useAppAlert } from '../contexts/AppAlertContext';
-import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext';
 import { supabase } from '../lib/supabase';
 import { resolveWorkerBaseId } from '../lib/resolveWorkerBaseId';
 import { getGoogleMapsApiKey } from '../lib/googleMapsConfig';
 import { GoogleCityAutocomplete } from '../components/GoogleCityAutocomplete';
 import type { GoogleGeocodeResult } from '@take-me/shared';
 import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
+import { OnboardingStepHeader } from '../components/OnboardingStepHeader';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CompletePreparadorExcursoes'>;
 
@@ -40,7 +40,9 @@ function FieldBlock({ label, children }: { label: string; children: ReactNode })
 export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
-  const { email, password, isReady } = useDeferredDriverSignup();
+
+  const [sessionUserId, setSessionUserId] = useState<string | null>(null);
+  const [sessionReady, setSessionReady] = useState(false);
 
   const [fullName, setFullName] = useState('');
   const [cpf, setCpf] = useState('');
@@ -53,11 +55,6 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
   });
   const [experienceYears, setExperienceYears] = useState('');
 
-  const [bankCode, setBankCode] = useState('');
-  const [agencyNumber, setAgencyNumber] = useState('');
-  const [accountNumber, setAccountNumber] = useState('');
-  const [pixKey, setPixKey] = useState('');
-
   const [identityDocUri, setIdentityDocUri] = useState<string | null>(null);
   const [willPresentCriminalRecord, setWillPresentCriminalRecord] = useState(false);
   const [criminalRecordUri, setCriminalRecordUri] = useState<string | null>(null);
@@ -65,6 +62,21 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [acceptedNotifications, setAcceptedNotifications] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      if (!active) return;
+      setSessionUserId(data.user?.id ?? null);
+      setSessionReady(true);
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const credentialsReady = Boolean(sessionUserId);
 
   const pickImage = async (callback: (uri: string) => void) => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -87,8 +99,8 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
   const sectionTitle = (title: string) => <Text style={styles.sectionTitle}>{title}</Text>;
 
   const validateAndSubmit = async () => {
-    if (!isReady || !email || !password) {
-      showAlert('Atenção', 'Volte e informe e-mail e senha antes de enviar.');
+    if (!sessionUserId) {
+      showAlert('Sessão expirada', 'Faça login novamente para concluir o cadastro.');
       return;
     }
     if (!fullName.trim()) { showAlert('Atenção', 'Preencha o nome completo.'); return; }
@@ -115,9 +127,6 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
     }
     const expNum = parseInt(onlyDigits(experienceYears), 10);
     if (!expNum || expNum < 1 || expNum > 60) { showAlert('Atenção', 'Informe os anos de experiência (1–60).'); return; }
-    if (!bankCode.trim() || !agencyNumber.trim() || !accountNumber.trim() || !pixKey.trim()) {
-      showAlert('Atenção', 'Preencha todos os dados bancários.'); return;
-    }
     if (!identityDocUri) { showAlert('Atenção', 'Envie o documento de identidade.'); return; }
     if (willPresentCriminalRecord && !criminalRecordUri) {
       showAlert('Atenção', 'Envie o documento de antecedentes ou desmarque a opção.'); return;
@@ -126,32 +135,9 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
 
     setLoading(true);
     try {
-      const emailNorm = email.trim().toLowerCase();
+      const userId = sessionUserId;
       const nowIso = new Date().toISOString();
 
-      // Criar conta
-      const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
-        email: emailNorm,
-        password,
-        options: { data: { full_name: fullName.trim() } },
-      });
-      if (signUpErr) throw new Error(signUpErr.message);
-
-      let userId = signUpData.user?.id;
-      let session = signUpData.session;
-
-      if (!userId) throw new Error('Cadastro não retornou usuário. Tente novamente.');
-
-      if (!session) {
-        const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({ email: emailNorm, password });
-        if (signInErr) throw new Error(signInErr.message);
-        session = signInData.session;
-        userId = signInData.user?.id ?? userId;
-      }
-      if (!session?.user?.id) throw new Error('Sessão não disponível. Confirme o e-mail ou tente novamente.');
-      userId = session.user.id;
-
-      // Upload documentos
       const uploadDoc = async (uri: string, path: string): Promise<string> => {
         const base64 = uri.startsWith('data:') ? uri.split(',')[1] ?? '' : null;
         if (!base64) throw new Error('Documento inválido. Selecione a imagem novamente.');
@@ -172,7 +158,6 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
         criminalPath = await uploadDoc(criminalRecordUri, `${userId}/criminal_record.jpg`);
       }
 
-      // Atualizar profiles
       await supabase.from('profiles').update({
         full_name: fullName.trim(),
         cpf: cpfDigits,
@@ -182,27 +167,39 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
 
       const baseId = await resolveWorkerBaseId(cityMeta.locality, cityMeta.adminArea, city.trim());
 
-      const { error: workerErr } = await supabase.from('worker_profiles').insert({
-        id: userId,
-        role: 'preparer',
-        subtype: 'excursions',
-        status: 'inactive',
+      const workerPayload = {
+        role: 'preparer' as const,
+        subtype: 'excursions' as const,
+        status: 'inactive' as const,
         cpf: cpfDigits,
         age: ageNum,
         city: city.trim(),
         experience_years: expNum,
-        bank_code: bankCode.trim(),
-        bank_agency: agencyNumber.trim(),
-        bank_account: accountNumber.trim(),
-        pix_key: pixKey.trim(),
         has_own_vehicle: false,
         cnh_document_url: identityPath,
         background_check_url: criminalPath,
         base_id: baseId,
-        created_at: nowIso,
         updated_at: nowIso,
-      });
-      if (workerErr) throw new Error(workerErr.message || 'Falha ao salvar perfil.');
+      };
+
+      const { data: existing } = await supabase
+        .from('worker_profiles')
+        .select('id')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (existing?.id) {
+        const { error: upErr } = await supabase
+          .from('worker_profiles')
+          .update(workerPayload)
+          .eq('id', userId);
+        if (upErr) throw new Error(upErr.message || 'Falha ao atualizar perfil.');
+      } else {
+        const { error: insErr } = await supabase
+          .from('worker_profiles')
+          .insert({ id: userId, ...workerPayload, created_at: nowIso });
+        if (insErr) throw new Error(insErr.message || 'Falha ao salvar perfil.');
+      }
 
       try {
         const { tryOpenSupportTicket } = await import('../lib/supportTickets');
@@ -211,7 +208,10 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
         /* ignore */
       }
 
-      navigation.reset({ index: 0, routes: [{ name: 'RegistrationSuccess' }] });
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'StripeConnectSetup', params: { subtype: 'excursions' } }],
+      });
     } catch (err: unknown) {
       showAlert('Erro', err instanceof Error ? err.message : 'Erro ao enviar cadastro.');
     } finally {
@@ -223,7 +223,35 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
     <KeyboardAvoidingView style={styles.container} behavior="padding">
       <StatusBar style="dark" />
       <View style={[styles.header, { paddingTop: insets.top }]}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('SignUpType')} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={() => {
+            if (navigation.canGoBack()) {
+              navigation.goBack();
+              return;
+            }
+            Alert.alert(
+              'Sair do cadastro?',
+              'Você perderá o progresso desta etapa e voltará para a tela inicial. Você poderá retomar depois entrando com a sua conta.',
+              [
+                { text: 'Continuar cadastro', style: 'cancel' },
+                {
+                  text: 'Sair',
+                  style: 'destructive',
+                  onPress: async () => {
+                    try {
+                      await supabase.auth.signOut();
+                    } catch (err) {
+                      console.warn('[CompletePreparadorExcursoes] signOut:', err);
+                    }
+                    navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
+                  },
+                },
+              ],
+            );
+          }}
+          activeOpacity={0.7}
+        >
           <MaterialIcons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Complete seu cadastro</Text>
@@ -236,10 +264,11 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.pageTitle}>Complete seu cadastro</Text>
-        <Text style={styles.pageSubtitle}>
-          Preencha suas informações para que possamos validar seu perfil como preparador de excursões.
-        </Text>
+        <OnboardingStepHeader
+          current={2}
+          title="Complete seu perfil"
+          subtitle="Preencha suas informações para que possamos validar seu perfil como preparador de excursões."
+        />
 
         {sectionTitle('Dados básicos')}
         <FieldBlock label="Nome completo">
@@ -269,20 +298,6 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
         </FieldBlock>
         <FieldBlock label="Anos de experiência organizando excursões">
           <TextInput style={styles.input} placeholder="Ex: 5" placeholderTextColor="#9CA3AF" value={experienceYears} onChangeText={(t) => setExperienceYears(onlyDigits(t).slice(0, 2))} keyboardType="number-pad" maxLength={2} />
-        </FieldBlock>
-
-        {sectionTitle('Dados bancários')}
-        <FieldBlock label="Banco">
-          <TextInput style={styles.input} placeholder="Ex: 0001 ou nome do banco" placeholderTextColor="#9CA3AF" value={bankCode} onChangeText={setBankCode} />
-        </FieldBlock>
-        <FieldBlock label="Agência">
-          <TextInput style={styles.input} placeholder="Ex: 0240" placeholderTextColor="#9CA3AF" value={agencyNumber} onChangeText={setAgencyNumber} />
-        </FieldBlock>
-        <FieldBlock label="Conta">
-          <TextInput style={styles.input} placeholder="Ex: 12345678-9" placeholderTextColor="#9CA3AF" value={accountNumber} onChangeText={setAccountNumber} />
-        </FieldBlock>
-        <FieldBlock label="Chave Pix">
-          <TextInput style={styles.input} placeholder="Ex: nome@gmail.com" placeholderTextColor="#9CA3AF" value={pixKey} onChangeText={setPixKey} autoCapitalize="none" />
         </FieldBlock>
 
         {sectionTitle('Documentos')}
@@ -342,15 +357,20 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
         </View>
 
         <View style={[styles.footerInScroll, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+          <Text style={styles.nextStepHint}>
+            Na próxima etapa você configura o recebimento automático via Stripe. Você poderá pular e configurar depois.
+          </Text>
           <TouchableOpacity
-            style={[styles.submitBtn, (!isReady || loading) && styles.submitBtnDisabled]}
+            style={[styles.submitBtn, (!credentialsReady || !sessionReady || loading) && styles.submitBtnDisabled]}
             onPress={validateAndSubmit}
             activeOpacity={0.8}
-            disabled={!isReady || loading}
+            disabled={!credentialsReady || !sessionReady || loading}
           >
-            <Text style={styles.submitBtnText}>{loading ? 'Enviando...' : 'Enviar cadastro'}</Text>
+            <Text style={styles.submitBtnText}>{loading ? 'Salvando...' : 'Avançar'}</Text>
           </TouchableOpacity>
-          {!isReady ? <Text style={styles.credentialsHint}>Conclua a etapa anterior para habilitar o envio.</Text> : null}
+          {sessionReady && !credentialsReady ? (
+            <Text style={styles.credentialsHint}>Sessão expirada. Faça login para continuar.</Text>
+          ) : null}
           <TouchableOpacity onPress={() => navigation.navigate('Login')} style={styles.backToLogin}>
             <Text style={styles.backToLoginText}>Voltar para o login</Text>
           </TouchableOpacity>
@@ -393,6 +413,7 @@ const styles = StyleSheet.create({
   submitBtnDisabled: { opacity: 0.45 },
   submitBtnText: { fontSize: 16, fontWeight: '600', color: '#FFF' },
   credentialsHint: { fontSize: 13, color: '#6B7280', textAlign: 'center', marginTop: 10 },
+  nextStepHint: { fontSize: 13, color: '#6B7280', textAlign: 'center', marginBottom: 12, lineHeight: 18 },
   backToLogin: { alignItems: 'center', marginTop: 20, paddingBottom: 8 },
   backToLoginText: { fontSize: 14, color: '#2563EB', fontWeight: '500' },
 });

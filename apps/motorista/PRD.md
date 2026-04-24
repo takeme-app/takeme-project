@@ -27,17 +27,20 @@ Cada perfil tem um ambiente (stack de navegacao) dedicado com telas e fluxos esp
 
 ## 2. Autenticacao e Autorizacao
 
-### 2.1 Fluxo de Autenticacao
+### 2.1 Fluxo de Autenticacao (onboarding em 3 etapas)
 
 ```
-Welcome → SignUpType → SignUp → VerifyEmail → CompleteDriverRegistration
-       → FinalizeRegistration → RegistrationSuccess
+Welcome → SignUpType → SignUp (Etapa 1/3) → VerifyEmail (PIN)
+       → CompleteDriverRegistration (Etapa 2/3) → FinalizeRegistration
+       → StripeConnectSetup (Etapa 3/3, opcional no onboarding)
+       → Main / MainEncomendas / MainExcursoes
 ```
 
-- Email + senha via Supabase Auth
-- OTP de 4 digitos enviado por email (Edge Function `send-email-verification-code`)
-- Cadastro completo cria `worker_profiles` + `vehicles` + `worker_routes`
-- Edge Function: `create-motorista-account`
+- **Etapa 1 – Criar conta:** coleta e-mail (ou telefone; WhatsApp em stub) + senha. Chama `send-email-verification-code` (ou `send-phone-verification-code`) e navega para `VerifyEmail`. Apos o PIN valido, `verify-email-code` cria a conta em `auth.users` e a linha draft em `worker_profiles (status='inactive')` — corrige o bug anterior onde a conta so era criada no Finalize.
+- **Etapa 2 – Completar perfil:** usuario ja logado (sessao Supabase). Campos bancarios foram removidos desta etapa (redundavam com Stripe). `FinalizeRegistration` chama `finalizeMotoristaProfile` (UPDATE no `worker_profiles` + INSERT em `vehicles`/`worker_routes`).
+- **Etapa 3 – Configurar Stripe:** `StripeConnectSetupScreen` com CTA "Configurar recebimento automatico" e botao "Pular esta etapa" (configurar depois em Configuracoes → Pagamentos).
+- Edge Functions: `send-email-verification-code`, `verify-email-code`, `send-phone-verification-code` (stub), `verify-phone-code` (stub).
+- **Telefone/WhatsApp:** arquitetura pronta (migration `phone_verification_codes` + edge functions + toggle no SignUp), porem o envio real via Meta WhatsApp Cloud API ainda nao esta integrado. Em dev o stub devolve `dev_code` na resposta.
 
 ### 2.2 Guard de Sessao (SplashScreen)
 
@@ -414,7 +417,9 @@ pending → contacted → quoted → in_analysis → approved → scheduled → 
 | Funcao | Chamada em | Descricao |
 |--------|------------|-----------|
 | `send-email-verification-code` | `SignUpScreen`, `VerifyEmailScreen` | Enviar OTP de 4 digitos |
-| `verify-email-code` | `VerifyEmailScreen` | Validar OTP com nome, telefone, senha |
+| `verify-email-code` | `VerifyEmailScreen` | Valida OTP; cria conta em `auth.users` + linha draft em `worker_profiles` (status='inactive') quando `driver_type` e informado |
+| `send-phone-verification-code` | `SignUpScreen` (toggle Telefone) | **Stub** — grava codigo em `phone_verification_codes`; envio via WhatsApp Cloud API ainda nao integrado |
+| `verify-phone-code` | `VerifyEmailScreen` (quando `channel='phone'`) | **Stub** — valida OTP de telefone; cria conta `auth.users` (phone) + linha draft em `worker_profiles` |
 | `login-with-phone` | `LoginScreen` | Login por telefone |
 | `stripe-connect-link` | `PaymentsScreen`, `StripeConnectSetupScreen` | Link de cadastro Stripe Connect |
 | `stripe-connect-sync` | `PaymentsScreen`, `StripeConnectSetupScreen` | Sincroniza `charges_enabled`/`payouts_enabled` sob demanda (fallback do webhook) |
@@ -425,7 +430,7 @@ pending → contacted → quoted → in_analysis → approved → scheduled → 
 > **Divergencia PRD vs codigo:** O PRD v1.1 citava `respond-assignment`, `confirm-code` e `create-motorista-account` como Edge Functions centrais. Na implementacao atual:
 > - `PendingRequestsScreen` usa **RPCs SQL** (`shipment_driver_accept_offer`, `shipment_driver_pass_offer`) e **updates diretos** em `bookings`/`shipments`/`worker_assignments` — nao chama `respond-assignment`.
 > - `ActiveShipmentScreen` faz **validacao local** comparando com `shipment.pickup_code`/`delivery_code` (`shipmentCodesMatch`) — nao chama `confirm-code`.
-> - `FinalizeRegistrationScreen` usa `registerMotoristaWithAuth` em `motoristaRegistration.ts` (`signUp` + inserts diretos) — nao chama `create-motorista-account`.
+> - `FinalizeRegistrationScreen` usa `finalizeMotoristaProfile` em `motoristaRegistration.ts` (UPDATE `worker_profiles` + INSERT `vehicles`/`worker_routes`). A criacao da conta `auth.users` foi movida para `verify-email-code` (etapa 1/3 — logo apos o PIN). `create-motorista-account` nao e mais usado.
 
 ### 8.2 RPCs SQL Utilizadas
 

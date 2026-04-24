@@ -1,25 +1,106 @@
-import { useState } from 'react';
-import { View, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, View, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { Text } from '../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList, RegistrationType } from '../navigation/types';
 import { MaterialIcons } from '@expo/vector-icons';
+import { supabase } from '../lib/supabase';
+import { useAppAlert } from '../contexts/AppAlertContext';
+import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SignUpType'>;
 
+/**
+ * Mapeia `RegistrationType` → (role, subtype) usados em `worker_profiles`.
+ * Precisa casar com a lógica usada em `verify-email-code`/`verify-phone-code`.
+ */
+function registrationTypeToWorker(t: RegistrationType): {
+  role: 'driver' | 'preparer';
+  subtype: 'takeme' | 'partner' | 'excursions' | 'shipments';
+} {
+  if (t === 'take_me') return { role: 'driver', subtype: 'takeme' };
+  if (t === 'parceiro') return { role: 'driver', subtype: 'partner' };
+  if (t === 'preparador_excursões') return { role: 'preparer', subtype: 'excursions' };
+  return { role: 'preparer', subtype: 'shipments' };
+}
+
 export function SignUpTypeScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const { showAlert } = useAppAlert();
+  const { setDriverType } = useDeferredDriverSignup();
   const [selected, setSelected] = useState<RegistrationType | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  /**
+   * Modo "retomar cadastro": usuário já está autenticado (Auth existe) mas sem
+   * worker_profile (ex.: insert falhou na verify-email-code, ou o PIN foi verificado
+   * mas a etapa 2 nunca chegou a ser iniciada). Ao escolher o tipo, criamos a linha
+   * draft aqui e navegamos direto para a etapa 2 — sem passar por SignUp/VerifyEmail.
+   */
+  const [authUserId, setAuthUserId] = useState<string | null>(null);
 
-  const goBackToWelcome = () => {
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (cancelled) return;
+      setAuthUserId(data.session?.user?.id ?? null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const goBackToWelcome = async () => {
+    if (authUserId) {
+      await supabase.auth.signOut();
+    }
     navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (!selected) return;
-    navigation.navigate('SignUp', { registrationType: selected });
+
+    // Fluxo normal (sem sessão): email + senha antes do PIN.
+    if (!authUserId) {
+      navigation.navigate('SignUp', { registrationType: selected });
+      return;
+    }
+
+    // Modo retomada: garante a linha draft em worker_profiles e salta para a etapa 2.
+    setSubmitting(true);
+    try {
+      const { role, subtype } = registrationTypeToWorker(selected);
+      const { error } = await supabase
+        .from('worker_profiles')
+        .upsert({ id: authUserId, role, subtype, status: 'inactive' }, { onConflict: 'id' });
+      if (error) {
+        showAlert(
+          'Não foi possível criar seu perfil',
+          error.message ?? 'Tente novamente em instantes.'
+        );
+        setSubmitting(false);
+        return;
+      }
+      setDriverType(selected);
+      if (selected === 'preparador_excursões') {
+        navigation.reset({ index: 0, routes: [{ name: 'CompletePreparadorExcursoes' }] });
+        return;
+      }
+      if (selected === 'preparador_encomendas') {
+        navigation.reset({ index: 0, routes: [{ name: 'CompletePreparadorEncomendas' }] });
+        return;
+      }
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'CompleteDriverRegistration', params: { driverType: selected } }],
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Tente novamente em instantes.';
+      showAlert('Não foi possível continuar', msg);
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -37,8 +118,12 @@ export function SignUpTypeScreen({ navigation }: Props) {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.title}>Crie sua conta</Text>
-        <Text style={styles.subtitle}>Escolha seu tipo de cadastro para começar.</Text>
+        <Text style={styles.title}>{authUserId ? 'Finalize seu cadastro' : 'Crie sua conta'}</Text>
+        <Text style={styles.subtitle}>
+          {authUserId
+            ? 'Escolha o tipo de cadastro para continuar de onde você parou.'
+            : 'Escolha seu tipo de cadastro para começar.'}
+        </Text>
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
@@ -117,12 +202,16 @@ export function SignUpTypeScreen({ navigation }: Props) {
         </View>
 
         <TouchableOpacity
-          style={[styles.nextButton, !selected && styles.nextButtonDisabled]}
+          style={[styles.nextButton, (!selected || submitting) && styles.nextButtonDisabled]}
           onPress={handleNext}
-          disabled={!selected}
+          disabled={!selected || submitting}
           activeOpacity={0.8}
         >
-          <Text style={styles.nextButtonText}>Próximo</Text>
+          {submitting ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={styles.nextButtonText}>{authUserId ? 'Continuar' : 'Próximo'}</Text>
+          )}
         </TouchableOpacity>
       </ScrollView>
     </View>

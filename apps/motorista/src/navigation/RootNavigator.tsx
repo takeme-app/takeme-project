@@ -37,11 +37,28 @@ import type { RootStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
+export type RootInitialRouteName =
+  | 'Welcome'
+  | 'Main'
+  | 'MainExcursoes'
+  | 'MainEncomendas'
+  | 'MotoristaPendingApproval'
+  | 'StripeConnectSetup'
+  | 'SignUpType'
+  | 'CompleteDriverRegistration'
+  | 'CompletePreparadorExcursoes'
+  | 'CompletePreparadorEncomendas';
+
 type RootNavigatorProps = {
-  initialRouteName: 'Welcome' | 'Main' | 'MainExcursoes' | 'MainEncomendas' | 'MotoristaPendingApproval' | 'StripeConnectSetup';
+  initialRouteName: RootInitialRouteName;
+  /**
+   * Params iniciais para a rota inicial (necessário p/ rotas que exigem params,
+   * ex.: `CompleteDriverRegistration` precisa de `driverType`).
+   */
+  initialRouteParams?: Record<string, unknown>;
 };
 
-export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
+export function RootNavigator({ initialRouteName, initialRouteParams }: RootNavigatorProps) {
   const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
 
   return (
@@ -62,7 +79,15 @@ export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="SignUp" component={SignUpScreen} />
           <Stack.Screen name="VerifyEmail" component={VerifyEmailScreen} />
-          <Stack.Screen name="CompleteDriverRegistration" component={CompleteDriverRegistrationScreen} />
+          <Stack.Screen
+            name="CompleteDriverRegistration"
+            component={CompleteDriverRegistrationScreen}
+            initialParams={
+              initialRouteName === 'CompleteDriverRegistration'
+                ? (initialRouteParams as { driverType: 'take_me' | 'parceiro' } | undefined)
+                : undefined
+            }
+          />
           <Stack.Screen name="CompletePreparadorExcursoes" component={CompletePreparadorExcursoesScreen} />
           <Stack.Screen name="CompletePreparadorEncomendas" component={CompletePreparadorEncomendasScreen} />
           <Stack.Screen name="FinalizeRegistration" component={FinalizeRegistrationScreen} />

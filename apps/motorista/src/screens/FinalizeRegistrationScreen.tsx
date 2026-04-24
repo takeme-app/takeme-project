@@ -6,17 +6,18 @@ import type { RootStackParamList } from '../navigation/types';
 import { useRegistrationForm } from '../contexts/RegistrationFormContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
 import { supabase } from '../lib/supabase';
-import { registerMotoristaWithAuth } from '../lib/motoristaRegistration';
+import { finalizeMotoristaProfile, mapDriverTypeToSubtypeDb } from '../lib/motoristaRegistration';
 import { onlyDigits } from '../utils/formatCpf';
 import { parseCurrencyBRLToNumber } from '../utils/formatCurrency';
 import { useDeferredDriverSignup } from '../contexts/DeferredDriverSignupContext';
+
 const BUCKET = 'driver-documents';
 
 function formatSupabaseErr(e: { message?: string; details?: string; hint?: string }): string {
   return [e.message, e.details, e.hint].filter(Boolean).join(' — ');
 }
 
-async function uploadImage(userId: string, uri: string, path: string): Promise<string> {
+async function uploadImage(_userId: string, uri: string, path: string): Promise<string> {
   const base64 = uri.startsWith('data:') ? uri.split(',')[1] ?? '' : null;
   if (!base64) throw new Error('Documento inválido. Selecione a imagem novamente.');
   const binary = atob(base64);
@@ -39,7 +40,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'FinalizeRegistration'>;
 
 export function FinalizeRegistrationScreen({ navigation, route }: Props) {
   const { driverType } = route.params;
-  const { email, password, driverType: ctxDriverType, clearDeferred } = useDeferredDriverSignup();
+  const { clearDeferred } = useDeferredDriverSignup();
   const { formData, clearFormData } = useRegistrationForm();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,14 +49,7 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
     let cancelled = false;
 
     if (!formData) {
-      setError('Dados do cadastro não encontrados. Volte e preencha o formulário "Complete seu cadastro".');
-      setLoading(false);
-      return;
-    }
-    if (!email || !password || ctxDriverType !== driverType) {
-      setError(
-        'Sessão de cadastro incompleta. Volte ao início do cadastro de motorista e preencha o formulário antes de enviar.'
-      );
+      setError('Dados do cadastro não encontrados. Volte e preencha o formulário "Complete seu perfil".');
       setLoading(false);
       return;
     }
@@ -64,6 +58,14 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
       setLoading(true);
       setError(null);
       try {
+        const { data: userData, error: userErr } = await supabase.auth.getUser();
+        if (userErr || !userData.user?.id) {
+          throw new Error(
+            'Sessão não encontrada. Entre novamente com seu e-mail e senha para finalizar o cadastro.'
+          );
+        }
+        const userId = userData.user.id;
+
         const owns = formData.ownsVehicle;
         const ageNum = formData.age ? parseInt(formData.age, 10) : null;
         const phoneDigits = onlyDigits(formData.vehiclePhone);
@@ -87,7 +89,9 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
             r.destination_address.length > 0 &&
             r.price_per_person_cents > 0
         );
-        if (validRoutes.length === 0) {
+        // Preparador de excursões não manda rotas — motoristas sim.
+        const requiresRoutes = driverType === 'take_me' || driverType === 'parceiro';
+        if (requiresRoutes && validRoutes.length === 0) {
           throw new Error(
             'Informe ao menos uma rota com origem, destino e valor por passageiro maior que zero.'
           );
@@ -120,9 +124,8 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
           }
         }
 
-        const { userId } = await registerMotoristaWithAuth({
-          email: email.trim().toLowerCase(),
-          password,
+        await finalizeMotoristaProfile({
+          userId,
           driverType,
           fullName: formData.fullName.trim(),
           phoneDigits: phoneDigits || null,
@@ -133,30 +136,10 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
           cityAdminArea: formData.cityAdminArea ?? null,
           preferenceArea: formData.preferenceArea.trim() || null,
           experienceYears: formData.experienceYears ? parseInt(formData.experienceYears, 10) : null,
-          bankCode: formData.bankCode.trim() || null,
-          agencyNumber: formData.agencyNumber.trim() || null,
-          accountNumber: formData.accountNumber.trim() || null,
-          pixKey: formData.pixKey.trim() || null,
           ownsVehicle: owns,
           vehicle,
           routes: validRoutes,
         });
-
-        const { data: workerRow, error: workerSelErr } = await supabase
-          .from('worker_profiles')
-          .select('id')
-          .eq('id', userId)
-          .maybeSingle();
-        if (workerSelErr) {
-          throw new Error(
-            `Não foi possível carregar seu perfil de motorista após o login.\n\n${formatSupabaseErr(workerSelErr as { message?: string; details?: string; hint?: string })}`
-          );
-        }
-        if (!workerRow) {
-          throw new Error(
-            'Conta criada, mas o perfil de motorista (worker_profiles) não foi encontrado. Verifique os logs da função create-motorista-account no Supabase.'
-          );
-        }
 
         const uploads: Promise<string>[] = [];
         if (formData.cnhFrontUri) uploads.push(uploadImage(userId, formData.cnhFrontUri, `${userId}/cnh_front.jpg`));
@@ -175,8 +158,7 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
         try {
           uploadedPaths = await Promise.all(uploads);
         } catch (uploadErr) {
-          const msg =
-            uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
+          const msg = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
           throw new Error(
             `Falha ao enviar documentos para o storage (bucket driver-documents).\n\n${msg}\n\nSe aparecer "row-level security", rode a migration 20250325000000_finalize_registration_rls no Supabase ou confira as políticas do bucket.`
           );
@@ -198,20 +180,13 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
           background_check_url: criminalPath,
         };
 
-        const { data: workerUpdated, error: workerUpErr } = await supabase
+        const { error: workerUpErr } = await supabase
           .from('worker_profiles')
           .update(workerUpdate as never)
-          .eq('id', userId)
-          .select('id')
-          .maybeSingle();
+          .eq('id', userId);
         if (workerUpErr) {
           throw new Error(
-            `Não foi possível salvar os caminhos dos documentos no perfil.\n\n${formatSupabaseErr(workerUpErr as { message?: string; details?: string; hint?: string })}\n\nSe aparecer "row-level security", confira as policies worker_profiles_update_own (migration 20250325000000).`
-          );
-        }
-        if (!workerUpdated) {
-          throw new Error(
-            'O UPDATE em worker_profiles não afetou nenhuma linha (RLS ou id incorreto). Confira policies de UPDATE para authenticated.'
+            `Não foi possível salvar os caminhos dos documentos no perfil.\n\n${formatSupabaseErr(workerUpErr as { message?: string; details?: string; hint?: string })}`
           );
         }
 
@@ -246,7 +221,11 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
         if (cancelled) return;
         clearFormData();
         clearDeferred();
-        navigation.replace('RegistrationSuccess');
+        const subtype = mapDriverTypeToSubtypeDb(driverType);
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'StripeConnectSetup', params: { subtype } }],
+        });
       } catch (err: unknown) {
         if (!cancelled) {
           const explicit =
@@ -263,7 +242,7 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [formData, email, password, driverType, ctxDriverType, clearDeferred, clearFormData, navigation]);
+  }, [formData, driverType, clearDeferred, clearFormData, navigation]);
 
   if (error) {
     return (
@@ -280,7 +259,7 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#0D0D0D" />
-        <Text style={styles.loadingText}>Criando sua conta...</Text>
+        <Text style={styles.loadingText}>Salvando seu perfil...</Text>
       </View>
     );
   }
