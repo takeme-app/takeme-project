@@ -5,10 +5,8 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  Modal,
-  TextInput,
-  KeyboardAvoidingView,
-  Platform,
+  Alert,
+  Linking,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -19,19 +17,17 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { PagamentosExcStackParamList } from '../../navigation/PagamentosExcursoesStack';
 import { supabase } from '../../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
+import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
+import { getStripeConnectState, type StripeConnectState } from '../../lib/motoristaAccess';
+import { StripeConnectBlock } from '../../components/StripeConnectBlock';
 
 type Props = NativeStackScreenProps<PagamentosExcStackParamList, 'PagamentosMain'>;
 
 const GOLD = '#C9A227';
 const CREAM = '#FFFBEB';
-const GOLD_BORDER = '#E6C94A';
-
-const PT_MONTHS = [
-  'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
-];
-
-const PT_MONTHS_SHORT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+const MUTED = '#6B7280';
+const SUBTLE = '#9CA3AF';
+const INK = '#111827';
 
 type Transfer = {
   id: string;
@@ -45,7 +41,8 @@ function formatCents(cents: number): string {
 
 function formatShortDate(iso: string): string {
   const d = new Date(iso);
-  return `${d.getDate().toString().padStart(2, '0')} ${PT_MONTHS_SHORT[d.getMonth()]}`;
+  const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+  return `${d.getDate().toString().padStart(2, '0')} ${months[d.getMonth()]}`;
 }
 
 function formatHour(iso: string): string {
@@ -62,19 +59,17 @@ function PixIcon() {
 }
 
 export function PagamentosExcursoesScreen({ navigation }: Props) {
-  const now = new Date();
-  const [viewYear, setViewYear] = useState(now.getFullYear());
-  const [viewMonth, setViewMonth] = useState(now.getMonth());
-
   const [totalTodayCents, setTotalTodayCents] = useState(0);
   const [excursionsToday, setExcursionsToday] = useState(0);
   const [tipsCount] = useState(0);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
-  const [pixKey, setPixKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [editPixVisible, setEditPixVisible] = useState(false);
-  const [newPixKey, setNewPixKey] = useState('');
-  const [savingPix, setSavingPix] = useState(false);
+
+  const [stripeState, setStripeState] = useState<StripeConnectState>('none');
+  const [stripePendingVerification, setStripePendingVerification] = useState(0);
+  const [stripeAccountId, setStripeAccountId] = useState<string | null>(null);
+  const [connectLoading, setConnectLoading] = useState(false);
+  const [expressLoginLoading, setExpressLoginLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,12 +79,20 @@ export function PagamentosExcursoesScreen({ navigation }: Props) {
       return;
     }
 
+    // Sync best-effort com a Stripe antes de ler do banco, para não depender só do webhook.
+    await supabase.functions.invoke('stripe-connect-sync', { body: {} }).catch(() => undefined);
+
     const { data: wp } = await (supabase as any)
       .from('worker_profiles')
-      .select('pix_key')
+      .select(
+        'stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_details_submitted, stripe_connect_requirements_due_count, stripe_connect_pending_verification_count'
+      )
       .eq('id', user.id)
       .single();
-    setPixKey(wp?.pix_key ?? null);
+    setStripeState(getStripeConnectState(wp));
+    setStripePendingVerification(Number(wp?.stripe_connect_pending_verification_count ?? 0) || 0);
+    const acct = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? '';
+    setStripeAccountId(acct || null);
 
     const today = new Date();
     const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
@@ -107,78 +110,77 @@ export function PagamentosExcursoesScreen({ navigation }: Props) {
     const todayList = (todayPayouts ?? []) as { id: string; worker_amount_cents: number; paid_at: string }[];
     setTotalTodayCents(todayList.reduce((s, p) => s + p.worker_amount_cents, 0));
     setExcursionsToday(todayList.length);
-
-    const isCurrentCalendarMonth =
-      viewYear === today.getFullYear() && viewMonth === today.getMonth();
-
-    const monthStart = new Date(viewYear, viewMonth, 1).toISOString();
-    const monthEnd = new Date(viewYear, viewMonth + 1, 0, 23, 59, 59, 999).toISOString();
-
-    let q = (supabase as any)
-      .from('payouts')
-      .select('id, worker_amount_cents, paid_at')
-      .eq('worker_id', user.id)
-      .eq('status', 'paid')
-      .order('paid_at', { ascending: false });
-
-    if (isCurrentCalendarMonth) {
-      q = q.gte('paid_at', startToday).lte('paid_at', endToday);
-    } else {
-      q = q.gte('paid_at', monthStart).lte('paid_at', monthEnd);
-    }
-
-    const { data: listData } = await q;
     setTransfers(
-      ((listData ?? []) as { id: string; worker_amount_cents: number; paid_at: string }[]).map((p) => ({
+      todayList.map((p) => ({
         id: p.id,
         amount_cents: p.worker_amount_cents,
         paid_at: p.paid_at,
       })),
     );
     setLoading(false);
-  }, [viewYear, viewMonth]);
+  }, []);
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
-  const goPrevMonth = () => {
-    if (viewMonth === 0) {
-      setViewMonth(11);
-      setViewYear((y) => y - 1);
-    } else {
-      setViewMonth((m) => m - 1);
+  const handleStripeConnectSetup = async () => {
+    setConnectLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        Alert.alert('Erro', 'Sessão expirada. Faça login novamente.');
+        setConnectLoading(false);
+        return;
+      }
+      const res = await supabase.functions.invoke('stripe-connect-link', {
+        body: {
+          return_url: 'take-me-motorista://payments',
+          refresh_url: 'take-me-motorista://payments',
+          link_type:
+            stripeState === 'action_required' || stripeState === 'in_review' ? 'update' : 'onboarding',
+        },
+      });
+      const url = (res.data as { url?: unknown } | null)?.url;
+      const isHttp = typeof url === 'string' && /^https?:\/\//i.test(url.trim());
+      if (res.error || !isHttp) {
+        const msg = await describeInvokeFailure(res.data, res.error);
+        Alert.alert('Erro', msg || 'Não foi possível gerar o link de configuração.');
+        setConnectLoading(false);
+        return;
+      }
+      await Linking.openURL((url as string).trim());
+    } catch (e: any) {
+      Alert.alert('Erro', e?.message || 'Falha ao abrir configuração de pagamento.');
+    }
+    setConnectLoading(false);
+  };
+
+  const handleStripeExpressLogin = async () => {
+    setExpressLoginLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        Alert.alert('Erro', 'Sessão expirada. Faça login novamente.');
+        return;
+      }
+      const res = await supabase.functions.invoke('stripe-connect-link', {
+        body: { flow: 'express_login' },
+      });
+      const url = (res.data as { url?: unknown } | null)?.url;
+      const isHttp = typeof url === 'string' && /^https?:\/\//i.test(url.trim());
+      if (res.error || !isHttp) {
+        const msg = await describeInvokeFailure(res.data, res.error);
+        Alert.alert('Erro', msg || 'Não foi possível abrir o painel Stripe.');
+        return;
+      }
+      await Linking.openURL((url as string).trim());
+    } catch (e: any) {
+      Alert.alert('Erro', e?.message || 'Falha ao abrir o painel Stripe.');
+    } finally {
+      setExpressLoginLoading(false);
     }
   };
 
-  const goNextMonth = () => {
-    if (viewMonth === 11) {
-      setViewMonth(0);
-      setViewYear((y) => y + 1);
-    } else {
-      setViewMonth((m) => m + 1);
-    }
-  };
-
-  const handleSavePix = async () => {
-    const key = newPixKey.trim();
-    if (!key) return;
-    setSavingPix(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      await (supabase as any)
-        .from('worker_profiles')
-        .update({ pix_key: key, updated_at: new Date().toISOString() })
-        .eq('id', user.id);
-      setPixKey(key);
-    }
-    setSavingPix(false);
-    setEditPixVisible(false);
-    setNewPixKey('');
-  };
-
-  const today = new Date();
-  const isCurrentMonth =
-    viewYear === today.getFullYear() && viewMonth === today.getMonth();
-  const listTitle = isCurrentMonth ? 'Transferências de hoje' : `Transferências em ${PT_MONTHS[viewMonth]}`;
+  const showStripeExpressLink = Boolean(stripeAccountId) && stripeState !== 'active';
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -193,19 +195,9 @@ export function PagamentosExcursoesScreen({ navigation }: Props) {
             onPress={() => navigation.navigate('Notifications')}
             activeOpacity={0.7}
           >
-            <MaterialIcons name="notifications-none" size={22} color="#111827" />
+            <MaterialIcons name="notifications-none" size={22} color={INK} />
           </TouchableOpacity>
         </View>
-      </View>
-
-      <View style={styles.monthNav}>
-        <TouchableOpacity style={styles.monthArrow} onPress={goPrevMonth} activeOpacity={0.7}>
-          <MaterialIcons name="chevron-left" size={26} color="#374151" />
-        </TouchableOpacity>
-        <Text style={styles.monthLabel}>{PT_MONTHS[viewMonth]}</Text>
-        <TouchableOpacity style={styles.monthArrow} onPress={goNextMonth} activeOpacity={0.7}>
-          <MaterialIcons name="chevron-right" size={26} color="#374151" />
-        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -214,43 +206,41 @@ export function PagamentosExcursoesScreen({ navigation }: Props) {
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryLabel}>Recebido hoje</Text>
-            <Text style={styles.summaryAmount}>{formatCents(totalTodayCents)}</Text>
-            <View style={styles.summaryDivider} />
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryRowLabel}>Excursões</Text>
-              <Text style={styles.summaryRowValue}>{excursionsToday}</Text>
-            </View>
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryRowLabel}>Gorjetas</Text>
-              <Text style={styles.summaryRowValue}>{tipsCount}</Text>
+          {/* Hero: recebido hoje */}
+          <View style={styles.hero}>
+            <Text style={styles.heroLabel}>Recebido hoje</Text>
+            <Text style={styles.heroAmount}>{formatCents(totalTodayCents)}</Text>
+            <View style={styles.heroChips}>
+              <View style={styles.chip}>
+                <Text style={styles.chipValue}>{excursionsToday}</Text>
+                <Text style={styles.chipLabel}>{excursionsToday === 1 ? 'excursão' : 'excursões'}</Text>
+              </View>
+              <View style={styles.chipDivider} />
+              <View style={styles.chip}>
+                <Text style={styles.chipValue}>{tipsCount}</Text>
+                <Text style={styles.chipLabel}>{tipsCount === 1 ? 'gorjeta' : 'gorjetas'}</Text>
+              </View>
             </View>
           </View>
 
-          <TouchableOpacity
-            style={styles.pixCard}
-            onPress={() => {
-              setNewPixKey(pixKey ?? '');
-              setEditPixVisible(true);
-            }}
-            activeOpacity={0.8}
-          >
-            <View style={styles.pixCardContent}>
-              <Text style={styles.pixCardLabel}>
-                {pixKey ? 'Chave Pix cadastrada' : 'Cadastrar chave Pix'}
-              </Text>
-              {pixKey ? <Text style={styles.pixCardValue}>{pixKey}</Text> : null}
-            </View>
-            <MaterialIcons name="edit" size={20} color={GOLD} />
-          </TouchableOpacity>
+          {/* Seção: Conta de recebimento */}
+          <Text style={styles.sectionTitle}>Conta de recebimento</Text>
 
-          <Text style={styles.sectionTitle}>{listTitle}</Text>
+          <StripeConnectBlock
+            state={stripeState}
+            pendingVerificationCount={stripePendingVerification}
+            loading={connectLoading}
+            onPressSetup={handleStripeConnectSetup}
+            showExpressLink={showStripeExpressLink}
+            expressLoginLoading={expressLoginLoading}
+            onPressExpress={handleStripeExpressLogin}
+          />
+
+          {/* Transferências de hoje */}
+          <Text style={[styles.sectionTitle, { marginTop: 32 }]}>Transferências de hoje</Text>
 
           {transfers.length === 0 ? (
-            <Text style={styles.emptyText}>
-              {isCurrentMonth ? 'Nenhuma transferência hoje.' : 'Nenhuma transferência neste mês.'}
-            </Text>
+            <Text style={styles.emptyText}>Nenhuma transferência hoje.</Text>
           ) : (
             <View>
               {transfers.map((t, i) => (
@@ -278,64 +268,6 @@ export function PagamentosExcursoesScreen({ navigation }: Props) {
           </TouchableOpacity>
         </ScrollView>
       )}
-
-      <Modal visible={editPixVisible} transparent animationType="slide">
-        <KeyboardAvoidingView
-          style={styles.modalOverlay}
-          behavior="padding"
-        >
-          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setEditPixVisible(false)} />
-          <View style={styles.sheet}>
-            <View style={styles.sheetHandleRow}>
-              <View style={styles.sheetHandle} />
-            </View>
-            <TouchableOpacity style={styles.sheetCloseBtn} onPress={() => setEditPixVisible(false)}>
-              <View style={styles.sheetCloseCircle}>
-                <MaterialIcons name="close" size={18} color="#374151" />
-              </View>
-            </TouchableOpacity>
-            <View style={styles.sheetHeaderContent}>
-              <Text style={styles.sheetTitle}>Alterar chave Pix</Text>
-              <Text style={styles.sheetSubtitle}>
-                Atualize sua chave Pix para receber seus pagamentos no novo destino.
-                {'\n\n'}
-                Você pode editar essa informação sempre que quiser.
-              </Text>
-            </View>
-            <View style={styles.sheetDivider} />
-            <View style={styles.sheetBody}>
-              <Text style={styles.inputLabel}>Nova chave Pix</Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder="Ex: 995431232 ou email@exemplo.com"
-                placeholderTextColor="#9CA3AF"
-                value={newPixKey}
-                onChangeText={setNewPixKey}
-                autoCapitalize="none"
-              />
-              <TouchableOpacity
-                style={[styles.btnPrimary, (!newPixKey.trim() || savingPix) && { opacity: 0.6 }]}
-                onPress={handleSavePix}
-                disabled={savingPix || !newPixKey.trim()}
-                activeOpacity={0.85}
-              >
-                {savingPix ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.btnPrimaryText}>Salvar alteração</Text>
-                )}
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.btnCancel}
-                onPress={() => setEditPixVisible(false)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.btnCancelText}>Cancelar</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -353,7 +285,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F3F4F6',
   },
   headerSide: { width: 40, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700', color: '#111827' },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700', color: INK },
   bellBtn: {
     width: 40,
     height: 40,
@@ -362,62 +294,37 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  monthNav: {
+  scroll: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 24 },
+
+  /* Hero */
+  hero: { alignItems: 'center', marginBottom: 32 },
+  heroLabel: { fontSize: 13, color: SUBTLE, marginBottom: 4, letterSpacing: 0.3 },
+  heroAmount: { fontSize: 40, fontWeight: '700', color: INK, marginBottom: 16, letterSpacing: -0.5 },
+  heroChips: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    gap: 24,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
   },
-  monthArrow: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F3F4F6',
-    alignItems: 'center',
-    justifyContent: 'center',
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  chipValue: { fontSize: 15, fontWeight: '700', color: INK },
+  chipLabel: { fontSize: 13, color: MUTED },
+  chipDivider: { width: 1, height: 14, backgroundColor: '#E5E7EB', marginHorizontal: 14 },
+
+  /* Seções */
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: SUBTLE,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 12,
   },
-  monthLabel: { fontSize: 16, fontWeight: '600', color: '#111827', minWidth: 120, textAlign: 'center' },
-  scroll: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 20 },
 
-  summaryCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  summaryLabel: { fontSize: 14, color: '#9CA3AF', textAlign: 'center', marginBottom: 6 },
-  summaryAmount: { fontSize: 36, fontWeight: '700', color: '#111827', textAlign: 'center', marginBottom: 16 },
-  summaryDivider: { height: 1, backgroundColor: '#E5E7EB', marginBottom: 12 },
-  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-  summaryRowLabel: { fontSize: 15, color: '#9CA3AF' },
-  summaryRowValue: { fontSize: 15, fontWeight: '700', color: '#111827' },
-
-  pixCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: CREAM,
-    borderWidth: 1.5,
-    borderColor: GOLD_BORDER,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginBottom: 28,
-  },
-  pixCardContent: { flex: 1 },
-  pixCardLabel: { fontSize: 12, color: '#9CA3AF', marginBottom: 2 },
-  pixCardValue: { fontSize: 16, fontWeight: '600', color: '#111827' },
-
-  sectionTitle: { fontSize: 17, fontWeight: '700', color: '#111827', marginBottom: 16 },
-  emptyText: { fontSize: 14, color: '#9CA3AF', marginVertical: 12 },
-
+  /* Transferências */
+  emptyText: { fontSize: 14, color: SUBTLE, marginVertical: 8 },
   transferRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 12 },
   pixIconCircle: {
     width: 44,
@@ -429,60 +336,11 @@ const styles = StyleSheet.create({
   },
   pixIconDiamond: { fontSize: 20, color: GOLD },
   transferInfo: { flex: 1 },
-  transferAmount: { fontSize: 16, fontWeight: '700', color: '#111827' },
-  transferMeta: { fontSize: 13, color: '#9CA3AF', marginTop: 2 },
-  transferDate: { fontSize: 14, color: '#9CA3AF' },
+  transferAmount: { fontSize: 16, fontWeight: '700', color: INK },
+  transferMeta: { fontSize: 13, color: SUBTLE, marginTop: 2 },
+  transferDate: { fontSize: 14, color: SUBTLE },
   sep: { height: 1, backgroundColor: '#F3F4F6' },
 
-  historyLink: { alignItems: 'center', marginTop: 28 },
-  historyLinkText: { fontSize: 15, color: '#111827', textDecorationLine: 'underline', fontWeight: '500' },
-
-  modalOverlay: { flex: 1, justifyContent: 'flex-end' },
-  modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
-  sheet: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingBottom: 32,
-  },
-  sheetHandleRow: { alignItems: 'center', paddingTop: 12, paddingBottom: 4 },
-  sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E5E7EB' },
-  sheetCloseBtn: { position: 'absolute', top: 12, right: 20, zIndex: 1 },
-  sheetCloseCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#F3F4F6',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sheetHeaderContent: { paddingHorizontal: 24, paddingTop: 8, paddingBottom: 20 },
-  sheetTitle: { fontSize: 22, fontWeight: '700', color: '#111827', marginBottom: 12 },
-  sheetSubtitle: { fontSize: 16, color: '#6B7280', lineHeight: 24 },
-  sheetDivider: { height: 1, backgroundColor: '#E5E7EB' },
-  sheetBody: { paddingHorizontal: 24, paddingTop: 24, gap: 12 },
-  inputLabel: { fontSize: 15, fontWeight: '600', color: '#111827' },
-  textInput: {
-    backgroundColor: '#F2F2F2',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    fontSize: 16,
-    color: '#111827',
-  },
-  btnPrimary: {
-    backgroundColor: '#000000',
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  btnPrimaryText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
-  btnCancel: {
-    backgroundColor: '#EFEFEF',
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  btnCancelText: { fontSize: 16, fontWeight: '600', color: '#B24A44' },
+  historyLink: { alignItems: 'center', marginTop: 24 },
+  historyLinkText: { fontSize: 14, color: MUTED, textDecorationLine: 'underline', fontWeight: '500' },
 });

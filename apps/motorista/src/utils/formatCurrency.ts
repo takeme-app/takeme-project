@@ -21,3 +21,11 @@ export function parseCurrencyBRLToNumber(formatted: string): number | null {
   const n = parseFloat(normalized);
   return Number.isFinite(n) ? n : null;
 }
+
+/** Converte string do input mascarado direto para centavos inteiros (ou null). */
+export function currencyInputToCents(formatted: string): number | null {
+  const digits = onlyDigits(formatted);
+  if (!digits) return null;
+  const cents = parseInt(digits, 10);
+  return Number.isFinite(cents) ? cents : null;
+}

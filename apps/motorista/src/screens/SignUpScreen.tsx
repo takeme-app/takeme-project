@@ -75,6 +75,14 @@ export function SignUpScreen({ navigation, route }: Props) {
   const [passwordTouched, setPasswordTouched] = useState(false);
   const [confirmTouched, setConfirmTouched] = useState(false);
 
+  /**
+   * Guarda síncrona contra duplo-toque no botão "Continuar". `setLoading(true)` só surte
+   * efeito após o próximo render, então um toque muito rápido pode reentrar em
+   * `handleContinue` e disparar dois `send-email-verification-code` em paralelo
+   * (resultando em dois e-mails com códigos diferentes).
+   */
+  const submittingRef = useRef(false);
+
   const openTerms = () => navigation.navigate('TermsOfUse');
   const openPrivacy = () => navigation.navigate('PrivacyPolicy');
 
@@ -146,6 +154,7 @@ export function SignUpScreen({ navigation, route }: Props) {
     !loading;
 
   const handleContinue = async () => {
+    if (submittingRef.current) return;
     setIdentifierTouched(true);
     setPasswordTouched(true);
     setConfirmTouched(true);
@@ -186,6 +195,7 @@ export function SignUpScreen({ navigation, route }: Props) {
       return;
     }
 
+    submittingRef.current = true;
     setLoading(true);
     try {
       const fnName = channel === 'email' ? 'send-email-verification-code' : 'send-phone-verification-code';
@@ -229,6 +239,7 @@ export function SignUpScreen({ navigation, route }: Props) {
     } catch (err: unknown) {
       showAlert('Atenção', getUserErrorMessage(err, 'Não foi possível enviar o código. Tente novamente.'));
     } finally {
+      submittingRef.current = false;
       setLoading(false);
     }
   };

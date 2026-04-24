@@ -168,7 +168,10 @@ export default function MotoristasScreen() {
     { name: 'Canceladas', value: statusCounts.canceladas, color: '#d64545' },
   ].filter((d) => d.value > 0), [statusCounts]);
 
-  // ── KPI metrics (mesma base que o gráfico: viagens após filtros de período/status/categoria) ──
+  // ── KPI metrics ───────────────────────────────────────────────────────
+  // Universo: motoristas cadastrados (worker_profiles). "Em viagem" e
+  // "Com viagens agendadas" são derivados cruzando o universo com
+  // filteredTableData (scheduled_trips após filtros de período/status/categoria).
   const {
     totalMotoristas,
     emViagem,
@@ -177,6 +180,13 @@ export default function MotoristasScreen() {
     topDrivers,
     avgRating,
   } = useMemo(() => {
+    const driversUniverse = allProfiles.filter((p) => {
+      if (filtroCategoria === 'take_me' && p.subtype !== 'take_me') return false;
+      if (filtroCategoria === 'parceiro' && p.subtype !== 'parceiro') return false;
+      return true;
+    });
+    const universeIds = new Set(driversUniverse.map((p) => p.id));
+
     const byDriver = new Map<string, { tripCount: number; emAndamento: boolean; agendadas: boolean }>();
     for (const t of filteredTableData) {
       let cur = byDriver.get(t.driverId);
@@ -188,30 +198,36 @@ export default function MotoristasScreen() {
       if (t.status === 'Em andamento') cur.emAndamento = true;
       if (t.status === 'Agendado') cur.agendadas = true;
     }
-    const idToMeta = new Map(motoristasData.map((m) => [m.id, m]));
+
+    const totalMotoristas = driversUniverse.length;
     let emViagem = 0;
     let comAgendadas = 0;
-    for (const v of byDriver.values()) {
-      if (v.emAndamento) emViagem++;
-      if (v.agendadas) comAgendadas++;
+    for (const p of driversUniverse) {
+      const v = byDriver.get(p.id);
+      if (v?.emAndamento) emViagem++;
+      if (v?.agendadas) comAgendadas++;
     }
-    const totalMotoristas = byDriver.size;
     const semViagem = totalMotoristas - emViagem;
+
+    const idToMeta = new Map(motoristasData.map((m) => [m.id, m]));
+    const idToProfile = new Map(driversUniverse.map((p) => [p.id, p]));
     const topDrivers = [...byDriver.entries()]
+      .filter(([id]) => universeIds.has(id))
       .sort((a, b) => b[1].tripCount - a[1].tripCount)
       .slice(0, 5)
       .map(([id, v]) => {
-        const m = idToMeta.get(id);
-        return { id, nome: m?.nome ?? 'Sem nome', totalViagens: v.tripCount };
+        const nome = idToMeta.get(id)?.nome ?? idToProfile.get(id)?.nome ?? 'Sem nome';
+        return { id, nome, totalViagens: v.tripCount };
       });
-    const ratings = [...byDriver.keys()]
-      .map((id) => idToMeta.get(id)?.rating)
+
+    const ratings = driversUniverse
+      .map((p) => p.rating)
       .filter((r): r is number => r != null && r > 0);
     const avgRating = ratings.length > 0
       ? (ratings.reduce((s, r) => s + r, 0) / ratings.length).toFixed(1)
       : '—';
     return { totalMotoristas, emViagem, semViagem, comAgendadas, topDrivers, avgRating };
-  }, [filteredTableData, motoristasData]);
+  }, [filteredTableData, motoristasData, allProfiles, filtroCategoria]);
 
   // ── Pie tooltip ────────────────────────────────────────────────────────
   const customTooltip = ({ active, payload }: any) => {

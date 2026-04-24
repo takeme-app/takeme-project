@@ -7,6 +7,7 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Alert,
+  Linking,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,21 +21,52 @@ import { supabase } from '../lib/supabase';
 import { resolveWorkerBaseId } from '../lib/resolveWorkerBaseId';
 import { getGoogleMapsApiKey } from '../lib/googleMapsConfig';
 import { GoogleCityAutocomplete } from '../components/GoogleCityAutocomplete';
+import { UploadField } from '../components/UploadField';
 import type { GoogleGeocodeResult } from '@take-me/shared';
 import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
 import { formatPhoneBR } from '../utils/formatPhone';
-import { OnboardingStepHeader } from '../components/OnboardingStepHeader';
+import { currencyInputToCents, formatCurrencyBRLInput } from '../utils/formatCurrency';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CompletePreparadorEncomendas'>;
 
 const BUCKET = 'driver-documents';
+const PF_CERTIDAO_URL =
+  'https://www.gov.br/pf/pt-br/assuntos/atendimento-ao-cidadao/certidoes';
 
-function FieldBlock({ label, children }: { label: string; children: ReactNode }) {
+function FieldBlock({
+  label,
+  supporting,
+  children,
+}: {
+  label: string;
+  supporting?: string;
+  children: ReactNode;
+}) {
   return (
     <View style={styles.fieldBlock}>
       <Text style={styles.fieldLabel}>{label}</Text>
       {children}
+      {supporting ? <Text style={styles.fieldSupporting}>{supporting}</Text> : null}
     </View>
+  );
+}
+
+function RadioOption({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity style={styles.radioRow} activeOpacity={0.7} onPress={onPress}>
+      <View style={[styles.radioOuter, selected && styles.radioOuterActive]}>
+        {selected ? <View style={styles.radioInner} /> : null}
+      </View>
+      <Text style={styles.radioLabel}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -65,9 +97,12 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
   const [vehicleDocUri, setVehicleDocUri] = useState<string | null>(null);
   const [vehiclePhotosUris, setVehiclePhotosUris] = useState<string[]>([]);
 
-  const [identityDocUri, setIdentityDocUri] = useState<string | null>(null);
-  const [willPresentCriminalRecord, setWillPresentCriminalRecord] = useState(false);
+  const [cnhFrontUri, setCnhFrontUri] = useState<string | null>(null);
+  const [cnhBackUri, setCnhBackUri] = useState<string | null>(null);
   const [criminalRecordUri, setCriminalRecordUri] = useState<string | null>(null);
+
+  const [deliveryFee, setDeliveryFee] = useState('');
+  const [perKmFee, setPerKmFee] = useState('');
 
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [acceptedNotifications, setAcceptedNotifications] = useState(false);
@@ -90,8 +125,16 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
 
   const pickImage = async (callback: (uri: string) => void) => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') { showAlert('Permissão', 'É necessário permitir acesso às fotos.'); return; }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.8, base64: true });
+    if (status !== 'granted') {
+      showAlert('Permissão', 'É necessário permitir acesso às fotos para enviar documentos.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: false,
+      quality: 0.8,
+      base64: true,
+    });
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
       callback(asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : asset.uri);
@@ -100,16 +143,37 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
 
   const pickMultipleImages = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') { showAlert('Permissão', 'É necessário permitir acesso às fotos.'); return; }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, quality: 0.8, base64: true });
-    if (!result.canceled && result.assets.length)
-      setVehiclePhotosUris((prev) => [...prev, ...result.assets.map((a) => a.base64 ? `data:image/jpeg;base64,${a.base64}` : a.uri)]);
+    if (status !== 'granted') {
+      showAlert('Permissão', 'É necessário permitir acesso às fotos.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: true,
+      quality: 0.8,
+      base64: true,
+    });
+    if (!result.canceled && result.assets.length) {
+      setVehiclePhotosUris((prev) => [
+        ...prev,
+        ...result.assets.map((a) => (a.base64 ? `data:image/jpeg;base64,${a.base64}` : a.uri)),
+      ]);
+    }
   };
 
-  const sectionTitle = (title: string) => <Text style={styles.sectionTitle}>{title}</Text>;
+  const openPfCertidao = async () => {
+    try {
+      await Linking.openURL(PF_CERTIDAO_URL);
+    } catch {
+      showAlert('Erro', 'Não foi possível abrir o link. Acesse gov.br/pf manualmente.');
+    }
+  };
 
   const validateAndSubmit = async () => {
-    if (!sessionUserId) { showAlert('Sessão expirada', 'Faça login novamente para concluir o cadastro.'); return; }
+    if (!sessionUserId) {
+      showAlert('Sessão expirada', 'Faça login novamente para concluir o cadastro.');
+      return;
+    }
     if (!fullName.trim()) { showAlert('Atenção', 'Preencha o nome completo.'); return; }
     const cpfDigits = onlyDigits(cpf);
     if (cpfDigits.length !== 11 || !validateCpf(cpf)) { showAlert('CPF inválido', 'Informe um CPF válido.'); return; }
@@ -134,6 +198,7 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
     }
     const expNum = parseInt(onlyDigits(experienceYears), 10);
     if (!expNum || expNum < 1 || expNum > 60) { showAlert('Atenção', 'Informe os anos de experiência (1–60).'); return; }
+
     if (ownsVehicle) {
       if (!vehicleYear.trim() || onlyDigits(vehicleYear).length !== 4) { showAlert('Atenção', 'Informe o ano do veículo.'); return; }
       if (!vehicleModel.trim()) { showAlert('Atenção', 'Preencha o modelo do veículo.'); return; }
@@ -144,8 +209,22 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
       if (!vehicleDocUri) { showAlert('Atenção', 'Envie o documento do veículo.'); return; }
       if (vehiclePhotosUris.length < 2) { showAlert('Atenção', 'Envie ao menos 2 fotos do veículo.'); return; }
     }
-    if (!identityDocUri) { showAlert('Atenção', 'Envie o documento de identidade.'); return; }
-    if (willPresentCriminalRecord && !criminalRecordUri) { showAlert('Atenção', 'Envie o documento de antecedentes ou desmarque a opção.'); return; }
+
+    if (!cnhFrontUri) { showAlert('Atenção', 'Envie a frente da CNH.'); return; }
+    if (!cnhBackUri) { showAlert('Atenção', 'Envie o verso da CNH.'); return; }
+
+    // Preços são opcionais: vazio = usar padrão da plataforma.
+    const deliveryFeeCents = deliveryFee.trim() ? currencyInputToCents(deliveryFee) : null;
+    if (deliveryFee.trim() && (deliveryFeeCents == null || deliveryFeeCents < 0)) {
+      showAlert('Atenção', 'Valor por entrega inválido.');
+      return;
+    }
+    const perKmFeeCents = perKmFee.trim() ? currencyInputToCents(perKmFee) : null;
+    if (perKmFee.trim() && (perKmFeeCents == null || perKmFeeCents < 0)) {
+      showAlert('Atenção', 'Valor por km inválido.');
+      return;
+    }
+
     if (!acceptedTerms) { showAlert('Atenção', 'Aceite os Termos de Uso e a Política de Privacidade.'); return; }
 
     setLoading(true);
@@ -159,21 +238,32 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        const { data, error } = await supabase.storage.from(BUCKET).upload(path, bytes, { contentType: 'image/jpeg', upsert: true });
+        const { data, error } = await supabase.storage.from(BUCKET).upload(path, bytes, {
+          contentType: 'image/jpeg',
+          upsert: true,
+        });
         if (error) throw new Error(error.message || 'Falha ao enviar documento.');
         return data.path;
       };
 
-      const identityPath = await uploadDoc(identityDocUri, `${userId}/identity_doc.jpg`);
+      const cnhFrontPath = await uploadDoc(cnhFrontUri, `${userId}/cnh_front.jpg`);
+      const cnhBackPath = await uploadDoc(cnhBackUri, `${userId}/cnh_back.jpg`);
       let criminalPath: string | null = null;
-      if (willPresentCriminalRecord && criminalRecordUri)
+      if (criminalRecordUri) {
         criminalPath = await uploadDoc(criminalRecordUri, `${userId}/criminal_record.jpg`);
+      }
 
       let vehicleDocPath: string | null = null;
-      if (ownsVehicle && vehicleDocUri)
+      if (ownsVehicle && vehicleDocUri) {
         vehicleDocPath = await uploadDoc(vehicleDocUri, `${userId}/vehicle_doc.jpg`);
+      }
 
-      await supabase.from('profiles').update({ full_name: fullName.trim(), cpf: cpfDigits, city: city.trim(), updated_at: nowIso }).eq('id', userId);
+      await supabase.from('profiles').update({
+        full_name: fullName.trim(),
+        cpf: cpfDigits,
+        city: city.trim(),
+        updated_at: nowIso,
+      }).eq('id', userId);
 
       const baseId = await resolveWorkerBaseId(cityMeta.locality, cityMeta.adminArea, city.trim());
 
@@ -197,8 +287,11 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
         city: city.trim(),
         experience_years: expNum,
         has_own_vehicle: ownsVehicle,
-        cnh_document_url: identityPath,
+        cnh_document_url: cnhFrontPath,
+        cnh_document_back_url: cnhBackPath,
         background_check_url: criminalPath ?? vehicleDocPath,
+        shipment_delivery_fee_cents: deliveryFeeCents,
+        shipment_per_km_fee_cents: perKmFeeCents,
         base_id: baseId,
         updated_at: nowIso,
       };
@@ -220,9 +313,13 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
         const yr = parseInt(onlyDigits(vehicleYear), 10);
         const cap = parseInt(onlyDigits(vehicleCapacity), 10);
         await supabase.from('vehicles').insert({
-          worker_id: userId, year: yr, model: vehicleModel.trim(),
-          plate: licensePlate.trim().toUpperCase(), passenger_capacity: cap,
-          status: 'pending', is_active: true,
+          worker_id: userId,
+          year: yr,
+          model: vehicleModel.trim(),
+          plate: licensePlate.trim().toUpperCase(),
+          passenger_capacity: cap,
+          status: 'pending',
+          is_active: true,
         });
       }
 
@@ -277,32 +374,60 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
           }}
           activeOpacity={0.7}
         >
-          <MaterialIcons name="arrow-back" size={24} color="#000" />
+          <MaterialIcons name="arrow-back" size={24} color="#0D0D0D" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Complete seu cadastro</Text>
         <View style={styles.headerRight} />
       </View>
 
-      <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 32 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-        <OnboardingStepHeader
-          current={2}
-          title="Complete seu perfil"
-          subtitle="Preencha suas informações para que possamos validar seu perfil como preparador de encomendas."
-        />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 32 }]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.pageHeader}>
+          <Text style={styles.pageTitle}>Complete seu cadastro</Text>
+          <Text style={styles.pageSubtitle}>
+            Preencha suas informações para que possamos validar seu perfil como preparador de encomendas.
+          </Text>
+        </View>
 
-        {sectionTitle('Dados básicos')}
+        <Text style={styles.sectionTitle}>Dados básicos</Text>
         <FieldBlock label="Nome completo">
-          <TextInput style={styles.input} placeholder="Digite seu nome completo" placeholderTextColor="#9CA3AF" value={fullName} onChangeText={setFullName} />
+          <TextInput
+            style={styles.input}
+            placeholder="Digite seu nome completo"
+            placeholderTextColor="#767676"
+            value={fullName}
+            onChangeText={setFullName}
+          />
         </FieldBlock>
         <FieldBlock label="CPF">
-          <TextInput style={styles.input} placeholder="Ex: 123.456.789-00" placeholderTextColor="#9CA3AF" value={cpf} onChangeText={(t) => setCpf(formatCpf(t))} keyboardType="number-pad" maxLength={14} />
+          <TextInput
+            style={styles.input}
+            placeholder="Ex: 123.456.789-99"
+            placeholderTextColor="#767676"
+            value={cpf}
+            onChangeText={(t) => setCpf(formatCpf(t))}
+            keyboardType="number-pad"
+            maxLength={14}
+          />
         </FieldBlock>
         <FieldBlock label="Idade">
-          <TextInput style={styles.input} placeholder="Ex: 30" placeholderTextColor="#9CA3AF" value={age} onChangeText={(t) => setAge(onlyDigits(t).slice(0, 3))} keyboardType="number-pad" maxLength={3} />
+          <TextInput
+            style={styles.input}
+            placeholder="Ex: 25 anos"
+            placeholderTextColor="#767676"
+            value={age}
+            onChangeText={(t) => setAge(onlyDigits(t).slice(0, 3))}
+            keyboardType="number-pad"
+            maxLength={3}
+          />
         </FieldBlock>
         <FieldBlock label="Cidade">
           <GoogleCityAutocomplete
-            placeholder="Busque sua cidade (ex: São Luís)"
+            placeholder="Digite sua cidade"
             value={city}
             onChangeText={setCity}
             onSelectPlace={(p: GoogleGeocodeResult) => {
@@ -317,79 +442,160 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
           />
         </FieldBlock>
         <FieldBlock label="Anos de experiência com encomendas">
-          <TextInput style={styles.input} placeholder="Ex: 3" placeholderTextColor="#9CA3AF" value={experienceYears} onChangeText={(t) => setExperienceYears(onlyDigits(t).slice(0, 2))} keyboardType="number-pad" maxLength={2} />
+          <TextInput
+            style={styles.input}
+            placeholder="Ex: 3 anos"
+            placeholderTextColor="#767676"
+            value={experienceYears}
+            onChangeText={(t) => setExperienceYears(onlyDigits(t).slice(0, 2))}
+            keyboardType="number-pad"
+            maxLength={2}
+          />
         </FieldBlock>
 
-        {sectionTitle('Veículo de entrega')}
-        <Text style={styles.questionLabel}>Possui veículo próprio?</Text>
-        <View style={styles.radioRow}>
-          {[true, false].map((val) => (
-            <TouchableOpacity key={String(val)} style={styles.radioOption} onPress={() => setOwnsVehicle(val)} activeOpacity={0.7}>
-              <View style={[styles.radio, ownsVehicle === val && styles.radioSelected]}>
-                {ownsVehicle === val ? <View style={styles.radioInner} /> : null}
-              </View>
-              <Text style={styles.radioLabel}>{val ? 'Sim' : 'Não'}</Text>
-            </TouchableOpacity>
-          ))}
+        <Text style={styles.sectionTitle}>Veículo de entrega</Text>
+        <Text style={styles.fieldLabel}>Possui veículo próprio? (opcional)</Text>
+        <View style={styles.radioGroup}>
+          <RadioOption label="Sim" selected={ownsVehicle === true} onPress={() => setOwnsVehicle(true)} />
+          <RadioOption label="Não" selected={ownsVehicle === false} onPress={() => setOwnsVehicle(false)} />
         </View>
+
         {ownsVehicle ? (
           <>
             <FieldBlock label="Ano do veículo">
-              <TextInput style={styles.input} placeholder="Ex: 2020" placeholderTextColor="#9CA3AF" value={vehicleYear} onChangeText={(t) => setVehicleYear(onlyDigits(t).slice(0, 4))} keyboardType="number-pad" maxLength={4} />
+              <TextInput
+                style={styles.input}
+                placeholder="Ex: 2020"
+                placeholderTextColor="#767676"
+                value={vehicleYear}
+                onChangeText={(t) => setVehicleYear(onlyDigits(t).slice(0, 4))}
+                keyboardType="number-pad"
+                maxLength={4}
+              />
             </FieldBlock>
             <FieldBlock label="Modelo">
-              <TextInput style={styles.input} placeholder="Ex: Fiat Fiorino" placeholderTextColor="#9CA3AF" value={vehicleModel} onChangeText={setVehicleModel} />
+              <TextInput
+                style={styles.input}
+                placeholder="Ex: Fiat Fiorino"
+                placeholderTextColor="#767676"
+                value={vehicleModel}
+                onChangeText={setVehicleModel}
+              />
             </FieldBlock>
             <FieldBlock label="Placa">
-              <TextInput style={styles.input} placeholder="Ex: ABC1D23" placeholderTextColor="#9CA3AF" value={licensePlate} onChangeText={(t) => setLicensePlate(t.toUpperCase())} autoCapitalize="characters" maxLength={10} />
+              <TextInput
+                style={styles.input}
+                placeholder="Ex: ABC1D23"
+                placeholderTextColor="#767676"
+                value={licensePlate}
+                onChangeText={(t) => setLicensePlate(t.toUpperCase())}
+                autoCapitalize="characters"
+                maxLength={10}
+              />
             </FieldBlock>
             <FieldBlock label="Telefone">
-              <TextInput style={styles.input} placeholder="Ex: (11) 98765-4321" placeholderTextColor="#9CA3AF" value={vehiclePhone} onChangeText={(t) => setVehiclePhone(formatPhoneBR(t))} keyboardType="phone-pad" maxLength={16} />
+              <TextInput
+                style={styles.input}
+                placeholder="Ex: (11) 98765-4321"
+                placeholderTextColor="#767676"
+                value={vehiclePhone}
+                onChangeText={(t) => setVehiclePhone(formatPhoneBR(t))}
+                keyboardType="phone-pad"
+                maxLength={16}
+              />
             </FieldBlock>
             <FieldBlock label="Capacidade de carga (volumes)">
-              <TextInput style={styles.input} placeholder="Ex: 20" placeholderTextColor="#9CA3AF" value={vehicleCapacity} onChangeText={(t) => setVehicleCapacity(onlyDigits(t).slice(0, 3))} keyboardType="number-pad" maxLength={3} />
+              <TextInput
+                style={styles.input}
+                placeholder="Ex: 20"
+                placeholderTextColor="#767676"
+                value={vehicleCapacity}
+                onChangeText={(t) => setVehicleCapacity(onlyDigits(t).slice(0, 3))}
+                keyboardType="number-pad"
+                maxLength={3}
+              />
             </FieldBlock>
-            <TouchableOpacity style={styles.uploadBox} onPress={() => pickImage(setVehicleDocUri)} activeOpacity={0.8}>
-              <MaterialIcons name="cloud-upload" size={40} color="#9CA3AF" />
-              <Text style={styles.uploadTitle}>Documento do veículo</Text>
-              <Text style={styles.uploadSub}>Clique para fazer o upload</Text>
-              {vehicleDocUri ? <Text style={styles.uploadOk}>✓ Adicionado</Text> : null}
-            </TouchableOpacity>
-            <Text style={styles.photosSectionTitle}>Fotos do veículo</Text>
-            <Text style={styles.photosSectionHint}>Envie ao menos 2 fotos</Text>
-            <TouchableOpacity style={styles.uploadBox} onPress={pickMultipleImages} activeOpacity={0.8}>
-              <MaterialIcons name="cloud-upload" size={40} color="#9CA3AF" />
-              <Text style={styles.uploadSub}>Clique para fazer upload (múltiplas fotos)</Text>
-              {vehiclePhotosUris.length > 0 ? <Text style={styles.uploadOk}>✓ {vehiclePhotosUris.length} foto(s)</Text> : null}
-            </TouchableOpacity>
+            <UploadField
+              label="Documento do veículo"
+              title="Clique para fazer o upload"
+              caption="CRLV ou documento oficial válido."
+              selected={!!vehicleDocUri}
+              selectedLabel="Documento adicionado"
+              onPress={() => pickImage(setVehicleDocUri)}
+            />
+            <UploadField
+              label="Fotos do veículo"
+              labelHint="Envie ao menos 2 fotos"
+              title="Clique para fazer upload (múltiplas fotos)"
+              selected={vehiclePhotosUris.length > 0}
+              selectedLabel={`${vehiclePhotosUris.length} foto(s) adicionada(s)`}
+              onPress={pickMultipleImages}
+            />
           </>
         ) : null}
 
-        {sectionTitle('Documentos')}
-        <TouchableOpacity style={styles.uploadBox} onPress={() => pickImage(setIdentityDocUri)} activeOpacity={0.8}>
-          <MaterialIcons name="cloud-upload" size={40} color="#9CA3AF" />
-          <Text style={styles.uploadTitle}>Documento de identidade</Text>
-          <Text style={styles.uploadSub}>Envie RG, CNH ou outro documento de identificação válido.</Text>
-          {identityDocUri ? <Text style={styles.uploadOk}>✓ Documento adicionado</Text> : null}
-        </TouchableOpacity>
+        <Text style={styles.sectionTitle}>Documentos</Text>
 
-        <View style={styles.checkboxRow}>
-          <TouchableOpacity onPress={() => setWillPresentCriminalRecord((v) => !v)} activeOpacity={0.7} style={styles.checkboxHitArea}>
-            <View style={[styles.checkbox, willPresentCriminalRecord && styles.checkboxChecked]}>
-              {willPresentCriminalRecord ? <Text style={styles.checkmark}>✓</Text> : null}
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.checkboxLabelWrap} onPress={() => setWillPresentCriminalRecord((v) => !v)} activeOpacity={0.7}>
-            <Text style={styles.checkLabelStandalone}>Apresentar Antecedentes Criminais</Text>
-          </TouchableOpacity>
-        </View>
-        {willPresentCriminalRecord ? (
-          <TouchableOpacity style={styles.uploadBox} onPress={() => pickImage(setCriminalRecordUri)} activeOpacity={0.8}>
-            <MaterialIcons name="cloud-upload" size={40} color="#9CA3AF" />
-            <Text style={styles.uploadSub}>Emitir documento no site da Polícia Federal. O arquivo deve ter sido emitido nos últimos 90 dias.</Text>
-            {criminalRecordUri ? <Text style={styles.uploadOk}>✓ Documento adicionado</Text> : null}
-          </TouchableOpacity>
-        ) : null}
+        <UploadField
+          label="CNH (frente)"
+          title="Upload da frente"
+          caption="Aceitamos RG, CNH ou documento de identificação válido com foto."
+          selected={!!cnhFrontUri}
+          selectedLabel="Documento adicionado"
+          onPress={() => pickImage(setCnhFrontUri)}
+        />
+        <UploadField
+          label="CNH (verso)"
+          title="Upload do verso"
+          caption="Aceitamos RG, CNH ou documento de identificação válido com foto."
+          selected={!!cnhBackUri}
+          selectedLabel="Documento adicionado"
+          onPress={() => pickImage(setCnhBackUri)}
+        />
+
+        <UploadField
+          label="Antecedentes Criminais"
+          labelIcon={
+            <TouchableOpacity onPress={openPfCertidao} activeOpacity={0.6} hitSlop={6}>
+              <MaterialIcons name="info-outline" size={16} color="#0D0D0D" />
+            </TouchableOpacity>
+          }
+          title="Emitir documento no site da Polícia Federal"
+          caption="O arquivo deve ter sido emitido nos últimos 90 dias."
+          selected={!!criminalRecordUri}
+          selectedLabel="Documento adicionado"
+          onPress={() => pickImage(setCriminalRecordUri)}
+        />
+
+        <Text style={styles.sectionTitle}>Valores e precificação</Text>
+
+        <FieldBlock
+          label="Valor por entrega (R$)"
+          supporting="Se deixar em branco, usamos o valor padrão da plataforma."
+        >
+          <TextInput
+            style={styles.input}
+            placeholder="Ex: R$ 5,00"
+            placeholderTextColor="#767676"
+            value={deliveryFee ? `R$ ${deliveryFee}` : ''}
+            onChangeText={(t) => setDeliveryFee(formatCurrencyBRLInput(t))}
+            keyboardType="number-pad"
+          />
+        </FieldBlock>
+
+        <FieldBlock
+          label="Valor por km (R$)"
+          supporting="Se deixar em branco, usamos o valor padrão da plataforma."
+        >
+          <TextInput
+            style={styles.input}
+            placeholder="Ex: R$ 1,50"
+            placeholderTextColor="#767676"
+            value={perKmFee ? `R$ ${perKmFee}` : ''}
+            onChangeText={(t) => setPerKmFee(formatCurrencyBRLInput(t))}
+            keyboardType="number-pad"
+          />
+        </FieldBlock>
 
         <View style={styles.checksSection}>
           <View style={styles.checkboxRow}>
@@ -420,16 +626,13 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
         </View>
 
         <View style={[styles.footerInScroll, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-          <Text style={styles.nextStepHint}>
-            Na próxima etapa você configura o recebimento automático via Stripe. Você poderá pular e configurar depois.
-          </Text>
           <TouchableOpacity
             style={[styles.submitBtn, (!credentialsReady || !sessionReady || loading) && styles.submitBtnDisabled]}
             onPress={validateAndSubmit}
             activeOpacity={0.8}
             disabled={!credentialsReady || !sessionReady || loading}
           >
-            <Text style={styles.submitBtnText}>{loading ? 'Salvando...' : 'Avançar'}</Text>
+            <Text style={styles.submitBtnText}>{loading ? 'Salvando...' : 'Enviar cadastro'}</Text>
           </TouchableOpacity>
           {sessionReady && !credentialsReady ? (
             <Text style={styles.credentialsHint}>Sessão expirada. Faça login para continuar.</Text>
@@ -446,46 +649,56 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 12 },
-  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 17, fontWeight: '600', color: '#000' },
-  headerRight: { width: 40 },
+  backBtn: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#F1F1F1', alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 14, fontWeight: '700', color: '#0D0D0D' },
+  headerRight: { width: 48 },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 24, paddingTop: 8 },
-  pageTitle: { fontSize: 22, fontWeight: '700', color: '#111827', marginBottom: 8 },
-  pageSubtitle: { fontSize: 14, color: '#6B7280', marginBottom: 24 },
-  sectionTitle: { fontSize: 16, fontWeight: '600', color: '#111827', marginBottom: 12, marginTop: 8 },
-  fieldBlock: { marginBottom: 16 },
-  fieldLabel: { fontSize: 14, fontWeight: '500', color: '#111827', marginBottom: 8 },
-  questionLabel: { fontSize: 14, fontWeight: '500', color: '#111827', marginBottom: 10 },
-  input: { backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, color: '#000' },
-  radioRow: { flexDirection: 'row', gap: 28, marginBottom: 16 },
-  radioOption: { flexDirection: 'row', alignItems: 'center' },
-  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#9CA3AF', alignItems: 'center', justifyContent: 'center', marginRight: 8 },
-  radioSelected: { borderColor: '#000' },
-  radioInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#000' },
-  radioLabel: { fontSize: 16, color: '#111827' },
-  uploadBox: { borderWidth: 2, borderStyle: 'dashed', borderColor: '#D1D5DB', borderRadius: 12, padding: 24, alignItems: 'center', marginBottom: 16 },
-  uploadTitle: { fontSize: 15, fontWeight: '600', color: '#374151', marginTop: 8 },
-  uploadSub: { fontSize: 13, color: '#6B7280', marginTop: 4, textAlign: 'center' },
-  uploadOk: { fontSize: 13, color: '#059669', marginTop: 6, fontWeight: '600' },
-  photosSectionTitle: { fontSize: 15, fontWeight: '600', color: '#111827', marginBottom: 4 },
-  photosSectionHint: { fontSize: 13, color: '#6B7280', marginBottom: 8 },
-  checksSection: { marginTop: 8, marginBottom: 8 },
-  checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 22, minHeight: 28 },
-  checkboxHitArea: { paddingVertical: 4, paddingRight: 16, justifyContent: 'flex-start' },
+  scrollContent: { paddingHorizontal: 16, paddingTop: 8 },
+  pageHeader: { marginBottom: 24, alignItems: 'flex-start' },
+  pageTitle: { fontSize: 24, fontWeight: '600', color: '#0D0D0D', marginBottom: 4 },
+  pageSubtitle: { fontSize: 14, color: '#767676', lineHeight: 21 },
+  sectionTitle: { fontSize: 16, fontWeight: '600', color: '#767676', marginBottom: 8, marginTop: 24 },
+  fieldBlock: { marginBottom: 8 },
+  fieldLabel: { fontSize: 14, fontWeight: '500', color: '#0D0D0D', marginBottom: 8, marginTop: 8 },
+  fieldSupporting: { fontSize: 12, fontWeight: '500', color: '#767676', marginTop: 8 },
+  input: {
+    backgroundColor: '#F1F1F1',
+    borderWidth: 0,
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#0D0D0D',
+  },
+  radioGroup: { marginBottom: 8 },
+  radioRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4, gap: 12 },
+  radioOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#767676',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioOuterActive: { borderColor: '#0D0D0D' },
+  radioInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#0D0D0D' },
+  radioLabel: { fontSize: 14, fontWeight: '500', color: '#0D0D0D' },
+  checksSection: { marginTop: 24, marginBottom: 8 },
+  checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12, minHeight: 28 },
+  checkboxHitArea: { paddingVertical: 4, paddingRight: 12, justifyContent: 'flex-start' },
   checkboxLabelWrap: { flex: 1, paddingTop: 2, paddingLeft: 2, justifyContent: 'center' },
-  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center' },
-  checkboxChecked: { backgroundColor: '#000', borderColor: '#000' },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: '#767676', alignItems: 'center', justifyContent: 'center' },
+  checkboxChecked: { backgroundColor: '#0D0D0D', borderColor: '#0D0D0D' },
   checkmark: { fontSize: 14, color: '#FFF', fontWeight: '700' },
-  checkLabelStandalone: { fontSize: 15, color: '#374151', lineHeight: 22 },
-  termsText: { fontSize: 15, color: '#374151', lineHeight: 22 },
-  linkInline: { color: '#2563EB', fontWeight: '600', fontSize: 15, lineHeight: 22, textDecorationLine: 'underline' },
-  footerInScroll: { marginTop: 28, paddingTop: 24, borderTopWidth: 1, borderTopColor: '#E5E7EB' },
-  submitBtn: { backgroundColor: '#000', paddingVertical: 16, borderRadius: 12, alignItems: 'center' },
+  checkLabelStandalone: { fontSize: 12, color: '#767676', lineHeight: 18, fontWeight: '600' },
+  termsText: { fontSize: 12, color: '#767676', lineHeight: 18, fontWeight: '600' },
+  linkInline: { color: '#016DF9', fontWeight: '600', fontSize: 12, lineHeight: 18 },
+  footerInScroll: { marginTop: 28 },
+  submitBtn: { backgroundColor: '#0D0D0D', paddingVertical: 14, borderRadius: 8, alignItems: 'center', height: 48, justifyContent: 'center' },
   submitBtnDisabled: { opacity: 0.45 },
-  submitBtnText: { fontSize: 16, fontWeight: '600', color: '#FFF' },
-  credentialsHint: { fontSize: 13, color: '#6B7280', textAlign: 'center', marginTop: 10 },
-  nextStepHint: { fontSize: 13, color: '#6B7280', textAlign: 'center', marginBottom: 12, lineHeight: 18 },
-  backToLogin: { alignItems: 'center', marginTop: 20, paddingBottom: 8 },
-  backToLoginText: { fontSize: 14, color: '#2563EB', fontWeight: '500' },
+  submitBtnText: { fontSize: 16, fontWeight: '500', color: '#FFFFFF' },
+  credentialsHint: { fontSize: 13, color: '#767676', textAlign: 'center', marginTop: 10 },
+  backToLogin: { alignItems: 'center', marginTop: 12, paddingBottom: 8, height: 48, justifyContent: 'center' },
+  backToLoginText: { fontSize: 16, color: '#0D0D0D', fontWeight: '500' },
 });

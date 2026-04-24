@@ -52,6 +52,10 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
   const [resolvedBaseId, setResolvedBaseId] = useState<string | null>(null);
   const [quoteRetryKey, setQuoteRetryKey] = useState(0);
 
+  /** Quote específico do preparador selecionado (override), quando diferente do genérico. */
+  const [selectedQuote, setSelectedQuote] = useState<ShipmentQuoteOk | null>(null);
+  const [selectedQuoteLoading, setSelectedQuoteLoading] = useState(false);
+
   const loadDrivers = useCallback(async () => {
     setDriversLoading(true);
     setDriversError(null);
@@ -119,9 +123,54 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
     quoteRetryKey,
   ]);
 
+  // Recalcula quote com `preparerId` ao selecionar o motorista — aplica override do preparador
+  // na hierarquia do shipmentQuote. Antes da seleção, mantém o quote genérico (preview).
+  useEffect(() => {
+    const preparerId = selectedId
+      ? items.find((i) => i.id === selectedId)?.driver_id ?? null
+      : null;
+    if (!preparerId) {
+      setSelectedQuote(null);
+      setSelectedQuoteLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setSelectedQuoteLoading(true);
+    (async () => {
+      const res = await quoteShipmentForClient({
+        originAddress: origin.address,
+        destinationAddress: destination.address,
+        originLat: origin.latitude,
+        originLng: origin.longitude,
+        destinationLat: destination.latitude,
+        destinationLng: destination.longitude,
+        packageSize,
+        preparerId,
+      });
+      if (cancelled) return;
+      setSelectedQuote(res.ok ? res.quote : null);
+      setSelectedQuoteLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedId,
+    items,
+    origin.address,
+    origin.latitude,
+    origin.longitude,
+    destination.address,
+    destination.latitude,
+    destination.longitude,
+    packageSize,
+  ]);
+
+  const effectiveQuote = selectedQuote ?? quote;
+
   const handleContinue = () => {
     const sel = items.find((i) => i.id === selectedId);
-    if (!sel || !quote) return;
+    if (!sel || !effectiveQuote) return;
     navigation.navigate('Recipient', {
       origin,
       destination,
@@ -129,12 +178,12 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
       whenLabel,
       packageSize,
       packageSizeLabel,
-      amountCents: quote.amountCents,
-      pricingSubtotalCents: quote.pricingSubtotalCents,
-      platformFeeCents: quote.platformFeeCents,
-      priceRouteBaseCents: quote.priceRouteBaseCents,
-      pricingRouteId: quote.pricingRouteId,
-      adminPctApplied: quote.adminPctApplied,
+      amountCents: effectiveQuote.amountCents,
+      pricingSubtotalCents: effectiveQuote.pricingSubtotalCents,
+      platformFeeCents: effectiveQuote.platformFeeCents,
+      priceRouteBaseCents: effectiveQuote.priceRouteBaseCents,
+      pricingRouteId: effectiveQuote.pricingRouteId,
+      adminPctApplied: effectiveQuote.adminPctApplied,
       resolvedBaseId,
       clientPreferredDriverId: sel.driver_id,
       scheduledTripDepartureAt: sel.departure_at,
@@ -226,12 +275,19 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
             })}
           </ScrollView>
           <TouchableOpacity
-            style={[styles.primary, (!selectedId || !quote) && styles.primaryDisabled]}
-            disabled={!selectedId || !quote}
+            style={[
+              styles.primary,
+              (!selectedId || !effectiveQuote || selectedQuoteLoading) && styles.primaryDisabled,
+            ]}
+            disabled={!selectedId || !effectiveQuote || selectedQuoteLoading}
             onPress={handleContinue}
             activeOpacity={0.85}
           >
-            <Text style={styles.primaryText}>Continuar</Text>
+            {selectedQuoteLoading ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={styles.primaryText}>Continuar</Text>
+            )}
           </TouchableOpacity>
         </>
       )}

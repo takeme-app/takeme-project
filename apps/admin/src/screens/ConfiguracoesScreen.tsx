@@ -294,27 +294,39 @@ export default function ConfiguracoesScreen() {
   const { settings: platSettings, updateSetting, loading: platLoading } = usePlatformSettings();
   const [gasPrice, setGasPrice] = useState('');
   const [kmPrice, setKmPrice] = useState('');
+  const [baseDeliveryPrice, setBaseDeliveryPrice] = useState('');
   const [platSaved, setPlatSaved] = useState(false);
 
   useEffect(() => {
     if (!platLoading) {
       setGasPrice(String((platSettings.gas_price_cents ?? 599) / 100));
       setKmPrice(String((platSettings.km_price_cents ?? 150) / 100));
+      setBaseDeliveryPrice(
+        String((platSettings.shipment_base_delivery_fee_cents ?? 500) / 100),
+      );
     }
   }, [platLoading, platSettings]);
 
   const savePlatformSettings = useCallback(async () => {
     const gasCents = Math.round(parseFloat(gasPrice || '0') * 100);
     const kmCents = Math.round(parseFloat(kmPrice || '0') * 100);
+    const baseDeliveryCents = Math.round(parseFloat(baseDeliveryPrice || '0') * 100);
     await Promise.all([
       updateSetting('gas_price_cents', gasCents),
       updateSetting('km_price_cents', kmCents),
+      updateSetting('shipment_base_delivery_fee_cents', baseDeliveryCents),
     ]);
     setPlatSaved(true);
     setTimeout(() => setPlatSaved(false), 2000);
-  }, [gasPrice, kmPrice, updateSetting]);
+  }, [gasPrice, kmPrice, baseDeliveryPrice, updateSetting]);
 
-  const platInput = (label: string, value: string, onChange: (v: string) => void, placeholder: string) =>
+  const platInput = (
+    label: string,
+    value: string,
+    onChange: (v: string) => void,
+    placeholder: string,
+    helperText?: string,
+  ) =>
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6, flex: '1 1 200px' } },
       React.createElement('label', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
@@ -323,7 +335,15 @@ export default function ConfiguracoesScreen() {
           type: 'number', step: '0.01', min: '0', value, placeholder,
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
           style: { height: 44, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', ...font, flex: 1 },
-        })));
+        })),
+      helperText
+        ? React.createElement(
+            'span',
+            { style: { fontSize: 12, color: '#767676', lineHeight: '16px', ...font } },
+            helperText,
+          )
+        : null,
+    );
 
   const plataformaContent = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%', maxWidth: 600 },
@@ -331,7 +351,20 @@ export default function ConfiguracoesScreen() {
     React.createElement('h2', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Configurações da Plataforma'),
     React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
       platInput('Preço da gasolina (litro)', gasPrice, setGasPrice, '5.99'),
-      platInput('Preço do KM rodado', kmPrice, setKmPrice, '1.50')),
+      platInput(
+        'Preço do KM rodado',
+        kmPrice,
+        setKmPrice,
+        '1.50',
+        'Usado como padrão em encomendas. Preparadores podem sobrescrever no próprio cadastro.',
+      ),
+      platInput(
+        'Valor base por entrega (R$)',
+        baseDeliveryPrice,
+        setBaseDeliveryPrice,
+        '5.00',
+        'Usado como padrão em encomendas. Preparadores podem sobrescrever no próprio cadastro.',
+      )),
     React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
       React.createElement('button', {
         type: 'button',

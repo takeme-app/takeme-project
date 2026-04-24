@@ -2870,6 +2870,33 @@ export async function fetchPendingCounts(): Promise<PendingCounts> {
   };
 }
 
+// ── Stuck Payouts Summary (for HomeScreen dashboard) ──────────────────
+// View admin_shipment_payouts_stuck: payouts de shipment/excursion com
+// mais de 3 dias pendentes/processing. Usada como sinal de "dinheiro
+// retido" na plataforma (opcao B — charge-shipments/charge-excursion-request
+// cobram centralizado; process-payouts precisa rodar para liberar via
+// stripe.transfers.create).
+export interface StuckPayoutsSummary {
+  count: number;
+  totalCents: number;
+}
+
+export async function fetchStuckPayoutsSummary(): Promise<StuckPayoutsSummary> {
+  if (!isSupabaseConfigured) return { count: 0, totalCents: 0 };
+  const { data, error } = await sb
+    .from('admin_shipment_payouts_stuck')
+    .select('worker_amount_cents')
+    .limit(500);
+  if (error || !data) {
+    // View pode nao existir em ambientes nao migrados ainda — ignorar silenciosamente.
+    console.warn('[fetchStuckPayoutsSummary] admin_shipment_payouts_stuck indisponivel:', error?.message);
+    return { count: 0, totalCents: 0 };
+  }
+  const rows = data as Array<{ worker_amount_cents: number | null }>;
+  const totalCents = rows.reduce((acc, r) => acc + (Number(r.worker_amount_cents) || 0), 0);
+  return { count: rows.length, totalCents };
+}
+
 // ── Notifications (admin management) ─────────────────────────────────
 
 export interface NotificationAdminRow {
