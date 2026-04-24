@@ -85,7 +85,6 @@ export interface ExcursionRequestRow {
 export interface ViagemListItem {
   bookingId: string;
   passageiro: string;
-  passageiroAvatarUrl: string | null;
   origem: string;
   destino: string;
   data: string;
@@ -191,7 +190,6 @@ export type EncomendaEditDetail =
       whenOption: string;
       createdAt: string;
       scheduledAt: string | null;
-      stripePaymentIntentId: string | null;
     }
   | {
       kind: 'dependent_shipment';
@@ -212,7 +210,6 @@ export type EncomendaEditDetail =
       createdAt: string;
       bagsCount: number;
       scheduledAt: string | null;
-      stripePaymentIntentId: string | null;
     };
 
 export interface PassageiroListItem {
@@ -249,8 +246,6 @@ export interface EncomendaListItem {
   scheduledTripId: string | null;
   /** Conversa de atendimento ativa vinculada (para encomendas pending_review) */
   supportConversationId: string | null;
-  /** Resumo do pagamento: null=sem cobranca, paid=tudo liquidado, pending=processando, held=algum payout com erro. */
-  paymentStatus: 'paid' | 'pending' | 'held' | null;
 }
 
 export interface MotoristaListItem {
@@ -261,16 +256,6 @@ export interface MotoristaListItem {
   viagensAgendadas: number;
   avatarUrl: string | null;
   rating: number | null;
-  connect: WorkerConnectStatus;
-}
-
-/** Estado Stripe Connect de um worker (motorista/preparador). */
-export interface WorkerConnectStatus {
-  accountId: string | null;
-  chargesEnabled: boolean;
-  payoutsEnabled: boolean;
-  detailsSubmitted: boolean;
-  notifiedApprovedAt: string | null;
 }
 
 export type WorkerApprovalStatus = 'pending' | 'approved' | 'rejected' | 'suspended';
@@ -287,7 +272,6 @@ export interface WorkerApprovalRow {
   rejectionReason: string | null;
   createdAt: string;
   reviewedAt: string | null;
-  connect: WorkerConnectStatus;
 }
 
 /** Contagens por bucket de UI (derivadas de `scheduled_trips.status` por viagem da rota). */
@@ -317,8 +301,6 @@ export interface DestinoListItem {
 
 export interface PreparadorListItem {
   id: string;
-  /** Worker ID (para navegar ao detalhe do preparador) */
-  workerId?: string;
   nome: string;
   origem: string;
   destino: string;
@@ -327,8 +309,6 @@ export interface PreparadorListItem {
   previsao: string;
   avaliacao: number | null;
   status: 'Em andamento' | 'Agendado' | 'Cancelado' | 'Concluído';
-  /** Status Stripe Connect do worker vinculado (pode ser null quando nao ha worker identificado). */
-  connect?: WorkerConnectStatus | null;
 }
 
 /** Detalhe completo para a tela Editar preparador (admin). */
@@ -360,13 +340,7 @@ export interface PreparadorEditDetail {
   statusRaw: string;
   statusLabel: PreparadorListItem['status'];
   totalAmountCents: number | null;
-  workerPayoutCents: number | null;
-  preparerPayoutCents: number | null;
-  driverPayoutCents: number | null;
-  platformFeeCents: number | null;
-  driverId: string | null;
   preparerId: string | null;
-  stripePaymentIntentId: string | null;
   vehicleDetails: Record<string, unknown> | null;
   budgetLines: unknown[];
   assignmentNotes: Record<string, unknown>;
@@ -402,34 +376,6 @@ export interface PreparadorEditDetail {
     plate: string | null;
     passengerCapacity: number | null;
   }>;
-}
-
-/** Detalhe de encomenda no contexto do preparador. */
-export interface PreparadorEncomendaDetail {
-  id: string;
-  kind: 'shipment' | 'dependent_shipment';
-  originAddress: string;
-  destinationAddress: string;
-  status: string;
-  statusLabel: string;
-  amountCents: number;
-  packageSize: string | null;
-  photoUrl: string | null;
-  recipientName: string | null;
-  recipientPhone: string | null;
-  recipientEmail: string | null;
-  senderName: string | null;
-  instructions: string | null;
-  createdAt: string;
-  /** Preparador atribuído */
-  preparerProfile: {
-    id: string;
-    fullName: string | null;
-    phone: string | null;
-    avatarUrl: string | null;
-    status: string | null;
-    subtype: string | null;
-  } | null;
 }
 
 export interface PreparadorCandidate {
@@ -502,42 +448,15 @@ export interface PayoutRow {
 
 export interface PagamentoListItem {
   id: string;
-  workerId: string;
   workerName: string;
   entityType: string;
-  /** entity_type bruto do banco, sem tradução (para UI filtrar por valor) */
-  entityTypeRaw: string;
-  entityId: string | null;
   dataFinalizacao: string;
   /** ISO (paid_at ou created_at) para filtros de período no admin */
   dateAtIso: string;
-  createdAtIso: string;
   status: 'Em andamento' | 'Agendado' | 'Cancelado' | 'Concluído';
-  /** status bruto da row em payouts (pending/processing/paid/failed/cancelled) */
-  statusRaw: string;
   grossAmountCents: number;
   workerAmountCents: number;
   adminAmountCents: number;
-  payoutMethod: string;
-  /** Campos novos de stripe.transfers explícito (shipment/excursion/dependent_shipment) */
-  stripeTransferId: string | null;
-  stripeTransferAt: string | null;
-  stripeTransferError: string | null;
-  /** true quando o worker está com Stripe Connect configurado (libera fluxo de transfer automático) */
-  workerHasConnect: boolean;
-}
-
-/** Linha da view admin_shipment_payouts_stuck — payouts não-booking pendentes há >3 dias. */
-export interface AdminStuckPayoutRow {
-  payoutId: string;
-  workerId: string;
-  subtype: string | null;
-  entityType: string;
-  entityId: string | null;
-  workerAmountCents: number;
-  status: string;
-  createdAt: string;
-  age: string;
 }
 
 export interface PagamentoCounts {

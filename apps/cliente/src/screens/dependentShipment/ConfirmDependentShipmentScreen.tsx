@@ -1,12 +1,9 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import {
   View,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  Alert,
-  Clipboard,
-  Linking,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -14,20 +11,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { DependentShipmentStackParamList } from '../../navigation/types';
-import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmParams } from '../../components/PaymentMethodSection';
+import { PaymentMethodSection, type PaymentMethodType } from '../../components/PaymentMethodSection';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
-import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
-import { flatPricingSnapshot } from '../../lib/orderPricingSnapshot';
-import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
-import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
-import { waitForShipmentStripePaymentIntentId } from '../../lib/waitForShipmentStripePaymentIntentId';
-import { fetchResolvedPriceCentsForScheduledTrip } from '../../lib/clientScheduledTrips';
-import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
-import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
-
-const MAX_DEPENDENT_PHOTOS = 8;
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'ConfirmDependentShipment'>;
 
@@ -63,32 +50,9 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     dependentId,
     amountCents,
     photoUri,
-    photoUris,
-    driver,
-    scheduledTripDepartureAt,
   } = route.params;
-  const scheduledTripId = driver.id;
-  const [resolvedFareCents, setResolvedFareCents] = useState<number | null>(null);
-  const [fareLoading, setFareLoading] = useState(true);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setFareLoading(true);
-    fetchResolvedPriceCentsForScheduledTrip(scheduledTripId).then(({ cents, error }) => {
-      if (cancelled) return;
-      setFareLoading(false);
-      if (error) {
-        setResolvedFareCents(driver.amount_cents ?? null);
-        return;
-      }
-      setResolvedFareCents(cents ?? driver.amount_cents ?? null);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [scheduledTripId, driver.amount_cents]);
 
   const uploadPhotoAndGetPath = useCallback(
     async (userId: string, localUri: string): Promise<string | null> => {
@@ -109,19 +73,11 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     [],
   );
 
-  const displayAmountCents = resolvedFareCents ?? amountCents;
-  const amountFormatted = fareLoading
-    ? 'Carregando preço…'
-    : `R$ ${(displayAmountCents / 100).toFixed(2).replace('.', ',')}`;
+  const amountFormatted = `R$ ${(amountCents / 100).toFixed(2).replace('.', ',')}`;
   const contactDisplay = formatPhoneDisplay(contactPhone);
-  const vehicleLabel = formatVehicleDescription(
-    driver.vehicle_model,
-    driver.vehicle_year,
-    driver.vehicle_plate
-  );
 
   const handleConfirmPayment = useCallback(
-    async (params: CardPaymentConfirmParams) => {
+    async (params: { method: PaymentMethodType; paymentMethodId?: string }) => {
       setSubmitting(true);
       try {
         const {
@@ -130,32 +86,6 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         } = await supabase.auth.getUser();
         if (authError || !user) {
           showAlert('Erro', 'Faça login para continuar.');
-          setSubmitting(false);
-          return;
-        }
-        const { cents: dbCents, error: priceErr } = await fetchResolvedPriceCentsForScheduledTrip(scheduledTripId);
-        if (priceErr) {
-          showAlert('Preço', priceErr);
-          setSubmitting(false);
-          return;
-        }
-        const finalAmountCents = dbCents ?? driver.amount_cents ?? null;
-        if (finalAmountCents == null || finalAmountCents < 0) {
-          showAlert(
-            'Preço',
-            'Não foi possível determinar o valor desta viagem. Volte e escolha outro motorista ou tente mais tarde.',
-          );
-          setSubmitting(false);
-          return;
-        }
-        const dupMsg = await getDuplicateDestinationSameDayMessage({
-          userId: user.id,
-          destLat: destination.latitude,
-          destLng: destination.longitude,
-          dayKey: calendarDayKeySaoPaulo(scheduledTripDepartureAt),
-        });
-        if (dupMsg) {
-          showAlert('Limite', dupMsg);
           setSubmitting(false);
           return;
         }
@@ -168,14 +98,10 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
                 ? 'pix'
                 : 'dinheiro';
         const status = 'pending_review';
-        const pricing = flatPricingSnapshot(finalAmountCents);
-        const rawPhotoUris = [...(photoUris ?? []), ...(photoUri ? [photoUri] : [])].slice(0, MAX_DEPENDENT_PHOTOS);
-        const uploadedPaths: string[] = [];
-        for (const uri of rawPhotoUris) {
-          const p = await uploadPhotoAndGetPath(user.id, uri);
-          if (p) uploadedPaths.push(p);
+        let photoUrl: string | null = null;
+        if (photoUri) {
+          photoUrl = await uploadPhotoAndGetPath(user.id, photoUri);
         }
-        const photoUrl = uploadedPaths[0] ?? null;
         const { data: row, error } = await supabase
           .from('dependent_shipments')
           .insert({
@@ -192,13 +118,11 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
             destination_lat: destination.latitude,
             destination_lng: destination.longitude,
             when_option: whenOption,
-            scheduled_at: scheduledTripDepartureAt,
-            scheduled_trip_id: scheduledTripId,
+            scheduled_at: whenOption === 'later' ? null : null,
             payment_method: paymentMethodDb,
-            ...pricing,
+            amount_cents: amountCents,
             status,
             photo_url: photoUrl,
-            photo_paths: uploadedPaths,
           })
           .select('id')
           .single();
@@ -210,33 +134,19 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         const shipmentId = row?.id;
         const orderId = shipmentId ? orderIdFromUuid(shipmentId) : '----';
 
-        const hasStripePm = Boolean(params.paymentMethodId?.trim());
-        const hasSavedPm = Boolean(params.savedPaymentMethodId?.trim());
-        if (shipmentId && (params.method === 'credito' || params.method === 'debito') && (hasStripePm || hasSavedPm)) {
-          const stripeCtx = await ensureAccessTokenForStripeFunctions({
-            holderCpfDigits: params.holderCpfDigits,
-          });
-          if (!stripeCtx.ok) {
-            await supabase
-              .from('dependent_shipments')
-              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
-              .eq('id', shipmentId);
-            showAlert('Pagamento', stripeCtx.message);
-            setSubmitting(false);
-            return;
-          }
-          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke(EDGE_CHARGE_SHIPMENT_SLUG, {
-            headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
+        if (shipmentId && (params.method === 'credito' || params.method === 'debito') && params.paymentMethodId) {
+          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke('charge-shipment', {
             body: {
               dependent_shipment_id: shipmentId,
-              ...(hasSavedPm
-                ? { payment_method_id: params.savedPaymentMethodId!.trim() }
-                : { stripe_payment_method_id: params.paymentMethodId!.trim() }),
+              stripe_payment_method_id: params.paymentMethodId,
             },
           });
-          if (chargeFnError) {
-            const raw = await describeInvokeFailure(chargeData, chargeFnError);
-            const chargeErrMsg = getUserErrorMessage({ message: raw }, raw);
+          const chargeErrMsg =
+            chargeFnError?.message ??
+            (chargeData && typeof chargeData === 'object' && 'error' in chargeData
+              ? String((chargeData as { error?: string }).error ?? '')
+              : '');
+          if (chargeErrMsg) {
             await supabase
               .from('dependent_shipments')
               .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
@@ -245,89 +155,6 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
               'Pagamento',
               chargeErrMsg || 'Não foi possível confirmar o pagamento; o pedido foi cancelado.',
             );
-            setSubmitting(false);
-            return;
-          }
-        } else if (shipmentId && params.method === 'pix') {
-          const stripeCtx = await ensureAccessTokenForStripeFunctions();
-          if (!stripeCtx.ok) {
-            await supabase
-              .from('dependent_shipments')
-              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
-              .eq('id', shipmentId);
-            showAlert('Pagamento', stripeCtx.message);
-            setSubmitting(false);
-            return;
-          }
-          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke(EDGE_CHARGE_SHIPMENT_SLUG, {
-            headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
-            body: { dependent_shipment_id: shipmentId },
-          });
-          if (chargeFnError) {
-            const raw = await describeInvokeFailure(chargeData, chargeFnError);
-            const chargeErrMsg = getUserErrorMessage({ message: raw }, raw);
-            await supabase
-              .from('dependent_shipments')
-              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
-              .eq('id', shipmentId);
-            showAlert(
-              'Pagamento',
-              chargeErrMsg || 'Não foi possível iniciar o Pix; o pedido foi cancelado.',
-            );
-            setSubmitting(false);
-            return;
-          }
-          const pixBody = chargeData as {
-            ok?: boolean;
-            pix_requires_payment?: boolean;
-            pix_copy_paste?: string | null;
-            hosted_voucher_url?: string | null;
-          } | null;
-          if (pixBody?.pix_requires_payment) {
-            const paste = typeof pixBody.pix_copy_paste === 'string' ? pixBody.pix_copy_paste.trim() : '';
-            if (paste) {
-              try {
-                await Clipboard.setString(paste);
-              } catch {
-                /* ignore */
-              }
-            }
-            const hosted = typeof pixBody.hosted_voucher_url === 'string' ? pixBody.hosted_voucher_url.trim() : '';
-            await new Promise<void>((resolve) => {
-              const msg = paste
-                ? 'Copiamos o código Pix. Abra o comprovante se preferir; pague no banco e toque em Continuar.'
-                : 'Abra o comprovante Pix, pague no app do banco e toque em Continuar.';
-              const buttons: { text: string; onPress?: () => void }[] = [];
-              if (hosted) {
-                buttons.push({
-                  text: 'Abrir comprovante',
-                  onPress: () => {
-                    void Linking.openURL(hosted);
-                  },
-                });
-              }
-              buttons.push({ text: 'Continuar', onPress: () => resolve() });
-              Alert.alert('Pix', msg, buttons, { cancelable: false });
-            });
-            const paid = await waitForShipmentStripePaymentIntentId('dependent_shipments', shipmentId);
-            if (!paid) {
-              await supabase
-                .from('dependent_shipments')
-                .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
-                .eq('id', shipmentId);
-              showAlert(
-                'Pix',
-                'Não detectamos o pagamento a tempo. O pedido foi cancelado; você pode criar um novo envio.',
-              );
-              setSubmitting(false);
-              return;
-            }
-          } else if (pixBody?.ok !== true) {
-            await supabase
-              .from('dependent_shipments')
-              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
-              .eq('id', shipmentId);
-            showAlert('Pagamento', 'Resposta inesperada do servidor ao iniciar Pix.');
             setSubmitting(false);
             return;
           }
@@ -352,13 +179,9 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
       origin,
       destination,
       whenOption,
-      scheduledTripDepartureAt,
-      driver,
-      photoUri,
-      photoUris,
+      amountCents,
       navigation,
       showAlert,
-      uploadPhotoAndGetPath,
     ]
   );
 
@@ -388,14 +211,6 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           <Text style={styles.summaryMeta}>Para: {destination.address}</Text>
           <Text style={styles.summaryMeta}>Quando: {whenOption === 'later' && whenLabel ? whenLabel : 'Agora'}</Text>
           <View style={styles.divider} />
-          <Text style={styles.summaryLabel}>Motorista</Text>
-          <Text style={styles.summaryText}>{driver.name}</Text>
-          <Text style={styles.summaryMeta}>
-            ★ {driver.rating > 0 ? driver.rating.toFixed(1) : '—'} · {driver.badge} · Saída {driver.departure} · Chegada{' '}
-            {driver.arrival}
-          </Text>
-          <Text style={styles.summaryMeta}>{vehicleLabel}</Text>
-          <View style={styles.divider} />
           <View style={styles.totalRow}>
             <Text style={styles.summaryLabel}>Total</Text>
             <Text style={styles.summaryPrice}>{amountFormatted}</Text>
@@ -403,7 +218,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         </View>
 
         <PaymentMethodSection
-          amountCents={displayAmountCents}
+          amountCents={amountCents}
           selectedMethod={selectedPaymentMethod}
           onSelectMethod={setSelectedPaymentMethod}
           onConfirmPayment={handleConfirmPayment}
