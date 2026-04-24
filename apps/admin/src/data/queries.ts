@@ -1,7 +1,6 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import Constants from 'expo-constants';
 import { preparadorEncomendaSlug } from '../utils/preparadorSlug';
-import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
 
 /** Tabelas fora do `Database` gerado — evita erros de tipo em `.from()`. */
 const sb = supabase as any;
@@ -27,8 +26,6 @@ import type {
   BookingDetailForAdmin,
   EncomendaEditDetail,
   TripShipmentListItem,
-  WorkerConnectStatus,
-  AdminStuckPayoutRow,
 } from './types';
 
 // ── Edge Function Helper ─────────────────────────────────────────────────
@@ -61,11 +58,7 @@ export async function invokeEdgeFunction<T = any>(
     });
 
     const json = await res.json();
-    if (!res.ok) {
-      const errMsg = json.error || `HTTP ${res.status}`;
-      const details = json.details ? ` (${json.details})` : '';
-      return { data: json, error: `${errMsg}${details}` };
-    }
+    if (!res.ok) return { data: null, error: json.error || `HTTP ${res.status}` };
     return { data: json as T, error: null };
   } catch (err: any) {
     return { data: null, error: err.message || 'Erro desconhecido' };
@@ -123,151 +116,12 @@ export async function deletePricingRoute(id: string) {
 
 // ── CRUD: Excursion Budget ──────────────────────────────────────────────
 
-export async function submitExcursionBudget(
-  excursionId: string,
-  budgetLines: any,
-  finalize = false,
-  extras?: { preparer_id?: string | null; driver_id?: string | null; preparer_payout_cents?: number },
-) {
+export async function submitExcursionBudget(excursionId: string, budgetLines: any, finalize = false) {
   return invokeEdgeFunction('manage-excursion-budget', 'POST', undefined, {
     excursion_id: excursionId,
     budget_lines: budgetLines,
     finalize,
-    ...(extras ?? {}),
   });
-}
-
-// ── Stripe Connect / Payouts helpers ────────────────────────────────────
-
-/** Dry-run do process-payouts: simula resultado sem escrever nada. */
-export interface ProcessPayoutsResult {
-  stripe_connect_auto_paid: number;
-  stripe_connect_transfers_created: number;
-  stripe_connect_transfers_failed: number;
-  manual_pix_processing: number;
-  manual_pix_paid: number;
-  below_threshold_skipped: number;
-  total_payouts: number;
-}
-
-export async function runProcessPayoutsDryRun(payoutIds: string[]) {
-  return invokeEdgeFunction<{ ok: boolean; dry_run: boolean; processed: ProcessPayoutsResult; errors?: string[] }>(
-    'process-payouts',
-    'POST',
-    undefined,
-    { payout_ids: payoutIds, dry_run: true },
-  );
-}
-
-/**
- * Libera payouts.
- * - `mark_paid=true`: admin confirma pagamento manual (PIX/banco) já feito fora do sistema.
- * - `mark_paid=false|undefined`: deixa a edge decidir (Connect → transfer; sem Connect → processing).
- */
-export async function runProcessPayouts(
-  payoutIds: string[],
-  opts: { mark_paid?: boolean; force?: boolean; receipt_url?: string } = {},
-) {
-  const body: Record<string, unknown> = { payout_ids: payoutIds, dry_run: false, ...opts };
-  return invokeEdgeFunction<{ ok: boolean; processed: ProcessPayoutsResult; errors?: string[] }>(
-    'process-payouts',
-    'POST',
-    undefined,
-    body,
-  );
-}
-
-/** Forca sync do Connect account de um worker (lê o accountId do banco). */
-export async function runStripeConnectSync(workerId: string) {
-  return invokeEdgeFunction<{ ok: boolean; status?: string; subtype?: string | null }>(
-    'stripe-connect-sync',
-    'POST',
-    undefined,
-    { worker_id: workerId },
-  );
-}
-
-/** Cobra excursion_request do cliente (PIX ou cartao). Split vem via payouts. */
-export async function runChargeExcursionRequest(
-  excursionId: string,
-  paymentMethod: 'pix' | 'card',
-  extras?: Record<string, unknown>,
-) {
-  return invokeEdgeFunction<{ ok: boolean; excursion_request_id: string; payment_intent?: any }>(
-    'charge-excursion-request',
-    'POST',
-    undefined,
-    { excursion_request_id: excursionId, payment_method: paymentMethod, ...(extras ?? {}) },
-  );
-}
-
-/** Payouts "travados" >3 dias (view admin_shipment_payouts_stuck). Consumido em dashboard/banner. */
-export async function fetchStuckPayoutsSummary(): Promise<{ count: number; totalCents: number; rows: AdminStuckPayoutRow[] }> {
-  if (!isSupabaseConfigured) return { count: 0, totalCents: 0, rows: [] };
-  const { data, error } = await sb.from('admin_shipment_payouts_stuck').select('*');
-  if (error || !data) return { count: 0, totalCents: 0, rows: [] };
-  const rows: AdminStuckPayoutRow[] = (data as any[]).map((r) => ({
-    payoutId: String(r.payout_id ?? r.id ?? ''),
-    workerId: String(r.worker_id ?? ''),
-    subtype: r.subtype ?? null,
-    entityType: String(r.entity_type ?? ''),
-    entityId: r.entity_id ?? null,
-    workerAmountCents: Number(r.worker_amount_cents) || 0,
-    status: String(r.status ?? ''),
-    createdAt: r.created_at ?? '',
-    age: String(r.age ?? ''),
-  }));
-  const totalCents = rows.reduce((s, r) => s + r.workerAmountCents, 0);
-  return { count: rows.length, totalCents, rows };
-}
-
-/** Lista payouts ligados a uma entidade (shipment/dependent_shipment/excursion/booking). */
-export interface EntityPayoutRow {
-  id: string;
-  workerId: string;
-  workerName: string;
-  status: string;
-  grossAmountCents: number;
-  workerAmountCents: number;
-  adminAmountCents: number;
-  stripeTransferId: string | null;
-  stripeTransferError: string | null;
-  paidAt: string | null;
-  createdAt: string;
-}
-
-export async function fetchPayoutsByEntity(entityType: string, entityId: string): Promise<EntityPayoutRow[]> {
-  if (!isSupabaseConfigured || !entityId) return [];
-  const { data, error } = await sb
-    .from('payouts')
-    .select(
-      'id, worker_id, status, gross_amount_cents, worker_amount_cents, admin_amount_cents, stripe_transfer_id, stripe_transfer_error, paid_at, created_at',
-    )
-    .eq('entity_type', entityType)
-    .eq('entity_id', entityId)
-    .order('created_at', { ascending: false });
-
-  if (error || !data) return [];
-  const rows = data as any[];
-  const workerIds = [...new Set(rows.map((r) => String(r.worker_id)).filter(Boolean))];
-  const nameMap: Record<string, string> = {};
-  if (workerIds.length) {
-    const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', workerIds);
-    (profs || []).forEach((p: any) => { nameMap[p.id] = p.full_name || 'Sem nome'; });
-  }
-  return rows.map((r) => ({
-    id: String(r.id),
-    workerId: String(r.worker_id || ''),
-    workerName: nameMap[r.worker_id] || 'Sem nome',
-    status: String(r.status || ''),
-    grossAmountCents: Number(r.gross_amount_cents) || 0,
-    workerAmountCents: Number(r.worker_amount_cents) || 0,
-    adminAmountCents: Number(r.admin_amount_cents) || 0,
-    stripeTransferId: r.stripe_transfer_id ?? null,
-    stripeTransferError: r.stripe_transfer_error ?? null,
-    paidAt: r.paid_at ?? null,
-    createdAt: r.created_at ?? '',
-  }));
 }
 
 // ── CRUD: Admin Users (via edge function) ───────────────────────────────
@@ -399,16 +253,12 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
   // Step 2: fetch profile names for all user_ids
   const userIds = [...new Set(data.map((b: any) => b.user_id).filter(Boolean))];
   const profileMap: Record<string, string> = {};
-  const avatarUrlMap: Record<string, string> = {};
   if (userIds.length > 0) {
     const { data: profiles } = await supabase
       .from('profiles')
-      .select('id, full_name, avatar_url')
+      .select('id, full_name')
       .in('id', userIds);
-    if (profiles) profiles.forEach((p: any) => {
-      profileMap[p.id] = p.full_name;
-      if (p.avatar_url) avatarUrlMap[p.id] = p.avatar_url;
-    });
+    if (profiles) profiles.forEach((p: any) => { profileMap[p.id] = p.full_name; });
   }
 
   const driverIds = [...new Set(data.map((b: any) => b.scheduled_trips?.driver_id).filter(Boolean))] as string[];
@@ -436,7 +286,6 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
     return {
       bookingId: b.id,
       passageiro: profileMap[b.user_id] ?? 'Sem nome',
-      passageiroAvatarUrl: avatarUrlMap[b.user_id] ?? null,
       origem: shortAddr(b.origin_address),
       destino: shortAddr(b.destination_address),
       data: fmtDate(dep),
@@ -461,7 +310,6 @@ function listItemFromBookingJoin(
   profileMap: Record<string, string>,
   driverNameMap: Record<string, string>,
   driverPartnerMap: Record<string, boolean>,
-  avatarUrlMap?: Record<string, string | null>,
 ): ViagemListItem {
   const trip = b.scheduled_trips;
   const dep = trip?.departure_at ?? b.created_at;
@@ -471,7 +319,6 @@ function listItemFromBookingJoin(
   return {
     bookingId: b.id,
     passageiro: profileMap[b.user_id] ?? 'Sem nome',
-    passageiroAvatarUrl: avatarUrlMap?.[b.user_id] ?? null,
     origem: shortAddr(b.origin_address),
     destino: shortAddr(b.destination_address),
     data: fmtDate(dep),
@@ -846,7 +693,7 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
       tripDepartureAt: trip?.departure_at ?? null,
       tripArrivalAt: trip?.arrival_at ?? null,
       senderName,
-      photoUrl: r.photo_url ? await resolveStorageDisplayUrl(supabase as any, r.photo_url) : null,
+      photoUrl: r.photo_url ?? null,
       recipientName: r.recipient_name ?? '',
       recipientPhone: r.recipient_phone ?? '',
       recipientEmail: r.recipient_email ?? '',
@@ -857,7 +704,6 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
       whenOption: r.when_option ?? '',
       createdAt: r.created_at ?? '',
       scheduledAt: r.scheduled_at ?? null,
-      stripePaymentIntentId: r.stripe_payment_intent_id ?? null,
     };
   }
   const { data: d, error: e2 } = await supabase.from('dependent_shipments').select('*').eq('id', id).maybeSingle();
@@ -882,8 +728,6 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
     createdAt: r.created_at ?? '',
     bagsCount: r.bags_count ?? 0,
     scheduledAt: r.scheduled_at ?? null,
-    photoUrl: r.photo_url ? await resolveStorageDisplayUrl(supabase as any, r.photo_url) : null,
-    stripePaymentIntentId: r.stripe_payment_intent_id ?? null,
   };
 }
 
@@ -1047,26 +891,6 @@ export interface MotoristaPaymentHeader {
   ganhoAno: string;
   totalMensal: string;
   lucroMedio: string;
-  connect: WorkerConnectStatus;
-}
-
-const EMPTY_CONNECT: WorkerConnectStatus = {
-  accountId: null,
-  chargesEnabled: false,
-  payoutsEnabled: false,
-  detailsSubmitted: false,
-  notifiedApprovedAt: null,
-};
-
-function mapConnect(w: any): WorkerConnectStatus {
-  if (!w) return { ...EMPTY_CONNECT };
-  return {
-    accountId: w.stripe_connect_account_id ?? null,
-    chargesEnabled: Boolean(w.stripe_connect_charges_enabled),
-    payoutsEnabled: Boolean(w.stripe_connect_payouts_enabled),
-    detailsSubmitted: Boolean(w.stripe_connect_details_submitted),
-    notifiedApprovedAt: w.stripe_connect_notified_approved_at ?? null,
-  };
 }
 
 export async function fetchMotoristaPaymentHeader(driverId: string): Promise<MotoristaPaymentHeader> {
@@ -1080,17 +904,10 @@ export async function fetchMotoristaPaymentHeader(driverId: string): Promise<Mot
     ganhoAno: 'R$ 0,00',
     totalMensal: 'R$ 0,00',
     lucroMedio: '—',
-    connect: { ...EMPTY_CONNECT },
   });
   if (!isSupabaseConfigured) return empty();
   const { data: prof } = await supabase.from('profiles').select('full_name, rating').eq('id', driverId).maybeSingle();
-  const { data: worker } = await sb
-    .from('worker_profiles')
-    .select(
-      'pix_key, stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_payouts_enabled, stripe_connect_details_submitted, stripe_connect_notified_approved_at',
-    )
-    .eq('id', driverId)
-    .maybeSingle();
+  const { data: worker } = await sb.from('worker_profiles').select('pix_key').eq('id', driverId).maybeSingle();
   const { count } = await supabase.from('scheduled_trips').select('*', { count: 'exact', head: true }).eq('driver_id', driverId);
   const { data: payouts } = await sb
     .from('payouts')
@@ -1119,7 +936,6 @@ export async function fetchMotoristaPaymentHeader(driverId: string): Promise<Mot
     ganhoAno: fmt(sumWorker),
     totalMensal: fmt(sumWorker),
     lucroMedio,
-    connect: mapConnect(worker),
   };
 }
 
@@ -1127,26 +943,16 @@ export interface PreparerEncPaymentHeader {
   nome: string;
   rating: number;
   pixChave: string;
-  connect: WorkerConnectStatus;
 }
 
 export async function fetchPreparerEncPaymentHeader(preparerId: string): Promise<PreparerEncPaymentHeader> {
-  if (!isSupabaseConfigured) {
-    return { nome: 'Preparador', rating: 0, pixChave: '—', connect: { ...EMPTY_CONNECT } };
-  }
+  if (!isSupabaseConfigured) return { nome: 'Preparador', rating: 0, pixChave: '—' };
   const { data: prof } = await supabase.from('profiles').select('full_name, rating').eq('id', preparerId).maybeSingle();
-  const { data: worker } = await sb
-    .from('worker_profiles')
-    .select(
-      'pix_key, stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_payouts_enabled, stripe_connect_details_submitted, stripe_connect_notified_approved_at',
-    )
-    .eq('id', preparerId)
-    .maybeSingle();
+  const { data: worker } = await sb.from('worker_profiles').select('pix_key').eq('id', preparerId).maybeSingle();
   return {
     nome: (prof as any)?.full_name ?? 'Preparador',
     rating: Number((prof as any)?.rating ?? 0),
     pixChave: (worker as any)?.pix_key ?? '—',
-    connect: mapConnect(worker),
   };
 }
 
@@ -1437,14 +1243,14 @@ export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
       .from('shipments')
       .select(`
         id, origin_address, destination_address, recipient_name, status, amount_cents, package_size, created_at,
-        scheduled_trip_id, stripe_payment_intent_id,
+        scheduled_trip_id,
         scheduled_trips ( departure_at, arrival_at )
       `)
       .order('created_at', { ascending: false })
       .limit(200),
     supabase
       .from('dependent_shipments')
-      .select('id, origin_address, destination_address, full_name, status, amount_cents, created_at, stripe_payment_intent_id')
+      .select('id, origin_address, destination_address, full_name, status, amount_cents, created_at')
       .order('created_at', { ascending: false })
       .limit(200),
     supabase
@@ -1454,50 +1260,6 @@ export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
       .eq('category', 'encomendas')
       .eq('status', 'active'),
   ]);
-
-  const shipmentIds = (shipRes.data ?? []).map((s: any) => s.id as string).filter(Boolean);
-  const depIds = (depRes.data ?? []).map((d: any) => d.id as string).filter(Boolean);
-  // Agregar status de payouts por entidade (uma query por tipo, bem barato).
-  const payoutsByEntity = new Map<string, { paid: number; held: number; other: number }>();
-  if (shipmentIds.length > 0) {
-    const { data: rows } = await (supabase as any)
-      .from('payouts')
-      .select('entity_type, entity_id, status, stripe_transfer_error')
-      .eq('entity_type', 'shipment')
-      .in('entity_id', shipmentIds);
-    for (const r of (rows ?? []) as any[]) {
-      const key = `shipment:${r.entity_id}`;
-      const entry = payoutsByEntity.get(key) || { paid: 0, held: 0, other: 0 };
-      if (r.stripe_transfer_error) entry.held += 1;
-      else if (r.status === 'paid') entry.paid += 1;
-      else entry.other += 1;
-      payoutsByEntity.set(key, entry);
-    }
-  }
-  if (depIds.length > 0) {
-    const { data: rows } = await (supabase as any)
-      .from('payouts')
-      .select('entity_type, entity_id, status, stripe_transfer_error')
-      .eq('entity_type', 'dependent_shipment')
-      .in('entity_id', depIds);
-    for (const r of (rows ?? []) as any[]) {
-      const key = `dependent_shipment:${r.entity_id}`;
-      const entry = payoutsByEntity.get(key) || { paid: 0, held: 0, other: 0 };
-      if (r.stripe_transfer_error) entry.held += 1;
-      else if (r.status === 'paid') entry.paid += 1;
-      else entry.other += 1;
-      payoutsByEntity.set(key, entry);
-    }
-  }
-
-  function derivePaymentStatus(kind: 'shipment' | 'dependent_shipment', id: string, pi: string | null): EncomendaListItem['paymentStatus'] {
-    if (!pi) return null;
-    const entry = payoutsByEntity.get(`${kind}:${id}`);
-    if (!entry) return 'pending';
-    if (entry.held > 0) return 'held';
-    if (entry.other === 0 && entry.paid > 0) return 'paid';
-    return 'pending';
-  }
 
   // Mapear shipment_id e dependent_shipment_id para conversation id
   const shipConvMap = new Map<string, string>();
@@ -1528,7 +1290,6 @@ export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
       rawStatus: String(s.status ?? ''),
       scheduledTripId: s.scheduled_trip_id ? String(s.scheduled_trip_id) : null,
       supportConversationId: shipConvMap.get(String(s.id)) ?? null,
-      paymentStatus: derivePaymentStatus('shipment', String(s.id), s.stripe_payment_intent_id ?? null),
     };
   });
 
@@ -1547,7 +1308,6 @@ export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
     rawStatus: String(d.status ?? ''),
     scheduledTripId: null,
     supportConversationId: depConvMap.get(String(d.id)) ?? null,
-    paymentStatus: derivePaymentStatus('dependent_shipment', String(d.id), d.stripe_payment_intent_id ?? null),
   }));
 
   return [...shipments, ...depShipments].sort(
@@ -1591,14 +1351,7 @@ export async function fetchMotoristas(): Promise<MotoristaListItem[]> {
 
   const [{ data: trips, error: tripsError }, { data: workers, error: workersError }] = await Promise.all([
     supabase.from('scheduled_trips').select('driver_id, status').limit(5000),
-    sb
-      .from('worker_profiles')
-      .select(
-        'id, stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_payouts_enabled, stripe_connect_details_submitted, stripe_connect_notified_approved_at',
-      )
-      .eq('role', 'driver')
-      .order('created_at', { ascending: false })
-      .limit(500),
+    sb.from('worker_profiles').select('id').eq('role', 'driver').order('created_at', { ascending: false }).limit(500),
   ]);
 
   const driverMap = new Map<string, { total: number; active: number; scheduled: number }>();
@@ -1614,9 +1367,10 @@ export async function fetchMotoristas(): Promise<MotoristaListItem[]> {
     }
   }
 
-  const workersList: any[] = !workersError && workers?.length ? (workers as any[]) : [];
-  const workerIds: string[] = workersList.map((w) => w.id as string);
-  const connectMap = new Map<string, any>(workersList.map((w) => [w.id, w]));
+  const workerIds: string[] =
+    !workersError && workers?.length
+      ? (workers as any[]).map((w) => w.id as string)
+      : [];
 
   const allIds = new Set<string>([...workerIds, ...driverMap.keys()]);
   if (allIds.size === 0) return [];
@@ -1631,7 +1385,6 @@ export async function fetchMotoristas(): Promise<MotoristaListItem[]> {
   return [...allIds].map((did) => {
     const stats = driverMap.get(did) ?? { total: 0, active: 0, scheduled: 0 };
     const p = profileMap.get(did) as any;
-    const w = connectMap.get(did) as any;
     return {
       id: did,
       nome: p?.full_name ?? 'Sem nome',
@@ -1640,13 +1393,6 @@ export async function fetchMotoristas(): Promise<MotoristaListItem[]> {
       viagensAgendadas: stats.scheduled,
       avatarUrl: p?.avatar_url ?? null,
       rating: p?.rating ?? null,
-      connect: {
-        accountId: w?.stripe_connect_account_id ?? null,
-        chargesEnabled: Boolean(w?.stripe_connect_charges_enabled),
-        payoutsEnabled: Boolean(w?.stripe_connect_payouts_enabled),
-        detailsSubmitted: Boolean(w?.stripe_connect_details_submitted),
-        notifiedApprovedAt: w?.stripe_connect_notified_approved_at ?? null,
-      },
     };
   }).sort((a, b) => b.totalViagens - a.totalViagens);
 }
@@ -1731,7 +1477,7 @@ export async function fetchAllMotoristaProfiles(): Promise<import('./types').Wor
   if (!isSupabaseConfigured) return [];
   const { data: workers, error } = await (supabase as any)
     .from('worker_profiles')
-    .select('id, role, subtype, status, rejection_reason, reviewed_at, created_at, stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_payouts_enabled, stripe_connect_details_submitted, stripe_connect_notified_approved_at')
+    .select('id, role, subtype, status, rejection_reason, reviewed_at, created_at')
     .eq('role', 'driver')
     .order('created_at', { ascending: false })
     .limit(500);
@@ -1758,13 +1504,6 @@ export async function fetchAllMotoristaProfiles(): Promise<import('./types').Wor
       rejectionReason: w.rejection_reason ?? null,
       createdAt: w.created_at ?? '',
       reviewedAt: w.reviewed_at ?? null,
-      connect: {
-        accountId: (w.stripe_connect_account_id as string) ?? null,
-        chargesEnabled: Boolean(w.stripe_connect_charges_enabled),
-        payoutsEnabled: Boolean(w.stripe_connect_payouts_enabled),
-        detailsSubmitted: Boolean(w.stripe_connect_details_submitted),
-        notifiedApprovedAt: (w.stripe_connect_notified_approved_at as string) ?? null,
-      },
     };
   });
 }
@@ -1918,149 +1657,41 @@ function asRecord(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as Record<string, unknown>) } : {};
 }
 
-export async function fetchPreparadoresEncomendas(): Promise<PreparadorListItem[]> {
-  const { data: workers, error } = await (supabase as any)
-    .from('worker_profiles')
-    .select('id, status, subtype, stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_payouts_enabled, stripe_connect_details_submitted, stripe_connect_notified_approved_at')
-    .eq('role', 'preparer')
-    .eq('subtype', 'shipments');
-  if (error || !workers || workers.length === 0) return [];
-
-  const workerIds = workers.map((w: any) => w.id);
-  const [{ data: profiles }, { data: shipments }] = await Promise.all([
-    supabase.from('profiles').select('id, full_name').in('id', workerIds),
-    (supabase as any).from('shipments').select('id, origin_address, destination_address, status, created_at, driver_id').in('driver_id', workerIds).order('created_at', { ascending: false }).limit(500),
-  ]);
-
-  const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p.full_name || 'Preparador']));
-
-  // Group shipments by driver_id
-  const shipByWorker = new Map<string, any[]>();
-  for (const s of (shipments ?? [])) {
-    const list = shipByWorker.get(s.driver_id) || [];
-    list.push(s);
-    shipByWorker.set(s.driver_id, list);
-  }
-
-  const items: PreparadorListItem[] = [];
-  for (const w of workers as any[]) {
-    const connect = {
-      accountId: (w.stripe_connect_account_id as string) ?? null,
-      chargesEnabled: Boolean(w.stripe_connect_charges_enabled),
-      payoutsEnabled: Boolean(w.stripe_connect_payouts_enabled),
-      detailsSubmitted: Boolean(w.stripe_connect_details_submitted),
-      notifiedApprovedAt: (w.stripe_connect_notified_approved_at as string) ?? null,
-    };
-    const workerShipments = shipByWorker.get(w.id) || [];
-    if (workerShipments.length === 0) {
-      // Worker sem encomendas — mostrar como item
-      items.push({
-        id: w.id,
-        workerId: w.id,
-        nome: profileMap.get(w.id) || 'Preparador',
-        origem: '—',
-        destino: '—',
-        dataInicio: '—',
-        rawDate: '',
-        previsao: '—',
-        avaliacao: null,
-        status: w.status === 'approved' ? 'Agendado' : 'Cancelado',
-        connect,
-      });
-    } else {
-      for (const s of workerShipments) {
-        const st = s.status as string;
-        let uiStatus: PreparadorListItem['status'] = 'Em andamento';
-        if (st === 'delivered') uiStatus = 'Concluído';
-        else if (st === 'cancelled') uiStatus = 'Cancelado';
-        else if (st === 'confirmed' || st === 'pending_review') uiStatus = 'Agendado';
-        items.push({
-          id: s.id,
-          workerId: w.id,
-          nome: profileMap.get(w.id) || 'Preparador',
-          origem: shortAddr(s.origin_address || ''),
-          destino: shortAddr(s.destination_address || ''),
-          dataInicio: s.created_at ? `${fmtDate(s.created_at)}\n${fmtTime(s.created_at)}` : '—',
-          rawDate: s.created_at ? new Date(s.created_at).toISOString().slice(0, 10) : '',
-          previsao: '—',
-          avaliacao: null,
-          status: uiStatus,
-          connect,
-        });
-      }
-    }
-  }
-  return items;
-}
-
 export async function fetchPreparadores(): Promise<PreparadorListItem[]> {
-  // Buscar workers com subtype='excursions' + excursion_requests vinculadas
-  const { data: workers, error } = await (supabase as any)
-    .from('worker_profiles')
-    .select('id, status, subtype, stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_payouts_enabled, stripe_connect_details_submitted, stripe_connect_notified_approved_at')
-    .eq('role', 'preparer')
-    .eq('subtype', 'excursions');
-  if (error || !workers || workers.length === 0) return [];
+  // FK preparer_id → auth.users (not public.profiles), so we do two queries
+  const { data, error } = await (supabase as any)
+    .from('excursion_requests')
+    .select('id, destination, excursion_date, status, preparer_id, scheduled_departure_at, created_at')
+    .not('preparer_id', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(200);
 
-  const workerIds = workers.map((w: any) => w.id);
-  const [{ data: profiles }, { data: excursions }] = await Promise.all([
-    supabase.from('profiles').select('id, full_name').in('id', workerIds),
-    (supabase as any).from('excursion_requests').select('id, destination, excursion_date, status, preparer_id, scheduled_departure_at, created_at').in('preparer_id', workerIds).order('created_at', { ascending: false }).limit(500),
-  ]);
+  if (error || !data || data.length === 0) return [];
 
-  const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p.full_name || 'Preparador']));
+  // Fetch preparer names from profiles (keyed by user id)
+  const preparerIds: string[] = [...new Set<string>(data.map((e: any) => e.preparer_id as string))];
+  const { data: profilesData } = await (supabase as any)
+    .from('profiles')
+    .select('id, full_name')
+    .in('id', preparerIds);
 
-  const excByWorker = new Map<string, any[]>();
-  for (const e of (excursions ?? [])) {
-    const list = excByWorker.get(e.preparer_id) || [];
-    list.push(e);
-    excByWorker.set(e.preparer_id, list);
-  }
+  const profileMap: Record<string, string> = {};
+  (profilesData ?? []).forEach((p: any) => { profileMap[p.id] = p.full_name ?? 'Preparador'; });
 
-  const items: PreparadorListItem[] = [];
-  for (const w of workers as any[]) {
-    const connect = {
-      accountId: (w.stripe_connect_account_id as string) ?? null,
-      chargesEnabled: Boolean(w.stripe_connect_charges_enabled),
-      payoutsEnabled: Boolean(w.stripe_connect_payouts_enabled),
-      detailsSubmitted: Boolean(w.stripe_connect_details_submitted),
-      notifiedApprovedAt: (w.stripe_connect_notified_approved_at as string) ?? null,
+  return data.map((e: any) => {
+    const dateIso: string = (e.scheduled_departure_at || e.excursion_date || '');
+    return {
+      id: e.id,
+      nome: profileMap[e.preparer_id] ?? 'Preparador',
+      origem: '—',
+      destino: e.destination,
+      dataInicio: dateIso ? `${fmtDate(dateIso)}\n${fmtTime(dateIso)}` : '—',
+      rawDate: dateIso ? dateIso.slice(0, 10) : '',
+      previsao: '—',
+      avaliacao: null,
+      status: mapPreparadorStatus(e.status),
     };
-    const workerExcursions = excByWorker.get(w.id) || [];
-    if (workerExcursions.length === 0) {
-      items.push({
-        id: w.id,
-        workerId: w.id,
-        nome: profileMap.get(w.id) || 'Preparador',
-        origem: '—',
-        destino: '—',
-        dataInicio: '—',
-        rawDate: '',
-        previsao: '—',
-        avaliacao: null,
-        status: w.status === 'approved' ? 'Agendado' : 'Cancelado',
-        connect,
-      });
-    } else {
-      for (const e of workerExcursions) {
-        const dateIso: string = (e.scheduled_departure_at || e.excursion_date || '');
-        items.push({
-          id: e.id,
-          workerId: w.id,
-          nome: profileMap.get(w.id) || 'Preparador',
-          origem: '—',
-          destino: e.destination,
-          dataInicio: dateIso ? `${fmtDate(dateIso)}\n${fmtTime(dateIso)}` : '—',
-          rawDate: dateIso ? dateIso.slice(0, 10) : '',
-          previsao: '—',
-          avaliacao: null,
-          status: mapPreparadorStatus(e.status),
-          connect,
-        });
-      }
-    }
-  }
-  return items;
+  });
 }
 
 export async function fetchPreparadorById(id: string): Promise<PreparadorListItem | null> {
@@ -2094,91 +1725,6 @@ export async function fetchPreparadorById(id: string): Promise<PreparadorListIte
   };
 }
 
-export async function fetchPreparadorEncomendaDetail(id: string): Promise<import('../data/types').PreparadorEncomendaDetail | null> {
-  if (!isSupabaseConfigured) return null;
-  const statusLabelMap: Record<string, string> = {
-    pending_review: 'Aguardando aprovação', confirmed: 'Confirmada',
-    in_progress: 'Em andamento', delivered: 'Entregue', cancelled: 'Cancelada',
-  };
-
-  // Try shipments first
-  const { data: s } = await (supabase as any).from('shipments')
-    .select('id, origin_address, destination_address, status, amount_cents, package_size, photo_url, recipient_name, recipient_phone, recipient_email, instructions, created_at, driver_id, user_id')
-    .eq('id', id).maybeSingle();
-  if (s) {
-    const r = s as any;
-    let senderName: string | null = null;
-    if (r.user_id) {
-      const { data: p } = await supabase.from('profiles').select('full_name').eq('id', r.user_id).maybeSingle();
-      senderName = (p as any)?.full_name || null;
-    }
-    let preparerProfile = null;
-    if (r.driver_id) {
-      const [{ data: pp }, { data: wp }] = await Promise.all([
-        supabase.from('profiles').select('full_name, phone, avatar_url').eq('id', r.driver_id).maybeSingle(),
-        (supabase as any).from('worker_profiles').select('status, subtype').eq('id', r.driver_id).maybeSingle(),
-      ]);
-      preparerProfile = {
-        id: r.driver_id,
-        fullName: (pp as any)?.full_name || null,
-        phone: (pp as any)?.phone || null,
-        avatarUrl: (pp as any)?.avatar_url ? await resolveStorageDisplayUrl(supabase as any, (pp as any).avatar_url) : null,
-        status: (wp as any)?.status || null,
-        subtype: (wp as any)?.subtype || null,
-      };
-    }
-    return {
-      id: r.id, kind: 'shipment',
-      originAddress: r.origin_address || '—', destinationAddress: r.destination_address || '—',
-      status: r.status, statusLabel: statusLabelMap[r.status] || r.status,
-      amountCents: r.amount_cents || 0, packageSize: r.package_size || null,
-      photoUrl: r.photo_url ? await resolveStorageDisplayUrl(supabase as any, r.photo_url) : null,
-      recipientName: r.recipient_name, recipientPhone: r.recipient_phone, recipientEmail: r.recipient_email,
-      senderName, instructions: r.instructions, createdAt: r.created_at || '',
-      preparerProfile,
-    };
-  }
-
-  // Try dependent_shipments
-  const { data: d } = await (supabase as any).from('dependent_shipments')
-    .select('id, origin_address, destination_address, status, amount_cents, photo_url, full_name, contact_phone, instructions, created_at')
-    .eq('id', id).maybeSingle();
-  if (d) {
-    const r = d as any;
-    return {
-      id: r.id, kind: 'dependent_shipment',
-      originAddress: r.origin_address || '—', destinationAddress: r.destination_address || '—',
-      status: r.status, statusLabel: statusLabelMap[r.status] || r.status,
-      amountCents: r.amount_cents || 0, packageSize: null,
-      photoUrl: r.photo_url ? await resolveStorageDisplayUrl(supabase as any, r.photo_url) : null,
-      recipientName: null, recipientPhone: null, recipientEmail: null,
-      senderName: r.full_name || null, instructions: r.instructions, createdAt: r.created_at || '',
-      preparerProfile: null,
-    };
-  }
-
-  // Try as worker_id (preparador sem encomendas)
-  const { data: wp } = await (supabase as any).from('worker_profiles').select('id, status, subtype').eq('id', id).eq('subtype', 'shipments').maybeSingle();
-  if (wp) {
-    const { data: pp } = await supabase.from('profiles').select('full_name, phone, avatar_url').eq('id', id).maybeSingle();
-    return {
-      id, kind: 'shipment',
-      originAddress: '—', destinationAddress: '—',
-      status: (wp as any).status === 'approved' ? 'confirmed' : 'pending_review',
-      statusLabel: (wp as any).status === 'approved' ? 'Ativo' : 'Pendente',
-      amountCents: 0, packageSize: null, photoUrl: null,
-      recipientName: null, recipientPhone: null, recipientEmail: null,
-      senderName: null, instructions: null, createdAt: '',
-      preparerProfile: {
-        id, fullName: (pp as any)?.full_name || null, phone: (pp as any)?.phone || null,
-        avatarUrl: (pp as any)?.avatar_url ? await resolveStorageDisplayUrl(supabase as any, (pp as any).avatar_url) : null,
-        status: (wp as any).status, subtype: (wp as any).subtype,
-      },
-    };
-  }
-  return null;
-}
-
 export async function fetchPreparadorEditDetail(id: string): Promise<PreparadorEditDetail | null> {
   if (!isSupabaseConfigured) return null;
 
@@ -2186,9 +1732,7 @@ export async function fetchPreparadorEditDetail(id: string): Promise<PreparadorE
     .from('excursion_requests')
     .select(`
       id, user_id, destination, excursion_date, people_count, fleet_type, observations, status,
-      total_amount_cents, worker_payout_cents, preparer_payout_cents, platform_fee_cents,
-      stripe_payment_intent_id, driver_id,
-      scheduled_departure_at, preparer_id, vehicle_details, budget_lines, assignment_notes,
+      total_amount_cents, scheduled_departure_at, preparer_id, vehicle_details, budget_lines, assignment_notes,
       excursion_passengers ( id, full_name, cpf, phone, observations, status_departure, status_return, absence_justified, age )
     `)
     .eq('id', id)
@@ -2240,16 +1784,7 @@ export async function fetchPreparadorEditDetail(id: string): Promise<PreparadorE
     statusRaw: row.status ?? 'pending',
     statusLabel: mapPreparadorStatus(row.status as ExcursionDbStatus),
     totalAmountCents: row.total_amount_cents ?? null,
-    workerPayoutCents: row.worker_payout_cents ?? null,
-    preparerPayoutCents: row.preparer_payout_cents ?? null,
-    driverPayoutCents:
-      typeof row.worker_payout_cents === 'number'
-        ? Math.max(0, (row.worker_payout_cents ?? 0) - (row.preparer_payout_cents ?? 0))
-        : null,
-    platformFeeCents: row.platform_fee_cents ?? null,
-    driverId: row.driver_id ?? null,
     preparerId: row.preparer_id ?? null,
-    stripePaymentIntentId: row.stripe_payment_intent_id ?? null,
     vehicleDetails: asRecord(row.vehicle_details),
     budgetLines: Array.isArray(row.budget_lines) ? row.budget_lines : [],
     assignmentNotes: asRecord(row.assignment_notes),
@@ -2611,8 +2146,8 @@ export async function fetchPromocoes(): Promise<PromocaoListItem[]> {
     id: p.id,
     nome: p.title,
     descricao: p.description || '',
-    dataInicio: p.start_at ? `${fmtDate(p.start_at)}\n${fmtTime(p.start_at)}` : '—',
-    dataTermino: p.end_at ? `${fmtDate(p.end_at)}\n${fmtTime(p.end_at)}` : '—',
+    dataInicio: fmtDate(p.start_at),
+    dataTermino: fmtDate(p.end_at),
     startAtIso: p.start_at ?? '',
     endAtIso: p.end_at ?? '',
     tipoPublico: mapTargetAudience(p.target_audiences || []),
@@ -2638,7 +2173,7 @@ export async function fetchPromocaoCounts(): Promise<PromocaoCounts> {
 function mapPayoutStatus(s: string): PagamentoListItem['status'] {
   if (s === 'paid') return 'Concluído';
   if (s === 'processing') return 'Em andamento';
-  if (s === 'failed' || s === 'cancelled') return 'Cancelado';
+  if (s === 'failed') return 'Cancelado';
   return 'Agendado';
 }
 
@@ -2653,53 +2188,34 @@ function mapEntityType(t: string): string {
 export async function fetchPagamentos(): Promise<PagamentoListItem[]> {
   const { data, error } = await sb
     .from('payouts')
-    .select(
-      'id, worker_id, entity_type, entity_id, gross_amount_cents, worker_amount_cents, admin_amount_cents, status, paid_at, created_at, payout_method, stripe_transfer_id, stripe_transfer_at, stripe_transfer_error',
-    )
+    .select('id, worker_id, entity_type, entity_id, gross_amount_cents, worker_amount_cents, admin_amount_cents, status, paid_at, created_at')
     .order('created_at', { ascending: false })
     .limit(200);
 
   if (error || !data) return [];
 
+  // Fetch worker names in bulk
   const payoutRows = data as { worker_id: string }[];
   const workerIds: string[] = [...new Set(payoutRows.map((p) => String(p.worker_id)).filter(Boolean))];
-
-  const [{ data: workers }, { data: workerConnects }] = await Promise.all([
-    workerIds.length
-      ? supabase.from('profiles').select('id, full_name').in('id', workerIds)
-      : Promise.resolve({ data: [] as any[] } as const),
-    workerIds.length
-      ? sb.from('worker_profiles').select('id, stripe_connect_account_id').in('id', workerIds)
-      : Promise.resolve({ data: [] as any[] } as const),
-  ]);
-
   const nameMap: Record<string, string> = {};
-  (workers || []).forEach((w: any) => { nameMap[w.id] = w.full_name || 'Sem nome'; });
-  const connectMap: Record<string, boolean> = {};
-  (workerConnects || []).forEach((w: any) => {
-    connectMap[w.id] = Boolean(w.stripe_connect_account_id);
-  });
+  if (workerIds.length > 0) {
+    const { data: workers } = await supabase
+      .from('profiles')
+      .select('id, full_name')
+      .in('id', workerIds);
+    (workers || []).forEach((w: any) => { nameMap[w.id] = w.full_name || 'Sem nome'; });
+  }
 
-  return (data as any[]).map((p) => ({
+  return payoutRows.map((p: any) => ({
     id: p.id,
-    workerId: String(p.worker_id || ''),
     workerName: nameMap[p.worker_id] || 'Sem nome',
     entityType: mapEntityType(p.entity_type),
-    entityTypeRaw: String(p.entity_type || ''),
-    entityId: p.entity_id ?? null,
     dataFinalizacao: p.paid_at ? fmtDate(p.paid_at) : fmtDate(p.created_at),
     dateAtIso: p.paid_at || p.created_at || '',
-    createdAtIso: p.created_at || '',
     status: mapPayoutStatus(p.status),
-    statusRaw: String(p.status || ''),
     grossAmountCents: p.gross_amount_cents,
     workerAmountCents: p.worker_amount_cents,
     adminAmountCents: p.admin_amount_cents,
-    payoutMethod: p.payout_method || 'pix',
-    stripeTransferId: p.stripe_transfer_id ?? null,
-    stripeTransferAt: p.stripe_transfer_at ?? null,
-    stripeTransferError: p.stripe_transfer_error ?? null,
-    workerHasConnect: connectMap[p.worker_id] ?? false,
   }));
 }
 

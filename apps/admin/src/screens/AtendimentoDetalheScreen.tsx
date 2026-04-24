@@ -116,19 +116,6 @@ export default function AtendimentoDetalheScreen() {
   const [refundEntityType, setRefundEntityType] = useState('booking');
   const [refundEntityId, setRefundEntityId] = useState('');
   const [refundProcessing, setRefundProcessing] = useState(false);
-  const [refundResult, setRefundResult] = useState<{
-    ok: boolean;
-    message: string;
-    refundAmountCents?: number;
-    refundId?: string | null;
-    reversalResults?: Array<{
-      payout_id: string;
-      transfer_id?: string | null;
-      reversal_id?: string | null;
-      reverse_amount_cents?: number;
-      error?: string | null;
-    }>;
-  } | null>(null);
 
   const [vehicleAuthOpen, setVehicleAuthOpen] = useState(false);
   const [vehicleData, setVehicleData] = useState<any>(null);
@@ -147,7 +134,6 @@ export default function AtendimentoDetalheScreen() {
   const [profilePhone, setProfilePhone] = useState('—');
   const [profileCity, setProfileCity] = useState('—');
   const [profileState, setProfileState] = useState('—');
-  const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null);
   const [categoria, setCategoria] = useState(ticket.categoria || 'Outros');
   const [rawCategory, setRawCategory] = useState<string>(ticket.rawCategory || labelToRaw(ticket.categoria || 'Outros'));
   const [trechoLinha, setTrechoLinha] = useState('—');
@@ -155,7 +141,6 @@ export default function AtendimentoDetalheScreen() {
   const [viagemRefLinha, setViagemRefLinha] = useState('—');
   const [viagemStatusLinha, setViagemStatusLinha] = useState('—');
   const [atendenteNome, setAtendenteNome] = useState('Não atribuído');
-  const [assignedAdminId, setAssignedAdminId] = useState<string | null>(null);
   const [solicitacaoShort, setSolicitacaoShort] = useState(conversationId ? String(conversationId).slice(0, 8).toUpperCase() : '—');
   const [subjectUserId, setSubjectUserId] = useState<string>('');
   const [ctxJson, setCtxJson] = useState<Record<string, unknown>>({});
@@ -173,7 +158,6 @@ export default function AtendimentoDetalheScreen() {
   const [encomendaInstructions, setEncomendaInstructions] = useState('');
   const [encomendaPhotoUrl, setEncomendaPhotoUrl] = useState<string | null>(null);
   const [workerSubtype, setWorkerSubtype] = useState<string | null>(null);
-  const [minorStatus, setMinorStatus] = useState<string | null>(null);
 
   const status = ticket.status || 'nao_atendida';
   const isEncomenda = rawCategory === 'encomendas';
@@ -254,7 +238,6 @@ export default function AtendimentoDetalheScreen() {
   const [currentStatus, setCurrentStatus] = useState(status);
   const [finalizarOpen, setFinalizarOpen] = useState(false);
   const [finishNoteDraft, setFinishNoteDraft] = useState('');
-  const [savedFinishNote, setSavedFinishNote] = useState<string | null>(null);
   const [reprovarOpen, setReprovarOpen] = useState(false);
   const [autorizarOpen, setAutorizarOpen] = useState(false);
   const [autorizarSubmitting, setAutorizarSubmitting] = useState(false);
@@ -352,12 +335,8 @@ export default function AtendimentoDetalheScreen() {
     void (async () => {
       const conv = await fetchSupportConversationDetail(conversationId);
       if (cancelled || !conv) return;
-      if (conv.status === 'closed') {
-        setConvStatus('closed');
-        if (conv.finish_note) setSavedFinishNote(conv.finish_note);
-      } else {
-        setConvStatus('active');
-      }
+      if (conv.status === 'closed') setConvStatus('closed');
+      else setConvStatus('active');
       setRawCategory(conv.category || 'outros');
       setCategoria(categoryLabelPt[conv.category || ''] || conv.category || 'Outros');
       setSolicitacaoShort(conv.id.replace(/-/g, '').slice(0, 8).toUpperCase());
@@ -374,23 +353,18 @@ export default function AtendimentoDetalheScreen() {
       const cp = await fetchProfileBasics(conv.client_id);
       if (!cancelled) setNome(cp.full_name || conv.participant_name || '—');
       // Fetch full profile for dados cadastrais
-      const { data: fullProfile } = await (supabase as any).from('profiles').select('cpf, phone, city, state, avatar_url').eq('id', conv.client_id).maybeSingle();
+      const { data: fullProfile } = await (supabase as any).from('profiles').select('cpf, phone, city, state, email').eq('id', conv.client_id).maybeSingle();
       if (fullProfile && !cancelled) {
         setProfileCpf((fullProfile as any).cpf || '—');
         setProfilePhone((fullProfile as any).phone || '—');
         setProfileCity((fullProfile as any).city || '—');
         setProfileState((fullProfile as any).state || '—');
-        if ((fullProfile as any).avatar_url) {
-          const resolved = await resolveStorageDisplayUrl(supabase as any, (fullProfile as any).avatar_url);
-          if (!cancelled) setProfileAvatarUrl(resolved);
-        }
+        if ((fullProfile as any).email) setEmail((fullProfile as any).email);
       }
       if (conv.admin_id) {
-        setAssignedAdminId(conv.admin_id);
         const ap = await fetchProfileBasics(conv.admin_id);
         if (!cancelled) setAtendenteNome(ap.full_name || 'Atendente');
       } else {
-        setAssignedAdminId(null);
         setAtendenteNome('Não atribuído');
       }
       const hist = await fetchSupportHistoryForClient(conv.client_id, conv.id);
@@ -458,7 +432,7 @@ export default function AtendimentoDetalheScreen() {
             setEncomendaSender(s.full_name || nome || '—');
             setEncomendaInstructions(s.instructions || '');
             if (s.photo_url) {
-              const resolved = await resolveStorageDisplayUrl(supabase as any, s.photo_url);
+              const resolved = await resolveStorageDisplayUrl(s.photo_url);
               if (!cancelled) setEncomendaPhotoUrl(resolved);
             }
           }
@@ -467,29 +441,6 @@ export default function AtendimentoDetalheScreen() {
     })();
     return () => { cancelled = true; };
   }, [conversationId]);
-
-  // Fetch minor status for autorizar_menores
-  useEffect(() => {
-    if (!isSupabaseConfigured || rawCategory !== 'autorizar_menores') {
-      setMinorStatus(null);
-      return;
-    }
-    let cancelled = false;
-    const depId = (ctxJson.dependent_id as string) || '';
-    if (!depId && !subjectUserId) return;
-    const sb = supabase as any;
-    const query = depId
-      ? sb.from('dependents').select('id, full_name, age, observations, document_url, representative_document_url, status').eq('id', depId).maybeSingle()
-      : sb.from('dependents').select('id, full_name, age, observations, document_url, representative_document_url, status').eq('user_id', subjectUserId).order('created_at', { ascending: false }).limit(1).maybeSingle();
-    void query.then(({ data }: any) => {
-      if (cancelled) return;
-      if (data) {
-        setMinorData(data);
-        setMinorStatus(data.status || null);
-      }
-    });
-    return () => { cancelled = true; };
-  }, [rawCategory, ctxJson.dependent_id, subjectUserId]);
 
   useEffect(() => {
     if (!isSupabaseConfigured || rawCategory !== 'cadastro_transporte' || !motoristaDocWorkerId) {
@@ -538,22 +489,6 @@ export default function AtendimentoDetalheScreen() {
         const meta = encomendaShipmentStatus === 'confirmed'
           ? { bg: '#b0e8d1', color: '#174f38', border: '#22c55e', label: 'Encomenda aprovada' }
           : { bg: '#eeafaa', color: '#551611', border: '#b53838', label: 'Encomenda rejeitada' };
-        return React.createElement('div', {
-          style: { marginTop: 8, padding: '14px 18px', borderRadius: 12, background: meta.bg, border: `1px solid ${meta.border}`, display: 'flex', alignItems: 'center', gap: 10, ...font },
-        },
-          React.createElement('span', { style: { width: 10, height: 10, borderRadius: '50%', background: meta.border, flexShrink: 0 } }),
-          React.createElement('span', { style: { fontSize: 15, fontWeight: 600, color: meta.color } }, meta.label));
-      })()
-    : null;
-
-  const minorDecidido = minorStatus === 'validated' || minorStatus === 'rejected';
-  const hideMinorButtons = isAutorizarMenores && minorDecidido;
-
-  const minorDecididoBanner = hideMinorButtons
-    ? (() => {
-        const meta = minorStatus === 'validated'
-          ? { bg: '#b0e8d1', color: '#174f38', border: '#22c55e', label: 'Menor autorizado' }
-          : { bg: '#eeafaa', color: '#551611', border: '#b53838', label: 'Autorização negada' };
         return React.createElement('div', {
           style: { marginTop: 8, padding: '14px 18px', borderRadius: 12, background: meta.bg, border: `1px solid ${meta.border}`, display: 'flex', alignItems: 'center', gap: 10, ...font },
         },
@@ -625,21 +560,14 @@ export default function AtendimentoDetalheScreen() {
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const } },
           React.createElement('span', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Atendimento'),
           React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, `Solicitação #${solicitacaoShort}`))),
-      convStatus !== 'closed'
-        ? React.createElement('button', {
-            type: 'button',
-            onClick: () => setFinalizarOpen(true),
-            style: {
-              height: 40, padding: '8px 24px', borderRadius: 999, border: 'none',
-              background: '#f2afaf', color: '#681f1f', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
-            },
-          }, 'Finalizar atendimento')
-        : React.createElement('span', {
-            style: {
-              height: 32, padding: '4px 16px', borderRadius: 999,
-              background: '#b0e8d1', color: '#174f38', fontSize: 13, fontWeight: 600, display: 'inline-flex', alignItems: 'center', ...font,
-            },
-          }, 'Finalizado')),
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => setFinalizarOpen(true),
+        style: {
+          height: 40, padding: '8px 24px', borderRadius: 999, border: 'none',
+          background: '#f2afaf', color: '#681f1f', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
+        },
+      }, 'Finalizar atendimento')),
 
     // Body content with padding
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, padding: 16 } },
@@ -657,33 +585,26 @@ export default function AtendimentoDetalheScreen() {
         },
           React.createElement('span', { style: { width: 10, height: 10, borderRadius: '50%', background: statusDot } }),
           statusLabel),
-        convStatus !== 'closed'
-          ? React.createElement('button', {
-              type: 'button',
-              onClick: () => setEditStatusOpen(true),
-              style: {
-                display: 'flex', alignItems: 'center', gap: 8, height: 36, padding: '8px 24px',
-                borderRadius: 999, background: '#f1f1f1', border: 'none',
-                fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
-              },
-            }, pencilSvg, 'Editar status')
-          : null),
+        React.createElement('button', {
+          type: 'button',
+          onClick: () => setEditStatusOpen(true),
+          style: {
+            display: 'flex', alignItems: 'center', gap: 8, height: 36, padding: '8px 24px',
+            borderRadius: 999, background: '#f1f1f1', border: 'none',
+            fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
+          },
+        }, pencilSvg, 'Editar status')),
 
       // User info with border bottom
       React.createElement('div', {
         style: { display: 'flex', alignItems: 'center', gap: 16, paddingBottom: 24, borderBottom: '1px solid #e2e2e2' },
       },
-        profileAvatarUrl
-          ? React.createElement('img', {
-              src: profileAvatarUrl, alt: nome,
-              style: { width: 56, height: 56, borderRadius: 1000, objectFit: 'cover' as const, flexShrink: 0 },
-            })
-          : React.createElement('div', {
-              style: {
-                width: 56, height: 56, borderRadius: 1000, background: '#E8725C', flexShrink: 0,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              },
-            }, React.createElement('span', { style: { color: '#fff', fontSize: 22, fontWeight: 600, ...font } }, nome.charAt(0))),
+        React.createElement('div', {
+          style: {
+            width: 56, height: 56, borderRadius: 1000, background: '#E8725C', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          },
+        }, React.createElement('span', { style: { color: '#fff', fontSize: 22, fontWeight: 600, ...font } }, nome.charAt(0))),
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
           React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, nome),
           React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, email))),
@@ -695,25 +616,7 @@ export default function AtendimentoDetalheScreen() {
           React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, isExcursao ? 'Solicitação de excursão' : categoria)),
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, flex: 1 } },
           React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'Atendente responsável'),
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-            React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, atendenteNome),
-            convStatus !== 'closed' && assignedAdminId !== currentUserId
-              ? React.createElement('button', {
-                  type: 'button',
-                  onClick: async () => {
-                    const { error } = await (supabase as any).rpc('claim_support_conversation', { p_conversation_id: conversationId });
-                    if (error) { showToast(`Erro: ${error.message || error}`); return; }
-                    setAssignedAdminId(currentUserId);
-                    const me = await fetchProfileBasics(currentUserId);
-                    setAtendenteNome(me.full_name || 'Eu');
-                    showToast('Atendimento assumido');
-                  },
-                  style: {
-                    height: 28, padding: '0 12px', borderRadius: 999, border: 'none',
-                    background: '#0d0d0d', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font,
-                  },
-                }, 'Assumir')
-              : null)))),
+          React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, atendenteNome)))),
 
     // Trecho + Período (hidden for encomendas — shown in modal)
     hideViagemSections ? null : React.createElement('div', {
@@ -761,15 +664,6 @@ export default function AtendimentoDetalheScreen() {
       },
         React.createElement('span', { style: { fontWeight: 600, display: 'block', marginBottom: 8, ...font } }, 'Mensagem / reclamação'),
         complaintBody)
-      : null,
-
-    // Nota de finalização (quando atendimento encerrado)
-    savedFinishNote
-      ? React.createElement('div', {
-          style: { padding: 16, background: '#f0faf4', borderRadius: 12, border: '1px solid #b0e8d1', fontSize: 14, color: '#174f38', lineHeight: 1.5, ...font },
-        },
-          React.createElement('span', { style: { fontWeight: 600, display: 'block', marginBottom: 8, ...font } }, 'Nota de finalização'),
-          savedFinishNote)
       : null,
 
     // Action chips (grid of 3 per row, Figma style)
@@ -859,31 +753,23 @@ export default function AtendimentoDetalheScreen() {
                   background: '#0d8344', color: '#fff8e6', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
                 },
               }, 'Aprovar encomenda')))
-      : hideMinorButtons
-          ? React.createElement('div', { style: { padding: 16 } }, minorDecididoBanner)
-      : isAutorizarMenores
-          ? React.createElement('div', { style: { display: 'flex', gap: 16, padding: 16 } },
+      : hideCadastroAprovarReprovar
+          ? React.createElement('div', { style: { padding: 16 } }, cadastroDecididoBanner)
+          : React.createElement('div', { style: { display: 'flex', gap: 16, padding: 16 } },
               React.createElement('button', {
                 type: 'button', onClick: () => setReprovarOpen(true),
-                style: { flex: 1, height: 47, borderRadius: 999, border: 'none', background: '#f2afaf', color: '#681f1f', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font },
-              }, 'Negar autorização'),
+                style: {
+                  flex: 1, height: 47, borderRadius: 999, border: 'none',
+                  background: '#f2afaf', color: '#681f1f', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
+                },
+              }, rawCategory === 'autorizar_menores' ? 'Negar autorização' : workerSubtype === 'excursions' || workerSubtype === 'shipments' ? 'Reprovar preparador' : 'Reprovar cadastro'),
               React.createElement('button', {
                 type: 'button', onClick: () => setAutorizarOpen(true),
-                style: { flex: 1, height: 47, borderRadius: 999, border: 'none', background: '#0d8344', color: '#fff8e6', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font },
-              }, 'Autorizar menor'))
-      : isCadastro
-          ? (hideCadastroAprovarReprovar
-              ? React.createElement('div', { style: { padding: 16 } }, cadastroDecididoBanner)
-              : React.createElement('div', { style: { display: 'flex', gap: 16, padding: 16 } },
-                  React.createElement('button', {
-                    type: 'button', onClick: () => setReprovarOpen(true),
-                    style: { flex: 1, height: 47, borderRadius: 999, border: 'none', background: '#f2afaf', color: '#681f1f', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font },
-                  }, workerSubtype === 'excursions' || workerSubtype === 'shipments' ? 'Reprovar preparador' : 'Reprovar cadastro'),
-                  React.createElement('button', {
-                    type: 'button', onClick: () => setAutorizarOpen(true),
-                    style: { flex: 1, height: 47, borderRadius: 999, border: 'none', background: '#0d8344', color: '#fff8e6', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font },
-                  }, workerSubtype === 'excursions' || workerSubtype === 'shipments' ? 'Autorizar preparador' : 'Autorizar cadastro')))
-      : null);
+                style: {
+                  flex: 1, height: 47, borderRadius: 999, border: 'none',
+                  background: '#0d8344', color: '#fff8e6', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
+                },
+              }, rawCategory === 'autorizar_menores' ? 'Autorizar menor' : workerSubtype === 'excursions' || workerSubtype === 'shipments' ? 'Autorizar preparador' : 'Autorizar cadastro')));
 
   // ── Right panel: Histórico ────────────────────────────────────────────
   const rightPanel = React.createElement('div', {
@@ -1032,7 +918,6 @@ export default function AtendimentoDetalheScreen() {
         },
           React.createElement('option', { value: 'booking' }, 'Viagem (booking)'),
           React.createElement('option', { value: 'shipment' }, 'Encomenda (shipment)'),
-          React.createElement('option', { value: 'dependent_shipment' }, 'Encomenda dependente'),
           React.createElement('option', { value: 'excursion' }, 'Excursão')),
         React.createElement('label', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'ID da entidade'),
         React.createElement('input', {
@@ -1040,69 +925,25 @@ export default function AtendimentoDetalheScreen() {
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => setRefundEntityId(e.target.value),
           style: { height: 44, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 12px', fontSize: 14, ...font },
         })),
-      refundResult
-        ? React.createElement('div', {
-            style: {
-              padding: 12, borderRadius: 8,
-              background: refundResult.ok ? '#dcfce7' : '#fee2e2',
-              color: refundResult.ok ? '#166534' : '#991b1b',
-              fontSize: 13, fontWeight: 600, ...font,
-            },
-          }, refundResult.message)
-        : null,
-      refundResult?.ok && refundResult.reversalResults && refundResult.reversalResults.length > 0
-        ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
-            React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Reversões de transfer (Stripe Connect)'),
-            React.createElement('div', { style: { border: '1px solid #e2e2e2', borderRadius: 8, overflow: 'hidden' } },
-              React.createElement('div', { style: { display: 'flex', background: '#e2e2e2', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: '#0d0d0d', ...font } },
-                React.createElement('div', { style: { flex: 2 } }, 'Payout'),
-                React.createElement('div', { style: { flex: 2 } }, 'Transfer'),
-                React.createElement('div', { style: { flex: 2 } }, 'Reversal'),
-                React.createElement('div', { style: { flex: 1 } }, 'Valor'),
-                React.createElement('div', { style: { flex: 1 } }, 'Erro')),
-              ...refundResult.reversalResults.map((r) =>
-                React.createElement('div', {
-                  key: r.payout_id,
-                  style: { display: 'flex', padding: '8px 10px', fontSize: 12, fontFamily: 'monospace', background: r.error ? '#fef2f2' : '#f6f6f6', borderTop: '1px solid #e2e2e2' },
-                },
-                  React.createElement('div', { style: { flex: 2 }, title: r.payout_id }, `${r.payout_id.slice(0, 10)}…`),
-                  React.createElement('div', { style: { flex: 2 }, title: r.transfer_id || '' }, r.transfer_id ? `${r.transfer_id.slice(0, 12)}…` : '—'),
-                  React.createElement('div', { style: { flex: 2 }, title: r.reversal_id || '' }, r.reversal_id ? `${r.reversal_id.slice(0, 12)}…` : '—'),
-                  React.createElement('div', { style: { flex: 1, fontFamily: 'Inter, sans-serif' } }, `R$ ${((r.reverse_amount_cents || 0) / 100).toFixed(2).replace('.', ',')}`),
-                  React.createElement('div', { style: { flex: 1, color: '#991b1b' }, title: r.error || '' }, r.error ? 'Erro' : '—')))))
-        : null,
       React.createElement('div', { style: { display: 'flex', gap: 12 } },
         React.createElement('button', {
           type: 'button',
           disabled: refundProcessing || !refundEntityId.trim(),
           onClick: async () => {
             setRefundProcessing(true);
-            setRefundResult(null);
-            const { data, error } = await invokeEdgeFunction<any>('process-refund', 'POST', undefined, {
-              entity_type: refundEntityType, entity_id: refundEntityId.trim(), reason: 'admin_refund',
-            });
+            try {
+              await invokeEdgeFunction('process-refund', 'POST', undefined, {
+                entity_type: refundEntityType, entity_id: refundEntityId.trim(), reason: 'admin_refund',
+              });
+              showToast('Reembolso processado com sucesso');
+              setRefundOpen(false);
+            } catch (err: any) { showToast(`Erro: ${err.message || 'falha no reembolso'}`); }
             setRefundProcessing(false);
-            if (error || (data && data.error)) {
-              const msg = error || data?.error || 'Falha ao processar reembolso';
-              setRefundResult({ ok: false, message: msg });
-              showToast(`Erro: ${msg}`);
-              return;
-            }
-            const reversalResults = Array.isArray(data?.reversal_results) ? data.reversal_results : [];
-            const amt = typeof data?.refund_amount_cents === 'number' ? data.refund_amount_cents : undefined;
-            setRefundResult({
-              ok: true,
-              message: `Reembolso processado${amt ? ` — R$ ${(amt / 100).toFixed(2).replace('.', ',')}` : ''}.`,
-              refundAmountCents: amt,
-              refundId: data?.refund_id ?? null,
-              reversalResults,
-            });
-            showToast('Reembolso processado com sucesso');
           },
           style: { flex: 1, height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', opacity: refundProcessing ? 0.6 : 1, ...font },
         }, refundProcessing ? 'Processando...' : 'Processar Reembolso'),
         React.createElement('button', {
-          type: 'button', onClick: () => { setRefundOpen(false); setRefundResult(null); },
+          type: 'button', onClick: () => setRefundOpen(false),
           style: { flex: 1, height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', color: '#b53838', fontSize: 16, fontWeight: 600, cursor: 'pointer', ...font },
         }, 'Cancelar')))) : null;
 
@@ -1918,7 +1759,6 @@ export default function AtendimentoDetalheScreen() {
               const { error } = await (supabase as any).from('dependents').update({ status: 'rejected' }).eq('id', depId);
               setReprovarSubmitting(false);
               if (error) { showToast(`Erro ao negar: ${error.message || error}`); return; }
-              setMinorStatus('rejected');
               if (conversationId) {
                 await (supabase as any).rpc('close_support_conversation', { p_conversation_id: conversationId, p_finish_note: 'Autorização de menor negada' });
               }
@@ -2013,7 +1853,6 @@ export default function AtendimentoDetalheScreen() {
               const { error } = await (supabase as any).from('dependents').update({ status: 'validated' }).eq('id', depId);
               setAutorizarSubmitting(false);
               if (error) { showToast(`Erro ao autorizar: ${error.message || error}`); return; }
-              setMinorStatus('validated');
               if (conversationId) {
                 await (supabase as any).rpc('close_support_conversation', { p_conversation_id: conversationId, p_finish_note: 'Menor autorizado' });
               }
@@ -2118,7 +1957,6 @@ export default function AtendimentoDetalheScreen() {
             }
             setCurrentStatus('finalizada');
             setConvStatus('closed');
-            if (finishNoteDraft.trim()) setSavedFinishNote(finishNoteDraft.trim());
             setFinalizarOpen(false);
             setFinishNoteDraft('');
             showToast('Atendimento finalizado');
