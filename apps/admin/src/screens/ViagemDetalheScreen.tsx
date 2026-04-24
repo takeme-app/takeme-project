@@ -34,6 +34,7 @@ import type { MotoristaListItem } from '../data/types';
 import MapView from '../components/MapView';
 import { useTripStops } from '../hooks/useTripStops';
 import { useTripMapCoords } from '../hooks/useTripMapCoords';
+import { useScheduledTripLiveLocation } from '../hooks/useScheduledTripLiveLocation';
 
 function rowFromDetail(d: BookingDetailForAdmin): ViagemRow {
   const v = d.listItem;
@@ -85,6 +86,14 @@ export default function ViagemDetalheScreen() {
   const [acompanharTempoReal, setAcompanharTempoReal] = useState(false);
   const [linkedShipments, setLinkedShipments] = useState<TripShipmentListItem[]>([]);
   const [tripCoords] = useTripMapCoords(detail);
+
+  const t: ViagemRow | null = useMemo(() => {
+    if (detail) return rowFromDetail(detail);
+    return stateObj?.trip ?? null;
+  }, [detail, stateObj]);
+
+  const tripPainelConcluido = t?.status === 'concluído';
+
   const [driverStats, setDriverStats] = useState<{ rating: number | null; totalTrips: number; avatarUrl: string | null }>({ rating: null, totalTrips: 0, avatarUrl: null });
   const [driverAvatarSrc, setDriverAvatarSrc] = useState<string | null>(null);
   const [passengerAvatarSrc, setPassengerAvatarSrc] = useState<string | null>(null);
@@ -113,6 +122,7 @@ export default function ViagemDetalheScreen() {
 
   // Multi-ponto: buscar paradas da viagem
   const tripIdForStops = detail?.listItem?.tripId || null;
+  const { coords: liveDriverCoords } = useScheduledTripLiveLocation(tripIdForStops);
   const { waypoints: tripWaypoints, stops: tripStops } = useTripStops(tripIdForStops);
 
   const driverStartCoord = useMemo(() => {
@@ -123,16 +133,37 @@ export default function ViagemDetalheScreen() {
   }, [tripStops, tripCoords.vehicleOrigin]);
 
   /**
-   * “Acompanhar em tempo real”: o GPS do motorista existe só no dispositivo (expo-location no app).
-   * Não há coluna/tabela de posição persistida no Supabase neste projeto — o mapa centra na partida
-   * cadastrada (`driver_origin` / origem da viagem), não no movimento em tempo real do veículo.
+   * Alvo do modo “Acompanhar”: prioriza `scheduled_trip_live_locations` (motorista na ActiveTripScreen);
+   * enquanto não houver linha GPS, usa partida registada (`driver_origin` / origem da viagem).
    */
-  const followTargetCoord = useMemo(
-    () => driverStartCoord ?? tripCoords.origin,
-    [driverStartCoord, tripCoords.origin],
-  );
+  const followTargetCoord = useMemo(() => {
+    const live =
+      liveDriverCoords &&
+      Number.isFinite(liveDriverCoords.latitude) &&
+      Number.isFinite(liveDriverCoords.longitude)
+        ? { lat: liveDriverCoords.latitude, lng: liveDriverCoords.longitude }
+        : null;
+    if (live) return live;
+    return driverStartCoord ?? tripCoords.origin;
+  }, [liveDriverCoords, driverStartCoord, tripCoords.origin]);
+
+  /** Pin extra (triângulo) só com GPS ao vivo e viagem “Em andamento” no painel. */
+  const liveVehicleMapPosition = useMemo(() => {
+    if (t?.status !== 'em_andamento' || !liveDriverCoords) return undefined;
+    if (
+      !Number.isFinite(liveDriverCoords.latitude) ||
+      !Number.isFinite(liveDriverCoords.longitude)
+    ) {
+      return undefined;
+    }
+    return { lat: liveDriverCoords.latitude, lng: liveDriverCoords.longitude };
+  }, [t?.status, liveDriverCoords]);
 
   const onFollowVehicleInterrupted = useCallback(() => setAcompanharTempoReal(false), []);
+
+  useEffect(() => {
+    if (t?.status !== 'em_andamento') setAcompanharTempoReal(false);
+  }, [t?.status]);
 
   const isMotoristas = location.pathname.startsWith('/motoristas');
   const isPassageiros = location.pathname.startsWith('/passageiros');
@@ -197,13 +228,6 @@ export default function ViagemDetalheScreen() {
     });
     return () => { cancel = true; };
   }, [detail?.listItem?.tripId]);
-
-  const t: ViagemRow | null = useMemo(() => {
-    if (detail) return rowFromDetail(detail);
-    return stateObj?.trip ?? null;
-  }, [detail, stateObj]);
-
-  const tripPainelConcluido = t?.status === 'concluído';
 
   /** Alinhado a `bookings.passenger_count`: titular + extras em `passenger_data`, sem duplicar nome do titular. */
   const passengerDisplayRows = useMemo(() => {
@@ -366,7 +390,9 @@ export default function ViagemDetalheScreen() {
     React.createElement('div', { style: { display: 'flex', gap: 24, overflowX: 'auto' as const } },
       ...passengerDisplayRows.map((row, i) => passageiroCard(row, i))));
 
-  const acompanharTempoRealBtn = followTargetCoord
+  const podeAcompanharTempoReal = t.status === 'em_andamento';
+
+  const acompanharTempoRealBtn = podeAcompanharTempoReal && followTargetCoord
     ? React.createElement('button', {
       type: 'button',
       style: {
@@ -376,7 +402,9 @@ export default function ViagemDetalheScreen() {
       'aria-pressed': acompanharTempoReal,
       title: acompanharTempoReal
         ? 'Clique novamente ou arraste o mapa para sair do modo acompanhar'
-        : 'Aproximar o mapa e manter o veículo centrado; segue atualizações de posição quando disponíveis.',
+        : liveDriverCoords
+          ? 'Centrar o mapa na posição GPS do motorista (atualiza cerca de 2 em 2 segundos).'
+          : 'Centrar na última posição conhecida. O GPS em tempo real aparece quando o motorista está na viagem ativa no app.',
       onClick: () => setAcompanharTempoReal((v) => !v),
     },
       liveFollowMyLocationSvg,
@@ -425,6 +453,7 @@ export default function ViagemDetalheScreen() {
           origin: tripCoords.origin,
           destination: tripCoords.destination,
           driverStart: driverStartCoord,
+          currentPosition: liveVehicleMapPosition,
           waypoints: tripWaypoints.length > 0 ? tripWaypoints : undefined,
           height: DETAIL_TRIP_MAP_HEIGHT,
           staticMode: false,
@@ -627,6 +656,7 @@ export default function ViagemDetalheScreen() {
             origin: tripCoords.origin,
             destination: tripCoords.destination,
             driverStart: driverStartCoord,
+            currentPosition: liveVehicleMapPosition,
             waypoints: tripWaypoints.length > 0 ? tripWaypoints : undefined,
             height: 675,
             staticMode: false,
