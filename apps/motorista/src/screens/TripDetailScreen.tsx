@@ -227,27 +227,46 @@ function CancelModal({
   onClose,
   onConfirm,
   loading,
+  paidBookingsCount,
+  estimatedPenaltyCents,
+  penaltyEnabled,
 }: {
   visible: boolean;
   onClose: () => void;
   onConfirm: () => void;
   loading: boolean;
+  paidBookingsCount: number;
+  estimatedPenaltyCents: number;
+  penaltyEnabled: boolean;
 }) {
+  const penaltyBrl = `R$ ${(estimatedPenaltyCents / 100).toFixed(2).replace('.', ',')}`;
   return (
     <BottomSheet visible={visible} onClose={onClose}>
       <View style={styles.sheetContent}>
         <Text style={styles.sheetTitle}>Cancelar viagem</Text>
-        <Text style={styles.sheetBody}>
-          Tem certeza que deseja cancelar esta viagem? Esta ação não pode ser desfeita e os
-          passageiros serão notificados.
-        </Text>
+        {paidBookingsCount > 0 ? (
+          <Text style={styles.sheetBody}>
+            {paidBookingsCount === 1
+              ? '1 passageiro já pagou por esta viagem.'
+              : `${paidBookingsCount} passageiros já pagaram por esta viagem.`}{' '}
+            Ao cancelar, o valor será estornado integralmente no cartão de cada um.
+            {penaltyEnabled && estimatedPenaltyCents > 0
+              ? ` Uma multa estimada de ${penaltyBrl} será descontada dos seus próximos ganhos.`
+              : ''}
+          </Text>
+        ) : (
+          <Text style={styles.sheetBody}>
+            Tem certeza que deseja cancelar esta viagem? Esta ação não pode ser desfeita e os
+            passageiros serão notificados.
+          </Text>
+        )}
         <TouchableOpacity
           style={styles.btnPrimary}
           onPress={onClose}
           activeOpacity={0.8}
           disabled={loading}
         >
-          <Text style={styles.btnPrimaryText}>Continuar</Text>
+          <Text style={styles.btnPrimaryText}>Manter viagem</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.btnCancel}
@@ -258,7 +277,7 @@ function CancelModal({
           {loading ? (
             <ActivityIndicator size="small" color="#EF4444" />
           ) : (
-            <Text style={styles.btnCancelText}>Cancelar viagem</Text>
+            <Text style={styles.btnCancelText}>Sim, cancelar</Text>
           )}
         </TouchableOpacity>
       </View>
@@ -389,6 +408,12 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const [cancelLoading, setCancelLoading] = useState(false);
   const [rescheduleLoading, setRescheduleLoading] = useState(false);
   const [startLoading, setStartLoading] = useState(false);
+  /** Política de multa vinda de `platform_settings` + reservas pagas do trip. */
+  const [cancelPolicy, setCancelPolicy] = useState<{
+    penaltyPct: number;
+    penaltyEnabled: boolean;
+    paidBookings: { id: string; amount_cents: number; admin_earning_cents: number | null }[];
+  }>({ penaltyPct: 10, penaltyEnabled: true, paidBookings: [] });
 
   const [expenseDoc, setExpenseDoc] = useState<DocumentAsset | null>(null);
 
@@ -515,18 +540,118 @@ export function TripDetailScreen({ route, navigation }: Props) {
     }
   };
 
+  const openCancelModal = async () => {
+    if (!trip) return;
+    // Carrega settings + bookings pagos em paralelo para estimar multa.
+    try {
+      const [pctRes, enabledRes, bookingsRes] = await Promise.all([
+        supabase
+          .from('platform_settings')
+          .select('value')
+          .eq('key', 'driver_cancellation_penalty_pct')
+          .maybeSingle(),
+        supabase
+          .from('platform_settings')
+          .select('value')
+          .eq('key', 'driver_cancellation_penalty_enabled')
+          .maybeSingle(),
+        supabase
+          .from('bookings')
+          .select('id, amount_cents, admin_earning_cents')
+          .eq('scheduled_trip_id', trip.id)
+          .in('status', ['paid', 'confirmed']),
+      ]);
+
+      const pctRaw = (pctRes.data as { value?: unknown } | null)?.value;
+      const enabledRaw = (enabledRes.data as { value?: unknown } | null)?.value;
+      const pct = (() => {
+        const v =
+          pctRaw && typeof pctRaw === 'object' && 'value' in (pctRaw as Record<string, unknown>)
+            ? Number((pctRaw as { value: unknown }).value)
+            : Number(pctRaw);
+        return Number.isFinite(v) && v >= 0 ? v : 10;
+      })();
+      const enabled = (() => {
+        const v =
+          enabledRaw && typeof enabledRaw === 'object' && 'value' in (enabledRaw as Record<string, unknown>)
+            ? (enabledRaw as { value: unknown }).value
+            : enabledRaw;
+        if (typeof v === 'boolean') return v;
+        if (typeof v === 'string') return v === 'true';
+        if (typeof v === 'number') return v !== 0;
+        return true;
+      })();
+      const paid = ((bookingsRes.data ?? []) as Array<{
+        id: string;
+        amount_cents: number | null;
+        admin_earning_cents: number | null;
+      }>).map((b) => ({
+        id: String(b.id),
+        amount_cents: Math.max(0, Math.floor(Number(b.amount_cents ?? 0))),
+        admin_earning_cents: b.admin_earning_cents != null ? Number(b.admin_earning_cents) : null,
+      }));
+      setCancelPolicy({ penaltyPct: pct, penaltyEnabled: enabled, paidBookings: paid });
+    } catch {
+      // fallback: abre com defaults
+      setCancelPolicy({ penaltyPct: 10, penaltyEnabled: true, paidBookings: [] });
+    }
+    setCancelVisible(true);
+  };
+
+  const estimatedPenaltyCents = (() => {
+    const { penaltyPct, paidBookings } = cancelPolicy;
+    return paidBookings.reduce((sum, b) => {
+      const adminEarn = Math.max(0, Math.floor(Number(b.admin_earning_cents ?? 0)));
+      const pctCents = Math.round((b.amount_cents * penaltyPct) / 100);
+      return sum + adminEarn + pctCents;
+    }, 0);
+  })();
+
   const handleCancelConfirm = async () => {
     if (!trip) return;
     setCancelLoading(true);
-    const { error } = await supabase
-      .from('scheduled_trips')
-      .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
-      .eq('id', trip.id);
-    setCancelLoading(false);
-    if (!error) {
+    try {
+      const { data, error } = await supabase.functions.invoke('cancel-scheduled-trip', {
+        body: { scheduled_trip_id: trip.id },
+      });
+      if (error) {
+        Alert.alert(
+          'Erro',
+          error.message ?? 'Não foi possível cancelar a viagem. Tente novamente.',
+        );
+        return;
+      }
+      const payload = (data ?? {}) as {
+        cancelled?: boolean;
+        refunded_count?: number;
+        penalty_cents?: number;
+        error?: string;
+      };
+      if (payload.error) {
+        Alert.alert('Erro', payload.error);
+        return;
+      }
       await closeConversationsForScheduledTrip(trip.id);
       setCancelVisible(false);
       setTrip((prev) => (prev ? { ...prev, status: 'cancelled' } : prev));
+      const refunded = Number(payload.refunded_count ?? 0);
+      const penalty = Number(payload.penalty_cents ?? 0);
+      if (refunded > 0 || penalty > 0) {
+        const penaltyBrl = `R$ ${(penalty / 100).toFixed(2).replace('.', ',')}`;
+        Alert.alert(
+          'Viagem cancelada',
+          `${refunded} ${refunded === 1 ? 'passageiro reembolsado' : 'passageiros reembolsados'} integralmente.${
+            penalty > 0 ? `\n\nMulta registrada: ${penaltyBrl} — será descontada dos próximos ganhos.` : ''
+          }`,
+        );
+      }
+    } catch (e) {
+      Alert.alert(
+        'Erro',
+        e instanceof Error ? e.message : 'Erro desconhecido ao cancelar a viagem.',
+      );
+    } finally {
+      setCancelLoading(false);
     }
   };
 
@@ -1039,7 +1164,9 @@ export function TripDetailScreen({ route, navigation }: Props) {
           <View style={styles.bottomRow}>
             <TouchableOpacity
               style={[styles.btnSecondary, { flex: 1 }]}
-              onPress={() => setCancelVisible(true)}
+              onPress={() => {
+                void openCancelModal();
+              }}
               activeOpacity={0.8}
             >
               <Text style={styles.btnCancelText}>Cancelar viagem</Text>
@@ -1063,6 +1190,9 @@ export function TripDetailScreen({ route, navigation }: Props) {
         onClose={() => setCancelVisible(false)}
         onConfirm={handleCancelConfirm}
         loading={cancelLoading}
+        paidBookingsCount={cancelPolicy.paidBookings.length}
+        estimatedPenaltyCents={estimatedPenaltyCents}
+        penaltyEnabled={cancelPolicy.penaltyEnabled}
       />
       <RescheduleModal
         visible={rescheduleVisible}

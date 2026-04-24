@@ -33,11 +33,65 @@ function routeForSubtype(subtype: string | null | undefined): string {
   return "Payments";
 }
 
+async function handleTipPaymentIntentSucceeded(
+  admin: SupabaseClient,
+  pi: Stripe.PaymentIntent,
+  now: string,
+): Promise<boolean> {
+  // Gorjeta é identificada pelo metadata.tip === 'true' (setado em charge-tip).
+  // Fluxo paralelo ao pagamento principal: não muda status da entidade,
+  // apenas marca tip_paid_at/tip_status e reconcilia tip_charge_id.
+  const isTip = (pi.metadata?.tip ?? "").toLowerCase() === "true";
+  if (!isTip) return false;
+
+  const entityType = (pi.metadata?.entity_type ?? "").trim();
+  const entityId = (pi.metadata?.entity_id ?? "").trim();
+  if (!entityType || !entityId) return true;
+
+  const table: EntityTable | null =
+    entityType === "booking"
+      ? "bookings"
+      : entityType === "shipment"
+        ? "shipments"
+        : entityType === "dependent_shipment"
+          ? "dependent_shipments"
+          : null;
+  if (!table) return true;
+
+  const chargeId =
+    typeof pi.latest_charge === "string"
+      ? pi.latest_charge
+      : ((pi.latest_charge as { id?: string } | null)?.id ?? null);
+
+  const amountCents =
+    typeof pi.amount_received === "number" && pi.amount_received > 0
+      ? pi.amount_received
+      : typeof pi.amount === "number" && pi.amount > 0
+        ? pi.amount
+        : null;
+
+  await admin
+    .from(table)
+    .update({
+      tip_status: "succeeded",
+      tip_paid_at: now,
+      tip_charge_id: chargeId,
+      ...(amountCents != null ? { tip_cents: amountCents } : {}),
+    } as never)
+    .eq("id", entityId)
+    .or("tip_status.is.null,tip_status.eq.pending");
+
+  return true;
+}
+
 async function handlePaymentIntentSucceeded(
   admin: SupabaseClient,
   pi: Stripe.PaymentIntent,
   now: string
 ): Promise<void> {
+  // Gorjeta: fluxo paralelo, retorna early se tratado.
+  if (await handleTipPaymentIntentSucceeded(admin, pi, now)) return;
+
   const ref = extractEntityRef(pi.metadata);
   if (!ref) return;
 
@@ -165,11 +219,51 @@ async function handleChargeRefunded(
   if (!paymentIntentId) return;
 
   const fullyRefunded = charge.amount_refunded >= charge.amount;
-  const nextStatus = fullyRefunded ? "refunded" : "partially_refunded";
+  const fallbackStatus = fullyRefunded ? "refunded" : "partially_refunded";
 
+  // Nota sobre race: quando o estorno é disparado por cancel-booking/cancel-scheduled-trip,
+  // o booking já está com status='cancelled' e cancelled_by/cancelled_at preenchidos.
+  // Se sobrescrevêssemos o status para 'refunded' aqui perderíamos a semântica do
+  // cancelamento (quem cancelou, janela aplicada). Estratégia:
+  //   1. Em bookings: gravar refunded_at + refund_amount_cents sem sobrescrever
+  //      status quando já for 'cancelled'. Para pagamentos estornados por outras
+  //      vias (admin reembolsando sem cancelar) mantemos o comportamento antigo.
+  //   2. Demais tabelas (shipments, dependent_shipments, excursion_requests):
+  //      mantém o fluxo original (não há rota de cancel+refund separada ainda).
+  const refundAmountCents = Math.max(
+    0,
+    Math.floor(Number(charge.amount_refunded ?? 0)),
+  );
+
+  // bookings: lookup prévio para preservar 'cancelled'.
+  const { data: bookingRows } = await admin
+    .from("bookings")
+    .select("id, status")
+    .eq("stripe_payment_intent_id", paymentIntentId);
+
+  for (const row of (bookingRows ?? []) as Array<{ id: string; status: string }>) {
+    const payload: Record<string, unknown> = {
+      refunded_at: now,
+      refund_amount_cents: refundAmountCents,
+      updated_at: now,
+    };
+    // Só avança o status se ainda não estiver em estado terminal de refund/cancel.
+    if (
+      row.status !== "refunded" &&
+      row.status !== "partially_refunded" &&
+      row.status !== "cancelled"
+    ) {
+      payload.status = fallbackStatus;
+    }
+    await admin
+      .from("bookings")
+      .update(payload as never)
+      .eq("id", row.id);
+  }
+
+  // Demais tabelas: comportamento preservado.
   for (
     const table of [
-      "bookings",
       "shipments",
       "dependent_shipments",
       "excursion_requests",
@@ -177,7 +271,7 @@ async function handleChargeRefunded(
   ) {
     await admin
       .from(table)
-      .update({ status: nextStatus, updated_at: now } as never)
+      .update({ status: fallbackStatus, updated_at: now } as never)
       .eq("stripe_payment_intent_id", paymentIntentId)
       .not("status", "in", "(refunded,partially_refunded)");
   }

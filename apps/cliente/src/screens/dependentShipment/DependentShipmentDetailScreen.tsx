@@ -40,6 +40,7 @@ import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { SupportSheet } from '../../components/SupportSheet';
 import { AnimatedBottomSheet } from '../../components/AnimatedBottomSheet';
+import { TipModal } from '../../components/TipModal';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const SHEET_SLIDE_DISTANCE = 500;
@@ -110,6 +111,8 @@ type DetailRow = {
   status: string;
   created_at: string;
   tip_cents: number | null;
+  tip_status: string | null;
+  tip_paid_at: string | null;
   rating: number | null;
   receiver_name: string | null;
   pickup_code: string | null;
@@ -154,14 +157,10 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
   const [showContactSheet, setShowContactSheet] = useState(false);
   const [showTipSheet, setShowTipSheet] = useState(false);
   const [showRatingSheet, setShowRatingSheet] = useState(false);
-  const [tipInputValue, setTipInputValue] = useState('');
-  const [tipSubmitting, setTipSubmitting] = useState(false);
   const [ratingStars, setRatingStars] = useState(0);
   const [ratingComment, setRatingComment] = useState('');
   const [ratingSubmitting, setRatingSubmitting] = useState(false);
   const [tripFollowMeta, setTripFollowMeta] = useState<DependentTripFollowMeta | null>(null);
-  const tipOverlayOpacity = useRef(new Animated.Value(0)).current;
-  const tipSheetTranslateY = useRef(new Animated.Value(SHEET_SLIDE_DISTANCE)).current;
   const ratingOverlayOpacity = useRef(new Animated.Value(0)).current;
   const ratingSheetTranslateY = useRef(new Animated.Value(SHEET_SLIDE_DISTANCE)).current;
 
@@ -180,7 +179,7 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
       const { data: row, error } = await supabase
         .from('dependent_shipments')
         .select(
-          'id, user_id, dependent_id, full_name, contact_phone, bags_count, instructions, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, tip_cents, rating, receiver_name, pickup_code, delivery_code, scheduled_trip_id',
+          'id, user_id, dependent_id, full_name, contact_phone, bags_count, instructions, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, tip_cents, tip_status, tip_paid_at, rating, receiver_name, pickup_code, delivery_code, scheduled_trip_id',
         )
         .eq('id', dependentShipmentId)
         .eq('user_id', user.id)
@@ -383,16 +382,6 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
   };
 
   useEffect(() => {
-    if (!showTipSheet) return;
-    tipOverlayOpacity.setValue(0);
-    tipSheetTranslateY.setValue(SHEET_SLIDE_DISTANCE);
-    Animated.sequence([
-      Animated.timing(tipOverlayOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
-      Animated.timing(tipSheetTranslateY, { toValue: 0, duration: 280, useNativeDriver: true }),
-    ]).start();
-  }, [showTipSheet]);
-
-  useEffect(() => {
     if (!showRatingSheet) return;
     ratingOverlayOpacity.setValue(0);
     ratingSheetTranslateY.setValue(SHEET_SLIDE_DISTANCE);
@@ -401,14 +390,6 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
       Animated.timing(ratingSheetTranslateY, { toValue: 0, duration: 280, useNativeDriver: true }),
     ]).start();
   }, [showRatingSheet]);
-
-  const closeTipSheet = () => {
-    Keyboard.dismiss();
-    setTipInputValue('');
-    tipOverlayOpacity.setValue(0);
-    tipSheetTranslateY.setValue(SHEET_SLIDE_DISTANCE);
-    setShowTipSheet(false);
-  };
 
   const closeRatingSheet = () => {
     Keyboard.dismiss();
@@ -419,40 +400,6 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
     setRatingComment('');
   };
 
-  const tipInputToCents = (s: string): number => {
-    const normalized = s.trim().replace(',', '.');
-    if (!normalized) return 0;
-    const val = parseFloat(normalized);
-    if (Number.isNaN(val) || val <= 0) return 0;
-    return Math.round(val * 100);
-  };
-
-  const handleTipSubmit = async () => {
-    const cents = tipInputToCents(tipInputValue);
-    if (cents <= 0) {
-      Alert.alert('Valor inválido', 'Digite um valor maior que zero.');
-      return;
-    }
-    Keyboard.dismiss();
-    setTipSubmitting(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setTipSubmitting(false);
-      return;
-    }
-    const { error } = await supabase
-      .from('dependent_shipments')
-      .update({ tip_cents: cents })
-      .eq('id', dependentShipmentId)
-      .eq('user_id', user.id);
-    setTipSubmitting(false);
-    if (error) {
-      Alert.alert('Erro', 'Não foi possível enviar a gorjeta. Tente novamente.');
-      return;
-    }
-    setDetail((d) => (d ? { ...d, tip_cents: cents } : null));
-    closeTipSheet();
-  };
 
   const handleRatingSubmit = async () => {
     if (ratingStars < 1) {
@@ -680,23 +627,31 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
           </View>
         </View>
 
-        {/* Gorjeta */}
-        <View style={styles.divider} />
-        <View style={styles.section}>
-          <View style={styles.infoRow}>
-            <Image source={require('../../../assets/icons/icon-sessao-gorjeta.png')} style={styles.sectionIcon} />
-            <Text style={styles.infoRowText}>{tipFormatted ?? 'R$ 0,00'}</Text>
-            {(!detail.tip_cents || detail.tip_cents <= 0) && (
-              <TouchableOpacity
-                style={styles.actionButton}
-                activeOpacity={0.8}
-                onPress={() => { setTipInputValue(''); setShowTipSheet(true); }}
-              >
-                <Text style={styles.actionButtonText}>Gorjeta</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
+        {/* Gorjeta — só aparece após entrega concluída (delivered). */}
+        {isDelivered && (
+          <>
+            <View style={styles.divider} />
+            <View style={styles.section}>
+              <View style={styles.infoRow}>
+                <Image source={require('../../../assets/icons/icon-sessao-gorjeta.png')} style={styles.sectionIcon} />
+                <Text style={styles.infoRowText}>
+                  {detail.tip_status === 'succeeded' && detail.tip_cents && detail.tip_cents > 0
+                    ? tipFormatted
+                    : 'Nenhuma gorjeta enviada'}
+                </Text>
+                {!(detail.tip_status === 'succeeded' && detail.tip_cents && detail.tip_cents > 0) && (
+                  <TouchableOpacity
+                    style={styles.actionButton}
+                    activeOpacity={0.8}
+                    onPress={() => setShowTipSheet(true)}
+                  >
+                    <Text style={styles.actionButtonText}>Gorjeta</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          </>
+        )}
 
         {/* Avaliação */}
         <View style={styles.divider} />
@@ -824,52 +779,26 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
         </View>
       </Modal>
 
-      {/* Bottom sheet: Gorjeta */}
-      <Modal visible={showTipSheet} transparent animationType="none" onRequestClose={closeTipSheet} statusBarTranslucent>
-        <View style={styles.sheetOverlayContainer} pointerEvents="box-none">
-          <Animated.View style={[styles.sheetOverlayBg, { opacity: tipOverlayOpacity }]} pointerEvents="none" />
-          <Pressable style={styles.sheetOverlayTouchable} onPress={closeTipSheet} />
-          <KeyboardAvoidingView
-            behavior="padding"
-            style={styles.sheetKeyboardAvoid}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
-          >
-            <Animated.View
-              style={[styles.bottomSheet, { paddingBottom: insets.bottom + 24, transform: [{ translateY: tipSheetTranslateY }] }]}
-              pointerEvents="box-none"
-            >
-              <View style={styles.sheetHandle} />
-              <TouchableOpacity style={styles.sheetClose} onPress={closeTipSheet} hitSlop={12}>
-                <MaterialIcons name="close" size={24} color={COLORS.black} />
-              </TouchableOpacity>
-              <Text style={styles.sheetTitle}>Gorjeta</Text>
-              <Text style={styles.tipValueLabel}>Valor (R$)</Text>
-              <TextInput
-                style={styles.tipInput}
-                placeholder="0,00"
-                placeholderTextColor={COLORS.neutral700}
-                value={tipInputValue}
-                onChangeText={(t) => setTipInputValue(t.replace(/[^0-9,]/g, '').replace(/,([^,]*),/, ',$1'))}
-                keyboardType="decimal-pad"
-                returnKeyType="done"
-                onSubmitEditing={handleTipSubmit}
-              />
-              <TouchableOpacity
-                style={[styles.sheetPrimaryButton, (tipInputToCents(tipInputValue) <= 0 || tipSubmitting) && styles.sheetPrimaryButtonDisabled]}
-                onPress={handleTipSubmit}
-                disabled={tipInputToCents(tipInputValue) <= 0 || tipSubmitting}
-                activeOpacity={0.8}
-              >
-                {tipSubmitting ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.sheetPrimaryButtonText}>Enviar gorjeta</Text>
-                )}
-              </TouchableOpacity>
-            </Animated.View>
-          </KeyboardAvoidingView>
-        </View>
-      </Modal>
+      <TipModal
+        visible={showTipSheet}
+        onClose={() => setShowTipSheet(false)}
+        onSuccess={({ tipCents }) => {
+          setShowTipSheet(false);
+          setDetail((d) =>
+            d
+              ? {
+                  ...d,
+                  tip_cents: tipCents,
+                  tip_status: 'succeeded',
+                  tip_paid_at: new Date().toISOString(),
+                }
+              : d,
+          );
+        }}
+        entityType="dependent_shipment"
+        entityId={dependentShipmentId}
+        driverName={tripFollowMeta?.driverName ?? null}
+      />
 
       {/* Bottom sheet: Avaliação */}
       <Modal visible={showRatingSheet} transparent animationType="none" onRequestClose={closeRatingSheet} statusBarTranslucent>

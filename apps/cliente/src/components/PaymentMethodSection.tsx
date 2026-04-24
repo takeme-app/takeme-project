@@ -56,23 +56,27 @@ const PAYMENT_OPTIONS: { type: PaymentMethodType; label: string; icon: keyof typ
   { type: 'dinheiro', label: 'Dinheiro', icon: 'payments' },
 ];
 
-function getCancellationPolicyLines(variant: CancellationPolicyVariant): string[] {
+function getCancellationPolicyLines(
+  variant: CancellationPolicyVariant,
+  freeWindowHours: number,
+): string[] {
+  const hoursLabel = formatHoursLabel(freeWindowHours);
   switch (variant) {
     case 'shipment_credit':
-      return [
-        'Cancelamento até 2h antes: reembolso integral',
-        'Cancelamento após 12h antes: sem reembolso',
-        'Reagendamento permitido até 2h antes',
-      ];
     case 'shipment_debit':
     case 'trip':
     default:
       return [
-        'Cancelamento até 12h antes: reembolso integral',
-        'Cancelamento após 12h antes: sem reembolso',
-        'Reagendamento permitido até 2h antes',
+        `Cancelamento até ${hoursLabel} antes da partida: reembolso integral`,
+        `Cancelamento após esse prazo: sem reembolso`,
       ];
   }
+}
+
+function formatHoursLabel(hours: number): string {
+  if (!Number.isFinite(hours) || hours <= 0) return '2h';
+  if (Number.isInteger(hours)) return `${hours}h`;
+  return `${hours.toFixed(1)}h`;
 }
 
 export function PaymentMethodSection({
@@ -97,6 +101,33 @@ export function PaymentMethodSection({
   /** Cartão salvo vs tokenizar novo (quando existir salvo). */
   const [cardEntryMode, setCardEntryMode] = useState<'saved' | 'new'>('new');
   const [selectedSavedId, setSelectedSavedId] = useState<string | null>(null);
+  /** Janela de reembolso integral vinda de `platform_settings`; fallback 2h. */
+  const [freeWindowHours, setFreeWindowHours] = useState<number>(2);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from('platform_settings')
+          .select('value')
+          .eq('key', 'booking_cancellation_free_window_hours')
+          .maybeSingle();
+        if (cancelled) return;
+        const raw = (data as { value?: unknown } | null)?.value;
+        const val =
+          raw && typeof raw === 'object' && 'value' in (raw as Record<string, unknown>)
+            ? Number((raw as { value: unknown }).value)
+            : Number(raw);
+        if (Number.isFinite(val) && val >= 0) setFreeWindowHours(val);
+      } catch {
+        // fallback mantido
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleCpfChange = useCallback((text: string) => setCpfCnpj(formatCpf(text)), []);
 
@@ -229,7 +260,8 @@ export function PaymentMethodSection({
   }, [onConfirmPayment]);
 
   const policyLines = getCancellationPolicyLines(
-    selectedMethod === 'credito' ? 'shipment_credit' : selectedMethod === 'debito' ? 'shipment_debit' : cancellationPolicyVariant
+    selectedMethod === 'credito' ? 'shipment_credit' : selectedMethod === 'debito' ? 'shipment_debit' : cancellationPolicyVariant,
+    freeWindowHours,
   );
 
   return (

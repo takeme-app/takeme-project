@@ -1,0 +1,284 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "npm:@supabase/supabase-js@2";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-auth-token, x-client-info, apikey, content-type",
+};
+
+const DEFAULT_FREE_WINDOW_HOURS = 2;
+
+async function readFreeWindowHours(admin: ReturnType<typeof createClient>): Promise<number> {
+  try {
+    const { data } = await admin
+      .from("platform_settings")
+      .select("value")
+      .eq("key", "booking_cancellation_free_window_hours")
+      .maybeSingle();
+    const raw = (data as { value?: unknown } | null)?.value;
+    const num =
+      typeof raw === "number"
+        ? raw
+        : typeof raw === "object" && raw !== null && "value" in raw
+          ? Number((raw as { value: unknown }).value)
+          : Number(raw);
+    if (Number.isFinite(num) && num >= 0) return num;
+  } catch (e) {
+    console.warn("[cancel-booking] fallback window hours:", e);
+  }
+  return DEFAULT_FREE_WINDOW_HOURS;
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  try {
+    const authHeader =
+      req.headers.get("Authorization") ?? req.headers.get("x-auth-token");
+    const token = authHeader?.startsWith("Bearer ")
+      ? authHeader.replace("Bearer ", "").trim()
+      : (authHeader ?? "").trim();
+
+    if (!token) {
+      return new Response(JSON.stringify({ error: "Não autorizado" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    const userClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+    const {
+      data: { user },
+      error: userError,
+    } = await userClient.auth.getUser(token);
+    if (userError || !user?.id) {
+      return new Response(JSON.stringify({ error: "Sessão inválida" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const body = (await req.json().catch(() => ({}))) as {
+      booking_id?: string;
+    };
+    const bookingId =
+      typeof body.booking_id === "string" ? body.booking_id.trim() : "";
+    if (!bookingId) {
+      return new Response(
+        JSON.stringify({ error: "booking_id obrigatório" }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    const admin = createClient(supabaseUrl, serviceRoleKey);
+
+    type BookingRow = {
+      id: string;
+      user_id: string;
+      status: string;
+      amount_cents: number | null;
+      stripe_payment_intent_id: string | null;
+      scheduled_trip_id: string;
+      scheduled_trips: { departure_at: string | null } | null;
+    };
+
+    const { data: bookingRaw, error: bookingErr } = await admin
+      .from("bookings")
+      .select(
+        "id, user_id, status, amount_cents, stripe_payment_intent_id, scheduled_trip_id, scheduled_trips:scheduled_trip_id(departure_at)"
+      )
+      .eq("id", bookingId)
+      .maybeSingle();
+
+    if (bookingErr || !bookingRaw) {
+      return new Response(JSON.stringify({ error: "Reserva não encontrada" }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const booking = bookingRaw as unknown as BookingRow;
+
+    if (String(booking.user_id) !== user.id) {
+      return new Response(JSON.stringify({ error: "Acesso negado" }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const cancellableStatuses = new Set(["pending", "paid", "confirmed"]);
+    if (!cancellableStatuses.has(booking.status)) {
+      return new Response(
+        JSON.stringify({
+          error: `Reserva não pode ser cancelada (status atual: ${booking.status}).`,
+        }),
+        {
+          status: 409,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    const departureIso = booking.scheduled_trips?.departure_at ?? null;
+    if (!departureIso) {
+      return new Response(
+        JSON.stringify({ error: "Viagem sem data de partida" }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    const nowMs = Date.now();
+    const departureMs = Date.parse(departureIso);
+    const hoursUntilDeparture = (departureMs - nowMs) / (1000 * 60 * 60);
+
+    const thresholdHours = await readFreeWindowHours(admin);
+    const insideWindow = hoursUntilDeparture >= thresholdHours;
+
+    const wasPaid =
+      (booking.status === "paid" || booking.status === "confirmed") &&
+      Boolean(booking.stripe_payment_intent_id) &&
+      Math.floor(Number(booking.amount_cents ?? 0)) > 0;
+
+    const nowIso = new Date().toISOString();
+    const policySnapshot = {
+      threshold_hours: thresholdHours,
+      hours_until_departure: Number(hoursUntilDeparture.toFixed(4)),
+      inside_free_window: insideWindow,
+      will_refund: insideWindow && wasPaid,
+      departure_at: departureIso,
+      cancelled_at: nowIso,
+    };
+
+    let refunded = false;
+    let refundAmountCents = 0;
+
+    if (insideWindow && wasPaid) {
+      // Invoca process-refund com service_role (interno). process-refund marca
+      // booking.status = 'cancelled' automaticamente.
+      const refundRes = await fetch(`${supabaseUrl}/functions/v1/process-refund`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${serviceRoleKey}`,
+        },
+        body: JSON.stringify({
+          entity_type: "booking",
+          entity_id: bookingId,
+          reason: "passenger_cancellation_within_window",
+        }),
+      });
+      const refundBody = (await refundRes.json().catch(() => ({}))) as {
+        error?: string;
+        refund_amount_cents?: number;
+      };
+      if (!refundRes.ok) {
+        return new Response(
+          JSON.stringify({
+            error: `Falha ao estornar: ${refundBody.error ?? refundRes.statusText}`,
+          }),
+          {
+            status: 502,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          }
+        );
+      }
+      refunded = true;
+      refundAmountCents = Math.max(
+        0,
+        Math.floor(Number(refundBody.refund_amount_cents ?? booking.amount_cents ?? 0))
+      );
+      policySnapshot.will_refund = true;
+      (policySnapshot as Record<string, unknown>).refund_amount_cents =
+        refundAmountCents;
+    }
+
+    // Aplica metadados do cancelamento. Se process-refund já setou status,
+    // o UPDATE abaixo preserva (não força outro status).
+    const updatePayload: Record<string, unknown> = {
+      status: "cancelled",
+      cancelled_by: "passenger",
+      cancelled_at: nowIso,
+      cancellation_reason: "passenger_cancellation",
+      cancellation_policy_applied: policySnapshot,
+      updated_at: nowIso,
+    };
+
+    const { error: updErr } = await admin
+      .from("bookings")
+      .update(updatePayload as never)
+      .eq("id", bookingId);
+
+    if (updErr) {
+      console.error("[cancel-booking] update booking error:", updErr.message);
+    }
+
+    // Cancela payout pendente (caso não-Stripe tenha sido criado e refund não rodou).
+    if (!refunded) {
+      await admin
+        .from("payouts")
+        .update({
+          status: "cancelled",
+          cancelled_reason: "booking_cancelled",
+          updated_at: nowIso,
+        } as never)
+        .eq("entity_type", "booking")
+        .eq("entity_id", bookingId)
+        .in("status", ["pending", "processing"]);
+    }
+
+    // Notificação para o passageiro.
+    try {
+      await admin.from("notifications").insert({
+        user_id: booking.user_id,
+        title: refunded ? "Reserva cancelada com estorno" : "Reserva cancelada",
+        message: refunded
+          ? "Sua reserva foi cancelada e o reembolso integral foi iniciado no cartão. Pode levar de 5 a 10 dias para aparecer."
+          : "Sua reserva foi cancelada. Como faltava menos tempo até a partida, não há reembolso.",
+        category: "booking",
+      } as never);
+    } catch (e) {
+      console.warn("[cancel-booking] notification insert warn:", e);
+    }
+
+    return new Response(
+      JSON.stringify({
+        cancelled: true,
+        refunded,
+        refund_amount_cents: refundAmountCents,
+        inside_window: insideWindow,
+        threshold_hours: thresholdHours,
+        hours_until_departure: hoursUntilDeparture,
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
+  } catch (e) {
+    console.error("[cancel-booking]", e);
+    return new Response(
+      JSON.stringify({
+        error: e instanceof Error ? e.message : "Erro interno",
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
+  }
+});

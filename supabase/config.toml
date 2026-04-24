@@ -30,6 +30,9 @@ verify_jwt = false
 [functions.charge-excursion-request]
 verify_jwt = false
 
+[functions.charge-tip]
+verify_jwt = false
+
 [functions.refund-shipment-no-driver]
 verify_jwt = false
 
