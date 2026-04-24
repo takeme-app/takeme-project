@@ -5,9 +5,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  Modal,
-  TextInput,
-  KeyboardAvoidingView,
   Alert,
   Linking,
 } from 'react-native';
@@ -73,11 +70,7 @@ export function PaymentsScreen({ navigation }: Props) {
   const [rides, setRides] = useState(0);
   const [tips] = useState(0);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
-  const [pixKey, setPixKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [editPixVisible, setEditPixVisible] = useState(false);
-  const [newPixKey, setNewPixKey] = useState('');
-  const [savingPix, setSavingPix] = useState(false);
   const [stripeState, setStripeState] = useState<StripeConnectState>('none');
   const [stripePendingVerification, setStripePendingVerification] = useState(0);
   const [stripeAccountId, setStripeAccountId] = useState<string | null>(null);
@@ -96,11 +89,10 @@ export function PaymentsScreen({ navigation }: Props) {
     const { data: wp } = await supabase
       .from('worker_profiles')
       .select(
-        'pix_key, stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_details_submitted, stripe_connect_requirements_due_count, stripe_connect_pending_verification_count'
+        'stripe_connect_account_id, stripe_connect_charges_enabled, stripe_connect_details_submitted, stripe_connect_requirements_due_count, stripe_connect_pending_verification_count'
       )
       .eq('id', user.id)
       .single();
-    setPixKey(wp?.pix_key ?? null);
     setStripeState(getStripeConnectState(wp));
     setStripePendingVerification(Number(wp?.stripe_connect_pending_verification_count ?? 0) || 0);
     const acct = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? '';
@@ -119,23 +111,6 @@ export function PaymentsScreen({ navigation }: Props) {
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
-
-  const handleSavePix = async () => {
-    const key = newPixKey.trim();
-    if (!key) return;
-    setSavingPix(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      await supabase
-        .from('worker_profiles')
-        .update({ pix_key: key, updated_at: new Date().toISOString() } as never)
-        .eq('id', user.id);
-      setPixKey(key);
-    }
-    setSavingPix(false);
-    setEditPixVisible(false);
-    setNewPixKey('');
-  };
 
   const handleStripeConnectSetup = async () => {
     setConnectLoading(true);
@@ -239,24 +214,6 @@ export function PaymentsScreen({ navigation }: Props) {
             onPressExpress={handleStripeExpressLogin}
           />
 
-          {/* Linha Pix compacta */}
-          <TouchableOpacity
-            style={styles.pixRow}
-            onPress={() => { setNewPixKey(pixKey ?? ''); setEditPixVisible(true); }}
-            activeOpacity={0.7}
-          >
-            <View style={styles.pixRowIcon}>
-              <Text style={styles.pixRowDiamond}>◆</Text>
-            </View>
-            <View style={styles.pixRowInfo}>
-              <Text style={styles.pixRowLabel}>Chave Pix (repasses manuais)</Text>
-              <Text style={styles.pixRowValue} numberOfLines={1}>
-                {pixKey ? pixKey : 'Toque para cadastrar'}
-              </Text>
-            </View>
-            <MaterialIcons name="edit" size={18} color={SUBTLE} />
-          </TouchableOpacity>
-
           {/* Transferências de hoje */}
           <Text style={[styles.sectionTitle, { marginTop: 32 }]}>Transferências de hoje</Text>
 
@@ -293,64 +250,6 @@ export function PaymentsScreen({ navigation }: Props) {
           </TouchableOpacity>
         </ScrollView>
       )}
-
-      {/* Modal editar Pix */}
-      <Modal visible={editPixVisible} transparent animationType="slide">
-        <KeyboardAvoidingView
-          style={styles.modalOverlay}
-          behavior="padding"
-        >
-          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setEditPixVisible(false)} />
-          <View style={styles.sheet}>
-            <View style={styles.sheetHandleRow}>
-              <View style={styles.sheetHandle} />
-            </View>
-            <TouchableOpacity style={styles.sheetCloseBtn} onPress={() => setEditPixVisible(false)}>
-              <View style={styles.sheetCloseCircle}>
-                <MaterialIcons name="close" size={18} color="#374151" />
-              </View>
-            </TouchableOpacity>
-            <View style={styles.sheetHeaderContent}>
-              <Text style={styles.sheetTitle}>Alterar chave Pix</Text>
-              <Text style={styles.sheetSubtitle}>
-                Atualize sua chave Pix para receber seus pagamentos no novo destino.
-                {'\n\n'}
-                Você pode editar essa informação sempre que quiser.
-              </Text>
-            </View>
-            <View style={styles.sheetDivider} />
-            <View style={styles.sheetBody}>
-              <Text style={styles.inputLabel}>Nova chave Pix</Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder="Ex: 995431232 ou email@exemplo.com"
-                placeholderTextColor="#9CA3AF"
-                value={newPixKey}
-                onChangeText={setNewPixKey}
-                autoCapitalize="none"
-              />
-              <TouchableOpacity
-                style={[styles.btnPrimary, (!newPixKey.trim() || savingPix) && { opacity: 0.6 }]}
-                onPress={handleSavePix}
-                disabled={savingPix || !newPixKey.trim()}
-                activeOpacity={0.85}
-              >
-                {savingPix
-                  ? <ActivityIndicator size="small" color="#fff" />
-                  : <Text style={styles.btnPrimaryText}>Salvar alteração</Text>
-                }
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.btnCancel}
-                onPress={() => setEditPixVisible(false)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.btnCancelText}>Cancelar</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -563,22 +462,6 @@ const styles = StyleSheet.create({
   },
   statusActiveText: { fontSize: 14, fontWeight: '600', color: SUCCESS },
 
-  /* Pix row */
-  pixRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    gap: 12,
-  },
-  pixRowIcon: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: CREAM, alignItems: 'center', justifyContent: 'center',
-  },
-  pixRowDiamond: { fontSize: 16, color: GOLD },
-  pixRowInfo: { flex: 1 },
-  pixRowLabel: { fontSize: 12, color: SUBTLE, marginBottom: 2 },
-  pixRowValue: { fontSize: 15, fontWeight: '600', color: INK },
-
   /* Transferências */
   emptyText: { fontSize: 14, color: SUBTLE, marginVertical: 8 },
   transferRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 12 },
@@ -595,41 +478,4 @@ const styles = StyleSheet.create({
 
   historyLink: { alignItems: 'center', marginTop: 24 },
   historyLinkText: { fontSize: 14, color: MUTED, textDecorationLine: 'underline', fontWeight: '500' },
-
-  /* Modal */
-  modalOverlay: { flex: 1, justifyContent: 'flex-end' },
-  modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
-  sheet: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    paddingBottom: 32,
-  },
-  sheetHandleRow: { alignItems: 'center', paddingTop: 12, paddingBottom: 4 },
-  sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E5E7EB' },
-  sheetCloseBtn: { position: 'absolute', top: 12, right: 20, zIndex: 1 },
-  sheetCloseCircle: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
-  },
-  sheetHeaderContent: { paddingHorizontal: 24, paddingTop: 8, paddingBottom: 20 },
-  sheetTitle: { fontSize: 22, fontWeight: '700', color: INK, marginBottom: 12 },
-  sheetSubtitle: { fontSize: 16, color: MUTED, lineHeight: 24 },
-  sheetDivider: { height: 1, backgroundColor: '#E5E7EB' },
-  sheetBody: { paddingHorizontal: 24, paddingTop: 24, gap: 12 },
-  inputLabel: { fontSize: 15, fontWeight: '600', color: INK },
-  textInput: {
-    backgroundColor: '#F3F4F6', borderRadius: 12,
-    paddingHorizontal: 16, paddingVertical: 16,
-    fontSize: 16, color: INK,
-  },
-  btnPrimary: {
-    backgroundColor: '#0d0d0d', borderRadius: 12,
-    paddingVertical: 16, alignItems: 'center', marginTop: 4,
-  },
-  btnPrimaryText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
-  btnCancel: {
-    backgroundColor: '#F3F4F6', borderRadius: 12,
-    paddingVertical: 16, alignItems: 'center',
-  },
-  btnCancelText: { fontSize: 16, fontWeight: '600', color: '#DC2626' },
 });
