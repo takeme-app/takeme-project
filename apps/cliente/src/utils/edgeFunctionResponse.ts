@@ -152,3 +152,23 @@ export function isSupabaseFunctionNotFoundMessage(s: string | null | undefined):
 /** Texto para orientar deploy da função usada em ResetPasswordScreen (fluxo por código). */
 export const MSG_DEPLOY_COMPLETE_PASSWORD_RESET =
   'A edge function "complete-password-reset" ainda não está publicada neste projeto. No Supabase: Edge Functions → faça deploy (código em supabase/functions/complete-password-reset). No terminal: supabase functions deploy complete-password-reset';
+
+/** Cadastro/login por telefone depende destas funções no mesmo projeto do app. */
+export const MSG_DEPLOY_SEND_PHONE_VERIFICATION =
+  'O cadastro por telefone precisa da edge function "send-phone-verification-code" publicada neste projeto Supabase. Enquanto isso, use um e-mail no campo (ex.: nome@email.com). Para publicar: no diretório do repositório, rode: supabase functions deploy send-phone-verification-code';
+
+export const MSG_DEPLOY_VERIFY_PHONE_CODE =
+  'Confirmação por telefone precisa da edge function "verify-phone-code" publicada. No terminal: supabase functions deploy verify-phone-code';
+
+/**
+ * Substitui o erro genérico NOT_FOUND por texto que explica deploy, quando for fluxo por telefone.
+ */
+export function notFoundHintForPhoneEdgeFn(
+  message: string | null | undefined,
+  which: 'send' | 'verify'
+): string {
+  if (!isSupabaseFunctionNotFoundMessage(message)) {
+    return (message ?? '').trim() || 'Serviço temporariamente indisponível. Tente novamente em instantes.';
+  }
+  return which === 'send' ? MSG_DEPLOY_SEND_PHONE_VERIFICATION : MSG_DEPLOY_VERIFY_PHONE_CODE;
+}

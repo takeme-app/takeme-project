@@ -23,13 +23,19 @@ import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { assertClientePassengerOnlyAccount } from '../lib/clientePassengerOnlyGate';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import {
+  parseInvokeData,
+  parseInvokeError,
+  isSupabaseFunctionNotFoundMessage,
+  notFoundHintForPhoneEdgeFn,
+} from '../utils/edgeFunctionResponse';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'VerifyEmail'>;
 
 const CODE_LENGTH = 4;
 const OTP_BOX_DESKTOP = 85;
 const OTP_GAP = 10;
-const CONTENT_PADDING = 48; // 24 * 2
+const CONTENT_PADDING = 48;
 
 function getOtpBoxSize(): number {
   const { width } = Dimensions.get('window');
@@ -39,7 +45,8 @@ function getOtpBoxSize(): number {
 }
 
 export function VerifyEmailScreen({ navigation, route }: Props) {
-  const { email, password, fullName, phone } = route.params;
+  const { email, password, fullName, phone, channel: channelParam } = route.params;
+  const channel: 'email' | 'phone' = channelParam === 'phone' ? 'phone' : 'email';
   const { showAlert } = useAppAlert();
   const [digits, setDigits] = useState<string[]>(() => Array.from({ length: CODE_LENGTH }, () => ''));
   const [focusedIndex, setFocusedIndex] = useState<number>(0);
@@ -64,7 +71,9 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
     if (onlyNums.length > 1) {
       const arr = onlyNums.slice(0, CODE_LENGTH).split('');
       const next = [...digits];
-      arr.forEach((c, i) => { next[i] = c; });
+      arr.forEach((c, i) => {
+        next[i] = c;
+      });
       setDigits(next);
       setError(null);
       const lastIdx = Math.min(arr.length, CODE_LENGTH) - 1;
@@ -95,56 +104,63 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
     setError(null);
     setLoading(true);
     try {
-      const { data: fnData, error: fnError } = await supabase.functions.invoke('verify-email-code', {
-        body: { email, code, password, fullName, phone },
-      });
+      const fnName = channel === 'phone' ? 'verify-phone-code' : 'verify-email-code';
+      const fnBody: Record<string, unknown> =
+        channel === 'phone'
+          ? { phone, code, password, fullName }
+          : { email: email.trim(), code, password, fullName, phone: phone || undefined };
+
+      const { data: fnData, error: fnError } = await supabase.functions.invoke(fnName, { body: fnBody });
+
+      const payload = parseInvokeData(fnData);
 
       if (fnError) {
-        const err = fnError as unknown as {
-          message?: string;
-          context?: { json?: () => Promise<unknown>; body?: unknown };
-        };
-        let bodyError: string | null = null;
-        if (err?.context && typeof (err.context as { json?: () => Promise<unknown> }).json === 'function') {
-          try {
-            const body = await (err.context as { json: () => Promise<Record<string, unknown>> }).json();
-            if (body && typeof body === 'object' && body !== null && 'error' in body) {
-              bodyError = String((body as { error: unknown }).error);
-            }
-          } catch (_) {
-            /* ignorar falha ao parsear */
-          }
+        const bodyError = await parseInvokeError(fnError);
+        let message = bodyError ?? getUserErrorMessage(fnError, 'Código inválido ou expirado. Tente novamente.');
+        if (channel === 'phone' && isSupabaseFunctionNotFoundMessage(message)) {
+          message = notFoundHintForPhoneEdgeFn(message, 'verify');
         }
-        if (!bodyError && err?.context?.body && typeof err.context.body === 'object' && err.context.body !== null && 'error' in (err.context.body as object)) {
-          bodyError = String((err.context.body as { error: unknown }).error);
-        }
-        const message = bodyError ?? getUserErrorMessage(fnError, 'Código inválido ou expirado. Tente novamente.');
         setError(message);
         showAlert('Código incorreto', message);
         setLoading(false);
         return;
       }
 
-      if (fnData?.error) {
-        const message = String(fnData.error);
+      if (payload?.error != null) {
+        const raw = String(payload.error);
+        const message =
+          channel === 'phone' && isSupabaseFunctionNotFoundMessage(raw)
+            ? notFoundHintForPhoneEdgeFn(raw, 'verify')
+            : raw;
         setError(message);
         showAlert('Código incorreto', message);
         setLoading(false);
         return;
       }
 
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      const phoneDigits = phone.replace(/\D/g, '');
+      const { error: signInError } =
+        channel === 'phone'
+          ? await supabase.auth.signInWithPassword({
+              email: `${phoneDigits}@takeme.com`,
+              password,
+            })
+          : await supabase.auth.signInWithPassword({ email: email.trim(), password });
+
       if (signInError) {
         const message = getUserErrorMessage(
           signInError,
-          'Não foi possível entrar após confirmar o e-mail. Tente fazer login manualmente.'
+          'Não foi possível entrar após confirmar. Tente fazer login manualmente.'
         );
         setError(message);
         showAlert('Login', message);
+        setLoading(false);
         return;
       }
 
-      const { data: { session: postVerifySession } } = await supabase.auth.getSession();
+      const {
+        data: { session: postVerifySession },
+      } = await supabase.auth.getSession();
       if (postVerifySession?.user) {
         const gate = await assertClientePassengerOnlyAccount(postVerifySession.user.id);
         if (!gate.ok) {
@@ -168,11 +184,32 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
     setError(null);
     setResendLoading(true);
     try {
-      const { error: fnError } = await supabase.functions.invoke(
-        'send-email-verification-code',
-        { body: { email } }
-      );
-      if (fnError) throw fnError;
+      const fnName = channel === 'phone' ? 'send-phone-verification-code' : 'send-email-verification-code';
+      const fnBody =
+        channel === 'phone'
+          ? { phone, purpose: 'signup' as const }
+          : { email: email.trim(), purpose: 'signup' as const };
+
+      const { data: resendData, error: fnError } = await supabase.functions.invoke(fnName, { body: fnBody });
+      const resendPayload = parseInvokeData(resendData);
+      if (resendPayload?.error != null) {
+        const raw = String(resendPayload.error);
+        const msg =
+          channel === 'phone' && isSupabaseFunctionNotFoundMessage(raw)
+            ? notFoundHintForPhoneEdgeFn(raw, 'send')
+            : raw;
+        showAlert('Erro', msg);
+        return;
+      }
+      if (fnError) {
+        const bodyError = await parseInvokeError(fnError);
+        let msg = bodyError ?? getUserErrorMessage(fnError, 'Não foi possível reenviar o código.');
+        if (channel === 'phone' && isSupabaseFunctionNotFoundMessage(msg)) {
+          msg = notFoundHintForPhoneEdgeFn(msg, 'send');
+        }
+        showAlert('Erro', msg);
+        return;
+      }
       setDigits(Array.from({ length: CODE_LENGTH }, () => ''));
       setFocusedIndex(0);
       inputRefs.current[0]?.focus();
@@ -184,6 +221,13 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
       setResendLoading(false);
     }
   };
+
+  const title = channel === 'phone' ? 'Vamos confirmar seu telefone' : 'Vamos confirmar seu e-mail';
+  const subtitle =
+    channel === 'phone'
+      ? 'Enviamos um código para seu WhatsApp.\nDigite abaixo para confirmar.'
+      : 'Enviamos um código para seu e-mail.\nDigite abaixo para confirmar.';
+  const resendLabel = channel === 'phone' ? 'Reenviar código' : 'Reenviar código por e-mail';
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
@@ -201,10 +245,9 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
           showsVerticalScrollIndicator={false}
         >
           <View style={[styles.content, { paddingTop: insets.top + titleTopPadding }]}>
-            <Text style={styles.title}>Vamos confirmar seu e-mail</Text>
-            <Text style={styles.subtitle}>
-              Enviamos um código para seu e-mail.{'\n'}Digite abaixo para confirmar.
-            </Text>
+            <Text style={styles.title}>{title}</Text>
+            <Text style={styles.subtitle}>{subtitle}</Text>
+            {error ? <Text style={styles.inlineError}>{error}</Text> : null}
 
             <View style={styles.otpWrapper}>
               {Array.from({ length: CODE_LENGTH }, (_, index) => index).map((index) => {
@@ -212,7 +255,9 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
                 return (
                   <TextInput
                     key={index}
-                    ref={(el) => { inputRefs.current[index] = el; }}
+                    ref={(el) => {
+                      inputRefs.current[index] = el;
+                    }}
                     style={[
                       styles.otpInput,
                       {
@@ -245,7 +290,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
               {resendLoading ? (
                 <ActivityIndicator size="small" color="#2563EB" />
               ) : (
-                <Text style={styles.resendLinkText}>Reenviar código por e-mail</Text>
+                <Text style={styles.resendLinkText}>{resendLabel}</Text>
               )}
             </TouchableOpacity>
           </View>
@@ -318,7 +363,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '400',
     lineHeight: 21,
-    marginBottom: 32,
+    marginBottom: 16,
+  },
+  inlineError: {
+    color: '#DC2626',
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 12,
   },
   otpWrapper: {
     flexDirection: 'row',

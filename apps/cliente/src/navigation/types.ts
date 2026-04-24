@@ -5,7 +5,14 @@ export type RootStackParamList = {
   Welcome: undefined;
   Login: undefined;
   SignUp: undefined;
-  VerifyEmail: { email: string; password: string; fullName: string; phone: string };
+  VerifyEmail: {
+    email: string;
+    password: string;
+    fullName: string;
+    phone: string;
+    /** Cadastro por WhatsApp (OTP) vs e-mail. */
+    channel?: 'email' | 'phone';
+  };
   AddPaymentPrompt: undefined;
   AddPaymentMethod: undefined;
   AddCard: { paymentType: 'credit' | 'debit' };

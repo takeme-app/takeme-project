@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   View,
   TextInput,
@@ -21,6 +21,8 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { assertClientePassengerOnlyAccount } from '../lib/clientePassengerOnlyGate';
 import { signInWithOAuthProvider } from '../lib/oauth';
 import { getUserErrorMessage } from '../utils/errorMessage';
+import { parseInvokeError } from '../utils/edgeFunctionResponse';
+import { detectPhoneOrEmailChannel, formatPhoneBRMask } from '../utils/phoneOrEmailInput';
 import { syncClienteProfileFcmToken } from '../lib/clienteFcm';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
@@ -32,6 +34,19 @@ export function LoginScreen({ navigation }: Props) {
   const [hidePassword, setHidePassword] = useState(true);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+
+  const loginIdentifierChannel = useMemo(
+    () => detectPhoneOrEmailChannel(phoneOrEmail),
+    [phoneOrEmail]
+  );
+
+  const handlePhoneOrEmailChange = useCallback((text: string) => {
+    if (detectPhoneOrEmailChannel(text) === 'phone') {
+      setPhoneOrEmail(formatPhoneBRMask(text));
+    } else {
+      setPhoneOrEmail(text);
+    }
+  }, []);
 
   /** Sempre volta à entrada (Criar conta / Já tenho conta), não ao histórico anterior do stack. */
   const goBackToWelcome = () => {
@@ -85,21 +100,7 @@ export function LoginScreen({ navigation }: Props) {
           body: { phone: phoneDigits, password },
         });
         if (fnError) {
-          const err = fnError as unknown as {
-            context?: { json?: () => Promise<unknown>; body?: unknown };
-          };
-          let bodyError: string | null = null;
-          if (err?.context && typeof (err.context as { json?: () => Promise<unknown> }).json === 'function') {
-            try {
-              const body = await (err.context as { json: () => Promise<Record<string, unknown>> }).json();
-              if (body && typeof body === 'object' && body !== null && 'error' in body) {
-                bodyError = String((body as { error: unknown }).error);
-              }
-            } catch (_) {}
-          }
-          if (!bodyError && err?.context?.body && typeof err.context.body === 'object' && err.context.body !== null && 'error' in (err.context.body as object)) {
-            bodyError = String((err.context.body as { error: unknown }).error);
-          }
+          const bodyError = await parseInvokeError(fnError);
           const msg = bodyError ?? getUserErrorMessage(fnError, 'Telefone ou senha incorretos. Tente novamente.');
           Keyboard.dismiss();
           setLoading(false);
@@ -216,9 +217,11 @@ export function LoginScreen({ navigation }: Props) {
         placeholder="Telefone ou email"
         placeholderTextColor="#9CA3AF"
         value={phoneOrEmail}
-        onChangeText={setPhoneOrEmail}
+        onChangeText={handlePhoneOrEmailChange}
         autoCapitalize="none"
+        autoCorrect={false}
         keyboardType="email-address"
+        textContentType={loginIdentifierChannel === 'phone' ? 'telephoneNumber' : 'emailAddress'}
       />
       <View style={styles.passwordRow}>
         <TextInput
