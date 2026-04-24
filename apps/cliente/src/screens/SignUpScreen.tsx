@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   TextInput,
@@ -18,24 +18,32 @@ import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
-import { parseInvokeData, describeInvokeFailure } from '../utils/edgeFunctionResponse';
+import {
+  parseInvokeData,
+  describeInvokeFailure,
+  parseInvokeError,
+  isSupabaseFunctionNotFoundMessage,
+  notFoundHintForPhoneEdgeFn,
+} from '../utils/edgeFunctionResponse';
+import { isValidEmailFormat } from '../utils/validateEmail';
+import {
+  checkEmailAvailability,
+  type EmailAvailability,
+} from '../lib/checkEmailAvailability';
+import { detectPhoneOrEmailChannel, formatPhoneBRMask } from '../utils/phoneOrEmailInput';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SignUp'>;
 
-function formatPhone(value: string): string {
-  const digits = value.replace(/\D/g, '').slice(0, 11);
-  if (digits.length === 0) return '';
-  if (digits.length <= 2) return `(${digits}`;
-  if (digits.length <= 7) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
-  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
-}
+const EMAIL_AVAILABILITY_DEBOUNCE_MS = 500;
+const PASSWORD_MIN_LEN = 8;
+
+type EmailCheckStatus = 'idle' | 'checking' | EmailAvailability | 'format';
 
 export function SignUpScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
   const [fullName, setFullName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [hidePassword, setHidePassword] = useState(true);
@@ -43,108 +51,202 @@ export function SignUpScreen({ navigation }: Props) {
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [agreeOffers, setAgreeOffers] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  const [emailStatus, setEmailStatus] = useState<EmailCheckStatus>('idle');
+  const [emailStatusMsg, setEmailStatusMsg] = useState<string | null>(null);
+  const [identifierTouched, setIdentifierTouched] = useState(false);
 
   const openTerms = () => navigation.navigate('TermsOfUse');
   const openPrivacy = () => navigation.navigate('PrivacyPolicy');
 
-  const handlePhoneChange = (text: string) => {
-    setPhone(formatPhone(text));
-  };
+  const channel = useMemo(() => detectPhoneOrEmailChannel(identifier), [identifier]);
+
+  const handleIdentifierChange = useCallback((text: string) => {
+    if (detectPhoneOrEmailChannel(text) === 'phone') {
+      setIdentifier(formatPhoneBRMask(text));
+    } else {
+      setIdentifier(text);
+    }
+  }, []);
+
+  const emailNormalized = channel === 'email' ? identifier.trim() : '';
+  const phoneDigits = channel === 'phone' ? identifier.replace(/\D/g, '') : '';
+  const emailFormatValid = useMemo(
+    () => (channel === 'email' ? isValidEmailFormat(emailNormalized) : false),
+    [channel, emailNormalized]
+  );
+  const phoneValid = channel === 'phone' && phoneDigits.length >= 10 && phoneDigits.length <= 11;
+
+  const lastQueryRef = useRef<string>('');
+  useEffect(() => {
+    if (channel !== 'email' || !emailNormalized) {
+      setEmailStatus('idle');
+      setEmailStatusMsg(null);
+      return;
+    }
+    if (!emailFormatValid) {
+      setEmailStatus('format');
+      setEmailStatusMsg('E-mail em formato inválido.');
+      return;
+    }
+
+    let cancelled = false;
+    setEmailStatus('checking');
+    setEmailStatusMsg(null);
+    const query = emailNormalized.toLowerCase();
+    lastQueryRef.current = query;
+    const timer = setTimeout(async () => {
+      const result = await checkEmailAvailability(query);
+      if (cancelled || lastQueryRef.current !== query) return;
+      setEmailStatus(result.status);
+      setEmailStatusMsg(result.message ?? null);
+    }, EMAIL_AVAILABILITY_DEBOUNCE_MS);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [channel, emailNormalized, emailFormatValid]);
+
+  const handleIdentifierBlur = useCallback(() => setIdentifierTouched(true), []);
+
+  const passwordValid = password.length >= PASSWORD_MIN_LEN;
+  const passwordsMatch = password.length > 0 && password === confirmPassword;
+
+  const formReadyToSubmit =
+    fullName.trim().length > 0 &&
+    (channel === 'email'
+      ? emailFormatValid && (emailStatus === 'available' || emailStatus === 'error')
+      : phoneValid) &&
+    passwordValid &&
+    passwordsMatch &&
+    agreeTerms &&
+    !loading;
 
   const handleContinue = async () => {
-    setError(null);
-    const phoneDigits = phone.replace(/\D/g, '');
+    setIdentifierTouched(true);
     if (!fullName.trim()) {
-      const msg = 'Preencha seu nome.';
-      setError(msg);
-      showAlert('Atenção', msg);
+      showAlert('Atenção', 'Preencha seu nome.');
       return;
     }
-    if (!email.trim()) {
-      const msg = 'Preencha o e-mail.';
-      setError(msg);
-      showAlert('Atenção', msg);
+    if (channel === 'email') {
+      if (!emailFormatValid) {
+        showAlert('Atenção', 'Informe um e-mail válido.');
+        return;
+      }
+      if (emailStatus === 'taken') {
+        showAlert('Atenção', emailStatusMsg ?? 'Este e-mail já está cadastrado.');
+        return;
+      }
+      if (emailStatus === 'checking') {
+        showAlert('Aguarde', 'Ainda estamos verificando o e-mail.');
+        return;
+      }
+    } else {
+      if (!phoneValid) {
+        showAlert('Atenção', 'Informe um telefone válido com DDD (10 ou 11 dígitos).');
+        return;
+      }
+    }
+    if (!passwordValid) {
+      showAlert('Atenção', `A senha deve ter no mínimo ${PASSWORD_MIN_LEN} caracteres.`);
       return;
     }
-    if (password.length < 8) {
-      const msg = 'A senha deve ter no mínimo 8 caracteres.';
-      setError(msg);
-      showAlert('Atenção', msg);
-      return;
-    }
-    if (password !== confirmPassword) {
-      const msg = 'As senhas não coincidem.';
-      setError(msg);
-      showAlert('Atenção', msg);
+    if (!passwordsMatch) {
+      showAlert('Atenção', 'As senhas não coincidem.');
       return;
     }
     if (!agreeTerms) {
-      const msg = 'Aceite os Termos de Uso e a Política de Privacidade.';
-      setError(msg);
-      showAlert('Atenção', msg);
+      showAlert('Atenção', 'Aceite os Termos de Uso e a Política de Privacidade.');
       return;
     }
-    if (phoneDigits.length < 10) {
-      const msg = 'Preencha o telefone com DDD e número.';
-      setError(msg);
-      showAlert('Atenção', msg);
-      return;
-    }
-
     if (!isSupabaseConfigured) {
-      const msg =
-        'Supabase não configurado. Adicione EXPO_PUBLIC_SUPABASE_URL e EXPO_PUBLIC_SUPABASE_ANON_KEY no .env do app e reinicie o Metro.';
-      setError(msg);
-      showAlert('Erro', msg);
+      showAlert(
+        'Erro',
+        'Supabase não configurado. Adicione EXPO_PUBLIC_SUPABASE_URL e EXPO_PUBLIC_SUPABASE_ANON_KEY no .env do app e reinicie o Metro.'
+      );
       return;
     }
 
     setLoading(true);
     try {
-      const { data: fnData, error: fnError } = await supabase.functions.invoke(
-        'send-email-verification-code',
-        { body: { email: email.trim(), phone: phoneDigits, purpose: 'signup' } }
-      );
+      const fnName = channel === 'email' ? 'send-email-verification-code' : 'send-phone-verification-code';
+      const fnBody: Record<string, unknown> =
+        channel === 'email'
+          ? { email: emailNormalized, purpose: 'signup' }
+          : { phone: phoneDigits, purpose: 'signup' };
+
+      const { data: fnData, error: fnError } = await supabase.functions.invoke(fnName, { body: fnBody });
       const payload = parseInvokeData(fnData);
       if (payload?.error != null) {
-        const apiErrorMsg = String(payload.error);
-        setError(apiErrorMsg);
-        showAlert('Atenção', apiErrorMsg);
+        const raw = String(payload.error);
+        const msg =
+          channel === 'phone' && isSupabaseFunctionNotFoundMessage(raw)
+            ? notFoundHintForPhoneEdgeFn(raw, 'send')
+            : raw;
+        showAlert('Atenção', msg);
         setLoading(false);
         return;
       }
       if (fnError) {
+        const bodyError = await parseInvokeError(fnError);
+        if (bodyError) {
+          const msg =
+            channel === 'phone' && isSupabaseFunctionNotFoundMessage(bodyError)
+              ? notFoundHintForPhoneEdgeFn(bodyError, 'send')
+              : bodyError;
+          showAlert('Atenção', msg);
+          setLoading(false);
+          return;
+        }
         const message = await describeInvokeFailure(fnData, fnError);
-        setError(message);
-        showAlert('Atenção', message);
+        const msg =
+          channel === 'phone' && isSupabaseFunctionNotFoundMessage(message)
+            ? notFoundHintForPhoneEdgeFn(message, 'send')
+            : message;
+        showAlert('Atenção', msg);
         setLoading(false);
         return;
       }
 
       navigation.navigate('VerifyEmail', {
-        email: email.trim(),
+        email: channel === 'email' ? emailNormalized : '',
         password,
         fullName: fullName.trim(),
-        phone: phoneDigits,
+        phone: channel === 'phone' ? phoneDigits : '',
+        channel,
       });
     } catch (err: unknown) {
-      const message = getUserErrorMessage(
-        err,
-        'Não foi possível enviar o código. Tente novamente.'
-      );
-      setError(message);
-      showAlert('Atenção', message);
+      showAlert('Atenção', getUserErrorMessage(err, 'Não foi possível enviar o código. Tente novamente.'));
     } finally {
       setLoading(false);
     }
   };
 
+  const identifierHint = useMemo(() => {
+    if (!identifierTouched && emailStatus !== 'checking') return null;
+    if (!identifier.trim()) return null;
+    if (channel === 'phone') {
+      if (!phoneValid) {
+        return { kind: 'error' as const, text: 'Informe DDD + número (10 ou 11 dígitos).' };
+      }
+      return null;
+    }
+    if (emailStatus === 'format') return { kind: 'error' as const, text: 'E-mail em formato inválido.' };
+    if (emailStatus === 'checking') return { kind: 'muted' as const, text: 'Verificando e-mail…' };
+    if (emailStatus === 'taken')
+      return { kind: 'error' as const, text: emailStatusMsg ?? 'Este e-mail já está cadastrado.' };
+    if (emailStatus === 'available') return { kind: 'ok' as const, text: 'E-mail disponível.' };
+    if (emailStatus === 'error')
+      return {
+        kind: 'muted' as const,
+        text: 'Não foi possível validar agora. Continuaremos ao clicar em Continuar.',
+      };
+    return null;
+  }, [channel, emailStatus, emailStatusMsg, identifier, identifierTouched, phoneValid]);
+
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior="padding"
-    >
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <StatusBar style="dark" />
       <View style={[styles.header, { paddingTop: Math.max(12, insets.top) }]}>
         <TouchableOpacity
@@ -158,10 +260,7 @@ export function SignUpScreen({ navigation }: Props) {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: Math.max(48, insets.bottom + 24) },
-        ]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(48, insets.bottom + 24) }]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
@@ -175,23 +274,43 @@ export function SignUpScreen({ navigation }: Props) {
           onChangeText={setFullName}
           autoCapitalize="words"
         />
-        <TextInput
-          style={styles.input}
-          placeholder="(00) 00000-0000"
-          placeholderTextColor="#9CA3AF"
-          value={phone}
-          onChangeText={handlePhoneChange}
-          keyboardType="phone-pad"
-        />
-        <TextInput
-          style={styles.input}
-          placeholder="Email"
-          placeholderTextColor="#9CA3AF"
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-        />
+
+        <View style={styles.fieldGroup}>
+          <TextInput
+            style={[
+              styles.input,
+              styles.inputWithHint,
+              identifierHint?.kind === 'error' ? styles.inputError : null,
+              identifierHint?.kind === 'ok' ? styles.inputOk : null,
+            ]}
+            placeholder="Telefone ou email"
+            placeholderTextColor="#9CA3AF"
+            value={identifier}
+            onChangeText={handleIdentifierChange}
+            onBlur={handleIdentifierBlur}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            textContentType={channel === 'phone' ? 'telephoneNumber' : 'emailAddress'}
+          />
+          {identifierHint && (
+            <View style={styles.hintRow}>
+              {emailStatus === 'checking' ? (
+                <ActivityIndicator size="small" color="#6B7280" style={styles.hintSpinner} />
+              ) : null}
+              <Text
+                style={[
+                  styles.hintText,
+                  identifierHint.kind === 'error' && styles.hintError,
+                  identifierHint.kind === 'ok' && styles.hintOk,
+                ]}
+              >
+                {identifierHint.text}
+              </Text>
+            </View>
+          )}
+        </View>
+
         <View style={styles.passwordRow}>
           <TextInput
             style={[styles.input, styles.inputPassword]}
@@ -200,11 +319,11 @@ export function SignUpScreen({ navigation }: Props) {
             value={password}
             onChangeText={setPassword}
             secureTextEntry={hidePassword}
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="newPassword"
           />
-          <TouchableOpacity
-            style={styles.eyeButton}
-            onPress={() => setHidePassword((v) => !v)}
-          >
+          <TouchableOpacity style={styles.eyeButton} onPress={() => setHidePassword((v) => !v)}>
             <View style={styles.eyeIconWrap}>
               <MaterialIcons
                 name={hidePassword ? 'visibility' : 'visibility-off'}
@@ -223,11 +342,11 @@ export function SignUpScreen({ navigation }: Props) {
             value={confirmPassword}
             onChangeText={setConfirmPassword}
             secureTextEntry={hideConfirm}
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="newPassword"
           />
-          <TouchableOpacity
-            style={styles.eyeButton}
-            onPress={() => setHideConfirm((v) => !v)}
-          >
+          <TouchableOpacity style={styles.eyeButton} onPress={() => setHideConfirm((v) => !v)}>
             <View style={styles.eyeIconWrap}>
               <MaterialIcons
                 name={hideConfirm ? 'visibility' : 'visibility-off'}
@@ -240,7 +359,7 @@ export function SignUpScreen({ navigation }: Props) {
         </View>
 
         <TouchableOpacity
-          style={[styles.continueButton, loading && styles.continueButtonDisabled]}
+          style={[styles.continueButton, !formReadyToSubmit && styles.continueButtonDisabled]}
           activeOpacity={0.8}
           onPress={handleContinue}
           disabled={loading}
@@ -330,10 +449,13 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '700',
     color: '#000000',
-    marginTop: 32,
+    marginTop: 8,
     marginBottom: 32,
     lineHeight: 28,
     textAlign: 'center',
+  },
+  fieldGroup: {
+    marginBottom: 0,
   },
   input: {
     backgroundColor: '#F9FAFB',
@@ -345,6 +467,36 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#000000',
     marginBottom: 16,
+  },
+  inputWithHint: {
+    marginBottom: 6,
+  },
+  inputError: {
+    borderColor: '#DC2626',
+  },
+  inputOk: {
+    borderColor: '#059669',
+  },
+  hintRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: -10,
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  hintSpinner: {
+    marginRight: 6,
+  },
+  hintText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  hintError: {
+    color: '#DC2626',
+  },
+  hintOk: {
+    color: '#059669',
   },
   passwordRow: {
     position: 'relative',
@@ -384,7 +536,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   continueButtonDisabled: {
-    opacity: 0.8,
+    opacity: 0.45,
   },
   checkboxRow: {
     flexDirection: 'row',
