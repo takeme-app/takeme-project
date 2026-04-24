@@ -565,7 +565,12 @@ export default function AtendimentosScreen() {
     style: { display: 'flex', flexDirection: 'column' as const, background: '#f6f6f6', borderRadius: 16, padding: '0 24px' },
   },
     meuTicketsFiltered.length === 0
-      ? [React.createElement('p', { key: 'empty', style: { padding: '24px 0', fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhum atendimento nesta visão.')]
+      ? [React.createElement('p', {
+          key: 'empty',
+          style: { padding: '24px 0', fontSize: 14, color: '#767676', margin: 0, ...font },
+        }, meuAtendimentoLabel === 'Meu atendimento'
+          ? 'Nenhum atendimento atribuído a você nesta visão. Tickets por assumir ou já finalizados aparecem em “Todos atendimentos”.'
+          : 'Nenhum atendimento nesta visão.')]
       : meuTicketsFiltered.map((t, i) => ticketCard(t, i)));
 
   const meuSection = React.createElement('div', {
