@@ -102,6 +102,46 @@ const duplicateSvg = React.createElement('svg', { width: 16, height: 16, viewBox
   React.createElement('rect', { x: 9, y: 9, width: 13, height: 13, rx: 2, stroke: '#0d0d0d', strokeWidth: 2 }),
   React.createElement('path', { d: 'M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }));
 
+type PromotionOrderRow = { user_id: string; created_at: string | null };
+
+/**
+ * Busca pedidos com `promotion_id` preenchido em todas as origens que aplicam
+ * desconto no checkout (bookings, shipments, dependent_shipments,
+ * excursion_requests). Esta é a fonte de verdade para "passageiros beneficiados
+ * pela promoção" — distinta do opt-in registrado em `promotion_adhesions`.
+ */
+async function fetchPromotionOrders(startIso: string, endIso: string): Promise<PromotionOrderRow[]> {
+  const pick = (tbl: string) =>
+    (supabase as any)
+      .from(tbl)
+      .select('user_id, created_at')
+      .not('promotion_id', 'is', null)
+      .gte('created_at', startIso)
+      .lte('created_at', endIso);
+
+  const [b, s, ds, er] = await Promise.all([
+    pick('bookings'),
+    pick('shipments'),
+    pick('dependent_shipments'),
+    pick('excursion_requests'),
+  ]);
+  const rows: PromotionOrderRow[] = [];
+  for (const resp of [b, s, ds, er]) {
+    const data = (resp?.data ?? []) as Array<{ user_id: string | null; created_at: string | null }>;
+    for (const r of data) {
+      if (!r?.user_id) continue;
+      rows.push({ user_id: r.user_id, created_at: r.created_at });
+    }
+  }
+  return rows;
+}
+
+function pctChangeStr(cur: number, prev: number): string {
+  if (prev === 0) return cur > 0 ? '+100%' : '0%';
+  const pct = Math.round(((cur - prev) / prev) * 100);
+  return pct >= 0 ? `+${pct}%` : `${pct}%`;
+}
+
 // ── Styles ──────────────────────────────────────────────────────────────
 const s = {
   metricCard: {
@@ -213,8 +253,13 @@ export default function PromocoesScreen() {
   // Adhesion stats
   const [adhesionMotoristas, setAdhesionMotoristas] = useState(0);
   const [adhesionPreparadores, setAdhesionPreparadores] = useState(0);
+  const [adhesionMotoristasDelta, setAdhesionMotoristasDelta] = useState<string>('0%');
+  const [adhesionPreparadoresDelta, setAdhesionPreparadoresDelta] = useState<string>('0%');
+  const [passageirosBeneficiados, setPassageirosBeneficiados] = useState(0);
+  const [passageirosBeneficiadosDelta, setPassageirosBeneficiadosDelta] = useState<string>('0%');
   const [chartData, setChartData] = useState<Array<{ day: string; motoristas: number; preparadores: number; passageiros: number }>>([]);
   const [prevMonthCounts, setPrevMonthCounts] = useState<PromocaoCounts>({ total: 0, ativas: 0, inativas: 0 });
+  const [chartSeries, setChartSeries] = useState<{ motoristas: boolean; preparadores: boolean; clientes: boolean }>({ motoristas: true, preparadores: true, clientes: true });
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -222,6 +267,7 @@ export default function PromocoesScreen() {
     void (async () => {
       const now = new Date();
       const mesAtualInicio = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const mesAtualFim = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).toISOString();
       const mesAnteriorInicio = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
       const mesAnteriorFim = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59).toISOString();
 
@@ -231,12 +277,39 @@ export default function PromocoesScreen() {
         (supabase as any).from('worker_profiles').select('id', { count: 'exact', head: true }).in('subtype', ['shipments', 'excursions']).eq('status', 'approved'),
       ]);
 
-      // Adesões do mês atual
-      const { data: adhesions } = await (supabase as any).from('promotion_adhesions').select('user_type, adhered_at').gte('adhered_at', mesAtualInicio);
-      const motAdhesions = (adhesions || []).filter((a: any) => a.user_type === 'motorista').length;
-      const prepAdhesions = (adhesions || []).filter((a: any) => a.user_type === 'preparador').length;
-      setAdhesionMotoristas(totalMotoristas ? Math.round((motAdhesions / totalMotoristas) * 100) : 0);
-      setAdhesionPreparadores(totalPreparadores ? Math.round((prepAdhesions / totalPreparadores) * 100) : 0);
+      // Adesões mês atual e mês anterior (opt-in explícito de motorista/preparador)
+      const [adhesionsCurResp, adhesionsPrevResp] = await Promise.all([
+        (supabase as any).from('promotion_adhesions').select('user_type, adhered_at').gte('adhered_at', mesAtualInicio),
+        (supabase as any).from('promotion_adhesions').select('user_type').gte('adhered_at', mesAnteriorInicio).lte('adhered_at', mesAnteriorFim),
+      ]);
+      const adhesions = adhesionsCurResp.data || [];
+      const adhesionsPrev = adhesionsPrevResp.data || [];
+
+      const motAdhesions = adhesions.filter((a: any) => a.user_type === 'motorista').length;
+      const prepAdhesions = adhesions.filter((a: any) => a.user_type === 'preparador').length;
+      const motPrev = adhesionsPrev.filter((a: any) => a.user_type === 'motorista').length;
+      const prepPrev = adhesionsPrev.filter((a: any) => a.user_type === 'preparador').length;
+
+      const curMotPct = totalMotoristas ? Math.round((motAdhesions / totalMotoristas) * 100) : 0;
+      const curPrepPct = totalPreparadores ? Math.round((prepAdhesions / totalPreparadores) * 100) : 0;
+      const prevMotPct = totalMotoristas ? Math.round((motPrev / totalMotoristas) * 100) : 0;
+      const prevPrepPct = totalPreparadores ? Math.round((prepPrev / totalPreparadores) * 100) : 0;
+      setAdhesionMotoristas(curMotPct);
+      setAdhesionPreparadores(curPrepPct);
+      setAdhesionMotoristasDelta(pctChangeStr(curMotPct, prevMotPct));
+      setAdhesionPreparadoresDelta(pctChangeStr(curPrepPct, prevPrepPct));
+
+      // Uso de promoção no checkout: pedidos com promotion_id em todas as origens.
+      // Passageiro "beneficiado" = user_id distinto que teve pedido com promoção aplicada no período.
+      const [ordersCur, ordersPrev] = await Promise.all([
+        fetchPromotionOrders(mesAtualInicio, mesAtualFim),
+        fetchPromotionOrders(mesAnteriorInicio, mesAnteriorFim),
+      ]);
+
+      const distinctPassengersCur = new Set(ordersCur.map((o) => o.user_id)).size;
+      const distinctPassengersPrev = new Set(ordersPrev.map((o) => o.user_id)).size;
+      setPassageirosBeneficiados(distinctPassengersCur);
+      setPassageirosBeneficiadosDelta(pctChangeStr(distinctPassengersCur, distinctPassengersPrev));
 
       // Dados para gráfico de adesão por dia
       const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
@@ -244,15 +317,17 @@ export default function PromocoesScreen() {
       for (let d = 1; d <= Math.min(daysInMonth, now.getDate()); d++) {
         const dayStr = `Dia ${d}`;
         const dayDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-        const dayAdhesions = (adhesions || []).filter((a: any) => a.adhered_at?.startsWith(dayDate));
-        const cumMot = (adhesions || []).filter((a: any) => a.user_type === 'motorista' && a.adhered_at <= dayDate + 'T23:59:59').length;
-        const cumPrep = (adhesions || []).filter((a: any) => a.user_type === 'preparador' && a.adhered_at <= dayDate + 'T23:59:59').length;
-        const cumPass = (adhesions || []).filter((a: any) => a.user_type === 'passageiro' && a.adhered_at <= dayDate + 'T23:59:59').length;
+        const dayCutoff = dayDate + 'T23:59:59';
+        const cumMot = adhesions.filter((a: any) => a.user_type === 'motorista' && a.adhered_at <= dayCutoff).length;
+        const cumPrep = adhesions.filter((a: any) => a.user_type === 'preparador' && a.adhered_at <= dayCutoff).length;
+        const cumPassengers = new Set(
+          ordersCur.filter((o) => (o.created_at ?? '') <= dayCutoff).map((o) => o.user_id),
+        ).size;
         dayData.push({
           day: d % 7 === 1 || d === 1 ? dayStr : '',
           motoristas: totalMotoristas ? Math.round((cumMot / totalMotoristas) * 100) : 0,
           preparadores: totalPreparadores ? Math.round((cumPrep / totalPreparadores) * 100) : 0,
-          passageiros: cumPass,
+          passageiros: cumPassengers,
         });
       }
       setChartData(dayData.length > 0 ? dayData : [{ day: 'Dia 1', motoristas: 0, preparadores: 0, passageiros: 0 }]);
@@ -268,15 +343,10 @@ export default function PromocoesScreen() {
   // KPIs reativos aos filtros com % vs mês anterior
   const filteredAtivas = filteredRows.filter((r) => r.status === 'Ativo').length;
   const filteredInativas = filteredRows.filter((r) => r.status === 'Inativo').length;
-  const pctChange = (cur: number, prev: number) => {
-    if (prev === 0) return cur > 0 ? '+100%' : '0%';
-    const pct = Math.round(((cur - prev) / prev) * 100);
-    return pct >= 0 ? `+${pct}%` : `${pct}%`;
-  };
   const metrics1 = [
-    { title: 'Total de Promoções', value: String(filteredRows.length), pct: pctChange(filteredRows.length, prevMonthCounts.total), desc: 'vs mês anterior' },
-    { title: 'Promoções Ativas', value: String(filteredAtivas), pct: pctChange(filteredAtivas, prevMonthCounts.ativas), desc: 'vs mês anterior' },
-    { title: 'Promoções Inativas', value: String(filteredInativas), pct: pctChange(filteredInativas, prevMonthCounts.inativas), desc: 'vs mês anterior', negative: true },
+    { title: 'Total de Promoções', value: String(filteredRows.length), pct: pctChangeStr(filteredRows.length, prevMonthCounts.total), desc: 'vs mês anterior' },
+    { title: 'Promoções Ativas', value: String(filteredAtivas), pct: pctChangeStr(filteredAtivas, prevMonthCounts.ativas), desc: 'vs mês anterior' },
+    { title: 'Promoções Inativas', value: String(filteredInativas), pct: pctChangeStr(filteredInativas, prevMonthCounts.inativas), desc: 'vs mês anterior', negative: true },
   ];
 
   const inputTabelaStyle: React.CSSProperties = {
@@ -455,37 +525,73 @@ export default function PromocoesScreen() {
         React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, m.value))));
 
   // ── Adhesion KPI cards ────────────────────────────────────────────────
+  const adhesionCard = (
+    title: string,
+    value: string,
+    delta: string,
+  ) => {
+    const isNegative = delta.startsWith('-');
+    return React.createElement('div', { style: { ...s.metricCard, flex: '1 1 30%' } },
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, title),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
+        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: isNegative ? '#b53838' : '#22c55e', ...font } }, delta),
+        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'vs mês anterior')),
+      React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, value));
+  };
+
   const metricCards2 = React.createElement('div', {
     style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const },
   },
-    React.createElement('div', { style: { ...s.metricCard, flex: '1 1 45%' } },
-      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Adesão Motoristas'),
-      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
-        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, '+5%'),
-        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'vs mês anterior')),
-      React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `${adhesionMotoristas}%`)),
-    React.createElement('div', { style: { ...s.metricCard, flex: '1 1 45%' } },
-      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Adesão Preparadores'),
-      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
-        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, '+7%'),
-        React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'vs mês anterior')),
-      React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `${adhesionPreparadores}%`)));
+    adhesionCard('Adesão Motoristas', `${adhesionMotoristas}%`, adhesionMotoristasDelta),
+    adhesionCard('Adesão Preparadores', `${adhesionPreparadores}%`, adhesionPreparadoresDelta),
+    adhesionCard('Clientes Beneficiados', String(passageirosBeneficiados), passageirosBeneficiadosDelta));
 
   // ── Adhesion chart ─────────────────────────────────────────────────────
+  const seriesChip = (
+    key: 'motoristas' | 'preparadores' | 'clientes',
+    label: string,
+    color: string,
+  ) => {
+    const active = chartSeries[key];
+    return React.createElement('button', {
+      key,
+      type: 'button',
+      onClick: () => setChartSeries((prev) => ({ ...prev, [key]: !prev[key] })),
+      style: {
+        display: 'flex', alignItems: 'center', gap: 6, height: 32, padding: '0 12px',
+        borderRadius: 999, border: `1px solid ${active ? color : '#d9d9d9'}`,
+        background: active ? '#fff' : 'transparent',
+        cursor: 'pointer', fontSize: 13, fontWeight: 500,
+        color: active ? '#0d0d0d' : '#767676', ...font,
+      },
+    },
+      React.createElement('span', { style: { width: 8, height: 8, borderRadius: '50%', background: active ? color : '#d9d9d9', display: 'inline-block' } }),
+      label);
+  };
+
   const chartSection = React.createElement('div', {
     style: { background: '#f6f6f6', borderRadius: 16, padding: 24, width: '100%', boxSizing: 'border-box' as const },
   },
-    React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: '0 0 16px', ...font } }, 'Crescimento de Adesão - Mês Atual'),
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' as const, marginBottom: 16 } },
+      React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Crescimento de Adesão - Mês Atual'),
+      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        seriesChip('motoristas', 'Motoristas', '#767676'),
+        seriesChip('preparadores', 'Preparadores', '#22c55e'),
+        seriesChip('clientes', 'Clientes', '#F59E0B'))),
     React.createElement(ResponsiveContainer, { width: '100%', height: 250 },
       React.createElement(LineChart, { data: chartData },
         React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#e2e2e2' }),
         React.createElement(XAxis, { dataKey: 'day', fontSize: 12, tick: { fill: '#767676' } }),
-        React.createElement(YAxis, { fontSize: 12, tick: { fill: '#767676' }, tickFormatter: (v: number) => `${v}%` }),
-        React.createElement(ReTooltip, { formatter: (v: number) => `${v}%` }),
+        React.createElement(YAxis, { yAxisId: 'left', fontSize: 12, tick: { fill: '#767676' }, tickFormatter: (v: number) => `${v}%` }),
+        React.createElement(YAxis, { yAxisId: 'right', orientation: 'right', fontSize: 12, tick: { fill: '#767676' }, allowDecimals: false }),
+        React.createElement(ReTooltip, {
+          formatter: (v: number, name: string) =>
+            name === 'Clientes' ? [`${v} cliente${v === 1 ? '' : 's'}`, name] : [`${v}%`, name],
+        }),
         React.createElement(Legend, null),
-        React.createElement(Line, { type: 'monotone', dataKey: 'motoristas', name: 'Motoristas', stroke: '#767676', strokeWidth: 2, dot: { r: 4, fill: '#767676' } }),
-        React.createElement(Line, { type: 'monotone', dataKey: 'preparadores', name: 'Preparadores', stroke: '#22c55e', strokeWidth: 2, dot: { r: 4, fill: '#22c55e' } }),
-        React.createElement(Line, { type: 'monotone', dataKey: 'passageiros', name: 'Passageiros', stroke: '#F59E0B', strokeWidth: 2, dot: { r: 4, fill: '#F59E0B' } }))));
+        chartSeries.motoristas && React.createElement(Line, { yAxisId: 'left', type: 'monotone', dataKey: 'motoristas', name: 'Motoristas', stroke: '#767676', strokeWidth: 2, dot: { r: 4, fill: '#767676' } }),
+        chartSeries.preparadores && React.createElement(Line, { yAxisId: 'left', type: 'monotone', dataKey: 'preparadores', name: 'Preparadores', stroke: '#22c55e', strokeWidth: 2, dot: { r: 4, fill: '#22c55e' } }),
+        chartSeries.clientes && React.createElement(Line, { yAxisId: 'right', type: 'monotone', dataKey: 'passageiros', name: 'Clientes', stroke: '#F59E0B', strokeWidth: 2, dot: { r: 4, fill: '#F59E0B' } }))));
 
   // ── Table ─────────────────────────────────────────────────────────────
   const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 6px' };
