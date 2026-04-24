@@ -208,6 +208,115 @@ Deno.serve(async (req) => {
     grouped[p.worker_id].push(p);
   }
 
+  const errors: string[] = [];
+
+  // ── Aplicar driver_penalties pendentes ────────────────────────────────────
+  // Para cada worker com penalties pendentes, consome o saldo dos payouts
+  // (deduzindo do worker_amount_cents do primeiro payout na ordem de created_at).
+  // Se payout_amount < penalty, aplica o que der e mantém o resto pending.
+  //
+  // NOTA: este bloco é pulado em dry_run e em mark_paid (quando admin está só
+  // marcando pagamentos já feitos manualmente).
+  const penaltyApplications: Record<
+    string,
+    Array<{ penalty_id: string; amount_applied: number; payout_id: string }>
+  > = {};
+
+  if (!dry_run && !mark_paid) {
+    for (const [workerId, workerPayouts] of Object.entries(grouped)) {
+      const { data: penalties } = await admin
+        .from("driver_penalties")
+        .select("id, amount_cents")
+        .eq("driver_id", workerId)
+        .eq("status", "pending")
+        .order("created_at", { ascending: true });
+
+      const pendingPenalties = (penalties ?? []) as Array<{
+        id: string;
+        amount_cents: number;
+      }>;
+      if (pendingPenalties.length === 0) continue;
+
+      // Ordena payouts por created_at (fallback: mantém ordem atual).
+      const sortedPayouts = [...workerPayouts].sort((a: any, b: any) =>
+        String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")),
+      );
+
+      for (const penalty of pendingPenalties) {
+        let remaining = Math.max(0, Math.floor(Number(penalty.amount_cents) || 0));
+        if (remaining <= 0) continue;
+
+        for (const p of sortedPayouts) {
+          if (remaining <= 0) break;
+          const available = Math.max(0, Math.floor(Number(p.worker_amount_cents) || 0));
+          if (available <= 0) continue;
+
+          const consume = Math.min(available, remaining);
+          const newWorkerAmount = available - consume;
+
+          const { error: updErr } = await admin
+            .from("payouts")
+            .update({ worker_amount_cents: newWorkerAmount })
+            .eq("id", p.id);
+          if (updErr) {
+            errors.push(
+              `Worker ${workerId}: falha ao deduzir penalty ${penalty.id} do payout ${p.id} - ${updErr.message}`,
+            );
+            break;
+          }
+
+          // Atualiza referência em memória para próximos passos.
+          p.worker_amount_cents = newWorkerAmount;
+
+          if (!penaltyApplications[workerId]) penaltyApplications[workerId] = [];
+          penaltyApplications[workerId].push({
+            penalty_id: penalty.id,
+            amount_applied: consume,
+            payout_id: p.id,
+          });
+
+          remaining -= consume;
+        }
+
+        const totalPenaltyCents = Math.max(0, Math.floor(Number(penalty.amount_cents) || 0));
+        if (remaining <= 0) {
+          await admin
+            .from("driver_penalties")
+            .update({
+              status: "applied",
+              applied_at: new Date().toISOString(),
+              applied_payout_id:
+                penaltyApplications[workerId]?.slice(-1)[0]?.payout_id ?? null,
+            } as never)
+            .eq("id", penalty.id);
+        } else if (remaining < totalPenaltyCents) {
+          // Aplicação parcial: reduz amount_cents da penalty e mantém pending
+          // para consumir no próximo ciclo.
+          await admin
+            .from("driver_penalties")
+            .update({ amount_cents: remaining } as never)
+            .eq("id", penalty.id);
+        }
+      }
+    }
+  }
+
+  // Log de auditoria das aplicações.
+  for (const [workerId, apps] of Object.entries(penaltyApplications)) {
+    for (const a of apps) {
+      await admin.from("payout_logs").insert({
+        payout_id: a.payout_id,
+        action: "penalty_applied",
+        performed_by: performedBy,
+        details: {
+          penalty_id: a.penalty_id,
+          amount_cents: a.amount_applied,
+          worker_id: workerId,
+        },
+      });
+    }
+  }
+
   const stripeSecret = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
 
   // ── Processar ──
@@ -220,7 +329,6 @@ Deno.serve(async (req) => {
     below_threshold_skipped: 0,
     total_payouts: payouts.length,
   };
-  const errors: string[] = [];
 
   for (const [workerId, workerPayouts] of Object.entries(grouped)) {
     const worker = workerMap[workerId];

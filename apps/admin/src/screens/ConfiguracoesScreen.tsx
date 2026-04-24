@@ -295,6 +295,9 @@ export default function ConfiguracoesScreen() {
   const [gasPrice, setGasPrice] = useState('');
   const [kmPrice, setKmPrice] = useState('');
   const [baseDeliveryPrice, setBaseDeliveryPrice] = useState('');
+  const [cancelFreeWindowHours, setCancelFreeWindowHours] = useState('');
+  const [driverPenaltyPct, setDriverPenaltyPct] = useState('');
+  const [driverPenaltyEnabled, setDriverPenaltyEnabled] = useState(true);
   const [platSaved, setPlatSaved] = useState(false);
 
   useEffect(() => {
@@ -304,6 +307,13 @@ export default function ConfiguracoesScreen() {
       setBaseDeliveryPrice(
         String((platSettings.shipment_base_delivery_fee_cents ?? 500) / 100),
       );
+      setCancelFreeWindowHours(
+        String(platSettings.booking_cancellation_free_window_hours ?? 2),
+      );
+      setDriverPenaltyPct(String(platSettings.driver_cancellation_penalty_pct ?? 10));
+      setDriverPenaltyEnabled(
+        platSettings.driver_cancellation_penalty_enabled !== false,
+      );
     }
   }, [platLoading, platSettings]);
 
@@ -311,14 +321,27 @@ export default function ConfiguracoesScreen() {
     const gasCents = Math.round(parseFloat(gasPrice || '0') * 100);
     const kmCents = Math.round(parseFloat(kmPrice || '0') * 100);
     const baseDeliveryCents = Math.round(parseFloat(baseDeliveryPrice || '0') * 100);
+    const cancelHours = Math.max(0, parseFloat(cancelFreeWindowHours || '0'));
+    const penaltyPct = Math.max(0, parseFloat(driverPenaltyPct || '0'));
     await Promise.all([
       updateSetting('gas_price_cents', gasCents),
       updateSetting('km_price_cents', kmCents),
       updateSetting('shipment_base_delivery_fee_cents', baseDeliveryCents),
+      updateSetting('booking_cancellation_free_window_hours', cancelHours),
+      updateSetting('driver_cancellation_penalty_pct', penaltyPct),
+      updateSetting('driver_cancellation_penalty_enabled', driverPenaltyEnabled),
     ]);
     setPlatSaved(true);
     setTimeout(() => setPlatSaved(false), 2000);
-  }, [gasPrice, kmPrice, baseDeliveryPrice, updateSetting]);
+  }, [
+    gasPrice,
+    kmPrice,
+    baseDeliveryPrice,
+    cancelFreeWindowHours,
+    driverPenaltyPct,
+    driverPenaltyEnabled,
+    updateSetting,
+  ]);
 
   const platInput = (
     label: string,
@@ -345,6 +368,61 @@ export default function ConfiguracoesScreen() {
         : null,
     );
 
+  const plainInput = (
+    label: string,
+    value: string,
+    onChange: (v: string) => void,
+    placeholder: string,
+    suffix?: string,
+    helperText?: string,
+  ) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6, flex: '1 1 200px' } },
+      React.createElement('label', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+        React.createElement('input', {
+          type: 'number', step: '0.1', min: '0', value, placeholder,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+          style: { height: 44, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', ...font, flex: 1 },
+        }),
+        suffix ? React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, suffix) : null),
+      helperText
+        ? React.createElement(
+            'span',
+            { style: { fontSize: 12, color: '#767676', lineHeight: '16px', ...font } },
+            helperText,
+          )
+        : null,
+    );
+
+  const toggleRow = (
+    label: string,
+    value: boolean,
+    onChange: (v: boolean) => void,
+    helperText?: string,
+  ) =>
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6, flex: '1 1 200px' } },
+      React.createElement('label', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => onChange(!value),
+        style: {
+          width: 52, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer',
+          background: value ? '#22c55e' : '#d9d9d9', position: 'relative' as const,
+          transition: 'background 0.2s',
+        },
+      },
+        React.createElement('span', {
+          style: {
+            width: 22, height: 22, borderRadius: '50%', background: '#fff', display: 'block',
+            position: 'absolute' as const, top: 3, left: value ? 27 : 3, transition: 'left 0.2s',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+          },
+        })),
+      helperText
+        ? React.createElement('span', { style: { fontSize: 12, color: '#767676', lineHeight: '16px', ...font } }, helperText)
+        : null,
+    );
+
   const plataformaContent = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%', maxWidth: 600 },
   },
@@ -365,6 +443,39 @@ export default function ConfiguracoesScreen() {
         '5.00',
         'Usado como padrão em encomendas. Preparadores podem sobrescrever no próprio cadastro.',
       )),
+    React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: '8px 0 0 0', ...font } }, 'Política de cancelamento'),
+    React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+      plainInput(
+        'Janela de reembolso integral',
+        cancelFreeWindowHours,
+        setCancelFreeWindowHours,
+        '2',
+        'horas antes da partida',
+        'Dentro dessa janela, o cancelamento do passageiro dispara reembolso 100% no cartão. Fora dela, cancela sem estorno.',
+      ),
+      plainInput(
+        'Multa ao motorista que cancela',
+        driverPenaltyPct,
+        setDriverPenaltyPct,
+        '10',
+        '% sobre total',
+        'Percentual aplicado sobre o total de cada reserva paga, somado à taxa da plataforma, descontado do próximo payout.',
+      ),
+      toggleRow(
+        'Cobrar multa automaticamente',
+        driverPenaltyEnabled,
+        setDriverPenaltyEnabled,
+        'Quando desligado, o motorista é cancelado sem multa mesmo com passageiros pagos.',
+      )),
+    React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => navigate('/pagamentos/multas'),
+        style: {
+          height: 40, padding: '0 18px', borderRadius: 999, border: '1px solid #0d0d0d',
+          background: '#fff', color: '#0d0d0d', fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font,
+        },
+      }, 'Gerenciar multas de motoristas')),
     React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
       React.createElement('button', {
         type: 'button',

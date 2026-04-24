@@ -38,6 +38,7 @@ import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
 import { StatusBadge, shipmentStatusToBadge } from '../../components/StatusBadge';
 import { SupportSheet } from '../../components/SupportSheet';
 import { storageUrl } from '../../utils/storageUrl';
+import { TipModal } from '../../components/TipModal';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ShipmentDetail'>;
 
@@ -99,6 +100,8 @@ type ShipmentDetail = {
   recipient_phone: string;
   instructions: string | null;
   tip_cents: number | null;
+  tip_status: string | null;
+  tip_paid_at: string | null;
   driver_id: string | null;
   pickup_code: string | null;
   delivery_code: string | null;
@@ -132,14 +135,10 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
   const [supportSheetVisible, setSupportSheetVisible] = useState(false);
   const [showTipSheet, setShowTipSheet] = useState(false);
   const [showRatingSheet, setShowRatingSheet] = useState(false);
-  const [tipInputValue, setTipInputValue] = useState('');
-  const [tipSubmitting, setTipSubmitting] = useState(false);
   const [ratingStars, setRatingStars] = useState(0);
   const [ratingComment, setRatingComment] = useState('');
   const [ratingSubmitting, setRatingSubmitting] = useState(false);
   const insets = useSafeAreaInsets();
-  const tipOverlayOpacity = useRef(new Animated.Value(0)).current;
-  const tipSheetTranslateY = useRef(new Animated.Value(SHEET_SLIDE_DISTANCE)).current;
   const ratingOverlayOpacity = useRef(new Animated.Value(0)).current;
   const ratingSheetTranslateY = useRef(new Animated.Value(SHEET_SLIDE_DISTANCE)).current;
 
@@ -158,7 +157,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
       const { data: shipment, error: shipErr } = await supabase
         .from('shipments')
         .select(
-          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, driver_id, pickup_code, delivery_code, cancellation_reason'
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, tip_status, tip_paid_at, driver_id, pickup_code, delivery_code, cancellation_reason'
         )
         .eq('id', shipmentId)
         .eq('user_id', user.id)
@@ -182,6 +181,8 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         recipient_phone: string;
         instructions: string | null;
         tip_cents: number | null;
+        tip_status: string | null;
+        tip_paid_at: string | null;
         driver_id: string | null;
         pickup_code: string | null;
         delivery_code: string | null;
@@ -202,6 +203,8 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         recipient_phone: row.recipient_phone,
         instructions: row.instructions ?? null,
         tip_cents: row.tip_cents ?? null,
+        tip_status: row.tip_status ?? null,
+        tip_paid_at: row.tip_paid_at ?? null,
         driver_id: row.driver_id ?? null,
         pickup_code: row.pickup_code ?? null,
         delivery_code: row.delivery_code ?? null,
@@ -328,16 +331,6 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
   };
 
   useEffect(() => {
-    if (!showTipSheet) return;
-    tipOverlayOpacity.setValue(0);
-    tipSheetTranslateY.setValue(SHEET_SLIDE_DISTANCE);
-    Animated.sequence([
-      Animated.timing(tipOverlayOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
-      Animated.timing(tipSheetTranslateY, { toValue: 0, duration: 280, useNativeDriver: true }),
-    ]).start();
-  }, [showTipSheet]);
-
-  useEffect(() => {
     if (!showRatingSheet) return;
     ratingOverlayOpacity.setValue(0);
     ratingSheetTranslateY.setValue(SHEET_SLIDE_DISTANCE);
@@ -347,54 +340,11 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
     ]).start();
   }, [showRatingSheet]);
 
-  const closeTipSheet = () => {
-    Keyboard.dismiss();
-    setTipInputValue('');
-    tipOverlayOpacity.setValue(0);
-    tipSheetTranslateY.setValue(SHEET_SLIDE_DISTANCE);
-    setShowTipSheet(false);
-  };
-
   const closeRatingSheet = () => {
     Keyboard.dismiss();
     ratingOverlayOpacity.setValue(0);
     ratingSheetTranslateY.setValue(SHEET_SLIDE_DISTANCE);
     setShowRatingSheet(false);
-  };
-
-  const tipInputToCents = (s: string): number => {
-    const normalized = s.trim().replace(',', '.');
-    if (!normalized) return 0;
-    const reais = parseFloat(normalized);
-    if (Number.isNaN(reais) || reais < 0) return 0;
-    return Math.round(reais * 100);
-  };
-
-  const handleTipSubmit = async () => {
-    const cents = tipInputToCents(tipInputValue);
-    if (cents <= 0) {
-      Alert.alert('Valor inválido', 'Digite um valor maior que zero.');
-      return;
-    }
-    Keyboard.dismiss();
-    setTipSubmitting(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setTipSubmitting(false);
-      return;
-    }
-    const { error } = await supabase
-      .from('shipments')
-      .update({ tip_cents: cents })
-      .eq('id', shipmentId)
-      .eq('user_id', user.id);
-    setTipSubmitting(false);
-    if (error) {
-      Alert.alert('Erro', 'Não foi possível enviar a gorjeta. Tente novamente.');
-      return;
-    }
-    setDetail((d) => (d ? { ...d, tip_cents: cents } : null));
-    closeTipSheet();
   };
 
   const handleRatingSubmit = async () => {
@@ -646,21 +596,28 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         </View>
 
         <View style={styles.actionsSection}>
-          <View style={styles.actionRow}>
-            <MaterialIcons name="card-giftcard" size={20} color={COLORS.neutral700} />
-            <Text style={styles.actionLabel}>
-              {detail.tip_cents != null && detail.tip_cents > 0
-                ? `Gorjeta: R$ ${(detail.tip_cents / 100).toFixed(2)}`
-                : 'Nenhuma gorjeta enviada'}
-            </Text>
-            <TouchableOpacity
-              style={styles.actionButton}
-              activeOpacity={0.8}
-              onPress={() => { setTipInputValue(''); setShowTipSheet(true); }}
-            >
-              <Text style={styles.actionButtonText}>Gorjeta</Text>
-            </TouchableOpacity>
-          </View>
+          {detail.status === 'delivered' && (
+            detail.tip_status === 'succeeded' && detail.tip_cents && detail.tip_cents > 0 ? (
+              <View style={styles.actionRow}>
+                <MaterialIcons name="card-giftcard" size={20} color={COLORS.neutral700} />
+                <Text style={styles.actionLabel}>
+                  Gorjeta enviada: R$ {(detail.tip_cents / 100).toFixed(2).replace('.', ',')}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.actionRow}>
+                <MaterialIcons name="card-giftcard" size={20} color={COLORS.neutral700} />
+                <Text style={styles.actionLabel}>Nenhuma gorjeta enviada</Text>
+                <TouchableOpacity
+                  style={styles.actionButton}
+                  activeOpacity={0.8}
+                  onPress={() => setShowTipSheet(true)}
+                >
+                  <Text style={styles.actionButtonText}>Gorjeta</Text>
+                </TouchableOpacity>
+              </View>
+            )
+          )}
           <View style={styles.actionRow}>
             <MaterialIcons name="star-outline" size={20} color={COLORS.neutral700} />
             <Text style={styles.actionLabel}>
@@ -752,52 +709,26 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         </View>
       </Modal>
 
-      {/* Bottom sheet: Gorjeta — mesma animação do sheet "Para quando" do Início */}
-      <Modal visible={showTipSheet} transparent animationType="none" onRequestClose={closeTipSheet} statusBarTranslucent>
-        <View style={styles.sheetOverlayContainer} pointerEvents="box-none">
-          <Animated.View style={[styles.sheetOverlayBg, { opacity: tipOverlayOpacity }]} pointerEvents="none" />
-          <Pressable style={styles.sheetOverlayTouchable} onPress={closeTipSheet} />
-          <KeyboardAvoidingView
-            behavior="padding"
-            style={styles.sheetKeyboardAvoid}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
-          >
-            <Animated.View
-              style={[styles.bottomSheet, { paddingBottom: insets.bottom + 24, transform: [{ translateY: tipSheetTranslateY }] }]}
-              pointerEvents="box-none"
-            >
-              <View style={styles.sheetHandle} />
-              <TouchableOpacity style={styles.sheetClose} onPress={closeTipSheet} hitSlop={12}>
-                <MaterialIcons name="close" size={24} color={COLORS.black} />
-              </TouchableOpacity>
-              <Text style={styles.sheetTitle}>Gorjeta</Text>
-              <Text style={styles.tipValueLabel}>Valor (R$)</Text>
-              <TextInput
-                style={styles.tipInput}
-                placeholder="0,00"
-                placeholderTextColor={COLORS.neutral700}
-                value={tipInputValue}
-                onChangeText={(t) => setTipInputValue(t.replace(/[^0-9,]/g, '').replace(/,([^,]*),/, ',$1'))}
-                keyboardType="decimal-pad"
-                returnKeyType="done"
-                onSubmitEditing={handleTipSubmit}
-              />
-              <TouchableOpacity
-                style={[styles.sheetPrimaryButton, (tipInputToCents(tipInputValue) <= 0 || tipSubmitting) && styles.sheetPrimaryButtonDisabled]}
-                onPress={handleTipSubmit}
-                disabled={tipInputToCents(tipInputValue) <= 0 || tipSubmitting}
-                activeOpacity={0.8}
-              >
-                {tipSubmitting ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.sheetPrimaryButtonText}>Enviar gorjeta</Text>
-                )}
-              </TouchableOpacity>
-            </Animated.View>
-          </KeyboardAvoidingView>
-        </View>
-      </Modal>
+      <TipModal
+        visible={showTipSheet}
+        onClose={() => setShowTipSheet(false)}
+        onSuccess={({ tipCents }) => {
+          setShowTipSheet(false);
+          setDetail((d) =>
+            d
+              ? {
+                  ...d,
+                  tip_cents: tipCents,
+                  tip_status: 'succeeded',
+                  tip_paid_at: new Date().toISOString(),
+                }
+              : d,
+          );
+        }}
+        entityType="shipment"
+        entityId={shipmentId}
+        driverName={driverProfile?.full_name ?? null}
+      />
 
       {/* Bottom sheet: Avaliação — mesma animação do sheet "Para quando" do Início */}
       <Modal visible={showRatingSheet} transparent animationType="none" onRequestClose={closeRatingSheet} statusBarTranslucent>

@@ -63,7 +63,8 @@ function PixIcon() {
 export function PaymentsScreen({ navigation }: Props) {
   const [totalCents, setTotalCents] = useState(0);
   const [rides, setRides] = useState(0);
-  const [tips] = useState(0);
+  const [tips, setTips] = useState(0);
+  const [tipsCents, setTipsCents] = useState(0);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [loading, setLoading] = useState(true);
   const [stripeState, setStripeState] = useState<StripeConnectState>('none');
@@ -101,7 +102,43 @@ export function PaymentsScreen({ navigation }: Props) {
 
     setTransfers(list);
     setRides(list.length);
-    setTotalCents(list.reduce((s, t) => s + t.amount_cents, 0));
+    const transfersSum = list.reduce((s, t) => s + t.amount_cents, 0);
+
+    // Gorjetas recebidas hoje (via PaymentIntent separado, transferido 100% para
+    // o motorista via transfer_data.destination). Somamos as 3 entidades.
+    const [bTips, sTips, dTips] = await Promise.all([
+      supabase
+        .from('bookings')
+        .select('tip_cents, scheduled_trips!inner(driver_id)')
+        .eq('tip_status', 'succeeded')
+        .gte('tip_paid_at', start)
+        .lte('tip_paid_at', end)
+        .eq('scheduled_trips.driver_id', user.id),
+      supabase
+        .from('shipments')
+        .select('tip_cents')
+        .eq('tip_status', 'succeeded')
+        .eq('driver_id', user.id)
+        .gte('tip_paid_at', start)
+        .lte('tip_paid_at', end),
+      supabase
+        .from('dependent_shipments')
+        .select('tip_cents, scheduled_trips!inner(driver_id)')
+        .eq('tip_status', 'succeeded')
+        .gte('tip_paid_at', start)
+        .lte('tip_paid_at', end)
+        .eq('scheduled_trips.driver_id', user.id),
+    ]);
+
+    const tipRows = [
+      ...((bTips.data ?? []) as Array<{ tip_cents: number | null }>),
+      ...((sTips.data ?? []) as Array<{ tip_cents: number | null }>),
+      ...((dTips.data ?? []) as Array<{ tip_cents: number | null }>),
+    ];
+    const tipsSum = tipRows.reduce((s, r) => s + (Number(r.tip_cents) || 0), 0);
+    setTips(tipRows.length);
+    setTipsCents(tipsSum);
+    setTotalCents(transfersSum + tipsSum);
     setLoading(false);
   }, []);
 
@@ -204,6 +241,11 @@ export function PaymentsScreen({ navigation }: Props) {
                 <Text style={styles.chipLabel}>{tips === 1 ? 'gorjeta' : 'gorjetas'}</Text>
               </View>
             </View>
+            {tipsCents > 0 && (
+              <Text style={styles.tipsHeroSub}>
+                + {formatCents(tipsCents)} em gorjetas
+              </Text>
+            )}
           </View>
 
           {/* Seção: Conta de recebimento */}
@@ -298,6 +340,7 @@ const styles = StyleSheet.create({
   chip: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   chipValue: { fontSize: 15, fontWeight: '700', color: INK },
   chipLabel: { fontSize: 13, color: MUTED },
+  tipsHeroSub: { marginTop: 10, fontSize: 13, fontWeight: '600', color: GOLD },
   chipDivider: { width: 1, height: 14, backgroundColor: '#E5E7EB', marginHorizontal: 14 },
 
   /* Seções */
