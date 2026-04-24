@@ -29,7 +29,8 @@ type Booking = {
   passenger_count: number | null;
   bags_count: number | null;
   status: string;
-  amount_cents?: number | null;
+  amount_cents: number;
+  worker_earning_cents?: number | null;
 };
 
 type Trip = {
@@ -186,14 +187,14 @@ export function TripHistoryScreen({ navigation }: Props) {
     const { data, error } = await supabase
       .from('scheduled_trips')
       .select(
-        'id, origin_address, destination_address, departure_at, status, amount_cents, bookings(id, passenger_count, bags_count, status, amount_cents)'
+        'id, origin_address, destination_address, departure_at, status, amount_cents, bookings(id, passenger_count, bags_count, status, amount_cents, worker_earning_cents)'
       )
       .eq('driver_id', user.id)
       .in('status', ['completed', 'cancelled'])
       .order('departure_at', { ascending: false });
 
     if (!error && data) {
-      const rows = data as Trip[];
+      const rows = data as unknown as Trip[];
       setCompleted(rows.filter((r) => r.status === 'completed'));
       setCancelled(rows.filter((r) => r.status === 'cancelled'));
     }

@@ -44,6 +44,8 @@ type ExcursionRow = {
   status: string;
   payment_method: string | null;
   stripe_payment_intent_id: string | null;
+  worker_earning_cents: number | null;
+  admin_earning_cents: number | null;
 };
 
 /**
@@ -122,7 +124,7 @@ Deno.serve(async (req) => {
     const { data: row, error: rowErr } = await admin
       .from("excursion_requests")
       .select(
-        "id, user_id, total_amount_cents, worker_payout_cents, preparer_payout_cents, driver_id, preparer_id, status, payment_method, stripe_payment_intent_id",
+        "id, user_id, total_amount_cents, worker_payout_cents, preparer_payout_cents, driver_id, preparer_id, status, payment_method, stripe_payment_intent_id, worker_earning_cents, admin_earning_cents",
       )
       .eq("id", excursionId)
       .eq("user_id", userId)
@@ -190,9 +192,15 @@ Deno.serve(async (req) => {
 
     // Metadata: excursion_request_id é o ponteiro que o stripe-webhook usa
     // para criar os payouts do driver e do preparer em payment_intent.succeeded.
-    const baseMeta = {
+    // Incluímos worker/admin earnings para auditoria e para o process-payouts
+    // poder usar como fonte de verdade no split via stripe.transfers.create.
+    const workerEarn = Number(s.worker_earning_cents ?? 0);
+    const adminEarn = Number(s.admin_earning_cents ?? 0);
+    const baseMeta: Record<string, string> = {
       "metadata[excursion_request_id]": excursionId,
       "metadata[user_id]": userId,
+      "metadata[worker_earning_cents]": String(Number.isFinite(workerEarn) ? workerEarn : 0),
+      "metadata[admin_earning_cents]": String(Number.isFinite(adminEarn) ? adminEarn : 0),
     };
 
     if (resolvedMethod === "pix") {

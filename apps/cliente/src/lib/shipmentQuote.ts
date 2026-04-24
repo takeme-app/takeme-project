@@ -1,28 +1,31 @@
 /**
- * Precificação de encomendas (cliente) com hierarquia em 3 níveis:
+ * Precificação de encomendas (cliente) — fórmula gross-up do PDF.
  *
- *   1) Override do preparador:
- *        worker_profiles.shipment_delivery_fee_cents / shipment_per_km_fee_cents
- *   2) Padrão global do admin:
- *        platform_settings.shipment_base_delivery_fee_cents / km_price_cents
- *   3) Fallback em catálogo:
- *        pricing_routes (role_type='preparer_shipments', is_active=true)
+ * Hierarquia do preço base:
+ *   1) Override do preparador: worker_profiles.shipment_delivery_fee_cents / shipment_per_km_fee_cents
+ *   2) Padrão global: platform_settings.shipment_base_delivery_fee_cents / km_price_cents
+ *   3) Catálogo: pricing_routes (role_type='preparer_shipments' | 'driver_shipments', is_active=true)
  *
- * Base do trecho = (delivery_fee ?? 0) + km * (per_km_fee ?? 0) quando há qualquer override
- * efetivo (1 ou 2). Caso contrário, cai no catálogo antigo (3). Multiplicador por tamanho
- * entra depois da base (pequeno/médio/grande). Comissão:
+ * Adicionais automáticos (surcharge_catalog.surcharge_mode='automatic',
+ * surcharge_type='encomenda') entram como `surchargesCents` e não sofrem
+ * gross-up — somam-se diretamente ao admin_earning.
  *
- * - Com override ativo (1 ou 2) → platform_settings.default_admin_pct.percentage
- * - Sem override (fallback em pricing_routes) → route.admin_pct
+ * Multiplicador por tamanho do pacote:
+ *   - Lido de platform_settings.shipment_package_size_multipliers (JSON
+ *     `{"pequeno":1,"medio":1.12,"grande":1.28}`) quando disponível; senão
+ *     usa o fallback hardcoded.
  *
- * Snapshot esperado no banco:
- *   pricing_subtotal_cents = base × pkg_mult
- *   platform_fee_cents     = round(subtotal × admin_pct / 100)
- *   amount_cents           = subtotal + platform_fee
+ * A função `computeOrderPricing` (shared) aplica gross-up literal:
+ *   Total = (base + adicionais) / (1 − ganho% + desconto% − admin%)
+ *
+ * O passo de promoção (ganho_motorista / desconto_passageiro) é aplicado na
+ * camada de edge (`charge-shipments`) após este quote, já que depende do
+ * usuário autenticado. Aqui consideramos gainPct=discountPct=0.
  */
 
 import { supabase } from './supabase';
 import { getRouteWithDuration, type RoutePoint } from './route';
+import { computeOrderPricing, PricingDenominatorOverflowError } from '@take-me/shared';
 
 export type PreparerShipmentPricingRoute = {
   id: string;
@@ -39,8 +42,12 @@ const MATCH_SCORE_STRICT = 0.32;
 /** Corte relaxado: ainda exige alguma sobreposição de palavras/endereço. */
 const MATCH_SCORE_RELAXED = 0.12;
 
-/** Multiplicador por tamanho (sobre o valor base do trecho); ref. documentação bagageira pequeno/médio/grande. */
-const PACKAGE_SIZE_MULT: Record<'pequeno' | 'medio' | 'grande', number> = {
+/**
+ * Multiplicador por tamanho (sobre o valor base do trecho).
+ * Usado como fallback quando `platform_settings.shipment_package_size_multipliers`
+ * não estiver configurado.
+ */
+const PACKAGE_SIZE_MULT_FALLBACK: Record<'pequeno' | 'medio' | 'grande', number> = {
   pequeno: 1,
   medio: 1.12,
   grande: 1.28,
@@ -205,6 +212,15 @@ async function catalogBaseCentsAsync(
   return clampInt(pc);
 }
 
+type PackageSizeMultipliers = Record<'pequeno' | 'medio' | 'grande', number>;
+
+type ShipmentSurcharge = {
+  id: string;
+  name: string;
+  value_cents: number;
+  surcharge_mode: 'automatic' | 'manual';
+};
+
 type PricingDefaults = {
   /** Override do preparador (se houver). */
   preparer: {
@@ -216,9 +232,12 @@ type PricingDefaults = {
     km_price_cents: number | null;
     shipment_base_delivery_fee_cents: number | null;
     default_admin_pct: number | null;
+    package_size_multipliers: PackageSizeMultipliers;
   };
   /** Catálogo antigo (fallback). */
   routes: PreparerShipmentPricingRoute[];
+  /** Adicionais automáticos aplicáveis a encomendas (qualquer papel). */
+  surcharges: ShipmentSurcharge[];
 };
 
 type PlatformSettingRow = { key: string; value: unknown };
@@ -238,6 +257,21 @@ function parseIntValue(raw: unknown, field = 'value'): number | null {
   return null;
 }
 
+function parsePackageMultipliers(raw: unknown): PackageSizeMultipliers {
+  const fallback = PACKAGE_SIZE_MULT_FALLBACK;
+  if (raw && typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>;
+    const src = (obj.value && typeof obj.value === 'object' ? (obj.value as Record<string, unknown>) : obj);
+    const p = Number(src.pequeno);
+    const m = Number(src.medio);
+    const g = Number(src.grande);
+    if ([p, m, g].every((n) => Number.isFinite(n) && n > 0)) {
+      return { pequeno: p, medio: m, grande: g };
+    }
+  }
+  return fallback;
+}
+
 /** Lê em paralelo: override do preparador + padrões globais + catálogo. */
 async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults> {
   const sb = supabase as { from: (t: string) => any };
@@ -245,7 +279,12 @@ async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults
   const settingsPromise = sb
     .from('platform_settings')
     .select('key, value')
-    .in('key', ['km_price_cents', 'shipment_base_delivery_fee_cents', 'default_admin_pct']);
+    .in('key', [
+      'km_price_cents',
+      'shipment_base_delivery_fee_cents',
+      'default_admin_pct',
+      'shipment_package_size_multipliers',
+    ]);
 
   const routesPromise = sb
     .from('pricing_routes')
@@ -253,6 +292,13 @@ async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults
       'id, origin_address, destination_address, pricing_mode, price_cents, admin_pct, role_type, is_active, created_at'
     )
     .eq('role_type', 'preparer_shipments')
+    .eq('is_active', true);
+
+  const surchargesPromise = sb
+    .from('surcharge_catalog')
+    .select('id, name, value_cents, surcharge_mode, surcharge_type, is_active')
+    .eq('surcharge_type', 'encomenda')
+    .eq('surcharge_mode', 'automatic')
     .eq('is_active', true);
 
   const preparerPromise = preparerId
@@ -263,9 +309,10 @@ async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults
         .maybeSingle()
     : Promise.resolve({ data: null });
 
-  const [settingsRes, routesRes, prepRes] = await Promise.all([
+  const [settingsRes, routesRes, surchargesRes, prepRes] = await Promise.all([
     settingsPromise,
     routesPromise,
+    surchargesPromise,
     preparerPromise,
   ]);
 
@@ -278,9 +325,27 @@ async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults
       settingMap.get('shipment_base_delivery_fee_cents'),
     ),
     default_admin_pct: parseIntValue(settingMap.get('default_admin_pct'), 'percentage'),
+    package_size_multipliers: parsePackageMultipliers(
+      settingMap.get('shipment_package_size_multipliers'),
+    ),
   };
 
   const routes = ((routesRes.data ?? []) as PreparerShipmentPricingRoute[]) || [];
+
+  const surchargeRows = (surchargesRes.data ?? []) as Array<{
+    id: string;
+    name: string;
+    value_cents: number | null;
+    surcharge_mode: 'automatic' | 'manual';
+  }>;
+  const surcharges: ShipmentSurcharge[] = surchargeRows
+    .filter((r) => Number.isFinite(Number(r.value_cents)) && Number(r.value_cents) > 0)
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      value_cents: Math.max(0, Math.round(Number(r.value_cents))),
+      surcharge_mode: r.surcharge_mode,
+    }));
 
   const prepRow = (prepRes.data ?? null) as WorkerPricingRow | null;
   const preparer = prepRow
@@ -290,15 +355,29 @@ async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults
       }
     : null;
 
-  return { preparer, globals, routes };
+  return { preparer, globals, routes, surcharges };
 }
 
 export type ShipmentQuoteOk = {
   pricingRouteId: string | null;
+  /** Base pura após pkg multiplier (sem adicionais nem admin). */
   priceRouteBaseCents: number;
+  /**
+   * Compatibilidade: mesmo que `priceRouteBaseCents` (pré gross-up),
+   * já que no novo modelo o "subtotal" passou a ser base + adicionais.
+   */
   pricingSubtotalCents: number;
+  /** Soma dos adicionais automáticos em centavos. */
+  surchargesCents: number;
+  surcharges: ShipmentSurcharge[];
+  /** Taxa da plataforma no total (= admin_pct × total). */
   platformFeeCents: number;
+  /** Valor final cobrado (já com gross-up da taxa admin). */
   amountCents: number;
+  /** Parte do preparador/motorista na cobrança (= base, sem promoção nesta etapa). */
+  workerEarningCents: number;
+  /** Parte da plataforma (= admin_fee + adicionais). */
+  adminEarningCents: number;
   adminPctApplied: number;
 };
 
@@ -364,19 +443,50 @@ export async function quoteShipmentForClient(params: {
     };
   }
 
-  const pkgMul = PACKAGE_SIZE_MULT[params.packageSize];
-  const pricingSubtotalCents = clampInt(baseCents * pkgMul);
-  const platformFeeCents = clampInt((pricingSubtotalCents * adminPctApplied) / 100);
-  const amountCents = pricingSubtotalCents + platformFeeCents;
+  const pkgMul = defaults.globals.package_size_multipliers[params.packageSize];
+  const basePricedCents = clampInt(baseCents * pkgMul);
+
+  const surchargesCents = defaults.surcharges.reduce((acc, s) => acc + s.value_cents, 0);
+
+  let totalCents: number;
+  let platformFeeCents: number;
+  let workerEarningCents: number;
+  let adminEarningCents: number;
+  try {
+    const pricing = computeOrderPricing({
+      baseCents: basePricedCents,
+      surchargesCents,
+      adminPct: adminPctApplied,
+      gainPct: 0,
+      discountPct: 0,
+    });
+    totalCents = pricing.totalCents;
+    platformFeeCents = pricing.adminFeeCents;
+    workerEarningCents = pricing.workerEarningCents;
+    adminEarningCents = pricing.adminEarningCents;
+  } catch (e) {
+    if (e instanceof PricingDenominatorOverflowError) {
+      return {
+        ok: false,
+        error:
+          'Configuração de taxas inválida: a comissão da plataforma é muito alta. Peça ao administrador para ajustar.',
+      };
+    }
+    throw e;
+  }
 
   return {
     ok: true,
     quote: {
       pricingRouteId: bestRoute?.id ?? null,
-      priceRouteBaseCents: baseCents,
-      pricingSubtotalCents,
+      priceRouteBaseCents: basePricedCents,
+      pricingSubtotalCents: basePricedCents,
+      surchargesCents,
+      surcharges: defaults.surcharges,
       platformFeeCents,
-      amountCents,
+      amountCents: totalCents,
+      workerEarningCents,
+      adminEarningCents,
       adminPctApplied,
     },
   };

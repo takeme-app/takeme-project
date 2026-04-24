@@ -63,12 +63,37 @@ function formatCents(cents: number): string {
   return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
-function totalValue(base: number, count: number, adjust: PriceAdjust, dayIdx: number): number {
+function isNocturnalTime(departureTime: string | null | undefined): boolean {
+  if (!departureTime) return false;
+  const match = /^(\d{1,2}):(\d{2})/.exec(departureTime);
+  if (!match) return false;
+  const hour = Number(match[1]);
+  if (!Number.isFinite(hour)) return false;
+  return hour >= 22 || hour < 6;
+}
+
+/**
+ * Aplica ganhos adicionais (fim de semana / noturno / feriado) ao valor total
+ * da viagem. A verificação de feriado é externa (backoffice/calendário) —
+ * a UI aqui apenas persiste o % e, por enquanto, não o aplica ao preview.
+ */
+function totalValue(
+  base: number,
+  count: number,
+  adjust: PriceAdjust,
+  dayIdx: number,
+  departureTime: string | null | undefined,
+): number {
   const isWeekend = dayIdx === 5 || dayIdx === 6;
+  const isNocturnal = isNocturnalTime(departureTime);
   let total = base * count;
   if (isWeekend) {
     const pct = parseFloat(adjust.weekend) || 0;
-    total = total * (1 + pct / 100);
+    total *= 1 + pct / 100;
+  }
+  if (isNocturnal) {
+    const pct = parseFloat(adjust.nocturnal) || 0;
+    total *= 1 + pct / 100;
   }
   return total;
 }
@@ -105,15 +130,25 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
       if (!silent) setLoading(false);
       return;
     }
-    const { data, error } = await supabase
-      .from('scheduled_trips')
-      .select(
-        'id, day_of_week, departure_time, arrival_time, capacity, confirmed_count, price_per_person_cents, is_active, status',
-      )
-      .eq('route_id', routeId)
-      .eq('driver_id', user.id)
-      .in('status', ['active', 'scheduled'])
-      .order('day_of_week', { ascending: true });
+    const [tripsRes, routeRes] = await Promise.all([
+      supabase
+        .from('scheduled_trips')
+        .select(
+          'id, day_of_week, departure_time, arrival_time, capacity, confirmed_count, price_per_person_cents, is_active, status',
+        )
+        .eq('route_id', routeId)
+        .eq('driver_id', user.id)
+        .in('status', ['active', 'scheduled'])
+        .order('day_of_week', { ascending: true }),
+      (supabase as any)
+        .from('worker_routes')
+        .select('weekend_surcharge_pct, nocturnal_surcharge_pct, holiday_surcharge_pct')
+        .eq('id', routeId)
+        .maybeSingle(),
+    ]);
+
+    const error = tripsRes.error;
+    const data = tripsRes.data;
 
     if (error) {
       console.warn('[RouteScheduleScreen] scheduled_trips', error.message);
@@ -131,6 +166,21 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
       toggles[idx] = (toggles[idx] ?? false) || Boolean(t.is_active);
     }
     setDayToggles(toggles);
+
+    const surcharges = routeRes.data as
+      | {
+          weekend_surcharge_pct?: number | null;
+          nocturnal_surcharge_pct?: number | null;
+          holiday_surcharge_pct?: number | null;
+        }
+      | null;
+    if (surcharges) {
+      setPriceAdjust({
+        weekend: String(Number(surcharges.weekend_surcharge_pct ?? 0)),
+        nocturnal: String(Number(surcharges.nocturnal_surcharge_pct ?? 0)),
+        holiday: String(Number(surcharges.holiday_surcharge_pct ?? 0)),
+      });
+    }
     if (!silent) setLoading(false);
   }, [routeId]);
 
@@ -437,7 +487,13 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
                 </View>
 
                 {dTrips.map((t) => {
-                  const total = totalValue(t.price_per_person_cents, t.confirmed_count, priceAdjust, idx);
+                  const total = totalValue(
+                    t.price_per_person_cents,
+                    t.confirmed_count,
+                    priceAdjust,
+                    idx,
+                    t.departure_time,
+                  );
                   return (
                     <View key={t.id} style={styles.tripCard}>
                       <View style={styles.tripRoute}>

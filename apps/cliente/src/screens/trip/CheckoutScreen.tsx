@@ -32,10 +32,17 @@ import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
 import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
 import { formatVehicleDescription, formatDriverRatingLabel, formatTripFareBrl } from '../../lib/tripDriverDisplay';
-import { bookingCardChargeAmountCents } from '../../lib/bookingChargePreview';
 import { fetchResolvedPriceCentsForScheduledTrip } from '../../lib/clientScheduledTrips';
-import { MAPBOX_DESTINATION_MARKER_COLOR, MAPBOX_ORIGIN_MARKER_COLOR } from '@take-me/shared';
-import { flatPricingSnapshot, applyPromotionToSnapshot } from '../../lib/orderPricingSnapshot';
+import {
+  MAPBOX_DESTINATION_MARKER_COLOR,
+  MAPBOX_ORIGIN_MARKER_COLOR,
+  computeOrderPricing,
+  PricingDenominatorOverflowError,
+  normalizeApplyPromotion,
+  formatPricingBreakdown,
+  type PricingResult,
+} from '@take-me/shared';
+import { snapshotFromPricingResult } from '../../lib/orderPricingSnapshot';
 import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmParams } from '../../components/PaymentMethodSection';
 import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
 
@@ -98,8 +105,16 @@ export function CheckoutScreen({ navigation, route }: Props) {
     route.params?.scheduled_trip_id ? null : route.params?.driver?.amount_cents ?? null
   );
   const [fareLoading, setFareLoading] = useState(() => Boolean(route.params?.scheduled_trip_id));
-  /** Total debitado no cartão (rota − promo), alinhado ao PaymentIntent em charge-booking. */
-  const [cardChargePreviewCents, setCardChargePreviewCents] = useState<number | null>(null);
+  /**
+   * Preview do breakdown gross-up (PDF):
+   *   Base + Adicionais + Ganho/Desconto promo + Taxa admin = Total
+   * O `totalCents` é exatamente o que vai no PaymentIntent.
+   */
+  const [pricingPreview, setPricingPreview] = useState<PricingResult | null>(null);
+  const [pricingError, setPricingError] = useState<string | null>(null);
+  const [appliedPromotionId, setAppliedPromotionId] = useState<string | null>(null);
+  const [appliedPromoWorkerRouteId, setAppliedPromoWorkerRouteId] = useState<string | null>(null);
+  const [workerRouteId, setWorkerRouteId] = useState<string | null>(null);
 
   const driver = route.params?.driver ?? DEFAULT_DRIVER;
   const origin = route.params?.origin;
@@ -109,7 +124,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
   const scheduledTripId = route.params?.scheduled_trip_id;
   const immediateTrip = route.params?.immediateTrip === true;
   const routePriceCents = resolvedFareCents ?? driver.amount_cents ?? null;
-  const displayChargeCents = cardChargePreviewCents ?? routePriceCents;
+  const displayChargeCents = pricingPreview?.totalCents ?? routePriceCents;
   const fareFormatted =
     displayChargeCents != null
       ? formatTripFareBrl(displayChargeCents)
@@ -146,38 +161,106 @@ export function CheckoutScreen({ navigation, route }: Props) {
   }, [scheduledTripId, driver.amount_cents]);
 
   useEffect(() => {
-    if (routePriceCents == null || routePriceCents < 1) {
-      setCardChargePreviewCents(null);
+    if (!scheduledTripId) {
+      setWorkerRouteId(null);
       return;
     }
-    setCardChargePreviewCents(bookingCardChargeAmountCents(routePriceCents, 0));
     let cancelled = false;
-    void (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      let discount = 0;
-      if (user) {
-        try {
-          const { data: promoRows } = await supabase.rpc('apply_active_promotion', {
-            p_order_type: 'bookings',
-            p_user_id: user.id,
-            p_amount_cents: routePriceCents,
-          });
-          const pr = promoRows?.[0] as { promo_discount_cents?: number } | undefined;
-          if (pr?.promo_discount_cents != null) {
-            discount = Math.max(0, Math.floor(Number(pr.promo_discount_cents)));
-          }
-        } catch {
-          /* promo indisponível: mantém desconto 0 */
-        }
-      }
+    (async () => {
+      const { data } = await supabase
+        .from('scheduled_trips')
+        .select('route_id')
+        .eq('id', scheduledTripId)
+        .maybeSingle();
       if (!cancelled) {
-        setCardChargePreviewCents(bookingCardChargeAmountCents(routePriceCents, discount));
+        const rid = (data?.route_id as string | null | undefined) ?? null;
+        setWorkerRouteId(rid);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [routePriceCents]);
+  }, [scheduledTripId]);
+
+  useEffect(() => {
+    if (routePriceCents == null || routePriceCents < 1) {
+      setPricingPreview(null);
+      setPricingError(null);
+      setAppliedPromotionId(null);
+      setAppliedPromoWorkerRouteId(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+
+      let adminPct = 15;
+      try {
+        const { data: setting } = await supabase
+          .from('platform_settings')
+          .select('value')
+          .eq('key', 'default_admin_pct')
+          .maybeSingle();
+        const raw = setting?.value as { percentage?: number; value?: number } | null;
+        const n = Number(raw?.percentage ?? raw?.value);
+        if (Number.isFinite(n) && n >= 0) adminPct = n;
+      } catch {
+        /* usa fallback 15 */
+      }
+
+      let gainPct = 0;
+      let discountPct = 0;
+      let promotionId: string | null = null;
+      let promoWorkerRouteId: string | null = null;
+      if (user) {
+        try {
+          const payload: Record<string, unknown> = {
+            p_order_type: 'bookings',
+            p_user_id: user.id,
+            p_amount_cents: routePriceCents,
+          };
+          if (workerRouteId) payload.p_worker_route_id = workerRouteId;
+          const { data: promoRows } = await supabase.rpc('apply_active_promotion', payload);
+          const row = Array.isArray(promoRows) ? promoRows[0] : promoRows;
+          const applied = normalizeApplyPromotion(row as any);
+          gainPct = applied.gainPct;
+          discountPct = applied.discountPct;
+          promotionId = applied.promotionId;
+          promoWorkerRouteId = applied.promoWorkerRouteId;
+        } catch {
+          /* promo indisponível */
+        }
+      }
+
+      try {
+        const preview = computeOrderPricing({
+          baseCents: routePriceCents,
+          surchargesCents: 0,
+          adminPct,
+          gainPct,
+          discountPct,
+        });
+        if (!cancelled) {
+          setPricingPreview(preview);
+          setPricingError(null);
+          setAppliedPromotionId(promotionId);
+          setAppliedPromoWorkerRouteId(promoWorkerRouteId);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          if (err instanceof PricingDenominatorOverflowError) {
+            setPricingError('Configuração de taxas inválida para esta rota. Tente outra opção.');
+          } else {
+            setPricingError('Não foi possível calcular o preço agora.');
+          }
+          setPricingPreview(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [routePriceCents, workerRouteId]);
 
   useEffect(() => {
     if (!scheduledTripId) {
@@ -272,28 +355,23 @@ export function CheckoutScreen({ navigation, route }: Props) {
           bags: p.bags ?? '',
         }));
         const passenger_count = Math.max(1, passengersParam.length);
-        // Aplicar promoção ativa (se houver)
-        let pricing = flatPricingSnapshot(finalAmountCents);
-        let appliedPromoId: string | null = null;
-        try {
-          const { data: promoResult } = await supabase.rpc('apply_active_promotion', {
-            p_order_type: 'bookings',
-            p_user_id: user.id,
-            p_amount_cents: finalAmountCents,
-          });
-          if (promoResult && promoResult[0]?.promotion_id) {
-            const pr = promoResult[0];
-            appliedPromoId = pr.promotion_id;
-            pricing = applyPromotionToSnapshot(pricing, pr.promo_discount_cents, pr.adjusted_admin_pct);
-          }
-        } catch { /* promoção não disponível, segue sem desconto */ }
+
+        // Recompute pricing server-side authority, mas também materializa o
+        // snapshot localmente para o INSERT no caso de fluxo sem Stripe.
+        const fallbackAdminPct = pricingPreview?.adminPctApplied ?? 15;
+        const previewToUse: PricingResult = pricingPreview ?? computeOrderPricing({
+          baseCents: finalAmountCents,
+          surchargesCents: 0,
+          adminPct: fallbackAdminPct,
+        });
+        const pricingInsert = snapshotFromPricingResult(previewToUse, {
+          promotionId: appliedPromotionId,
+          promoWorkerRouteId: appliedPromoWorkerRouteId,
+        });
 
         let bookingId = '';
-        /** Igual ao PaymentIntent (rota − promo); não usar pricing.amount_cents (subtotal+taxa interna). */
-        let chargedAmountCents = bookingCardChargeAmountCents(
-          finalAmountCents,
-          pricing.promo_discount_cents || 0
-        );
+        /** Cartão: o edge recalcula e devolve o amount_cents cobrado no PaymentIntent. */
+        let chargedAmountCents = previewToUse.totalCents;
 
         if (params.method === 'credito' || params.method === 'debito') {
           const hasStripePm = Boolean(params.paymentMethodId?.trim());
@@ -343,9 +421,8 @@ export function CheckoutScreen({ navigation, route }: Props) {
                 passenger_count,
                 bags_count: bagsCount,
                 passenger_data,
-                promotion_id: appliedPromoId || undefined,
-                promo_discount_cents: pricing.promo_discount_cents || 0,
-                admin_pct_applied: (pricing as any).admin_pct_applied || undefined,
+                promotion_id: appliedPromotionId || undefined,
+                admin_pct_applied: previewToUse.adminPctApplied,
               },
             },
           });
@@ -387,7 +464,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
               passenger_count,
               bags_count: bagsCount,
               passenger_data,
-              ...pricing,
+              ...pricingInsert,
               status: 'pending',
             })
             .select('id')
@@ -457,8 +534,9 @@ export function CheckoutScreen({ navigation, route }: Props) {
       route.params?.scheduledTripDepartureAt,
       scheduledTripId,
       showAlert,
-      origin,
-      destination,
+      pricingPreview,
+      appliedPromotionId,
+      appliedPromoWorkerRouteId,
     ]
   );
 
@@ -610,6 +688,34 @@ export function CheckoutScreen({ navigation, route }: Props) {
           )}
         </View>
 
+        {pricingPreview ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Detalhes do preço</Text>
+            {formatPricingBreakdown(pricingPreview).map((line, idx) => {
+              const fmt = formatTripFareBrl(Math.abs(line.valueCents));
+              const displayValue = line.valueCents < 0 ? `- ${fmt}` : fmt;
+              return (
+                <View
+                  key={`${line.label}-${idx}`}
+                  style={line.isTotal ? styles.breakdownTotalRow : styles.breakdownRow}
+                >
+                  <Text style={line.isTotal ? styles.breakdownTotalLabel : styles.breakdownLabel}>
+                    {line.label}
+                  </Text>
+                  <Text style={line.isTotal ? styles.breakdownTotalValue : styles.breakdownValue}>
+                    {displayValue}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        ) : pricingError ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Preço</Text>
+            <Text style={styles.meta}>{pricingError}</Text>
+          </View>
+        ) : null}
+
         <View style={styles.card}>
           <PaymentMethodSection
             amountCents={displayChargeCents ?? 0}
@@ -680,4 +786,23 @@ const styles = StyleSheet.create({
   passengerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
   passengerText: { flex: 1, fontSize: 14, color: COLORS.black },
   bagsNote: { fontSize: 13, color: COLORS.neutral700, marginTop: 4 },
+  breakdownRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  breakdownTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 10,
+    marginTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.neutral300,
+  },
+  breakdownLabel: { fontSize: 14, color: COLORS.neutral700 },
+  breakdownValue: { fontSize: 14, color: COLORS.black, fontWeight: '500' },
+  breakdownTotalLabel: { fontSize: 15, color: COLORS.black, fontWeight: '700' },
+  breakdownTotalValue: { fontSize: 16, color: COLORS.black, fontWeight: '700' },
 });

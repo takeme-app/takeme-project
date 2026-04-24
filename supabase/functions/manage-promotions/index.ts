@@ -104,14 +104,17 @@ Deno.serve(async (req) => {
         discount_value?: number;
         applies_to?: string[];
         is_active?: boolean;
+        gain_pct_to_worker?: number;
+        discount_pct_to_passenger?: number;
+        worker_route_id?: string | null;
+        pricing_route_id?: string | null;
+        origin_city?: string | null;
       };
 
       if (
         !body.title?.trim() ||
         !body.start_at ||
         !body.end_at ||
-        !body.discount_type ||
-        !body.discount_value ||
         !Array.isArray(body.target_audiences) ||
         body.target_audiences.length === 0 ||
         !Array.isArray(body.applies_to) ||
@@ -120,7 +123,7 @@ Deno.serve(async (req) => {
         return new Response(
           JSON.stringify({
             error:
-              "Campos obrigatórios: title, start_at, end_at, target_audiences, discount_type, discount_value, applies_to",
+              "Campos obrigatórios: title, start_at, end_at, target_audiences, applies_to",
           }),
           {
             status: 400,
@@ -128,6 +131,15 @@ Deno.serve(async (req) => {
           }
         );
       }
+
+      // Compatibilidade com discount_value legado: se não enviado mas
+      // discount_pct_to_passenger veio, usamos ele como valor legado.
+      const legacyDiscountValue = typeof body.discount_value === "number"
+        ? body.discount_value
+        : typeof body.discount_pct_to_passenger === "number"
+          ? body.discount_pct_to_passenger
+          : 0;
+      const legacyDiscountType = body.discount_type ?? "percentage";
 
       const { data, error } = await admin
         .from("promotions")
@@ -137,11 +149,19 @@ Deno.serve(async (req) => {
           start_at: body.start_at,
           end_at: body.end_at,
           target_audiences: body.target_audiences,
-          discount_type: body.discount_type,
-          discount_value: body.discount_value,
+          discount_type: legacyDiscountType,
+          discount_value: Math.max(1, Math.round(Number(legacyDiscountValue) || 1)),
           applies_to: body.applies_to,
           is_active: typeof body.is_active === "boolean" ? body.is_active : true,
-          gain_pct_to_worker: typeof body.gain_pct_to_worker === "number" ? body.gain_pct_to_worker : 0,
+          gain_pct_to_worker:
+            typeof body.gain_pct_to_worker === "number" ? body.gain_pct_to_worker : 0,
+          discount_pct_to_passenger:
+            typeof body.discount_pct_to_passenger === "number"
+              ? body.discount_pct_to_passenger
+              : 0,
+          worker_route_id: body.worker_route_id ?? null,
+          pricing_route_id: body.pricing_route_id ?? null,
+          origin_city: body.origin_city?.trim() || null,
           created_by: user.id,
         })
         .select()
@@ -206,6 +226,10 @@ Deno.serve(async (req) => {
         "applies_to",
         "is_active",
         "gain_pct_to_worker",
+        "discount_pct_to_passenger",
+        "worker_route_id",
+        "pricing_route_id",
+        "origin_city",
       ];
       const updates: Record<string, unknown> = {};
       for (const key of allowedFields) {

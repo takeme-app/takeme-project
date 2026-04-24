@@ -895,9 +895,9 @@ export default function PagamentosGestaoScreen() {
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     void (async () => {
-      const { data } = await (supabase as any).from('pricing_routes').select('price_per_person_cents').eq('is_active', true);
+      const { data } = await (supabase as any).from('pricing_routes').select('price_cents').eq('is_active', true);
       if (!data || data.length === 0) return;
-      const prices = data.map((r: any) => r.price_per_person_cents || 0);
+      const prices = data.map((r: any) => r.price_cents || 0);
       setTrechoAvgCents(Math.round(prices.reduce((a: number, b: number) => a + b, 0) / prices.length));
     })();
   }, []);

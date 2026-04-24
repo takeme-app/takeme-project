@@ -9,7 +9,13 @@ export type DriverPaymentTransfer = {
   source: DriverPaymentTransferSource;
 };
 
-type BookingRow = { id: string; amount_cents: number; status: string; paid_at: string | null };
+type BookingRow = {
+  id: string;
+  amount_cents: number;
+  worker_earning_cents?: number | null;
+  status: string;
+  paid_at: string | null;
+};
 
 type CompletedTripRow = {
   id: string;
@@ -17,11 +23,22 @@ type CompletedTripRow = {
   bookings: BookingRow[] | null;
 };
 
+function workerCents(row: { amount_cents: number; worker_earning_cents?: number | null }): number {
+  const w = typeof row.worker_earning_cents === 'number' && Number.isFinite(row.worker_earning_cents)
+    ? row.worker_earning_cents
+    : null;
+  if (w != null && w > 0) return w;
+  return Number(row.amount_cents) || 0;
+}
+
 /**
  * Lista transferências/ganhos do motorista no intervalo.
  * - Com payouts no período: só payouts (fonte oficial de repasse).
  * - Sem payouts: reservas pagas no período (paid_at) + linhas sintéticas por viagem concluída
  *   no período (updated_at), para reservas confirmadas ou pagas fora do filtro de paid_at.
+ *
+ * Fórmula dos ganhos: usa `worker_earning_cents` (split do PDF) quando disponível, com
+ * fallback para `amount_cents` em bookings antigos (anteriores ao alinhamento de preços).
  */
 export async function fetchDriverPaymentTransfers(
   supabase: SupabaseClient,
@@ -51,7 +68,7 @@ export async function fetchDriverPaymentTransfers(
 
   const { data: paidBookings } = await supabase
     .from('bookings')
-    .select('id, amount_cents, paid_at, status, scheduled_trips!inner(driver_id)')
+    .select('id, amount_cents, worker_earning_cents, paid_at, status, scheduled_trips!inner(driver_id)')
     .eq('scheduled_trips.driver_id', userId)
     .eq('status', 'paid')
     .gte('paid_at', startIso)
@@ -60,7 +77,7 @@ export async function fetchDriverPaymentTransfers(
 
   const bookingTransfers: DriverPaymentTransfer[] = (paidBookings ?? []).map((b: BookingRow) => ({
     id: b.id,
-    amount_cents: b.amount_cents,
+    amount_cents: workerCents(b),
     paid_at: b.paid_at as string,
     source: 'booking' as const,
   }));
@@ -69,7 +86,7 @@ export async function fetchDriverPaymentTransfers(
 
   const { data: completedTrips } = await supabase
     .from('scheduled_trips')
-    .select('id, updated_at, bookings(id, amount_cents, status, paid_at)')
+    .select('id, updated_at, bookings(id, amount_cents, worker_earning_cents, status, paid_at)')
     .eq('driver_id', userId)
     .eq('status', 'completed')
     .gte('updated_at', startIso)
@@ -83,7 +100,7 @@ export async function fetchDriverPaymentTransfers(
     for (const b of rows) {
       if (b.status !== 'confirmed' && b.status !== 'paid') continue;
       if (b.status === 'paid' && listedPaidBookingIds.has(b.id)) continue;
-      extra += Number(b.amount_cents) || 0;
+      extra += workerCents(b);
     }
     if (extra > 0) {
       tripTransfers.push({

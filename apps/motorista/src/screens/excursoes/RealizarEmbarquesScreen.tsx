@@ -57,6 +57,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
   const [justifySelected, setJustifySelected] = useState<Set<string>>(new Set());
   const [savingJustify, setSavingJustify] = useState(false);
   const [uploadingPassengerId, setUploadingPassengerId] = useState<string | null>(null);
+  const [totalAmountCents, setTotalAmountCents] = useState<number | null>(null);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -91,9 +92,15 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data } = await supabase.from('excursion_requests').select('status').eq('id', excursionId).maybeSingle();
+      const { data } = await supabase
+        .from('excursion_requests')
+        .select('status, total_amount_cents')
+        .eq('id', excursionId)
+        .maybeSingle();
       if (cancelled || !data) return;
-      const st = (data as { status: string }).status;
+      const row = data as { status: string; total_amount_cents: number | null };
+      setTotalAmountCents(row.total_amount_cents ?? null);
+      const st = row.status;
       if (st === 'approved' || st === 'scheduled') {
         await supabase.from('excursion_requests').update({ status: 'in_progress' }).eq('id', excursionId);
       }
@@ -132,9 +139,10 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
         boarded,
         justified,
         totalExcursion,
+        totalAmountCents,
       });
     },
-    [excursionId, navigation],
+    [excursionId, navigation, totalAmountCents],
   );
 
   const tryFinalize = useCallback(() => {

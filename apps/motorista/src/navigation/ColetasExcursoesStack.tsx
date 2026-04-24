@@ -17,6 +17,7 @@ export type ColetasExcursoesStackParamList = {
     boarded: number;
     justified: number;
     totalExcursion: number;
+    totalAmountCents?: number | null;
   };
 };
 

@@ -32,6 +32,7 @@ import AtendimentoDetalheScreen from './screens/AtendimentoDetalheScreen';
 import ElaborarOrcamentoScreen from './screens/ElaborarOrcamentoScreen';
 import HistoricoViagensScreen from './screens/HistoricoViagensScreen';
 import ConfiguracoesScreen from './screens/ConfiguracoesScreen';
+import AdicionaisScreen from './screens/AdicionaisScreen';
 import NotificacoesScreen from './screens/NotificacoesScreen';
 import AvaliacoesScreen from './screens/AvaliacoesScreen';
 import AnalyticsScreen from './screens/AnalyticsScreen';
@@ -89,6 +90,7 @@ export const router = createBrowserRouter([
           { path: '/avaliacoes', element: React.createElement(AvaliacoesScreen) },
           { path: '/analytics', element: React.createElement(AnalyticsScreen) },
           { path: '/configuracoes', element: React.createElement(ConfiguracoesScreen) },
+          { path: '/adicionais', element: React.createElement(AdicionaisScreen) },
         ],
       },
     ],

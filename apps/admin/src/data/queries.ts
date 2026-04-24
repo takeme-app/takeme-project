@@ -77,6 +77,11 @@ export async function createPromotion(body: {
   discount_value: number;
   applies_to: string[];
   is_active?: boolean;
+  gain_pct_to_worker?: number;
+  discount_pct_to_passenger?: number;
+  worker_route_id?: string | null;
+  pricing_route_id?: string | null;
+  origin_city?: string | null;
 }) {
   return invokeEdgeFunction('manage-promotions', 'POST', undefined, body);
 }
@@ -1732,7 +1737,7 @@ export async function fetchPreparadorEditDetail(id: string): Promise<PreparadorE
     .from('excursion_requests')
     .select(`
       id, user_id, destination, excursion_date, people_count, fleet_type, observations, status,
-      total_amount_cents, scheduled_departure_at, preparer_id, vehicle_details, budget_lines, assignment_notes,
+      total_amount_cents, scheduled_departure_at, scheduled_return_at, preparer_id, driver_id, vehicle_details, budget_lines, assignment_notes,
       excursion_passengers ( id, full_name, cpf, phone, observations, status_departure, status_return, absence_justified, age )
     `)
     .eq('id', id)
@@ -1778,6 +1783,7 @@ export async function fetchPreparadorEditDetail(id: string): Promise<PreparadorE
     destination: row.destination ?? '',
     excursionDate: row.excursion_date ?? '',
     scheduledDepartureAt: row.scheduled_departure_at ?? null,
+    scheduledReturnAt: row.scheduled_return_at ?? null,
     peopleCount: row.people_count ?? 1,
     fleetType: row.fleet_type ?? 'carro',
     observations: row.observations ?? null,

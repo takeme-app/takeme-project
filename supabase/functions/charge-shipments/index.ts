@@ -39,7 +39,25 @@ type Row = {
   status: string;
   payment_method: string;
   stripe_payment_intent_id: string | null;
+  worker_earning_cents?: number | null;
+  admin_earning_cents?: number | null;
+  driver_id?: string | null;
+  preparer_id?: string | null;
 };
+
+async function resolveConnectDestination(
+  admin: ReturnType<typeof createClient>,
+  workerUserId: string | null | undefined
+): Promise<string | null> {
+  if (!workerUserId) return null;
+  const { data } = await admin
+    .from("worker_profiles")
+    .select("stripe_connect_account_id, stripe_connect_charges_enabled")
+    .eq("id", workerUserId)
+    .maybeSingle();
+  const acct = (data?.stripe_connect_account_id as string | null | undefined)?.trim() ?? null;
+  return acct && data?.stripe_connect_charges_enabled === true ? acct : null;
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -105,9 +123,12 @@ Deno.serve(async (req) => {
     const table = shipmentId ? "shipments" : "dependent_shipments";
     const id = shipmentId ?? dependentId!;
 
+    const selectFields = shipmentId
+      ? "id, user_id, amount_cents, status, payment_method, stripe_payment_intent_id, worker_earning_cents, admin_earning_cents, driver_id, preparer_id"
+      : "id, user_id, amount_cents, status, payment_method, stripe_payment_intent_id, worker_earning_cents, admin_earning_cents, driver_id";
     const { data: row, error: rowErr } = await admin
       .from(table)
-      .select("id, user_id, amount_cents, status, payment_method, stripe_payment_intent_id")
+      .select(selectFields)
       .eq("id", id)
       .eq("user_id", userId)
       .single();
@@ -169,6 +190,21 @@ Deno.serve(async (req) => {
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
+      // Split Connect também em Pix: transfer_data é usado no Pix da mesma forma que cartão.
+      const preparerUserIdPix = shipmentId ? (s.preparer_id ?? null) : null;
+      const driverUserIdPix = s.driver_id ?? null;
+      const workerUserIdPix = preparerUserIdPix ?? driverUserIdPix ?? null;
+      const connectDestinationPix = await resolveConnectDestination(admin, workerUserIdPix);
+      let applicationFeeCentsPix: number | null = null;
+      if (connectDestinationPix) {
+        const adminEarningStored = Number(s.admin_earning_cents);
+        if (Number.isFinite(adminEarningStored) && adminEarningStored >= 0) {
+          applicationFeeCentsPix = Math.min(amountCents, Math.max(0, Math.floor(adminEarningStored)));
+        } else {
+          applicationFeeCentsPix = 0;
+        }
+      }
+
       const pixParams = new URLSearchParams({
         amount: String(amountCents),
         currency: "brl",
@@ -178,6 +214,11 @@ Deno.serve(async (req) => {
         [`metadata[${metaKey}]`]: id,
         "metadata[user_id]": userId,
       });
+      if (connectDestinationPix && applicationFeeCentsPix != null) {
+        pixParams.set("application_fee_amount", String(applicationFeeCentsPix));
+        pixParams.set("transfer_data[destination]", connectDestinationPix);
+        pixParams.set("metadata[stripe_connect_destination]", connectDestinationPix);
+      }
       const piPix = (await stripeFetch(stripeSecret, "POST", "/payment_intents", pixParams)) as {
         id?: string;
         status?: string;
@@ -260,6 +301,26 @@ Deno.serve(async (req) => {
       stripePaymentMethodId = pmRow.provider_id as string;
     }
 
+    // Split Stripe Connect: se worker (motorista ou preparador) tem Connect ativo,
+    // faz transfer_data[destination] com application_fee_amount = admin_earning_cents.
+    // Caso preparador_encomendas (shipment.preparer_id): PDF exige admin_pct = 0,
+    // então worker_earning_cents ≈ amount_cents (zero taxa admin).
+    const preparerUserId = shipmentId ? (s.preparer_id ?? null) : null;
+    const driverUserId = s.driver_id ?? null;
+    const workerUserId = preparerUserId ?? driverUserId ?? null;
+    const connectDestination = await resolveConnectDestination(admin, workerUserId);
+
+    let applicationFeeCents: number | null = null;
+    if (connectDestination) {
+      const adminEarningStored = Number(s.admin_earning_cents);
+      if (Number.isFinite(adminEarningStored) && adminEarningStored >= 0) {
+        applicationFeeCents = Math.min(amountCents, Math.max(0, Math.floor(adminEarningStored)));
+      } else {
+        // Fallback conservador: sem snapshot de split, envia 100% ao worker.
+        applicationFeeCents = 0;
+      }
+    }
+
     const piParams = new URLSearchParams({
       amount: String(amountCents),
       currency: "brl",
@@ -270,6 +331,13 @@ Deno.serve(async (req) => {
       [`metadata[${metaKey}]`]: id,
       "metadata[user_id]": userId,
     });
+    if (connectDestination && applicationFeeCents != null) {
+      piParams.set("application_fee_amount", String(applicationFeeCents));
+      piParams.set("transfer_data[destination]", connectDestination);
+      piParams.set("metadata[stripe_connect_destination]", connectDestination);
+      piParams.set("metadata[worker_earning_cents]", String(Math.max(0, amountCents - applicationFeeCents)));
+      piParams.set("metadata[admin_earning_cents]", String(applicationFeeCents));
+    }
 
     const pi = (await stripeFetch(stripeSecret, "POST", "/payment_intents", piParams)) as {
       id?: string;

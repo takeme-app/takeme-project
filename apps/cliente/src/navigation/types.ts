@@ -44,6 +44,7 @@ export type ShipmentPlaceParam = {
   address: string;
   latitude: number;
   longitude: number;
+  city?: string;
 };
 
 /** Destinatário do envio */
@@ -53,10 +54,19 @@ export type ShipmentRecipientParam = {
   phone: string;
   instructions?: string;
   photoUri?: string;
+  photoUris?: string[];
 };
 
 export type ShipmentStackParamList = {
   SelectShipmentAddress: undefined;
+  SelectShipmentDriver: {
+    origin: ShipmentPlaceParam;
+    destination: ShipmentPlaceParam;
+    whenOption: 'now' | 'later';
+    whenLabel?: string;
+    packageSize: 'pequeno' | 'medio' | 'grande';
+    packageSizeLabel: string;
+  };
   Recipient: {
     origin: ShipmentPlaceParam;
     destination: ShipmentPlaceParam;
@@ -64,6 +74,17 @@ export type ShipmentStackParamList = {
     whenLabel?: string;
     packageSize: 'pequeno' | 'medio' | 'grande';
     packageSizeLabel: string;
+    /** FK do trecho do catálogo (ou null quando veio de override do preparador). */
+    pricingRouteId?: string | null;
+    priceRouteBaseCents?: number;
+    pricingSubtotalCents?: number;
+    platformFeeCents?: number;
+    amountCents?: number;
+    adminPctApplied?: number;
+    clientPreferredDriverId?: string;
+    resolvedBaseId?: string | null;
+    scheduledTripDepartureAt?: string | null;
+    scheduledTripId?: string;
   };
   ConfirmShipment: {
     origin: ShipmentPlaceParam;
@@ -75,7 +96,25 @@ export type ShipmentStackParamList = {
     recipient: ShipmentRecipientParam;
     /** Valor total final (já com taxa administrativa quando vier do backend). */
     amountCents: number;
-    /** Opcional: quando o backend enviar breakdown, exibir Subtotal + Taxa = Total */
+    /** Subtotal (pre gross-up) vindo do quote. */
+    pricingSubtotalCents: number;
+    /** Taxa administrativa no gross-up. */
+    platformFeeCents: number;
+    /** Base da rota (após multiplicador de tamanho). */
+    priceRouteBaseCents: number;
+    /** FK do trecho do catálogo quando aplicável. */
+    pricingRouteId: string | null;
+    /** % admin aplicada (snapshot). */
+    adminPctApplied: number;
+    /** Motorista/preparador escolhido pelo cliente (opcional). */
+    clientPreferredDriverId?: string;
+    /** Base operacional resolvida pelo hub (ou `null` quando não existe). */
+    resolvedBaseId?: string | null;
+    /** ISO da partida da viagem associada, quando coleta for on-demand. */
+    scheduledTripDepartureAt?: string | null;
+    /** ID do `scheduled_trips` quando o envio for acoplado a uma viagem. */
+    scheduledTripId?: string;
+    /** Compat: campos antigos ainda aceitos até migração completa. */
     subtotalCents?: number;
     feeCents?: number;
     orderId?: string;
@@ -104,6 +143,19 @@ export type DependentShipmentStackParamList = {
   AddDependent: undefined;
   DependentSuccess: undefined;
   DefineDependentTrip: DependentShipmentFormParams;
+  SelectDependentTripDriver: {
+    origin: ShipmentPlaceParam;
+    destination: ShipmentPlaceParam;
+    whenOption: 'now' | 'later';
+    whenLabel?: string;
+    fullName: string;
+    contactPhone: string;
+    bagsCount: number;
+    instructions?: string;
+    dependentId?: string;
+    photoUri?: string;
+    photoUris?: string[];
+  };
   ConfirmDependentShipment: {
     origin: ShipmentPlaceParam;
     destination: ShipmentPlaceParam;
@@ -116,6 +168,9 @@ export type DependentShipmentStackParamList = {
     dependentId?: string;
     amountCents: number;
     photoUri?: string;
+    photoUris?: string[];
+    driver?: TripDriverParam;
+    scheduledTripDepartureAt?: string | null;
   };
   DependentShipmentSuccess: {
     orderId: string;
@@ -166,6 +221,9 @@ export type PaymentConfirmedBookingParam = {
 
 /** Dados exibidos no acompanhamento da viagem após o pagamento */
 export type TripLiveDriverDisplay = {
+  scheduledTripId?: string;
+  origin?: { latitude: number; longitude: number; address: string };
+  destination?: { latitude: number; longitude: number; address: string };
   driverName: string;
   rating: number;
   vehicleLabel: string;
@@ -180,11 +238,21 @@ export type TripStackParamList = {
   ChooseTime: undefined;
   SearchTrip: { destination?: { address: string; city?: string; latitude?: number; longitude?: number }; immediateTrip?: boolean };
   ConfirmDetails: { driver?: TripDriverParam; origin?: TripPlaceParam; destination?: TripPlaceParam; scheduled_trip_id?: string; immediateTrip?: boolean };
-  Checkout: { driver?: TripDriverParam; origin?: TripPlaceParam; destination?: TripPlaceParam; scheduled_trip_id?: string; passengers?: TripPassengerParam[]; bags_count?: number; immediateTrip?: boolean };
+  Checkout: {
+    driver?: TripDriverParam;
+    origin?: TripPlaceParam;
+    destination?: TripPlaceParam;
+    scheduled_trip_id?: string;
+    scheduledTripDepartureAt?: string | null;
+    passengers?: TripPassengerParam[];
+    bags_count?: number;
+    immediateTrip?: boolean;
+  };
   PaymentConfirmed: {
     booking?: PaymentConfirmedBookingParam;
     immediateTrip?: boolean;
     tripLive?: TripLiveDriverDisplay;
+    paymentMethod?: string | null;
   };
   DriverOnTheWay: TripLiveDriverDisplay | undefined;
   TripInProgress: TripLiveDriverDisplay | undefined;

@@ -77,9 +77,12 @@ export default function ElaborarOrcamentoScreen() {
   const [selectedPreparerId, setSelectedPreparerId] = useState<string>('');
   const [driverValueCents, setDriverValueCents] = useState<number>(0);
   const [preparerValueCents, setPreparerValueCents] = useState<number>(0);
+  const [preparerDailyRateCents, setPreparerDailyRateCents] = useState<number | null>(null);
   const [basicItems, setBasicItems] = useState<BudgetItemLine[]>([]);
   const [additionalServices, setAdditionalServices] = useState<BudgetItemLine[]>([]);
   const [recreationItems, setRecreationItems] = useState<BudgetItemLine[]>([]);
+  const [packageCatalog, setPackageCatalog] = useState<Array<{ id: string; name: string; default_value_cents: number; description: string | null }>>([]);
+  const [recreationCatalog, setRecreationCatalog] = useState<Array<{ id: string; name: string; default_value_cents: number; description: string | null }>>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,6 +101,24 @@ export default function ElaborarOrcamentoScreen() {
       if (cancelled) return;
       setDetail(d);
       setPreparerCandidates(preps);
+
+      void (async () => {
+        const [{ data: pkgs }, { data: recs }] = await Promise.all([
+          (supabase as any)
+            .from('excursion_package_catalog')
+            .select('id, name, default_value_cents, description')
+            .eq('is_active', true)
+            .order('name'),
+          (supabase as any)
+            .from('excursion_recreation_items')
+            .select('id, name, default_value_cents, description')
+            .eq('is_active', true)
+            .order('name'),
+        ]);
+        if (cancelled) return;
+        setPackageCatalog((pkgs as any[]) || []);
+        setRecreationCatalog((recs as any[]) || []);
+      })();
       const driverIds = (driverRows ?? []).map((r: any) => r.id as string);
       let driverList: Array<{ id: string; nome: string }> = [];
       if (driverIds.length > 0) {
@@ -138,6 +159,48 @@ export default function ElaborarOrcamentoScreen() {
     })();
     return () => { cancelled = true; };
   }, [excursionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedPreparerId) {
+      setPreparerDailyRateCents(null);
+      return;
+    }
+    (async () => {
+      const { data } = await (supabase as any)
+        .from('worker_profiles')
+        .select('daily_rate_cents')
+        .eq('id', selectedPreparerId)
+        .maybeSingle();
+      if (cancelled) return;
+      const cents = typeof data?.daily_rate_cents === 'number' ? data.daily_rate_cents : null;
+      setPreparerDailyRateCents(cents);
+    })();
+    return () => { cancelled = true; };
+  }, [selectedPreparerId]);
+
+  const excursionDaysCount = useMemo(() => {
+    const start = detail?.scheduledDepartureAt || detail?.excursionDate || null;
+    const end = detail?.scheduledReturnAt || null;
+    if (!start) return null;
+    try {
+      const s = new Date(start);
+      const e = end ? new Date(end) : s;
+      const ms = e.getTime() - s.getTime();
+      if (!Number.isFinite(ms)) return null;
+      const days = Math.max(1, Math.ceil(ms / (24 * 60 * 60 * 1000)) || 1);
+      return days;
+    } catch {
+      return null;
+    }
+  }, [detail?.scheduledDepartureAt, detail?.excursionDate, detail?.scheduledReturnAt]);
+
+  const canAutoCalcPreparer = typeof preparerDailyRateCents === 'number' && preparerDailyRateCents > 0 && (excursionDaysCount ?? 0) > 0;
+
+  const handleAutoCalcPreparer = useCallback(() => {
+    if (!canAutoCalcPreparer || typeof preparerDailyRateCents !== 'number' || !excursionDaysCount) return;
+    setPreparerValueCents(preparerDailyRateCents * excursionDaysCount);
+  }, [canAutoCalcPreparer, preparerDailyRateCents, excursionDaysCount]);
 
   const itemsSum = (rows: BudgetItemLine[]) => rows.reduce((s, r) => s + (r.qty * r.value_cents), 0);
 
@@ -281,16 +344,58 @@ export default function ElaborarOrcamentoScreen() {
           type: 'text', value: formatCentsBRL(preparerValueCents),
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => setPreparerValueCents(parseBRLInputToCents(e.target.value)),
           style: inputStyle,
-        }))));
+        }),
+        canAutoCalcPreparer
+          ? React.createElement('button', {
+              type: 'button',
+              onClick: handleAutoCalcPreparer,
+              style: {
+                marginTop: 4, alignSelf: 'flex-start', background: 'none', border: 'none',
+                padding: 0, cursor: 'pointer', fontSize: 12, fontWeight: 500, color: '#0d0d0d',
+                textDecoration: 'underline', ...font,
+              },
+              title: `Diária ${formatCentsBRL(preparerDailyRateCents ?? 0)} × ${excursionDaysCount ?? 0} dia(s)`,
+            }, `Calcular diária × ${excursionDaysCount ?? 0} dia(s)`)
+          : typeof preparerDailyRateCents === 'number' && preparerDailyRateCents > 0 && !excursionDaysCount
+            ? React.createElement('span', {
+                style: { marginTop: 4, fontSize: 11, color: '#767676', ...font },
+              }, 'Cadastre a data de retorno para calcular a diária.')
+            : null)));
+
+  const catalogPicker = (
+    catalog: Array<{ id: string; name: string; default_value_cents: number; description: string | null }>,
+    setRows: React.Dispatch<React.SetStateAction<BudgetItemLine[]>>,
+  ) => {
+    if (catalog.length === 0) return null;
+    return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+      React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Importar do catálogo:'),
+      React.createElement('select', {
+        value: '',
+        onChange: (e: React.ChangeEvent<HTMLSelectElement>) => {
+          const id = e.target.value;
+          if (!id) return;
+          const item = catalog.find((c) => c.id === id);
+          if (!item) return;
+          setRows((prev) => [...prev, { label: item.name, qty: 1, value_cents: item.default_value_cents }]);
+          e.target.value = '';
+        },
+        style: { ...inputStyle, height: 36, padding: '0 12px', fontSize: 13, width: 'auto', flex: '0 0 auto' },
+      },
+        React.createElement('option', { value: '' }, '— selecione —'),
+        ...catalog.map((c) => React.createElement('option', { key: c.id, value: c.id }, `${c.name} · ${formatCentsBRL(c.default_value_cents)}`))));
+  };
 
   const renderItemsBlock = (
     blockLabel: string,
     rows: BudgetItemLine[],
     setRows: React.Dispatch<React.SetStateAction<BudgetItemLine[]>>,
     ctaLabel: string,
+    catalog: Array<{ id: string; name: string; default_value_cents: number; description: string | null }> | null = null,
   ) =>
     React.createElement('div', { style: sectionCard },
-      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#767676', ...font } }, blockLabel),
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const } },
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#767676', ...font } }, blockLabel),
+        catalog ? catalogPicker(catalog, setRows) : null),
       React.createElement('div', { style: { display: 'flex', gap: 16 } },
         React.createElement('span', { style: { flex: '2 1 0', ...labelStyle } }, 'Item'),
         React.createElement('span', { style: { flex: '0 0 80px', ...labelStyle } }, 'Qtd.'),
@@ -327,9 +432,9 @@ export default function ElaborarOrcamentoScreen() {
         onClick: () => setRows((prev) => [...prev, { label: '', qty: 1, value_cents: 0 }]),
       }, plusSvg, ctaLabel));
 
-  const itensSection = renderItemsBlock('Itens básicos', basicItems, setBasicItems, 'Adicionar novo item');
-  const servicosSection = renderItemsBlock('Serviços adicionais', additionalServices, setAdditionalServices, 'Adicionar novo serviço');
-  const recreacaoSection = renderItemsBlock('Adicionais de recreação', recreationItems, setRecreationItems, 'Adicionar novo item');
+  const itensSection = renderItemsBlock('Itens básicos', basicItems, setBasicItems, 'Adicionar novo item', packageCatalog);
+  const servicosSection = renderItemsBlock('Serviços adicionais', additionalServices, setAdditionalServices, 'Adicionar novo serviço', packageCatalog);
+  const recreacaoSection = renderItemsBlock('Adicionais de recreação', recreationItems, setRecreationItems, 'Adicionar novo item', recreationCatalog);
 
   const totalRow = React.createElement('div', {
     style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', borderTop: '1px solid #e2e2e2' },

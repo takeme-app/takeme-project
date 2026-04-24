@@ -37,7 +37,7 @@ export function ConfigureNotificationsContent() {
         .eq('user_id', user.id);
       const map: Record<string, boolean> = {};
       PREF_KEYS.forEach(({ key }) => {
-        map[key] = true;
+        map[key] = key === 'disable_all' ? false : true;
       });
       (data ?? []).forEach((row: { key: string; enabled: boolean }) => {
         map[row.key] = row.enabled;
@@ -124,7 +124,7 @@ export function ConfigureNotificationsContent() {
           <View key={key} style={styles.row}>
             <Text style={styles.rowTitle}>{title}</Text>
             <Switch
-              value={prefs[key] ?? true}
+              value={prefs[key] ?? false}
               onValueChange={(v) => setPref(key, v)}
               trackColor={{ false: '#d1d5db', true: COLORS.black }}
               thumbColor="#fff"

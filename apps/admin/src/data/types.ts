@@ -334,6 +334,7 @@ export interface PreparadorEditDetail {
   destination: string;
   excursionDate: string;
   scheduledDepartureAt: string | null;
+  scheduledReturnAt: string | null;
   peopleCount: number;
   fleetType: string;
   observations: string | null;
@@ -481,13 +482,28 @@ export interface PricingRouteRow {
   created_at: string;
 }
 
+export type SurchargeType =
+  | 'viagem'
+  | 'encomenda'
+  | 'preparador_encomendas'
+  | 'preparador_excursoes';
+
 export interface SurchargeCatalogRow {
   id: string;
   name: string;
   description: string | null;
   default_value_cents: number;
   surcharge_mode: 'automatic' | 'manual';
+  surcharge_type: SurchargeType;
   is_active: boolean;
+}
+
+export interface PricingRouteSurchargeRow {
+  id: string;
+  pricing_route_id: string;
+  surcharge_id: string;
+  value_cents: number | null;
+  created_at: string;
 }
 
 // ── Payment Methods (admin pode inserir via insertPassengerPaymentMethodAdmin + RLS) ──

@@ -26,6 +26,7 @@ import {
   shipmentPricingSnapshotFromParams,
   shipmentOrderInsertFromQuoteParams,
 } from '../../lib/orderPricingSnapshot';
+import { formatPricingBreakdown, computeOrderPricing, PricingDenominatorOverflowError } from '@take-me/shared';
 import { guessCityFromPtAddress } from '../../lib/shipmentOriginCity';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
@@ -89,6 +90,25 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
     feeCents: platformFeeCents,
     priceRouteBaseCents,
   });
+
+  // Reconstrói o breakdown gross-up (PDF) usando os parâmetros da cotação.
+  // Neste momento não aplicamos promoção — o desconto/ganho promocional
+  // é persistido pelo edge `charge-shipments` após o checkout.
+  const pricingPreview = useMemo(() => {
+    try {
+      return computeOrderPricing({
+        baseCents: priceRouteBaseCents,
+        surchargesCents: Math.max(0, amountCents - priceRouteBaseCents - platformFeeCents),
+        adminPct: adminPctApplied,
+        gainPct: 0,
+        discountPct: 0,
+      });
+    } catch (err) {
+      if (err instanceof PricingDenominatorOverflowError) return null;
+      return null;
+    }
+  }, [priceRouteBaseCents, platformFeeCents, amountCents, adminPctApplied]);
+
   const pricingInsertRow = useMemo(
     () =>
       shipmentOrderInsertFromQuoteParams({
@@ -98,6 +118,9 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         platformFeeCents,
         amountCents,
         adminPctApplied,
+        surchargesCents: pricingPreview?.surchargesCents ?? 0,
+        workerEarningCents: pricingPreview?.workerEarningCents,
+        adminEarningCents: pricingPreview?.adminEarningCents,
       }),
     [
       pricingRouteId,
@@ -106,6 +129,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
       platformFeeCents,
       amountCents,
       adminPctApplied,
+      pricingPreview,
     ]
   );
   const amountFormatted = `R$ ${(pricingSnapshot.amount_cents / 100).toFixed(2).replace('.', ',')}`;
@@ -486,7 +510,25 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
             <Text style={styles.summaryLabel}>Envio para {recipient.name}</Text>
             {!showFeeBreakdown && <Text style={styles.summaryPrice}>{amountFormatted}</Text>}
           </View>
-          {showFeeBreakdown && (
+          {showFeeBreakdown && pricingPreview ? (
+            <>
+              {formatPricingBreakdown(pricingPreview).map((line, idx) => {
+                const abs = Math.abs(line.valueCents);
+                const val = line.valueCents < 0 ? `- ${formatBRL(abs)}` : formatBRL(abs);
+                return line.isTotal ? (
+                  <View key={`${line.label}-${idx}`} style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>{line.label}</Text>
+                    <Text style={styles.summaryPrice}>{val}</Text>
+                  </View>
+                ) : (
+                  <View key={`${line.label}-${idx}`} style={styles.summaryFeeRow}>
+                    <Text style={styles.summaryMeta}>{line.label}</Text>
+                    <Text style={styles.summaryMeta}>{val}</Text>
+                  </View>
+                );
+              })}
+            </>
+          ) : showFeeBreakdown ? (
             <>
               <View style={styles.summaryFeeRow}>
                 <Text style={styles.summaryMeta}>Subtotal</Text>
@@ -501,7 +543,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
                 <Text style={styles.summaryPrice}>{amountFormatted}</Text>
               </View>
             </>
-          )}
+          ) : null}
           {!showFeeBreakdown && (
             <Text style={styles.summaryMetaNote}>Valor total já inclui taxa quando aplicável.</Text>
           )}

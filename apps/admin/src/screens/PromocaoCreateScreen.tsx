@@ -9,7 +9,13 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
-const CITY_OPTIONS = ['São Paulo', 'Campinas', 'Curitiba', 'Belo Horizonte', 'Porto Alegre'] as const;
+type RouteOption = {
+  id: string;
+  kind: 'worker_route' | 'pricing_route';
+  label: string;
+  origin: string | null;
+  destination: string;
+};
 
 function toDatetimeLocalValue(d: Date): string {
   const y = d.getFullYear();
@@ -109,14 +115,12 @@ export default function PromocaoCreateScreen() {
   const [passageiros, setPassageiros] = useState(false);
   const [encomendas, setEncomendas] = useState(false);
   const [promoActive, setPromoActive] = useState(true);
-  const [discountPct, setDiscountPct] = useState(15);
+  const [discountPctToPassenger, setDiscountPctToPassenger] = useState(15);
   const [gainPctWorker, setGainPctWorker] = useState(0);
-  const [citySearch, setCitySearch] = useState('');
-  const [cityChecked, setCityChecked] = useState<Record<string, boolean>>(() => {
-    const o: Record<string, boolean> = {};
-    CITY_OPTIONS.forEach((c) => { o[c] = ['São Paulo', 'Campinas', 'Curitiba'].includes(c); });
-    return o;
-  });
+  const [routeSearch, setRouteSearch] = useState('');
+  const [routeOptions, setRouteOptions] = useState<RouteOption[]>([]);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [loadingRoutes, setLoadingRoutes] = useState(false);
   const [obsMotoristas, setObsMotoristas] = useState('');
   const [expanded, setExpanded] = useState<Record<AccKey, boolean>>({
     motoristas: true,
@@ -127,7 +131,6 @@ export default function PromocaoCreateScreen() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load existing promotion data for edit mode
   useEffect(() => {
     if (!isEditMode || !editId || !isSupabaseConfigured) { setLoadingEdit(false); return; }
     void (async () => {
@@ -143,12 +146,51 @@ export default function PromocaoCreateScreen() {
         setPassageiros(ta.includes('passengers'));
         setEncomendas(ta.includes('preparers_shipments'));
         setPromoActive(data.is_active !== false);
-        setDiscountPct(data.discount_value || 15);
-        setGainPctWorker(data.gain_pct_to_worker || 0);
+        const fallbackDiscount = data.discount_type === 'percentage' ? Number(data.discount_value) || 0 : 0;
+        setDiscountPctToPassenger(Number(data.discount_pct_to_passenger ?? fallbackDiscount) || 0);
+        setGainPctWorker(Number(data.gain_pct_to_worker) || 0);
+        if (data.worker_route_id) setSelectedRouteId(`wr:${data.worker_route_id}`);
+        else if (data.pricing_route_id) setSelectedRouteId(`pr:${data.pricing_route_id}`);
       }
       setLoadingEdit(false);
     })();
   }, [editId, isEditMode]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    let cancelled = false;
+    setLoadingRoutes(true);
+    void (async () => {
+      const opts: RouteOption[] = [];
+      const [{ data: pr }, { data: wr }] = await Promise.all([
+        (supabase as any)
+          .from('pricing_routes')
+          .select('id, title, origin_address, destination_address, role_type')
+          .eq('is_active', true)
+          .order('destination_address'),
+        (supabase as any)
+          .from('worker_routes')
+          .select('id, origin_address, destination_address, worker_id')
+          .eq('is_active', true)
+          .order('destination_address'),
+      ]);
+      for (const r of pr ?? []) {
+        const origin = (r.origin_address as string | null) || null;
+        const label = `${r.title || r.role_type || 'Rota'} · ${origin ? origin + ' → ' : ''}${r.destination_address}`;
+        opts.push({ id: `pr:${r.id}`, kind: 'pricing_route', label, origin, destination: r.destination_address });
+      }
+      for (const r of wr ?? []) {
+        const origin = (r.origin_address as string | null) || null;
+        const label = `Motorista · ${origin ? origin + ' → ' : ''}${r.destination_address}`;
+        opts.push({ id: `wr:${r.id}`, kind: 'worker_route', label, origin, destination: r.destination_address });
+      }
+      if (!cancelled) {
+        setRouteOptions(opts);
+        setLoadingRoutes(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const audiences = useMemo(() => ({ motoristas, preparadores, passageiros, encomendas }), [motoristas, preparadores, passageiros, encomendas]);
 
@@ -164,22 +206,14 @@ export default function PromocaoCreateScreen() {
     if (v) setExpanded((e) => ({ ...e, [key]: true }));
   }, []);
 
-  const filteredCities = useMemo(() => {
-    const q = citySearch.trim().toLowerCase();
-    if (!q) return [...CITY_OPTIONS];
-    return CITY_OPTIONS.filter((c) => c.toLowerCase().includes(q));
-  }, [citySearch]);
+  const filteredRoutes = useMemo(() => {
+    const q = routeSearch.trim().toLowerCase();
+    if (!q) return routeOptions;
+    return routeOptions.filter((r) => r.label.toLowerCase().includes(q));
+  }, [routeSearch, routeOptions]);
 
-  const clearCities = useCallback(() => {
-    const o: Record<string, boolean> = {};
-    CITY_OPTIONS.forEach((c) => { o[c] = false; });
-    setCityChecked(o);
-  }, []);
-
-  const selectAllCities = useCallback(() => {
-    const o: Record<string, boolean> = {};
-    CITY_OPTIONS.forEach((c) => { o[c] = true; });
-    setCityChecked(o);
+  const clearRoute = useCallback(() => {
+    setSelectedRouteId(null);
   }, []);
 
   const cancel = useCallback(() => navigate('/promocoes'), [navigate]);
@@ -200,9 +234,10 @@ export default function PromocaoCreateScreen() {
       setError('Combinação de público inválida para aplicar a promoção.');
       return;
     }
-    const dv = Math.round(discountPct);
-    if (!Number.isFinite(dv) || dv <= 0 || dv > 100) {
-      setError('Informe um percentual de desconto entre 1 e 100.');
+    const dv = Math.max(0, Math.min(100, Number(discountPctToPassenger) || 0));
+    const gv = Math.max(0, Math.min(100, Number(gainPctWorker) || 0));
+    if (dv <= 0 && gv <= 0) {
+      setError('Informe desconto ao passageiro ou ganho ao motorista/preparador (% > 0).');
       return;
     }
     const start = new Date(startLocal);
@@ -221,7 +256,11 @@ export default function PromocaoCreateScreen() {
     if (obsMotoristas.trim()) descParts.push(`[Motoristas] ${obsMotoristas.trim()}`);
     const fullDesc = descParts.filter(Boolean).join('\n\n') || undefined;
 
-    const payload = {
+    const selected = selectedRouteId ? routeOptions.find((r) => r.id === selectedRouteId) : null;
+    const worker_route_id = selected?.kind === 'worker_route' ? selected.id.slice(3) : null;
+    const pricing_route_id = selected?.kind === 'pricing_route' ? selected.id.slice(3) : null;
+
+    const payload: Record<string, unknown> = {
       title: title.trim(),
       description: fullDesc,
       start_at: start.toISOString(),
@@ -229,9 +268,13 @@ export default function PromocaoCreateScreen() {
       target_audiences: ta,
       discount_type: 'percentage',
       discount_value: dv,
+      discount_pct_to_passenger: dv,
+      gain_pct_to_worker: gv,
       applies_to: ap,
       is_active: promoActive,
-      gain_pct_to_worker: gainPctWorker,
+      worker_route_id,
+      pricing_route_id,
+      origin_city: selected?.origin ?? null,
     };
     let err: string | null = null;
     if (isEditMode && editId) {
@@ -247,7 +290,7 @@ export default function PromocaoCreateScreen() {
       return;
     }
     navigate('/promocoes');
-  }, [title, description, startLocal, endLocal, audiences, discountPct, promoActive, obsMotoristas, navigate, isEditMode, editId]);
+  }, [title, description, startLocal, endLocal, audiences, discountPctToPassenger, gainPctWorker, promoActive, obsMotoristas, navigate, isEditMode, editId, selectedRouteId, routeOptions]);
 
   const audienceCheckbox = (
     key: 'motoristas' | 'preparadores' | 'passageiros' | 'encomendas',
@@ -343,60 +386,70 @@ export default function PromocaoCreateScreen() {
       isOpen && inner ? React.createElement('div', { style: { marginTop: 16 } }, inner) : null);
   };
 
+  const selectedRoute = selectedRouteId ? routeOptions.find((r) => r.id === selectedRouteId) ?? null : null;
+
   const motoristasInner = motoristas
     ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' } },
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
-        React.createElement('span', { style: labelMd }, 'Porcentagem de ganho adicional (%)'),
+        React.createElement('span', { style: labelMd }, 'Desconto para o passageiro (%)'),
         React.createElement('input', {
           type: 'number',
-          min: 1,
+          min: 0,
           max: 100,
-          value: discountPct,
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDiscountPct(Number(e.target.value)),
+          step: 0.5,
+          value: discountPctToPassenger,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDiscountPctToPassenger(Math.max(0, Math.min(100, Number(e.target.value)))),
           style: inputGray,
         })),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
-        React.createElement('span', { style: labelMd }, 'Digite o nome da cidade para adicionar'),
+        React.createElement('span', { style: labelMd }, 'Rota alvo da promoção'),
+        React.createElement('span', { style: labelSmMuted }, 'A promoção aplica-se exclusivamente a esta rota (origem + destino). Deixe em branco para todas as rotas.'),
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, background: '#f1f1f1', borderRadius: 8, paddingLeft: 16, height: 44 } },
           searchSvg,
           React.createElement('input', {
             type: 'text',
-            value: citySearch,
-            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCitySearch(e.target.value),
-            placeholder: 'Ex: Recife',
-            style: { flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 16, color: citySearch ? '#0d0d0d' : '#767676', ...font },
+            value: routeSearch,
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setRouteSearch(e.target.value),
+            placeholder: loadingRoutes ? 'Carregando rotas…' : 'Busque por origem, destino ou título',
+            style: { flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 16, color: routeSearch ? '#0d0d0d' : '#767676', ...font },
           }))),
-      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
-        ...filteredCities.map((c) =>
-          React.createElement('label', {
-            key: c,
-            style: { display: 'flex', alignItems: 'center', cursor: 'pointer' },
-          },
-            React.createElement('input', {
-              type: 'checkbox',
-              checked: !!cityChecked[c],
-              onChange: (e: React.ChangeEvent<HTMLInputElement>) =>
-                setCityChecked((prev) => ({ ...prev, [c]: e.target.checked })),
-              style: { width: 20, height: 20, margin: '10px 8px 10px 0', accentColor: '#0d0d0d' },
-            }),
-            React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, c)))),
+      React.createElement('div', {
+        style: {
+          maxHeight: 260, overflowY: 'auto' as const, borderRadius: 8,
+          border: '1px solid #e2e2e2', padding: 8, display: 'flex', flexDirection: 'column' as const, gap: 4,
+        },
+      },
+        filteredRoutes.length === 0
+          ? React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font, padding: 8 } }, loadingRoutes ? 'Carregando…' : 'Nenhuma rota encontrada.')
+          : filteredRoutes.map((r) =>
+            React.createElement('label', {
+              key: r.id,
+              style: { display: 'flex', alignItems: 'center', cursor: 'pointer', padding: '6px 8px', borderRadius: 6, background: selectedRouteId === r.id ? '#f1f1f1' : 'transparent' },
+            },
+              React.createElement('input', {
+                type: 'radio',
+                name: 'promotion-route',
+                checked: selectedRouteId === r.id,
+                onChange: () => setSelectedRouteId(r.id),
+                style: { width: 18, height: 18, margin: '0 8px 0 0', accentColor: '#0d0d0d' },
+              }),
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, r.label)))),
       React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const, maxWidth: 510 } },
         React.createElement('button', {
           type: 'button',
-          onClick: clearCities,
+          onClick: clearRoute,
           style: {
             flex: '1 1 160px', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1',
             fontSize: 14, fontWeight: 600, color: '#b53838', cursor: 'pointer', ...font,
           },
-        }, 'Limpar cidades'),
-        React.createElement('button', {
-          type: 'button',
-          onClick: selectAllCities,
-          style: {
-            flex: '1 1 160px', height: 44, borderRadius: 8, border: '1px solid #0d0d0d', background: '#fff',
-            fontSize: 14, fontWeight: 600, color: '#0d0d0d', cursor: 'pointer', ...font,
-          },
-        }, 'Selecionar tudo')),
+        }, 'Limpar rota (aplicar a todas)')),
+      selectedRoute
+        ? React.createElement('div', {
+          style: { padding: 12, borderRadius: 8, background: '#f6f6f6', display: 'flex', flexDirection: 'column' as const, gap: 4 },
+        },
+          React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#767676', ...font } }, selectedRoute.kind === 'worker_route' ? 'Rota do motorista' : 'Rota catalogada'),
+          React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, selectedRoute.label))
+        : null,
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8 } },
           React.createElement('span', { style: labelMd }, 'Observações'),
@@ -406,24 +459,7 @@ export default function PromocaoCreateScreen() {
           onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => setObsMotoristas(e.target.value),
           placeholder: 'Notas internas sobre esta promoção',
           style: textAreaGray,
-        })),
-      React.createElement('div', {
-        style: {
-          background: '#fff8e6', borderRadius: 8, padding: '16px 16px 12px', boxShadow: '0px 4px 20px rgba(13,13,13,0.04)',
-          display: 'flex', flexDirection: 'column' as const, gap: 16,
-        },
-      },
-        React.createElement('span', { style: { ...labelMd, fontSize: 14 } }, 'Margem de ganho'),
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 24, width: '100%' } },
-          React.createElement('input', {
-            type: 'range',
-            min: 1,
-            max: 100,
-            value: discountPct,
-            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDiscountPct(Number(e.target.value)),
-            style: { flex: 1, accentColor: '#cba04b', height: 8 },
-          }),
-          React.createElement('span', { style: { fontSize: 16, fontWeight: 700, color: '#a37e38', ...font, flexShrink: 0 } }, `${Math.round(discountPct)}%`))))
+        })))
     : React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Marque «Motoristas» em Tipo de público-alvo para configurar esta seção.');
 
   const simpleAccPlaceholder = (label: string) =>
@@ -494,26 +530,31 @@ export default function PromocaoCreateScreen() {
           'Ao ativar, a promoção ficará disponível imediatamente')),
       toggleSwitch()));
 
-  // Gain % to worker field
   const gainPctSection = React.createElement('div', {
     style: { width: '100%', maxWidth: 1044, background: '#fff', border: '1px solid #e2e2e2', borderRadius: 16, padding: 24, display: 'flex', flexDirection: 'column' as const, gap: 16, boxSizing: 'border-box' as const },
   },
-    React.createElement('h2', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Distribuição de ganho'),
+    React.createElement('h2', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Ganhos e descontos'),
     React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, lineHeight: 1.5, ...font } },
-      'Quando você dá porcentagem extra ao motorista/preparador, esse valor é subtraído do ganho da plataforma.'),
+      'Defina separadamente o ganho extra para o motorista/preparador e o desconto ao passageiro. Ambos são percentuais aplicados sobre o total final (fórmula gross-up).'),
     React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, flex: 1, minWidth: 200 } },
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Porcentagem extra para motorista/preparador (%)'),
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Ganho extra ao motorista/preparador (%)'),
         React.createElement('input', {
-          type: 'number', min: 0, max: 15, step: 0.5, value: gainPctWorker,
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setGainPctWorker(Math.min(15, Math.max(0, Number(e.target.value)))),
+          type: 'number', min: 0, max: 50, step: 0.5, value: gainPctWorker,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setGainPctWorker(Math.min(50, Math.max(0, Number(e.target.value)))),
           style: { height: 44, borderRadius: 8, background: '#f1f1f1', border: 'none', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', width: '100%', boxSizing: 'border-box' as const, ...font },
         })),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, flex: 1, minWidth: 200 } },
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#767676', ...font } }, 'Resultado'),
-        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, padding: 16, background: '#f6f6f6', borderRadius: 12 } },
-          React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, `Motorista/Preparador ganha: +${gainPctWorker}% extra`),
-          React.createElement('span', { style: { fontSize: 14, color: '#b53838', ...font } }, `Plataforma perde: -${gainPctWorker}% do ganho`)))));
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Desconto ao passageiro (%)'),
+        React.createElement('input', {
+          type: 'number', min: 0, max: 100, step: 0.5, value: discountPctToPassenger,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDiscountPctToPassenger(Math.min(100, Math.max(0, Number(e.target.value)))),
+          style: { height: 44, borderRadius: 8, background: '#f1f1f1', border: 'none', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', width: '100%', boxSizing: 'border-box' as const, ...font },
+        }))),
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, padding: 16, background: '#f6f6f6', borderRadius: 12 } },
+      React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, `Motorista/Preparador recebe extra: +${gainPctWorker}%`),
+      React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, `Passageiro paga menos: -${discountPctToPassenger}%`),
+      React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'A plataforma absorve as duas partes no total gross-up.')));
 
   const accordions = React.createElement('div', { style: { width: '100%', maxWidth: 1044, display: 'flex', flexDirection: 'column' as const, gap: 16 } },
     accordionShell('motoristas', 'Motoristas', expanded.motoristas, motoristasInner),

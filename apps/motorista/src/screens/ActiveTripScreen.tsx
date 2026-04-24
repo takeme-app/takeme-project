@@ -542,7 +542,7 @@ type TripRow = {
   arrival_time?: string | null;
   capacity?: number | null;
   price_per_person_cents?: number | null;
-  bookings?: { amount_cents: number; status: string }[] | null;
+  bookings?: { amount_cents: number; worker_earning_cents?: number | null; status: string }[] | null;
 };
 
 /** Destino final no sheet ao tocar na bandeira da lateral (quando o destino não está como parada em `trip_stops`). */
@@ -1427,7 +1427,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             'id, origin_address, destination_address, departure_at, driver_journey_started_at, origin_lat, origin_lng,',
             'destination_lat, destination_lng, amount_cents, status,',
             'route_id, day_of_week, departure_time, arrival_time, capacity, price_per_person_cents,',
-            'bookings(amount_cents, status)',
+            'bookings(amount_cents, worker_earning_cents, status)',
           ].join(' '),
         )
         .eq('id', tripId)

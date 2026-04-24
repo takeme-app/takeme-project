@@ -1,7 +1,7 @@
 /**
- * Valor debitado no cartão na reserva com cartão (edge `charge-booking`):
- * `max(1, preço_rota_centavos − desconto_promo_centavos)`.
- * A taxa administrativa / split Connect não aumenta esse valor — entra no repasse Stripe.
+ * @deprecated Use `computeOrderPricing` from `@take-me/shared` (fórmula gross-up do PDF).
+ * Mantido temporariamente para retrocompat enquanto o CheckoutScreen ainda usa
+ * o fluxo antigo; deve ser removido junto com o refactor de cliente-checkout-ui.
  */
 export function bookingCardChargeAmountCents(routePriceCents: number, promoDiscountCents: number): number {
   const route = Math.floor(Number(routePriceCents));
