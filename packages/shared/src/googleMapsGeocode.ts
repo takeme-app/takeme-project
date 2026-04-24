@@ -10,8 +10,10 @@ export type GoogleGeocodeResult = {
   placeName: string;
   /** Cidade (locality ou, em falta, administrative_area_level_2). */
   locality: string | null;
-  /** Estado (administrative_area_level_1). */
+  /** Estado por extenso (administrative_area_level_1 long_name, ex: "São Paulo"). */
   adminAreaLevel1: string | null;
+  /** Sigla do estado (administrative_area_level_1 short_name, ex: "SP"). */
+  adminAreaLevel1Code: string | null;
 };
 
 type AddressComponent = {
@@ -37,13 +39,19 @@ function stripDiacritics(s: string): string {
 
 function extractLocalityAndState(
   components: AddressComponent[] | undefined,
-): { locality: string | null; adminAreaLevel1: string | null } {
-  if (!components?.length) return { locality: null, adminAreaLevel1: null };
+): { locality: string | null; adminAreaLevel1: string | null; adminAreaLevel1Code: string | null } {
+  if (!components?.length) {
+    return { locality: null, adminAreaLevel1: null, adminAreaLevel1Code: null };
+  }
   let adminAreaLevel1: string | null = null;
+  let adminAreaLevel1Code: string | null = null;
   let locality: string | null = null;
   for (const c of components) {
     const t = c.types;
-    if (t.includes('administrative_area_level_1')) adminAreaLevel1 = c.long_name;
+    if (t.includes('administrative_area_level_1')) {
+      adminAreaLevel1 = c.long_name;
+      adminAreaLevel1Code = c.short_name;
+    }
     if (t.includes('locality')) locality = c.long_name;
   }
   if (!locality) {
@@ -54,7 +62,7 @@ function extractLocalityAndState(
       }
     }
   }
-  return { locality, adminAreaLevel1 };
+  return { locality, adminAreaLevel1, adminAreaLevel1Code };
 }
 
 /** Resultado útil para busca por cidade (evita só "Brasil"). */
@@ -71,13 +79,16 @@ function hasCityLikeComponent(components: AddressComponent[] | undefined): boole
 function resultFromGeocodeItem(r: GeocodeResultItem): GoogleGeocodeResult | null {
   const loc = r.geometry?.location;
   if (!loc || !Number.isFinite(loc.lat) || !Number.isFinite(loc.lng)) return null;
-  const { locality, adminAreaLevel1 } = extractLocalityAndState(r.address_components);
+  const { locality, adminAreaLevel1, adminAreaLevel1Code } = extractLocalityAndState(
+    r.address_components,
+  );
   return {
     latitude: loc.lat,
     longitude: loc.lng,
     placeName: r.formatted_address ?? '',
     locality,
     adminAreaLevel1,
+    adminAreaLevel1Code,
   };
 }
 

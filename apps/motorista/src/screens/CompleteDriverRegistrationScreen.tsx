@@ -174,31 +174,6 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       setVehiclePhotosUris((prev) => [...prev, ...result.assets.map((a) => a.base64 ? `data:image/jpeg;base64,${a.base64}` : a.uri)]);
   };
 
-  const pickCnh = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      showAlert('Permissão', 'É necessário permitir acesso às fotos para enviar a CNH.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsMultipleSelection: true,
-      selectionLimit: 2,
-      quality: 0.8,
-      base64: true,
-    });
-    if (result.canceled || result.assets.length === 0) return;
-    const toUri = (a: ImagePicker.ImagePickerAsset) =>
-      a.base64 ? `data:image/jpeg;base64,${a.base64}` : a.uri;
-    if (result.assets.length >= 2) {
-      setCnhFrontUri(toUri(result.assets[0]));
-      setCnhBackUri(toUri(result.assets[1]));
-    } else {
-      if (!cnhFrontUri) setCnhFrontUri(toUri(result.assets[0]));
-      else setCnhBackUri(toUri(result.assets[0]));
-    }
-  };
-
   const updateRoute = (id: string, patch: Partial<RouteFormEntry>) => {
     setRoutes((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   };
@@ -297,8 +272,12 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       }
     }
 
-    if (!cnhFrontUri || !cnhBackUri) {
-      showAlert('Atenção', 'Envie a CNH (frente e verso).');
+    if (!cnhFrontUri) {
+      showAlert('Atenção', 'Envie a foto da CNH (frente).');
+      return;
+    }
+    if (!cnhBackUri) {
+      showAlert('Atenção', 'Envie a foto da CNH (verso).');
       return;
     }
 
@@ -578,12 +557,21 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
         {sectionTitle('Documentos')}
 
         <UploadField
-          label="CNH (frente e verso)"
-          title="Upload frente e verso"
+          label="CNH (frente)"
+          title="Upload da frente"
           caption={`Aceitamos RG, CNH ou documento\nde identificação válido com foto.`}
-          selected={Boolean(cnhFrontUri) || Boolean(cnhBackUri)}
-          selectedLabel={cnhFrontUri && cnhBackUri ? 'Frente e verso adicionados' : cnhFrontUri ? 'Frente adicionada — falta o verso' : cnhBackUri ? 'Verso adicionado — falta a frente' : null}
-          onPress={pickCnh}
+          selected={Boolean(cnhFrontUri)}
+          selectedLabel={cnhFrontUri ? 'Frente adicionada' : null}
+          onPress={() => pickImage(setCnhFrontUri)}
+        />
+
+        <UploadField
+          label="CNH (verso)"
+          title="Upload do verso"
+          caption={`Aceitamos RG, CNH ou documento\nde identificação válido com foto.`}
+          selected={Boolean(cnhBackUri)}
+          selectedLabel={cnhBackUri ? 'Verso adicionado' : null}
+          onPress={() => pickImage(setCnhBackUri)}
         />
 
         <UploadField
