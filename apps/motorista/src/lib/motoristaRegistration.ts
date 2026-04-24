@@ -120,12 +120,18 @@ export async function finalizeMotoristaProfile(input: FinalizeMotoristaProfileIn
   const roleDb: 'driver' | 'preparer' =
     driverType === 'take_me' || driverType === 'parceiro' ? 'driver' : 'preparer';
 
+  // Ao finalizar a etapa 4, o status sai de 'inactive' (draft criado no PIN) e vai
+  // para 'pending' (aguarda aprovação do admin). Se já estiver em um estado de
+  // análise/aprovação (under_review/approved/rejected/suspended), preserva —
+  // o motorista está apenas reenviando dados.
+  const nextStatus = !existingWorker || existingWorker.status === 'inactive' ? 'pending' : existingWorker.status;
+
   if (!existingWorker) {
     const { error: wpInsErr } = await supabase.from('worker_profiles').insert({
       id: userId,
       role: roleDb,
       subtype: subtypeDb,
-      status: 'inactive',
+      status: nextStatus,
       cpf: cpfDigits,
       age: ageForDb,
       city: city?.trim() || null,
@@ -148,6 +154,7 @@ export async function finalizeMotoristaProfile(input: FinalizeMotoristaProfileIn
       .update({
         role: roleDb,
         subtype: subtypeDb,
+        status: nextStatus,
         cpf: cpfDigits,
         age: ageForDb,
         city: city?.trim() || null,
