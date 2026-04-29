@@ -1,11 +1,10 @@
-import { useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   View,
   TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
-  Platform,
   ActivityIndicator,
 } from 'react-native';
 import { Text } from '../components/Text';
@@ -18,18 +17,29 @@ import { setLastRecoveryEmail } from '../lib/lastRecoveryEmail';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
 import { parseInvokeData, parseInvokeError } from '../utils/edgeFunctionResponse';
+import { detectPhoneOrEmailChannel, formatPhoneBRMask } from '../utils/phoneOrEmailInput';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPassword'>;
 
 export function ForgotPasswordScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const channel = useMemo(() => detectPhoneOrEmailChannel(identifier), [identifier]);
+
+  const handleIdentifierChange = useCallback((text: string) => {
+    if (detectPhoneOrEmailChannel(text) === 'phone') {
+      setIdentifier(formatPhoneBRMask(text));
+    } else {
+      setIdentifier(text);
+    }
+  }, []);
+
   const handleSubmit = async () => {
-    const trimmed = email.trim();
+    const trimmed = identifier.trim();
     if (!trimmed) {
-      showAlert('Atenção', 'Digite seu e-mail.');
+      showAlert('Atenção', 'Digite seu e-mail ou telefone.');
       return;
     }
     if (!isSupabaseConfigured) {
@@ -39,11 +49,27 @@ export function ForgotPasswordScreen({ navigation }: Props) {
       );
       return;
     }
+
+    if (channel === 'phone') {
+      const phoneDigits = trimmed.replace(/\D/g, '');
+      if (phoneDigits.length < 10 || phoneDigits.length > 11) {
+        showAlert('Atenção', 'Informe DDD + número (10 ou 11 dígitos).');
+        return;
+      }
+      await sendPhoneCode(phoneDigits);
+      return;
+    }
+
+    await sendEmailCode(trimmed);
+  };
+
+  const sendEmailCode = async (emailTrim: string) => {
     setLoading(true);
     try {
-      const { data: sendData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
-        body: { email: trimmed, purpose: 'password_reset' },
-      });
+      const { data: sendData, error: fnError } = await supabase.functions.invoke(
+        'send-email-verification-code',
+        { body: { email: emailTrim, purpose: 'password_reset' } }
+      );
       const payload = parseInvokeData(sendData);
       if (payload?.error != null) {
         showAlert('Erro', String(payload.error));
@@ -55,19 +81,54 @@ export function ForgotPasswordScreen({ navigation }: Props) {
         return;
       }
       await supabase.auth.signOut();
-      setLastRecoveryEmail(trimmed);
+      setLastRecoveryEmail(emailTrim);
       navigation.dispatch(
         CommonActions.reset({
           index: 1,
           routes: [
             { name: 'Welcome' },
-            { name: 'ForgotPasswordVerifyCode', params: { email: trimmed } },
+            { name: 'ForgotPasswordVerifyCode', params: { email: emailTrim } },
           ],
         })
       );
     } catch (e: unknown) {
       const message = getUserErrorMessage(e, 'Não foi possível enviar o e-mail. Tente novamente.');
       showAlert('Erro ao enviar e-mail', message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const sendPhoneCode = async (phoneDigits: string) => {
+    setLoading(true);
+    try {
+      const { data: sendData, error: fnError } = await supabase.functions.invoke(
+        'send-phone-verification-code',
+        { body: { phone: phoneDigits, purpose: 'password_reset' } }
+      );
+      const payload = parseInvokeData(sendData);
+      if (payload?.error != null) {
+        showAlert('Erro', String(payload.error));
+        return;
+      }
+      if (fnError) {
+        const bodyError = await parseInvokeError(fnError);
+        showAlert('Erro', bodyError ?? getUserErrorMessage(fnError, 'Não foi possível enviar o código.'));
+        return;
+      }
+      await supabase.auth.signOut();
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 1,
+          routes: [
+            { name: 'Welcome' },
+            { name: 'ForgotPasswordVerifyCode', params: { phone: phoneDigits } },
+          ],
+        })
+      );
+    } catch (e: unknown) {
+      const message = getUserErrorMessage(e, 'Não foi possível enviar o código. Tente novamente.');
+      showAlert('Erro', message);
     } finally {
       setLoading(false);
     }
@@ -91,17 +152,19 @@ export function ForgotPasswordScreen({ navigation }: Props) {
       <View style={styles.content}>
         <Text style={styles.title}>Recuperação de senha</Text>
         <Text style={styles.subtitle}>
-          Digite seu e-mail. Enviaremos um código de 4 dígitos para você redefinir a senha.
+          Digite seu e-mail ou telefone. Enviaremos um código de 4 dígitos para você redefinir a senha.
         </Text>
 
         <TextInput
           style={styles.input}
-          placeholder="Email"
+          placeholder="E-mail ou telefone"
           placeholderTextColor="#9CA3AF"
-          value={email}
-          onChangeText={setEmail}
+          value={identifier}
+          onChangeText={handleIdentifierChange}
           autoCapitalize="none"
-          keyboardType="email-address"
+          autoCorrect={false}
+          keyboardType={channel === 'phone' ? 'phone-pad' : 'email-address'}
+          textContentType={channel === 'phone' ? 'telephoneNumber' : 'emailAddress'}
           editable={!loading}
         />
       </View>

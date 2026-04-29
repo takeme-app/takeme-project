@@ -1171,7 +1171,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   useLayoutEffect(() => {
     followNavRef.current = followMyLocation;
     if (followMyLocation) {
-      navBearingStateRef.current = createInitialBearingState(0);
+      if (!navBearingStateRef.current) {
+        navBearingStateRef.current = createInitialBearingState(0);
+      }
       requestAnimationFrame(() => scheduleNavFrame());
     } else if (navRafRef.current != null) {
       cancelAnimationFrame(navRafRef.current);
@@ -2035,6 +2037,39 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   }, [trip?.id, tripDestLL, stops]);
 
   const overlayTop = insets.top + 56;
+
+  const startNavigationMode = useCallback(() => {
+    const fix = latestDriverFixRef.current;
+    const fallbackPos = driverPositionRef.current ?? driverPosition;
+    const latitude = fix?.latitude ?? fallbackPos?.latitude;
+    const longitude = fix?.longitude ?? fallbackPos?.longitude;
+
+    if (
+      typeof latitude !== 'number' ||
+      typeof longitude !== 'number' ||
+      !isValidGlobeCoordinate(latitude, longitude)
+    ) {
+      showAlert(
+        'Localização',
+        'Aguardando o GPS do motorista. Assim que a posição estiver disponível, toque em Navegar novamente.',
+      );
+      return;
+    }
+
+    const heading =
+      fix?.headingDeg != null && fix.headingDeg >= 0 && fix.headingDeg <= 360
+        ? fix.headingDeg
+        : driverHeadingDeg != null && driverHeadingDeg >= 0 && driverHeadingDeg <= 360
+          ? driverHeadingDeg
+          : compassHeadingRef.current != null && Number.isFinite(compassHeadingRef.current)
+            ? compassHeadingRef.current
+            : 0;
+
+    navBearingStateRef.current = createInitialBearingState(heading);
+    lastNavDRRef.current = null;
+    Vibration.vibrate(20);
+    setFollowMyLocation(true);
+  }, [driverHeadingDeg, driverPosition, showAlert]);
 
   /** Centraliza o mapa na parada correspondente ao ícone da lateral (mesmo fallback de coord. dos markers). */
   const focusMapOnSidebarStop = useCallback(
@@ -3113,14 +3148,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
         <DriverLocationFocusButton
           following={followMyLocation}
+          label={followMyLocation ? 'Navegando' : 'Navegar'}
+          accessibilityLabel={followMyLocation ? 'Navegação ativa' : 'Navegar até o próximo destino'}
           style={[
             styles.myLocationBtn,
             { top: overlayTop + 44 + 6 + 44 + 10, left: 14 },
           ]}
-          onPress={() => {
-            if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) return;
-            setFollowMyLocation(true);
-          }}
+          onPress={startNavigationMode}
         />
 
         {(stops.length > 0 || showSidebarTripEndFlag) && (

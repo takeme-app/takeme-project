@@ -1,40 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-
-// --- Token HMAC (password reset) ---
-const _encoder = new TextEncoder();
-
-function _base64UrlEncode(bytes: Uint8Array): string {
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
-  const b64 = btoa(bin);
-  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
-async function _hmacSha256Hex(secret: string, message: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    _encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, _encoder.encode(message));
-  const arr = new Uint8Array(sig);
-  return [...arr].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function getPasswordResetSecret(): string {
-  const a = Deno.env.get("PASSWORD_RESET_TOKEN_SECRET");
-  if (a && a.trim().length >= 16) return a.trim();
-  const b = Deno.env.get("DRIVER_DEFERRED_SIGNUP_SECRET");
-  if (b && b.trim().length >= 16) return b.trim();
-  const c = Deno.env.get("SUPABASE_JWT_SECRET");
-  if (c && c.trim().length >= 16) return c.trim();
-  const d = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (d && d.trim().length >= 32) return d.trim().slice(0, 64);
-  throw new Error("Defina PASSWORD_RESET_TOKEN_SECRET ou SUPABASE_JWT_SECRET (mín. 16 caracteres)");
-}
+import { createPasswordResetToken } from "../_shared/passwordResetToken.ts";
 
 type RegistrationType = "take_me" | "parceiro" | "preparador_excursões" | "preparador_encomendas";
 
@@ -273,17 +239,7 @@ Deno.serve(async (req) => {
         });
       }
       try {
-        const secret = getPasswordResetSecret();
-        const exp = Math.floor(Date.now() / 1000) + 15 * 60;
-        const payloadJson = JSON.stringify({
-          sub: uid,
-          email: emailNorm,
-          exp,
-          typ: "pwd_reset",
-        });
-        const payloadB64 = _base64UrlEncode(_encoder.encode(payloadJson));
-        const sig = await _hmacSha256Hex(secret, payloadB64);
-        const token = `${payloadB64}.${sig}`;
+        const token = await createPasswordResetToken(uid, emailNorm);
         return new Response(JSON.stringify({ ok: true, password_reset_token: token }), {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
