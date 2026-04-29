@@ -82,21 +82,48 @@ Deno.serve(async (req) => {
 
     const purpose = parsePurpose(purposeRaw);
 
-    if (purpose === "signup") {
-      const { data: existingPhone } = await supabase
+    /**
+     * Para signup bloqueamos quando o telefone JÁ existe (evita duplicar conta).
+     * Para password_reset bloqueamos quando o telefone NÃO existe — espelha o
+     * comportamento do `send-email-verification-code` e dá UX clara ao utilizador.
+     * Aceita variantes "55XXXXXXXXX" (com DDI) caindo de volta para os 11 dígitos.
+     */
+    const phoneVariants = new Set<string>([phoneDigits]);
+    if (phoneDigits.startsWith("55") && phoneDigits.length > 12) {
+      phoneVariants.add(phoneDigits.slice(2));
+    }
+
+    let existingPhoneId: string | null = null;
+    for (const candidate of phoneVariants) {
+      const { data } = await supabase
         .from("profiles")
         .select("id")
-        .eq("phone", phoneDigits)
+        .eq("phone", candidate)
         .limit(1)
         .maybeSingle();
-      if (existingPhone) {
-        return new Response(
-          JSON.stringify({
-            error: "Este telefone já está cadastrado. Faça login ou use outro número.",
-          }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
+      if (data?.id) {
+        existingPhoneId = data.id as string;
+        break;
       }
+    }
+
+    if (purpose === "signup" && existingPhoneId) {
+      return new Response(
+        JSON.stringify({
+          error: "Este telefone já está cadastrado. Faça login ou use outro número.",
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    if (purpose === "password_reset" && !existingPhoneId) {
+      return new Response(
+        JSON.stringify({
+          error:
+            "Não encontramos uma conta com este telefone. Verifique o número ou cadastre-se.",
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     // Limpa códigos anteriores para esse telefone/purpose.

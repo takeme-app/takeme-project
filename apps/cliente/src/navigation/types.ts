@@ -20,7 +20,9 @@ export type RootStackParamList = {
   Main: undefined;
   ForgotPassword: undefined;
   ForgotPasswordEmailSent: { email: string };
-  ResetPassword: undefined;
+  /** Verificação do código de redefinição de senha por e-mail OU telefone (BR, só dígitos). */
+  ForgotPasswordVerifyCode: { email?: string; phone?: string };
+  ResetPassword: { passwordResetToken?: string } | undefined;
   ResetPasswordSuccess: undefined;
   TermsOfUse: undefined;
   PrivacyPolicy: undefined;
