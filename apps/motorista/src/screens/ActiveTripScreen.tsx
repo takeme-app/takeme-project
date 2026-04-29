@@ -51,6 +51,11 @@ import {
   ensureAllTripStopsRemote,
 } from '../hooks/useTripStops';
 import { Text } from '../components/Text';
+import { DriverLocationFocusButton } from '../components/DriverLocationFocusButton';
+import { MapNetworkBadge } from '../components/MapNetworkBadge';
+import { SmoothDriverMapMarker } from '../components/SmoothDriverMapMarker';
+import { useNetworkStatus } from '../hooks/useNetworkStatus';
+import { useRouteOfflinePack } from '../hooks/useRouteOfflinePack';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getRouteWithDuration, getMultiPointRoute, formatEta } from '../lib/route';
 import { getGoogleMapsApiKey, getMapboxAccessToken } from '../lib/googleMapsConfig';
@@ -121,6 +126,23 @@ const REROUTE_NETWORK_FAIL_AFTER_MS = 15_000;
 const REROUTE_BADGE_ANIM_MS = 220;
 /** Após este tempo, exibe countdown "~Ns" ao lado da mensagem para dar sensação de progresso. */
 const REROUTE_BADGE_ELAPSED_THRESHOLD_MS = 2_000;
+
+/** Diferença mínima entre heading do GPS e bearing do segmento da rota para
+ *  classificar como "direção errada" (> 90°). */
+const WRONG_DIRECTION_DELTA_DEG = 100;
+/** Tempo mínimo persistindo na condição antes de mostrar o aviso. */
+const WRONG_DIRECTION_ENTER_MS = 1_500;
+/** Tempo mínimo na condição contrária antes de remover o aviso (anti-flicker). */
+const WRONG_DIRECTION_LEAVE_MS = 1_500;
+/** Velocidade mínima para considerar o heading do GPS confiável (m/s). */
+const WRONG_DIRECTION_MIN_SPEED_MPS = 2;
+
+/**
+ * Abaixo desta velocidade, o curso reportado pelo GPS é instável (ruído de
+ * fix); priorizamos a bússola para alimentar o heading do ícone.
+ *  - 1.5 m/s ≈ 5.4 km/h (caminhada rápida / manobra lenta)
+ */
+const COMPASS_HEADING_MAX_SPEED_MPS = 1.5;
 /** Vibração curta ao detectar desvio — feedback tátil universal (iOS + Android). */
 const REROUTE_HAPTIC_MS = 40;
 
@@ -157,9 +179,13 @@ const NEAREST_DASHED_ROUTE_FETCH_DEBOUNCE_MS = 450;
 /**
  * GPS chama o callback com frequência alta; `setDriverPosition` re-renderiza toda a `ActiveTripScreen`
  * (mapa + overlays). Ref sempre atualizado; React só neste intervalo ou após deslocamento mínimo.
+ *
+ * Valores reduzidos (de 160ms/10m → 90ms/4m) deixam o pin do motorista visivelmente
+ * mais fluido tipo Waze/Uber. O dead-reckoning interno (`DR_TICK_MS = 16`) já cuida
+ * da câmera; aqui é só a frequência com que o estado React reflete o GPS.
  */
-const DRIVER_POSITION_UI_MIN_INTERVAL_MS = 160;
-const DRIVER_POSITION_UI_MIN_MOVE_M = 10;
+const DRIVER_POSITION_UI_MIN_INTERVAL_MS = 90;
+const DRIVER_POSITION_UI_MIN_MOVE_M = 4;
 /** Soma trechos no ref e consolida `setTraveledMeters` em um único update periódico. */
 const ODOMETER_UI_FLUSH_MS = 650;
 
@@ -284,14 +310,19 @@ async function resolveSyntheticTripStopId(
 function isPackage(s: Stop) { return s.stopType === 'package_pickup' || s.stopType === 'package_dropoff'; }
 
 /**
- * Paradas que exigem PIN de 4 dígitos no app do motorista:
+ * Paradas que exigem PIN de 4 dígitos no app do motorista (PDF "Sequência
+ * de Solicitação de Código"):
  *   - encomenda: coleta e entrega (o código é a prova de posse).
- *   - passageiro: apenas embarque (desembarque é livre).
- *   - dependente: apenas embarque (desembarque é livre).
+ *   - passageiro: apenas embarque (desembarque é livre — cenário 1 do PDF).
+ *   - dependente: embarque E desembarque (cenário 2 do PDF, etapas 1-3 e 5-7).
  */
 function requiresDriverEnteredPin(s: Stop): boolean {
   if (isPackage(s)) return true;
-  return s.stopType === 'passenger_pickup' || s.stopType === 'dependent_pickup';
+  return (
+    s.stopType === 'passenger_pickup' ||
+    s.stopType === 'dependent_pickup' ||
+    s.stopType === 'dependent_dropoff'
+  );
 }
 
 function isPackagePickupAtBase(s: Stop | null | undefined): boolean {
@@ -390,36 +421,6 @@ const ActiveStopMarker = memo(function ActiveStopMarker({
  * GPS + re-render da tela inteira não force o Mapbox a refazer a view nativa
  * deste marker quando só mudou uma coord insignificante.
  */
-type ActiveDriverMarkerProps = {
-  latitude: number;
-  longitude: number;
-  following: boolean;
-};
-
-const ActiveDriverMarker = memo(function ActiveDriverMarker({
-  latitude,
-  longitude,
-  following,
-}: ActiveDriverMarkerProps) {
-  return (
-    <MapMarker
-      id="driver"
-      coordinate={{ latitude, longitude }}
-      anchor={MAP_MARKER_CENTER_ANCHOR}
-    >
-      <View style={styles.driverPulse}>
-        <View style={styles.driverMarker}>
-          <MaterialIcons
-            name={following ? 'navigation' : 'play-arrow'}
-            size={18}
-            color="#fff"
-          />
-        </View>
-      </View>
-    </MapMarker>
-  );
-});
-
 /** Rótulo curto no card inferior — nunca tratar desembarque de passageiro como “Entrega”. */
 function stopPhaseShortLabel(s: Stop): string {
   switch (s.stopType) {
@@ -489,7 +490,8 @@ function confirmPickupSubtitle(stop: Stop | null | undefined): string {
   if (!stop) return '';
   if (stop.stopType === 'package_pickup') {
     if (isPackagePickupAtBase(stop)) {
-      return 'Insira o código de 4 dígitos (o mesmo do depósito na base ou o informado pela equipe da base).';
+      // PDF cenário 3, etapas 10-11: motorista solicita o código à base e digita.
+      return 'Solicite o código de 4 dígitos à base e digite abaixo para retirar a encomenda.';
     }
     return 'Insira o código informado pelo passageiro para confirmar a coleta.';
   }
@@ -505,7 +507,8 @@ function confirmPickupSubtitle(stop: Stop | null | undefined): string {
     return 'Insira o código de 4 dígitos exibido no app do responsável para confirmar o embarque do dependente.';
   }
   if (stop.stopType === 'dependent_dropoff') {
-    return 'Confirme que o dependente foi entregue no destino.';
+    // PDF cenário 2, etapas 5-7: motorista solicita o código ao responsável no destino.
+    return 'Solicite ao responsável no destino o código de 4 dígitos e digite para confirmar a entrega do dependente.';
   }
   if (stop.stopType === 'trip_destination') return 'Confirme a chegada ao destino da viagem.';
   if (stop.stopType === 'excursion_stop') return 'Confirme que esta parada na rota foi concluída.';
@@ -838,6 +841,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const [driverPosition, setDriverPosition] = useState<LatLng | null>(null);
   const driverPositionRef = useRef<LatLng | null>(null);
   const driverUiLastFlushRef = useRef<{ t: number; lat: number; lng: number } | null>(null);
+  /**
+   * Heading do motorista para rotacionar o ícone no mapa fora do modo
+   * heading-up. Throttled para não re-renderizar a cada tick do GPS.
+   */
+  const [driverHeadingDeg, setDriverHeadingDeg] = useState<number | null>(null);
+  const driverHeadingLastFlushRef = useRef<{ t: number; deg: number | null }>({ t: 0, deg: null });
   const locationSub = useRef<any>(null);
   const mapRef = useRef<GoogleMapsMapRef>(null);
   const hasFramedDriverOnMap = useRef(false);
@@ -892,6 +901,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
    */
   const [isOffRouteSoft, setIsOffRouteSoft] = useState(false);
   const isOffRouteSoftRef = useRef(false);
+
+  /**
+   * "Você está indo na direção errada": ativa quando o heading do motorista difere
+   * por mais de ~90° do bearing do segmento da rota mais próximo, com velocidade
+   * suficiente para descartar GPS parado/ruído. Persiste por algum tempo após
+   * voltar à rota para evitar piscar.
+   */
+  const [isWrongDirection, setIsWrongDirection] = useState(false);
+  const isWrongDirectionRef = useRef(false);
+  const wrongDirectionEnterAtRef = useRef<number | null>(null);
+  const wrongDirectionLeaveAtRef = useRef<number | null>(null);
   /** Nenhuma polyline chegou após timeout → possivelmente sem conexão. */
   const [rerouteNetworkError, setRerouteNetworkError] = useState(false);
   /** Fixes consecutivos fora da rota; zera ao retornar. */
@@ -981,6 +1001,31 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       driverUiLastFlushRef.current = { t: now, lat, lng };
       setDriverPosition(next);
     }
+  }, []);
+
+  /**
+   * Throttle separado para o heading. Mais permissivo que o de coordenada
+   * porque o gargalo agora é o sensor (GPS @ 2 Hz; bússola pode ir mais alto):
+   *  - 50 ms: deixa passar bússola sem amarrar
+   *  - 2.5°: ainda corta tremor < 1 frame de animação
+   *
+   * O `useSmoothCoordinate` interpola entre estes alvos, então qualquer
+   * jitter pequeno é absorvido na animação.
+   */
+  const flushDriverHeadingToUi = useCallback((deg: number | null) => {
+    const now = Date.now();
+    const last = driverHeadingLastFlushRef.current;
+    if (now - last.t < 50) return;
+    const prev = last.deg;
+    const sameNull = prev == null && deg == null;
+    if (sameNull) return;
+    if (prev != null && deg != null) {
+      // Comparação angular curta (cruza 359↔0 sem disparar 359° de mudança).
+      const delta = Math.abs(((deg - prev + 540) % 360) - 180);
+      if (delta < 2.5) return;
+    }
+    driverHeadingLastFlushRef.current = { t: now, deg };
+    setDriverHeadingDeg(deg);
   }, []);
 
   const accumulateTripOdometer = useCallback((lat: number, lng: number) => {
@@ -1259,8 +1304,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         locationSub.current = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy?.BestForNavigation ?? Location.Accuracy.High,
-            distanceInterval: 3,
-            timeInterval: 1000,
+            // Mais frequência para ícone/heading fluidos (Waze-like). 500 ms é
+            // o piso confiável no Android — abaixo disso muitos devices ignoram
+            // ou clipam silenciosamente. Em 1 m de distância, o GPS responde
+            // mesmo em manobras lentas.
+            distanceInterval: 1,
+            timeInterval: 500,
           },
           (loc: any) => {
             if (!active) return;
@@ -1279,6 +1328,14 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               headingDeg,
               timestamp: Date.now(),
             };
+            // Acima de COMPASS_HEADING_MAX_SPEED_MPS, o curso do GPS é mais
+            // estável que a bússola (que reflete a direção do celular, não a
+            // do veículo). Abaixo, deixamos a bússola comandar (ver effect do
+            // watchHeadingAsync) — não escrevemos `null` aqui para não
+            // "apagar" o último heading válido enquanto a bússola publica.
+            if (headingDeg != null && (speedMps ?? 0) >= COMPASS_HEADING_MAX_SPEED_MPS) {
+              flushDriverHeadingToUi(headingDeg);
+            }
             // Detecção off-route: visual (badge + opacidade) funciona mesmo sem velocidade válida;
             // o TRIGGER de recálculo exige speedMps >= REROUTE_MIN_SPEED_MPS para evitar loops parados.
             const activeRoute = offRouteGuideRef.current;
@@ -1291,16 +1348,54 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               const farAway = snapResult.distanceM > REROUTE_TRIGGER_M;
               const halfDistance = snapResult.distanceM > REROUTE_TRIGGER_M * REROUTE_FAST_DISTANCE_FACTOR;
               let fastBearingTrigger = false;
+              let bearingDiffDeg: number | null = null;
+              if (headingDeg != null) {
+                bearingDiffDeg = Math.abs(((headingDeg - snapResult.segmentBearingDeg + 540) % 360) - 180);
+              }
               if (
                 halfDistance &&
-                headingDeg != null &&
+                bearingDiffDeg != null &&
                 (speedMps ?? 0) >= REROUTE_FAST_MIN_SPEED_MPS
               ) {
-                const diff = Math.abs(((headingDeg - snapResult.segmentBearingDeg + 540) % 360) - 180);
-                fastBearingTrigger = diff > REROUTE_FAST_BEARING_DELTA_DEG;
+                fastBearingTrigger = bearingDiffDeg > REROUTE_FAST_BEARING_DELTA_DEG;
               }
               // Feedback visual imediato (independe da velocidade vir nula).
               const isOffSoft = farAway || fastBearingTrigger;
+
+              // "Você está indo na direção errada": só vale com velocidade
+              // suficiente para o heading ser confiável, e diff bem alto vs.
+              // o segmento da rota. Usa janela temporal para entrar/sair
+              // sem piscar (motoristas curvando, semáforos, etc.).
+              const wrongCandidate =
+                bearingDiffDeg != null &&
+                bearingDiffDeg > WRONG_DIRECTION_DELTA_DEG &&
+                (speedMps ?? 0) >= WRONG_DIRECTION_MIN_SPEED_MPS;
+              const nowTs = Date.now();
+              if (wrongCandidate) {
+                wrongDirectionLeaveAtRef.current = null;
+                if (wrongDirectionEnterAtRef.current == null) {
+                  wrongDirectionEnterAtRef.current = nowTs;
+                } else if (
+                  !isWrongDirectionRef.current &&
+                  nowTs - wrongDirectionEnterAtRef.current >= WRONG_DIRECTION_ENTER_MS
+                ) {
+                  isWrongDirectionRef.current = true;
+                  setIsWrongDirection(true);
+                }
+              } else {
+                wrongDirectionEnterAtRef.current = null;
+                if (isWrongDirectionRef.current) {
+                  if (wrongDirectionLeaveAtRef.current == null) {
+                    wrongDirectionLeaveAtRef.current = nowTs;
+                  } else if (
+                    nowTs - wrongDirectionLeaveAtRef.current >= WRONG_DIRECTION_LEAVE_MS
+                  ) {
+                    isWrongDirectionRef.current = false;
+                    wrongDirectionLeaveAtRef.current = null;
+                    setIsWrongDirection(false);
+                  }
+                }
+              }
               if (isOffSoft !== isOffRouteSoftRef.current) {
                 isOffRouteSoftRef.current = isOffSoft;
                 setIsOffRouteSoft(isOffSoft);
@@ -1328,10 +1423,18 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               } else if (!isOffSoft) {
                 rerouteOffCountRef.current = 0;
               }
-            } else if (isOffRouteSoftRef.current) {
-              // Sem rota confiável → não dá para afirmar que está fora; desliga o badge.
-              isOffRouteSoftRef.current = false;
-              setIsOffRouteSoft(false);
+            } else {
+              if (isOffRouteSoftRef.current) {
+                // Sem rota confiável → não dá para afirmar que está fora; desliga o badge.
+                isOffRouteSoftRef.current = false;
+                setIsOffRouteSoft(false);
+              }
+              if (isWrongDirectionRef.current) {
+                isWrongDirectionRef.current = false;
+                wrongDirectionEnterAtRef.current = null;
+                wrongDirectionLeaveAtRef.current = null;
+                setIsWrongDirection(false);
+              }
             }
             if (followNavRef.current) scheduleNavFrame();
           },
@@ -1358,7 +1461,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         if (add > 0) setTraveledMeters((m) => m + add);
       }
     };
-  }, [showAlert, scheduleNavFrame, accumulateTripOdometer, flushDriverPositionToUi]);
+  }, [showAlert, scheduleNavFrame, accumulateTripOdometer, flushDriverPositionToUi, flushDriverHeadingToUi]);
 
   /** Publica posição para o app do passageiro (`scheduled_trip_live_locations`) enquanto a viagem está ativa. */
   useEffect(() => {
@@ -1381,9 +1484,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     return () => clearInterval(id);
   }, [tripId, trip?.status]);
 
-  /** Bússola em baixa velocidade (< ~5 km/h); fallback quando o curso do GPS é fraco. */
+  /**
+   * Bússola SEMPRE ativa enquanto a tela está montada. Tem dois papéis:
+   *  1) `compassHeadingRef` alimenta a câmera Waze-like (`computeNextNavigationCamera`).
+   *  2) Em baixa velocidade (≤ COMPASS_HEADING_MAX_SPEED_MPS), também alimenta
+   *     diretamente o ícone do motorista — o curso do GPS fica instável quase
+   *     parado, e a bússola vira a fonte mais responsiva. Acima dessa
+   *     velocidade preferimos o GPS heading, que é estável em movimento e
+   *     reflete a direção do veículo (não a do celular).
+   */
   useEffect(() => {
-    if (!followMyLocation || !Location?.watchHeadingAsync) return;
+    if (!Location?.watchHeadingAsync) return;
     let cancelled = false;
     let sub: { remove: () => void } | undefined;
     (async () => {
@@ -1401,6 +1512,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 ? mh
                 : null;
           if (v != null) compassHeadingRef.current = v;
+          // Em baixa velocidade, a bússola é mais responsiva que o curso do GPS.
+          const lastFix = latestDriverFixRef.current;
+          const speed = lastFix?.speedMps ?? 0;
+          if (v != null && speed < COMPASS_HEADING_MAX_SPEED_MPS) {
+            flushDriverHeadingToUi(v);
+          }
           if (followNavRef.current) scheduleNavFrame();
         });
         if (!cancelled) sub = s;
@@ -1412,7 +1529,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       cancelled = true;
       sub?.remove?.();
     };
-  }, [followMyLocation, scheduleNavFrame]);
+  }, [scheduleNavFrame, flushDriverHeadingToUi]);
 
   // ---------------------------------------------------------------------------
   // Load data
@@ -1520,6 +1637,19 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     return `${driverPosition.latitude.toFixed(3)},${driverPosition.longitude.toFixed(3)}`;
   }, [driverPosition]);
 
+  /**
+   * Estável durante toda a vida da viagem: só muda quando o GPS sai/entra
+   * (no-gps ↔ has-gps). Usada para disparar a busca da linha imediata
+   * **uma vez** ao receber o primeiro fix, sem refazer a cada movimento.
+   */
+  const hasGpsKey = useMemo(
+    () =>
+      driverPosition && isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)
+        ? 'has-gps'
+        : 'no-gps',
+    [driverPosition],
+  );
+
   const tripDestLL = useMemo(
     () => (trip ? pickStopCoord(trip.destination_lat, trip.destination_lng) : undefined),
     [trip?.destination_lat, trip?.destination_lng, trip?.id],
@@ -1548,6 +1678,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     if (pick?.kind === 'stop') return pick.stopIndex;
     return null;
   }, [nearestGeographicNavPick]);
+
+  /**
+   * Identidade do alvo atual da linha imediata. Só muda ao trocar de parada/destino
+   * (latitude/longitude com 4 casas ≈ 11 m). Enquanto o motorista percorre a mesma
+   * via até o mesmo alvo, esta chave fica constante e a linha imediata não recarrega.
+   */
+  const nearestDashedTargetKey = useMemo(() => {
+    const c = nearestGeographicNavPick?.coord;
+    if (!c || !isValidGlobeCoordinate(c.latitude, c.longitude)) return '';
+    return `${c.latitude.toFixed(4)},${c.longitude.toFixed(4)}`;
+  }, [nearestGeographicNavPick?.coord]);
 
   /** Índice destacado no mapa e na barra lateral: com GPS = parada geograficamente mais próxima; senão = sequencial. */
   const mapHighlightStopIndex = nearestNavStopIndex ?? currentStopIndex;
@@ -1750,7 +1891,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [loading, driverPositionKey, currentStopIndex, stops, trip?.id, trip?.destination_address, tripDestLL, rerouteKey]);
+    // Importante: NÃO depender de `driverPositionKey` aqui — antes, a cada ~100 m o
+    // efeito recalculava, mostrando o fallback de linha reta antes de a Directions
+    // chegar (ficava "piscando" em direção ao destino). Agora só dispara em mudança
+    // real de alvo (`nearestDashedTargetKey`/`currentStopIndex`), reroute (`rerouteKey`)
+    // ou primeira aquisição de GPS (`hasGpsKey`).
+  }, [loading, hasGpsKey, nearestDashedTargetKey, currentStopIndex, stops, trip?.id, trip?.destination_address, tripDestLL, rerouteKey]);
 
   useEffect(() => {
     if (stopsRouteCoords.length >= 2) routeForSnapRef.current = stopsRouteCoords;
@@ -1821,7 +1967,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   );
 
   /** Estado derivado: mostrar o badge quando qualquer fase do reroute está ativa. */
-  const shouldShowRerouteBadge = isRerouting || isOffRouteSoft || rerouteNetworkError;
+  const shouldShowRerouteBadge =
+    isRerouting || isOffRouteSoft || rerouteNetworkError || isWrongDirection;
 
   /**
    * Anima entrada/saída do badge (fade + slide-down). Mantém o node montado até a animação
@@ -2744,6 +2891,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   ]);
 
   // ---------------------------------------------------------------------------
+  // Mapa offline (basemap) + indicador de rede
+  // ---------------------------------------------------------------------------
+  // Auto-download do pack offline cobrindo a rota dourada (`stopsRouteCoords`).
+  // É idempotente por `trip-<id>`: só baixa uma vez por viagem nesta sessão.
+  const { online: isOnline } = useNetworkStatus();
+  useRouteOfflinePack({
+    packName: tripId ? `trip-${tripId}` : null,
+    coords: stopsRouteCoords,
+  });
+
+  // ---------------------------------------------------------------------------
   // Loading
   // ---------------------------------------------------------------------------
 
@@ -2854,10 +3012,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         })}
 
         {driverMapPinCoordinate && (
-          <ActiveDriverMarker
-            latitude={driverMapPinCoordinate.latitude}
-            longitude={driverMapPinCoordinate.longitude}
+          <SmoothDriverMapMarker
+            targetLatitude={driverMapPinCoordinate.latitude}
+            targetLongitude={driverMapPinCoordinate.longitude}
             following={followMyLocation}
+            targetHeadingDeg={driverHeadingDeg}
           />
         )}
       </GoogleMapsMap>
@@ -2880,50 +3039,68 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           <MaterialIcons name="arrow-back" size={20} color={DARK} />
         </TouchableOpacity>
 
-        {rerouteBadgeMounted && (
-          <Animated.View
+        {/* Badge: sem internet → mapa segue offline (se houver pack baixado). */}
+        {!isOnline && !rerouteBadgeMounted && (
+          <View
+            style={[styles.networkBadgeWrap, { top: insets.top + 12 }]}
             pointerEvents="none"
-            style={[
-              styles.rerouteBadge,
-              rerouteNetworkError && styles.rerouteBadgeError,
-              {
-                top: insets.top + 12,
-                opacity: rerouteBadgeAnim,
-                transform: [
-                  {
-                    translateY: rerouteBadgeAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [-8, 0],
-                    }),
-                  },
-                ],
-              },
-            ]}
           >
-            <ActivityIndicator size="small" color="#fff" />
-            <Text style={styles.rerouteBadgeText}>
-              {rerouteNetworkError
-                ? 'Sem conexão — reconectando…'
-                : isRerouting &&
-                    rerouteElapsedSec * 1000 >= REROUTE_BADGE_ELAPSED_THRESHOLD_MS
-                  ? `Recalculando rota… ${rerouteElapsedSec}s`
-                  : 'Recalculando rota…'}
-            </Text>
-          </Animated.View>
+            <MapNetworkBadge online={false} />
+          </View>
         )}
 
-        <TouchableOpacity
-          style={[styles.myLocationBtn, { top: overlayTop, left: 14 }]}
-          activeOpacity={0.8}
-          onPress={() => {
-            if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) return;
-            setFollowMyLocation(true);
-          }}
-        >
-          <MaterialIcons name="my-location" size={22} color={DARK} />
-        </TouchableOpacity>
+        {rerouteBadgeMounted && (
+          <View style={styles.rerouteOverlay} pointerEvents="none">
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.rerouteCard,
+                rerouteNetworkError && styles.rerouteCardError,
+                isWrongDirection && !rerouteNetworkError && styles.rerouteCardWarning,
+                {
+                  opacity: rerouteBadgeAnim,
+                  transform: [
+                    {
+                      scale: rerouteBadgeAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.92, 1],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
+              <View style={styles.rerouteIconWrap}>
+                {rerouteNetworkError ? (
+                  <MaterialIcons name="cloud-off" size={28} color="#fff" />
+                ) : isWrongDirection ? (
+                  <MaterialIcons name="u-turn-left" size={28} color="#fff" />
+                ) : (
+                  <ActivityIndicator size="large" color="#fff" />
+                )}
+              </View>
+              <Text style={styles.rerouteCardTitle}>
+                {rerouteNetworkError
+                  ? 'Sem conexão'
+                  : isWrongDirection
+                    ? 'Você está indo na direção errada'
+                    : 'Recalculando rota…'}
+              </Text>
+              <Text style={styles.rerouteCardSubtitle}>
+                {rerouteNetworkError
+                  ? 'Reconectando ao servidor de rotas…'
+                  : isWrongDirection
+                    ? 'Faça o retorno ou aguarde uma nova rota'
+                    : isRerouting &&
+                        rerouteElapsedSec * 1000 >= REROUTE_BADGE_ELAPSED_THRESHOLD_MS
+                      ? `Tempo: ${rerouteElapsedSec}s`
+                      : 'Aguarde alguns segundos'}
+              </Text>
+            </Animated.View>
+          </View>
+        )}
 
-        <View style={[styles.zoomWrap, { top: overlayTop + 46 + 10, left: 14 }]} pointerEvents="box-none">
+        <View style={[styles.zoomWrap, { top: overlayTop, left: 14 }]} pointerEvents="box-none">
           <MapZoomControls
             mapRef={mapRef}
             floating={false}
@@ -2933,6 +3110,18 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             }}
           />
         </View>
+
+        <DriverLocationFocusButton
+          following={followMyLocation}
+          style={[
+            styles.myLocationBtn,
+            { top: overlayTop + 44 + 6 + 44 + 10, left: 14 },
+          ]}
+          onPress={() => {
+            if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) return;
+            setFollowMyLocation(true);
+          }}
+        />
 
         {(stops.length > 0 || showSidebarTripEndFlag) && (
           <View style={[styles.sidebar, { top: overlayTop, right: 14 }]} pointerEvents="box-none">
@@ -3320,11 +3509,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                         ? 'Código de embarque'
                         : confirmSheetStop.stopType === 'dependent_pickup'
                           ? 'Código de embarque do dependente'
-                          : confirmSheetStop.stopType === 'package_pickup'
-                            ? isPackagePickupAtBase(confirmSheetStop)
-                              ? 'Código na base'
-                              : 'Código de coleta'
-                            : 'Código'}
+                          : confirmSheetStop.stopType === 'dependent_dropoff'
+                            ? 'Código do responsável no destino'
+                            : confirmSheetStop.stopType === 'package_pickup'
+                              ? isPackagePickupAtBase(confirmSheetStop)
+                                ? 'Código informado pela base'
+                                : 'Código de coleta'
+                              : 'Código'}
                     </Text>
                     <TextInput
                       style={styles.codeInput}
@@ -3650,48 +3841,64 @@ const styles = StyleSheet.create({
 
   zoomWrap: { position: 'absolute' },
 
-  rerouteBadge: {
-    position: 'absolute',
-    alignSelf: 'center',
-    left: 0,
-    right: 0,
-    marginHorizontal: 72,
-    flexDirection: 'row',
+  rerouteOverlay: {
+    ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 18,
-    backgroundColor: 'rgba(17, 24, 39, 0.92)',
+  },
+  rerouteCard: {
+    minWidth: 260,
+    maxWidth: 340,
+    paddingHorizontal: 24,
+    paddingVertical: 22,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(17, 24, 39, 0.94)',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
-    elevation: 6,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 12,
   },
-  rerouteBadgeError: {
-    backgroundColor: 'rgba(185, 28, 28, 0.95)',
+  rerouteCardError: {
+    backgroundColor: 'rgba(185, 28, 28, 0.96)',
   },
-  rerouteBadgeText: {
+  rerouteCardWarning: {
+    backgroundColor: 'rgba(217, 119, 6, 0.96)',
+  },
+  rerouteIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    marginBottom: 12,
+  },
+  rerouteCardTitle: {
     color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  rerouteCardSubtitle: {
+    color: 'rgba(255,255,255,0.85)',
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '500',
+    textAlign: 'center',
+    marginTop: 6,
   },
 
   myLocationBtn: {
     position: 'absolute',
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#fff',
+  },
+
+  networkBadgeWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
     alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
   },
 
   // ── Right sidebar ─────────────────────────────────────────

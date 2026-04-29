@@ -11,7 +11,18 @@ try {
   if (NativeModules.RNFBAppModule) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const messaging = require('@react-native-firebase/messaging').default;
-    messaging().setBackgroundMessageHandler(async () => {});
+    messaging().setBackgroundMessageHandler(async (remoteMessage: unknown) => {
+      try {
+        const { displayMotoristaRemoteMessage } = await import(
+          './src/lib/foregroundNotificationHandler'
+        );
+        await displayMotoristaRemoteMessage(
+          remoteMessage as import('@react-native-firebase/messaging').FirebaseMessagingTypes.RemoteMessage,
+        );
+      } catch {
+        /* */
+      }
+    });
   }
 } catch {
   /* Web ou bundle sem nativo */

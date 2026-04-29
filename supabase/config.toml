@@ -73,3 +73,7 @@ verify_jwt = false
 # Webhook em public.notifications → envia FCM (validar x-webhook-secret se NOTIFICATION_FCM_WEBHOOK_SECRET estiver definido).
 [functions.dispatch-notification-fcm]
 verify_jwt = false
+
+# Cron: proximidade motorista / ETA (service role). Ver comentário na função.
+[functions.notify-passenger-driver-proximity]
+verify_jwt = false

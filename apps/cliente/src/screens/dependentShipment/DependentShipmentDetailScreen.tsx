@@ -551,7 +551,11 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         </View>
 
-        {/* PINs logo após o mapa — visíveis sem rolar a tela inteira */}
+        {/* PINs logo após o mapa — visíveis sem rolar a tela inteira.
+            PDF "Sequência de Solicitação de Código" cenário 2: dois PINs.
+            - Embarque: solicitante informa ao motorista na coleta (etapas 1-3).
+            - Desembarque: solicitante repassa ao responsável no destino, que
+              informa ao motorista na entrega (etapas 5-7). */}
         <View style={[styles.pinSection, styles.pinSectionAfterMap]}>
           <Text style={styles.pinLabel}>PIN de embarque do dependente</Text>
           <Text style={styles.pinHint}>Mostre ou informe este código ao motorista na coleta (embarque).</Text>
@@ -575,6 +579,44 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
                 style={styles.pinIconBtn}
                 activeOpacity={0.8}
                 onPress={() => void sharePin('PIN de embarque do dependente', detail.pickup_code)}
+              >
+                <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.pinSection}>
+          <Text style={styles.pinLabel}>PIN de desembarque do dependente</Text>
+          <Text style={styles.pinHint}>
+            Compartilhe este código com o responsável que vai receber o dependente no destino.
+            Ele deve informar ao motorista na entrega.
+          </Text>
+          <View style={styles.pinRow}>
+            <View style={styles.pinChipsWrap}>
+              {pinCharsForDisplay(detail.delivery_code).map((ch, i) => (
+                <View key={`dep-dc-${i}`} style={styles.pinChip}>
+                  <Text style={styles.pinChipText}>{ch}</Text>
+                </View>
+              ))}
+            </View>
+            <View style={styles.pinIconButtons}>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() => copyPin('PIN de desembarque', detail.delivery_code)}
+              >
+                <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.pinIconBtn}
+                activeOpacity={0.8}
+                onPress={() =>
+                  void sharePin(
+                    'PIN de desembarque do dependente',
+                    detail.delivery_code,
+                  )
+                }
               >
                 <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
               </TouchableOpacity>

@@ -172,7 +172,6 @@ export function TripInProgressScreen({ navigation, route }: Props) {
   const [durationLabel, setDurationLabel] = useState<string>('—');
   const [distanceLabel, setDistanceLabel] = useState<string>('—');
   const [pickupCode, setPickupCode] = useState<string | null>(null);
-  const [deliveryCode, setDeliveryCode] = useState<string | null>(null);
   const [bagsNote, setBagsNote] = useState<string | null>(null);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [showColetaSheet, setShowColetaSheet] = useState(false);
@@ -180,7 +179,6 @@ export function TripInProgressScreen({ navigation, route }: Props) {
   const [showFinalizarSheet, setShowFinalizarSheet] = useState(false);
   const [showCancelColetaModal, setShowCancelColetaModal] = useState(false);
   const [showCodeColetaModal, setShowCodeColetaModal] = useState(false);
-  const [showCodeEntregaModal, setShowCodeEntregaModal] = useState(false);
   const [liveDriverRouteCoords, setLiveDriverRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
   const [liveDriverEta, setLiveDriverEta] = useState<string | undefined>(undefined);
 
@@ -262,14 +260,12 @@ export function TripInProgressScreen({ navigation, route }: Props) {
           const fallback = live ? buildStepsFromLiveParams(live) : null;
           setSteps(fallback ?? []);
           setPickupCode(null);
-          setDeliveryCode(null);
           setBagsNote(null);
           return;
         }
         const { booking } = data;
         setSteps(buildStepsFromBooking(booking));
         setPickupCode(booking.pickup_code?.trim() || null);
-        setDeliveryCode(booking.delivery_code?.trim() || null);
         setBagsNote(
           booking.bags_count != null
             ? `${booking.bags_count} ${booking.bags_count === 1 ? 'mala' : 'malas'}`
@@ -294,7 +290,6 @@ export function TripInProgressScreen({ navigation, route }: Props) {
       if (cancelled) return;
       setSteps(fallback ?? []);
       setPickupCode(null);
-      setDeliveryCode(null);
       setBagsNote(null);
       if (fallback && fallback.length >= 2) {
         const o = { latitude: fallback[0].latitude, longitude: fallback[0].longitude };
@@ -413,17 +408,10 @@ export function TripInProgressScreen({ navigation, route }: Props) {
     setShowColetaSheet(false);
   };
 
+  // PDF "Sequência de Solicitação de Código" cenário 1: viagem comum tem só PIN no
+  // embarque (coleta). Desembarque/entrega é confirmação simples, sem código.
   const handleConfirmEntrega = () => {
     setShowEntregaSheet(false);
-    setShowCodeEntregaModal(true);
-  };
-
-  const handleConfirmEntregaCode = (code: string) => {
-    const expected = deliveryCode?.trim();
-    if (expected && onlyDigits(code) !== onlyDigits(expected)) {
-      showAlert('Código', 'Código de entrega incorreto. Verifique com o motorista.');
-      return false;
-    }
     setSteps((prev) =>
       prev.map((s, i) => (i === currentStepIndex ? { ...s, completed: true } : s))
     );
@@ -743,17 +731,6 @@ export function TripInProgressScreen({ navigation, route }: Props) {
         inputPlaceholder="Ex: 1234"
         submitLabel="Confirmar coleta"
         onSubmit={handleConfirmColetaCode}
-        backLabel="Voltar"
-      />
-
-      <CodeConfirmModal
-        visible={showCodeEntregaModal}
-        onClose={() => setShowCodeEntregaModal(false)}
-        title="Confirmar entrega"
-        instruction="Insira o código informado pelo cliente para confirmar a entrega."
-        inputPlaceholder="Ex: 1234"
-        submitLabel="Confirmar entrega"
-        onSubmit={handleConfirmEntregaCode}
         backLabel="Voltar"
       />
         </>

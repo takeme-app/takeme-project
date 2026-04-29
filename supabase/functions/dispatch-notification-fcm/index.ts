@@ -32,6 +32,37 @@ function getRecordFromBody(body: any): Record<string, unknown> | null {
   return null;
 }
 
+/** Converte `notifications.data` (jsonb) em mapa string→string (FCM) e lê metadados de colapso/tag. */
+function parseNotificationDataJson(record: Record<string, unknown>): {
+  flat: Record<string, string>;
+  fcmAndroidTag?: string;
+  fcmCollapseKey?: string;
+  fcmDataOnly: boolean;
+} {
+  const raw = record.data;
+  let obj: Record<string, unknown> = {};
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    obj = raw as Record<string, unknown>;
+  } else if (typeof raw === "string") {
+    try {
+      const p = JSON.parse(raw);
+      if (p && typeof p === "object" && !Array.isArray(p)) obj = p as Record<string, unknown>;
+    } catch {
+      /* manter vazio */
+    }
+  }
+  const fcmAndroidTag = obj.fcm_android_tag != null ? String(obj.fcm_android_tag) : undefined;
+  const fcmCollapseKey = obj.fcm_collapse_key != null ? String(obj.fcm_collapse_key) : undefined;
+  const fcmDataOnly = obj.fcm_data_only === true || obj.fcm_data_only === "true";
+  const flat: Record<string, string> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v == null) continue;
+    if (typeof v === "object") flat[k] = JSON.stringify(v);
+    else flat[k] = String(v);
+  }
+  return { flat, fcmAndroidTag, fcmCollapseKey, fcmDataOnly };
+}
+
 async function getAccessToken(clientEmail: string, privateKey: string): Promise<string> {
   return await new Promise((resolve, reject) => {
     const jwtClient = new JWT({
@@ -136,12 +167,14 @@ Deno.serve(async (req) => {
 
     const title = String(record.title ?? "Nova notificação");
     const bodyText = record.message != null ? String(record.message) : "";
+    const parsed = parseNotificationDataJson(record);
     const customData: Record<string, string> = {
       notification_id: String(record.id ?? ""),
       category: String(record.category ?? ""),
       target_app_slug: targetAppSlug,
       read_at: record.read_at != null ? String(record.read_at) : "",
       created_at: String(record.created_at ?? ""),
+      ...parsed.flat,
     };
 
     const fcmUrl = `https://fcm.googleapis.com/v1/projects/${GOOGLE_PROJECT_ID}/messages:send`;
@@ -155,20 +188,41 @@ Deno.serve(async (req) => {
       targetAppSlug === "motorista" ? "motorista-default" : "cliente-default";
 
     for (const token of tokens) {
-      const messagePayload = {
-        message: {
+      const androidNotif: Record<string, unknown> = {
+        sound: "default",
+        channel_id: androidChannelId,
+      };
+      if (parsed.fcmAndroidTag) {
+        androidNotif.tag = parsed.fcmAndroidTag;
+      }
+
+      const messageInner: Record<string, unknown> = parsed.fcmDataOnly
+        ? {
+          token,
+          data: {
+            ...customData,
+            display_title: title,
+            display_body: bodyText,
+          },
+          android: {
+            priority: "HIGH",
+            ...(parsed.fcmCollapseKey || parsed.fcmAndroidTag
+              ? { collapse_key: parsed.fcmCollapseKey ?? parsed.fcmAndroidTag }
+              : {}),
+          },
+        }
+        : {
           token,
           notification: { title, body: bodyText },
           data: customData,
           android: {
             priority: "HIGH",
-            notification: {
-              sound: "default",
-              channel_id: androidChannelId,
-            },
+            notification: androidNotif,
+            ...(parsed.fcmCollapseKey ? { collapse_key: parsed.fcmCollapseKey } : {}),
           },
-        },
-      };
+        };
+
+      const messagePayload = { message: messageInner };
 
       const r = await fetch(fcmUrl, {
         method: "POST",
