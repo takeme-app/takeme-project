@@ -10,6 +10,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { Text } from '../../components/Text';
+import { DriverLocationFocusButton } from '../../components/DriverLocationFocusButton';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -355,24 +356,23 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
                   )}
                 </GoogleMapsMap>
                 <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
-                  <TouchableOpacity
-                    style={[
-                      styles.mapMyLocationBtn,
-                      !preparerPos && styles.mapMyLocationBtnDisabled,
-                    ]}
-                    activeOpacity={0.85}
-                    disabled={!preparerPos}
-                    onPress={() => {
-                      if (!preparerPos || !isValidGlobeCoordinate(preparerPos.latitude, preparerPos.longitude)) return;
-                      setFollowMyLocation(true);
-                    }}
-                  >
-                    <MaterialIcons name="my-location" size={22} color="#111827" />
-                  </TouchableOpacity>
-                  <MapZoomControls
-                    mapRef={mapRef}
-                    onBeforeZoom={() => setFollowMyLocation(false)}
-                  />
+                  <View style={styles.mapLeftControlsCol} pointerEvents="box-none">
+                    <MapZoomControls
+                      mapRef={mapRef}
+                      floating={false}
+                      onBeforeZoom={() => setFollowMyLocation(false)}
+                    />
+                    <DriverLocationFocusButton
+                      following={followMyLocation}
+                      style={[!preparerPos && styles.mapMyLocationBtnDisabled]}
+                      disabled={!preparerPos}
+                      activeOpacity={0.85}
+                      onPress={() => {
+                        if (!preparerPos || !isValidGlobeCoordinate(preparerPos.latitude, preparerPos.longitude)) return;
+                        setFollowMyLocation(true);
+                      }}
+                    />
+                  </View>
                 </View>
                 </View>
               </>
@@ -560,21 +560,12 @@ const styles = StyleSheet.create({
     width: '100%',
     position: 'relative',
   },
-  mapMyLocationBtn: {
+  mapLeftControlsCol: {
     position: 'absolute',
     top: 10,
     left: 10,
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#fff',
+    gap: 10,
     alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
   },
   mapMyLocationBtnDisabled: { opacity: 0.45 },
   pickupPill: {

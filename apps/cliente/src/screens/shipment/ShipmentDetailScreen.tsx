@@ -39,6 +39,7 @@ import { StatusBadge, shipmentStatusToBadge } from '../../components/StatusBadge
 import { SupportSheet } from '../../components/SupportSheet';
 import { storageUrl } from '../../utils/storageUrl';
 import { TipModal } from '../../components/TipModal';
+import { CodeConfirmModal } from '../../components/CodeConfirmModal';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ShipmentDetail'>;
 
@@ -106,6 +107,8 @@ type ShipmentDetail = {
   pickup_code: string | null;
   delivery_code: string | null;
   cancellation_reason: string | null;
+  base_id: string | null;
+  picked_up_by_preparer_at: string | null;
 };
 
 type DriverProfileRow = { full_name: string | null; avatar_url: string | null };
@@ -138,6 +141,8 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
   const [ratingStars, setRatingStars] = useState(0);
   const [ratingComment, setRatingComment] = useState('');
   const [ratingSubmitting, setRatingSubmitting] = useState(false);
+  const [showPreparerPinModal, setShowPreparerPinModal] = useState(false);
+  const [preparerPinSubmitting, setPreparerPinSubmitting] = useState(false);
   const insets = useSafeAreaInsets();
   const ratingOverlayOpacity = useRef(new Animated.Value(0)).current;
   const ratingSheetTranslateY = useRef(new Animated.Value(SHEET_SLIDE_DISTANCE)).current;
@@ -157,7 +162,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
       const { data: shipment, error: shipErr } = await supabase
         .from('shipments')
         .select(
-          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, tip_status, tip_paid_at, driver_id, pickup_code, delivery_code, cancellation_reason'
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, tip_status, tip_paid_at, driver_id, pickup_code, delivery_code, cancellation_reason, base_id, picked_up_by_preparer_at'
         )
         .eq('id', shipmentId)
         .eq('user_id', user.id)
@@ -187,6 +192,8 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         pickup_code: string | null;
         delivery_code: string | null;
         cancellation_reason: string | null;
+        base_id: string | null;
+        picked_up_by_preparer_at: string | null;
       };
       setDetail({
         id: row.id,
@@ -209,6 +216,8 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         pickup_code: row.pickup_code ?? null,
         delivery_code: row.delivery_code ?? null,
         cancellation_reason: row.cancellation_reason ?? null,
+        base_id: row.base_id ?? null,
+        picked_up_by_preparer_at: row.picked_up_by_preparer_at ?? null,
       });
       if (row.driver_id) {
         const { data: prof } = await supabase
@@ -368,6 +377,45 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
     setRatingComment('');
   };
 
+  // Cenário 3 do PDF "Sequência de Solicitação de Código" — etapa 3:
+  // passageiro digita o PIN A informado pelo preparador na coleta.
+  // RPC `complete_shipment_passenger_to_preparer` valida e atualiza
+  // `picked_up_by_preparer_at` no banco.
+  const handleSubmitPreparerPin = async (code: string): Promise<boolean> => {
+    if (!shipmentId || preparerPinSubmitting) return false;
+    setPreparerPinSubmitting(true);
+    try {
+      const { data, error } = await supabase.rpc(
+        'complete_shipment_passenger_to_preparer' as never,
+        { p_shipment_id: shipmentId, p_confirmation_code: code } as never,
+      );
+      if (error) {
+        Alert.alert('Erro', 'Não foi possível validar agora. Tente novamente.');
+        return false;
+      }
+      const payload = data as { ok?: boolean; error?: string } | null;
+      if (!payload || payload.ok !== true) {
+        const err = String(payload?.error ?? '');
+        if (err === 'invalid_code' || err === 'code_length' || err === 'missing_code') {
+          Alert.alert('Código inválido', 'Verifique o código informado pelo preparador.');
+        } else if (err === 'forbidden') {
+          Alert.alert('Acesso negado', 'Esta encomenda não está vinculada à sua conta.');
+        } else {
+          Alert.alert('Erro', 'Não foi possível validar. Tente novamente.');
+        }
+        return false;
+      }
+      setDetail((d) =>
+        d ? { ...d, picked_up_by_preparer_at: new Date().toISOString() } : d,
+      );
+      setShowPreparerPinModal(false);
+      Alert.alert('Coleta confirmada', 'Código validado com sucesso. Boa viagem!');
+      return true;
+    } finally {
+      setPreparerPinSubmitting(false);
+    }
+  };
+
   const handleConfirmCancel = async () => {
     if (!shipmentId || !detail) return;
     setCancelling(true);
@@ -501,38 +549,72 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
           </View>
         )}
 
-        {/* PIN de Coleta: dígitos do banco; copiar / compartilhar o código completo */}
-        <View style={styles.pinSection}>
-          <Text style={styles.pinLabel}>PIN de Coleta</Text>
-          <View style={styles.pinRow}>
-            <View style={styles.pinChipsWrap}>
-              {pinCharsForDisplay(detail.pickup_code).map((ch, i) => (
-                <View key={`pc-${i}`} style={styles.pinChip}>
-                  <Text style={styles.pinChipText}>{ch}</Text>
-                </View>
-              ))}
-            </View>
-            <View style={styles.pinIconButtons}>
-              <TouchableOpacity
-                style={styles.pinIconBtn}
-                activeOpacity={0.8}
-                onPress={() => copyPin('PIN de coleta', detail.pickup_code)}
-              >
-                <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.pinIconBtn}
-                activeOpacity={0.8}
-                onPress={() => void sharePin('PIN de coleta', detail.pickup_code)}
-              >
-                <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
-              </TouchableOpacity>
-            </View>
+        {/* PIN de Coleta — duas variantes conforme PDF "Sequência de Solicitação de Código":
+            - Cenário 4 (sem base): PIN de coleta visível, motorista digita → cliente repassa.
+            - Cenário 3 (com base): preparador informa o PIN A verbalmente; passageiro
+              valida digitando. O código não é exibido em texto para preservar o handoff. */}
+        {detail.base_id ? (
+          <View style={styles.pinSection}>
+            <Text style={styles.pinLabel}>Coleta pelo preparador</Text>
+            {detail.picked_up_by_preparer_at ? (
+              <View style={styles.preparerStatusRow}>
+                <MaterialIcons name="check-circle" size={20} color="#16a34a" />
+                <Text style={styles.preparerStatusText}>
+                  Coleta confirmada com o preparador.
+                </Text>
+              </View>
+            ) : (
+              <>
+                <Text style={styles.preparerHint}>
+                  Quando o preparador chegar para retirar a encomenda, ele informará
+                  um código de 4 dígitos. Toque abaixo para confirmar.
+                </Text>
+                <TouchableOpacity
+                  style={styles.preparerValidateButton}
+                  activeOpacity={0.8}
+                  onPress={() => setShowPreparerPinModal(true)}
+                >
+                  <MaterialIcons name="vpn-key" size={18} color={COLORS.background} />
+                  <Text style={styles.preparerValidateButtonText}>
+                    Validar código do preparador
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
-          <TouchableOpacity style={styles.pinReenviarButton} activeOpacity={0.8}>
-            <Text style={styles.pinReenviarText}>Reenviar para o remetente</Text>
-          </TouchableOpacity>
-        </View>
+        ) : (
+          <View style={styles.pinSection}>
+            <Text style={styles.pinLabel}>PIN de Coleta</Text>
+            <View style={styles.pinRow}>
+              <View style={styles.pinChipsWrap}>
+                {pinCharsForDisplay(detail.pickup_code).map((ch, i) => (
+                  <View key={`pc-${i}`} style={styles.pinChip}>
+                    <Text style={styles.pinChipText}>{ch}</Text>
+                  </View>
+                ))}
+              </View>
+              <View style={styles.pinIconButtons}>
+                <TouchableOpacity
+                  style={styles.pinIconBtn}
+                  activeOpacity={0.8}
+                  onPress={() => copyPin('PIN de coleta', detail.pickup_code)}
+                >
+                  <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.pinIconBtn}
+                  activeOpacity={0.8}
+                  onPress={() => void sharePin('PIN de coleta', detail.pickup_code)}
+                >
+                  <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
+                </TouchableOpacity>
+              </View>
+            </View>
+            <TouchableOpacity style={styles.pinReenviarButton} activeOpacity={0.8}>
+              <Text style={styles.pinReenviarText}>Reenviar para o remetente</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         <View style={styles.pinSection}>
           <Text style={styles.pinLabel}>PIN de entrega</Text>
@@ -795,6 +877,22 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
           </TouchableWithoutFeedback>
         </View>
       </Modal>
+
+      <CodeConfirmModal
+        visible={showPreparerPinModal}
+        onClose={() => {
+          if (!preparerPinSubmitting) setShowPreparerPinModal(false);
+        }}
+        title="Confirmar coleta"
+        instruction="Digite o código de 4 dígitos informado pelo preparador para confirmar a coleta."
+        inputPlaceholder="Ex: 1234"
+        submitLabel={preparerPinSubmitting ? 'Validando…' : 'Confirmar coleta'}
+        onSubmit={(code) => {
+          void handleSubmitPreparerPin(code);
+          return false;
+        }}
+        backLabel="Voltar"
+      />
     </SafeAreaView>
   );
 }
@@ -896,6 +994,33 @@ const styles = StyleSheet.create({
     borderRadius: 24,
   },
   pinReenviarText: { fontSize: 14, fontWeight: '500', color: COLORS.neutral700 },
+  preparerHint: {
+    fontSize: 13,
+    color: COLORS.neutral700,
+    marginBottom: 12,
+    lineHeight: 18,
+  },
+  preparerValidateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: COLORS.black,
+    paddingVertical: 14,
+    borderRadius: 10,
+  },
+  preparerValidateButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: COLORS.background,
+  },
+  preparerStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+  },
+  preparerStatusText: { fontSize: 14, fontWeight: '500', color: '#15803d' },
   card: {
     marginHorizontal: 24,
     marginTop: 24,

@@ -12,6 +12,11 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { Text } from '../../components/Text';
+import { DriverLocationFocusButton } from '../../components/DriverLocationFocusButton';
+import { MapNetworkBadge } from '../../components/MapNetworkBadge';
+import { SmoothDriverMapMarker } from '../../components/SmoothDriverMapMarker';
+import { useNetworkStatus } from '../../hooks/useNetworkStatus';
+import { useRouteOfflinePack } from '../../hooks/useRouteOfflinePack';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -91,8 +96,16 @@ type Shipment = {
   deliveryHasMapCoords: boolean;
   amountCents: number;
   confirmedAt: string;
+  /** PDF cenário 4 (sem base): `pickup_code` que o motorista digita. */
   pickupCodeExpected: string;
+  /** PDF cenário 4 (sem base): `delivery_code` que o motorista digita ao entregar. */
   deliveryCodeExpected: string;
+  /** PDF cenário 3 (com base): PIN A (passageiro valida no app cliente). */
+  passengerToPreparerCode: string;
+  /** PDF cenário 3 (com base): PIN B (preparador valida ao chegar na base). */
+  preparerToBaseCode: string;
+  /** PDF cenário 3 (com base): timestamp do handoff Passageiro → Preparador. */
+  pickedUpByPreparerAt: string | null;
   coletaLetter: string;
 };
 
@@ -132,6 +145,21 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
   const [fullRouteCoords, setFullRouteCoords] = useState<Coord[]>([]);
   const [driverRouteCoords, setDriverRouteCoords] = useState<Coord[]>([]);
   const [etaSeconds, setEtaSeconds] = useState(0);
+
+  // Mapa offline + indicador de rede. Hooks ficam no topo (regras de Hooks):
+  // não podem rodar depois de early returns abaixo.
+  const { online: isOnline } = useNetworkStatus();
+  const offlinePackCoords = useMemo<Coord[]>(() => {
+    if (fullRouteCoords.length >= 2) return fullRouteCoords;
+    if (shipment?.pickupCoord && shipment?.deliveryCoord) {
+      return [shipment.pickupCoord, shipment.deliveryCoord];
+    }
+    return [];
+  }, [fullRouteCoords, shipment?.pickupCoord, shipment?.deliveryCoord]);
+  useRouteOfflinePack({
+    packName: shipment?.id ? `shipment-${shipment.id}` : null,
+    coords: offlinePackCoords,
+  });
 
   // Pickup modal
   const [pickupVisible, setPickupVisible] = useState(false);
@@ -286,7 +314,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       const { data } = await supabase
         .from('shipments')
         .select(
-          'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, created_at, status, user_id, base_id, pickup_code, delivery_code, picked_up_at',
+          'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, created_at, status, user_id, base_id, pickup_code, delivery_code, picked_up_at, passenger_to_preparer_code, preparer_to_base_code, picked_up_by_preparer_at',
         )
         .eq('id', shipmentId)
         .maybeSingle();
@@ -332,6 +360,9 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         pickup_code: string | null;
         delivery_code: string | null;
         picked_up_at: string | null;
+        passenger_to_preparer_code: string | null;
+        preparer_to_base_code: string | null;
+        picked_up_by_preparer_at: string | null;
       };
 
       const { data: prof } = await supabase
@@ -383,27 +414,30 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
           pickupHasMapCoords,
           baseHasMapCoords: deliveryHasMapCoords,
           deliveryHasMapCoords,
-          amountCents: row.amount_cents ?? 0,
-          confirmedAt: row.created_at,
-          pickupCodeExpected: String(row.pickup_code ?? ''),
-          deliveryCodeExpected: String(row.delivery_code ?? ''),
-          coletaLetter: coletaLetterFromShipmentId(row.id),
-        };
-        setShipment(s);
-        if (row.status === 'in_progress' || row.picked_up_at) setStep('to_delivery');
+        amountCents: row.amount_cents ?? 0,
+        confirmedAt: row.created_at,
+        pickupCodeExpected: String(row.pickup_code ?? ''),
+        deliveryCodeExpected: String(row.delivery_code ?? ''),
+        passengerToPreparerCode: String(row.passenger_to_preparer_code ?? ''),
+        preparerToBaseCode: String(row.preparer_to_base_code ?? ''),
+        pickedUpByPreparerAt: row.picked_up_by_preparer_at ?? null,
+        coletaLetter: coletaLetterFromShipmentId(row.id),
+      };
+      setShipment(s);
+      if (row.status === 'in_progress' || row.picked_up_at) setStep('to_delivery');
 
-        const fullRoute = await getRouteWithDuration(s.pickupCoord, s.deliveryCoord, routeOpts);
-        if (fullRoute) setFullRouteCoords(fullRoute.coordinates);
-        else if (
-          isValidGlobeCoordinate(s.pickupCoord.latitude, s.pickupCoord.longitude) &&
-          isValidGlobeCoordinate(s.deliveryCoord.latitude, s.deliveryCoord.longitude)
-        ) {
-          setFullRouteCoords([s.pickupCoord, s.deliveryCoord]);
-        }
-
-        setLoading(false);
-        return;
+      const fullRoute = await getRouteWithDuration(s.pickupCoord, s.deliveryCoord, routeOpts);
+      if (fullRoute) setFullRouteCoords(fullRoute.coordinates);
+      else if (
+        isValidGlobeCoordinate(s.pickupCoord.latitude, s.pickupCoord.longitude) &&
+        isValidGlobeCoordinate(s.deliveryCoord.latitude, s.deliveryCoord.longitude)
+      ) {
+        setFullRouteCoords([s.pickupCoord, s.deliveryCoord]);
       }
+
+      setLoading(false);
+      return;
+    }
 
       const { data: baseRow } = await supabase
         .from('bases')
@@ -457,6 +491,9 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         confirmedAt: row.created_at,
         pickupCodeExpected: String(row.pickup_code ?? ''),
         deliveryCodeExpected: String(row.delivery_code ?? ''),
+        passengerToPreparerCode: String(row.passenger_to_preparer_code ?? ''),
+        preparerToBaseCode: String(row.preparer_to_base_code ?? ''),
+        pickedUpByPreparerAt: row.picked_up_by_preparer_at ?? null,
         coletaLetter: coletaLetterFromShipmentId(row.id),
       };
       setShipment(s);
@@ -686,8 +723,67 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     );
   }, [shipment]);
 
+  // PDF cenário 3 (com base): o preparador NÃO digita o PIN A — ele apenas
+  // INFORMA verbalmente ao passageiro, que valida no app cliente. O passageiro
+  // valida → backend seta `picked_up_by_preparer_at`. Aqui só verificamos se já
+  // foi validado e avançamos.
+  // PDF cenário 4 (sem base): comportamento legado — preparador digita
+  // `pickup_code` para registrar a coleta.
   const confirmPickup = async () => {
-    if (!pickupCode.trim() || !shipment) return;
+    if (!shipment) return;
+
+    if (shipment.hasPreparerBase) {
+      setPickupLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('shipments')
+          .select('picked_up_by_preparer_at, status, picked_up_at')
+          .eq('id', shipment.id)
+          .maybeSingle();
+        if (error || !data) {
+          showAlert('Erro', 'Não foi possível verificar a coleta. Tente novamente.');
+          return;
+        }
+        const row = data as {
+          picked_up_by_preparer_at: string | null;
+          status: string;
+          picked_up_at: string | null;
+        };
+        if (!row.picked_up_by_preparer_at) {
+          showAlert(
+            'Aguardando o cliente',
+            'O cliente ainda não validou o código no app dele. Confirme com ele que digitou o código que você informou.',
+          );
+          return;
+        }
+        const { error: upErr } = await supabase
+          .from('shipments')
+          .update({
+            status: 'in_progress',
+            pickup_notes: pickupObs.trim() || null,
+            picked_up_at: row.picked_up_at ?? new Date().toISOString(),
+          } as never)
+          .eq('id', shipment.id);
+        if (upErr) {
+          showAlert('Não foi possível confirmar', upErr.message || 'Tente novamente.');
+          return;
+        }
+        setShipment((s) => (s ? { ...s, pickedUpByPreparerAt: row.picked_up_by_preparer_at } : s));
+        autoModalRef.current = { pickup: false, delivery: false };
+        setStep('to_delivery');
+        setPickupVisible(false);
+        setPickupObs('');
+        mapRef.current?.animateToRegion(
+          { ...shipment.deliveryCoord, latitudeDelta: 0.02, longitudeDelta: 0.02 },
+          600,
+        );
+      } finally {
+        setPickupLoading(false);
+      }
+      return;
+    }
+
+    if (!pickupCode.trim()) return;
     const expDigits = onlyDigits(shipment.pickupCodeExpected);
     if (expDigits.length !== 4) {
       showAlert(
@@ -728,8 +824,61 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     }
   };
 
+  // PDF cenário 3 (com base): preparador valida PIN B (preparer_to_base_code)
+  // ao chegar na base. RPC `complete_shipment_preparer_to_base` valida e seta
+  // `delivered_to_base_at`.
+  // PDF cenário 4 (sem base): comportamento legado — preparador digita
+  // `delivery_code` para concluir entrega ao destinatário.
   const confirmDelivery = async () => {
     if (!deliveryCode.trim() || !shipment) return;
+
+    if (shipment.hasPreparerBase) {
+      setDeliveryLoading(true);
+      try {
+        const { data, error } = await supabase.rpc(
+          'complete_shipment_preparer_to_base' as never,
+          { p_shipment_id: shipment.id, p_confirmation_code: deliveryCode } as never,
+        );
+        if (error) {
+          showAlert('Erro', getUserErrorMessage(error));
+          return;
+        }
+        const payload = data as { ok?: boolean; error?: string } | null;
+        if (!payload || payload.ok !== true) {
+          const err = String(payload?.error ?? '');
+          if (err === 'invalid_code' || err === 'code_length' || err === 'missing_code') {
+            showAlert('Código incorreto', 'Confira o código informado pela base.');
+          } else if (err === 'pickup_not_completed') {
+            showAlert(
+              'Coleta pendente',
+              'A coleta com o cliente ainda não foi confirmada. Confirme antes de entregar na base.',
+            );
+          } else if (err === 'forbidden') {
+            showAlert('Acesso negado', 'Esta encomenda não está sob sua responsabilidade.');
+          } else if (err === 'no_base') {
+            showAlert('Sem base', 'Esta encomenda não está vinculada a uma base.');
+          } else {
+            showAlert('Erro', 'Não foi possível confirmar. Tente novamente.');
+          }
+          return;
+        }
+        if (deliveryObs.trim()) {
+          await supabase
+            .from('shipments')
+            .update({ delivery_notes: deliveryObs.trim() } as never)
+            .eq('id', shipment.id);
+        }
+        await closeShipmentConversation(shipment.id);
+        setDeliveryVisible(false);
+        setDeliveryCode('');
+        setDeliveryObs('');
+        setSummaryVisible(true);
+      } finally {
+        setDeliveryLoading(false);
+      }
+      return;
+    }
+
     const expDigits = onlyDigits(shipment.deliveryCodeExpected);
     if (expDigits.length !== 4) {
       showAlert(
@@ -746,17 +895,11 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     try {
       const { error: upErr } = await supabase
         .from('shipments')
-        .update(
-          shipment.hasPreparerBase
-            ? ({
-                delivery_notes: deliveryObs.trim() || null,
-              } as never)
-            : ({
-                status: 'delivered',
-                delivery_notes: deliveryObs.trim() || null,
-                delivered_at: new Date().toISOString(),
-              } as never),
-        )
+        .update({
+          status: 'delivered',
+          delivery_notes: deliveryObs.trim() || null,
+          delivered_at: new Date().toISOString(),
+        } as never)
         .eq('id', shipment.id);
       if (upErr) {
         showAlert('Não foi possível registrar', upErr.message || 'Tente novamente.');
@@ -915,14 +1058,13 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
           </View>
         </MapMarker>
 
-        {driverPos && !followMyLocation && (
-          <MapMarker id="driver-pos" coordinate={driverPos} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.driverPulse}>
-              <View style={styles.driverMarker}>
-                <MaterialIcons name="play-arrow" size={18} color="#fff" />
-              </View>
-            </View>
-          </MapMarker>
+        {driverPos && !followMyLocation && isValidGlobeCoordinate(driverPos.latitude, driverPos.longitude) && (
+          <SmoothDriverMapMarker
+            id="driver-pos"
+            targetLatitude={driverPos.latitude}
+            targetLongitude={driverPos.longitude}
+            following={false}
+          />
         )}
       </GoogleMapsMap>
 
@@ -950,18 +1092,16 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
           <MaterialIcons name="arrow-back" size={20} color={DARK} />
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.myLocationBtn, { top: overlayTop, left: 14 }]}
-          activeOpacity={0.8}
-          onPress={() => {
-            if (!driverPos || !isValidGlobeCoordinate(driverPos.latitude, driverPos.longitude)) return;
-            setFollowMyLocation(true);
-          }}
-        >
-          <MaterialIcons name="my-location" size={22} color={DARK} />
-        </TouchableOpacity>
+        {!isOnline && (
+          <View
+            style={[styles.networkBadgeWrap, { top: insets.top + 12 }]}
+            pointerEvents="none"
+          >
+            <MapNetworkBadge online={false} />
+          </View>
+        )}
 
-        <View style={[styles.zoomWrap, { top: overlayTop + 46 + 10, left: 14 }]} pointerEvents="box-none">
+        <View style={[styles.zoomWrap, { top: overlayTop, left: 14 }]} pointerEvents="box-none">
           <MapZoomControls
             mapRef={mapRef}
             floating={false}
@@ -982,6 +1122,18 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             }}
           />
         </View>
+
+        <DriverLocationFocusButton
+          following={followMyLocation}
+          style={[
+            styles.myLocationBtn,
+            { top: overlayTop + 44 + 6 + 44 + 10, left: 14 },
+          ]}
+          onPress={() => {
+            if (!driverPos || !isValidGlobeCoordinate(driverPos.latitude, driverPos.longitude)) return;
+            setFollowMyLocation(true);
+          }}
+        />
 
         {/* Barra direita: encomenda — coleta → entrega (tocar centraliza no ponto) */}
         <View style={[styles.sidebar, { top: overlayTop, right: 14 }]} pointerEvents="box-none">
@@ -1087,40 +1239,85 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
               </View>
               <View style={styles.divider} />
               <ScrollView keyboardShouldPersistTaps="handled">
-                <Text style={styles.fieldLabel}>Código de confirmação</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Ex: 482915"
-                  placeholderTextColor="#9CA3AF"
-                  value={pickupCode}
-                  onChangeText={setPickupCode}
-                  autoCapitalize="characters"
-                />
-                <View style={styles.obsRow}>
-                  <Text style={styles.fieldLabel}>Observações</Text>
-                  <Text style={styles.optional}>Opcional</Text>
-                </View>
-                <TextInput
-                  style={[styles.input, styles.textArea]}
-                  placeholder={'Descreva algo importante sobre esta\ncoleta (ex: pacote danificado, cliente\nausente...)'}
-                  placeholderTextColor="#9CA3AF"
-                  value={pickupObs}
-                  onChangeText={setPickupObs}
-                  multiline
-                  numberOfLines={4}
-                  textAlignVertical="top"
-                />
-                <TouchableOpacity
-                  style={[styles.primaryBtn, !pickupCode.trim() && styles.btnDisabled]}
-                  onPress={confirmPickup}
-                  disabled={!pickupCode.trim() || pickupLoading}
-                  activeOpacity={0.85}
-                >
-                  {pickupLoading
-                    ? <ActivityIndicator size="small" color="#FFF" />
-                    : <Text style={styles.primaryBtnText}>Sim, confirmar</Text>
-                  }
-                </TouchableOpacity>
+                {shipment.hasPreparerBase ? (
+                  <>
+                    <Text style={styles.fieldLabel}>
+                      Informe este código ao cliente
+                    </Text>
+                    <Text style={styles.handoffHint}>
+                      Diga estes 4 dígitos ao cliente. Ele vai digitar no app dele
+                      para validar a coleta. Quando ele confirmar, toque no botão
+                      abaixo para seguir até a base.
+                    </Text>
+                    <View style={styles.handoffPinBox}>
+                      <Text style={styles.handoffPinText}>
+                        {shipment.passengerToPreparerCode || '— — — —'}
+                      </Text>
+                    </View>
+                    <View style={styles.obsRow}>
+                      <Text style={styles.fieldLabel}>Observações</Text>
+                      <Text style={styles.optional}>Opcional</Text>
+                    </View>
+                    <TextInput
+                      style={[styles.input, styles.textArea]}
+                      placeholder={'Descreva algo importante sobre esta\ncoleta (ex: pacote danificado, cliente\nausente...)'}
+                      placeholderTextColor="#9CA3AF"
+                      value={pickupObs}
+                      onChangeText={setPickupObs}
+                      multiline
+                      numberOfLines={4}
+                      textAlignVertical="top"
+                    />
+                    <TouchableOpacity
+                      style={styles.primaryBtn}
+                      onPress={confirmPickup}
+                      disabled={pickupLoading}
+                      activeOpacity={0.85}
+                    >
+                      {pickupLoading
+                        ? <ActivityIndicator size="small" color="#FFF" />
+                        : <Text style={styles.primaryBtnText}>Cliente confirmou — seguir para a base</Text>
+                      }
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.fieldLabel}>Código de confirmação</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Ex: 482915"
+                      placeholderTextColor="#9CA3AF"
+                      value={pickupCode}
+                      onChangeText={setPickupCode}
+                      autoCapitalize="characters"
+                    />
+                    <View style={styles.obsRow}>
+                      <Text style={styles.fieldLabel}>Observações</Text>
+                      <Text style={styles.optional}>Opcional</Text>
+                    </View>
+                    <TextInput
+                      style={[styles.input, styles.textArea]}
+                      placeholder={'Descreva algo importante sobre esta\ncoleta (ex: pacote danificado, cliente\nausente...)'}
+                      placeholderTextColor="#9CA3AF"
+                      value={pickupObs}
+                      onChangeText={setPickupObs}
+                      multiline
+                      numberOfLines={4}
+                      textAlignVertical="top"
+                    />
+                    <TouchableOpacity
+                      style={[styles.primaryBtn, !pickupCode.trim() && styles.btnDisabled]}
+                      onPress={confirmPickup}
+                      disabled={!pickupCode.trim() || pickupLoading}
+                      activeOpacity={0.85}
+                    >
+                      {pickupLoading
+                        ? <ActivityIndicator size="small" color="#FFF" />
+                        : <Text style={styles.primaryBtnText}>Sim, confirmar</Text>
+                      }
+                    </TouchableOpacity>
+                  </>
+                )}
                 <TouchableOpacity style={styles.cancelBtn} onPress={() => setPickupVisible(false)} activeOpacity={0.7}>
                   <Text style={styles.cancelBtnText}>Não, voltar</Text>
                 </TouchableOpacity>
@@ -1148,7 +1345,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                   </Text>
                   <Text style={styles.sheetSub}>
                     {shipment.hasPreparerBase
-                      ? 'Confirme o código para registrar o depósito na base Take Me.\nA entrega ao destinatário é feita pelo motorista.'
+                      ? 'Solicite o código à base e digite abaixo para registrar o depósito.\nA entrega ao destinatário é feita pelo motorista.'
                       : `Insira o código de confirmação da entrega\npara registrar a conclusão.`}
                   </Text>
                 </View>
@@ -1158,14 +1355,20 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
               </View>
               <View style={styles.divider} />
               <ScrollView keyboardShouldPersistTaps="handled">
-                <Text style={styles.fieldLabel}>Código de entrega</Text>
+                <Text style={styles.fieldLabel}>
+                  {shipment.hasPreparerBase
+                    ? 'Código informado pela base'
+                    : 'Código de entrega'}
+                </Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="Ex: BASE132"
+                  placeholder={shipment.hasPreparerBase ? 'Ex: 1234' : 'Ex: BASE132'}
                   placeholderTextColor="#9CA3AF"
                   value={deliveryCode}
                   onChangeText={setDeliveryCode}
                   autoCapitalize="characters"
+                  keyboardType={shipment.hasPreparerBase ? 'number-pad' : 'default'}
+                  maxLength={shipment.hasPreparerBase ? 4 : undefined}
                 />
                 <View style={styles.obsRow}>
                   <Text style={styles.fieldLabel}>Observações</Text>
@@ -1333,17 +1536,13 @@ const styles = StyleSheet.create({
 
   myLocationBtn: {
     position: 'absolute',
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#fff',
+  },
+
+  networkBadgeWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
     alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
   },
 
   navPuckOverlay: {
@@ -1575,6 +1774,26 @@ const styles = StyleSheet.create({
   btnDisabled: { opacity: 0.5 },
   cancelBtn: { paddingVertical: 14, alignItems: 'center' },
   cancelBtnText: { fontSize: 15, fontWeight: '600', color: '#EF4444' },
+  // Cenário 3 (handoff Passageiro → Preparador): destaque do PIN A.
+  handoffHint: {
+    fontSize: 13,
+    color: '#6B7280',
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  handoffPinBox: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    paddingVertical: 18,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  handoffPinText: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: DARK,
+    letterSpacing: 6,
+  },
 
   // Summary
   statRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14 },

@@ -60,15 +60,29 @@ async function displayFromRemote(
   nf: NotifeeModule,
   msg: FirebaseMessagingTypes.RemoteMessage,
 ): Promise<void> {
-  const title = msg.notification?.title ?? '';
-  const body = msg.notification?.body ?? '';
+  const d = (msg.data ?? {}) as Record<string, string>;
+  let title = msg.notification?.title ?? '';
+  let body = msg.notification?.body ?? '';
+
+  if ((!title || !body) && d.display_title) {
+    title = String(d.display_title);
+    body = String(d.display_body ?? '');
+  }
+
   if (!title && !body) return;
+
+  const tag = typeof d.fcm_android_tag === 'string' ? d.fcm_android_tag : undefined;
+  /** Mesmo id/tag substituem a notificação anterior (ETA atualizável alinhada ao PDF). */
+  const stableId = tag;
+
   await nf.default.displayNotification({
+    ...(stableId ? { id: stableId } : {}),
     title,
     body,
-    data: msg.data,
+    data: msg.data as Record<string, string>,
     android: {
       channelId: ANDROID_CHANNEL_ID,
+      ...(tag ? { tag } : {}),
       pressAction: { id: 'default' },
       sound: 'default',
     },
@@ -124,4 +138,21 @@ export async function registerClienteForegroundNotifications(
     unsubMessaging?.();
     unsubForeground?.();
   };
+}
+
+/**
+ * Data-only / segundo plano: exibe no tray com o mesmo `id`/`tag` que o FCM
+ * (substitui ETA). Usado pelo `setBackgroundMessageHandler` em `index.ts`.
+ */
+export async function displayClienteRemoteMessage(
+  msg: FirebaseMessagingTypes.RemoteMessage,
+): Promise<void> {
+  const nf = loadNotifee();
+  if (!nf) return;
+  try {
+    await ensureAndroidChannel(nf);
+  } catch {
+    /* canal indisponível */
+  }
+  await displayFromRemote(nf, msg);
 }

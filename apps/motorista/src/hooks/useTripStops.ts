@@ -371,6 +371,8 @@ type ShipmentRow = {
   recipient_name?: string | null;
   pickup_code?: string | null;
   delivery_code?: string | null;
+  /** PDF cenário 3: PIN C (motorista digita ao retirar na base). */
+  base_to_driver_code?: string | null;
 };
 
 type BaseRow = {
@@ -421,7 +423,8 @@ async function buildShipmentStopsOnly(tripId: string): Promise<TripStop[]> {
       destination_lng,
       recipient_name,
       pickup_code,
-      delivery_code
+      delivery_code,
+      base_to_driver_code
     `)
     .eq('scheduled_trip_id', tripId)
     .eq('driver_id', tripDriverId)
@@ -450,6 +453,10 @@ async function buildShipmentStopsOnly(tripId: string): Promise<TripStop[]> {
     if (b) {
       const baseLL = latLngFromDbColumns(b.lat, b.lng);
       const baseAddr = [b.name, b.address, b.city].filter(Boolean).join(' — ') || b.address || '';
+      // PDF cenário 3: motorista valida PIN C (base_to_driver_code) ao retirar na base.
+      // Fallback para pickup_code mantém compatibilidade com encomendas antigas
+      // que ainda não tiveram o backfill aplicado.
+      const baseRetirada = s.base_to_driver_code ?? s.pickup_code ?? null;
       out.push({
         id: `shipment-pickup-${s.id}`,
         scheduledTripId: tripId,
@@ -462,7 +469,7 @@ async function buildShipmentStopsOnly(tripId: string): Promise<TripStop[]> {
         sequenceOrder: 0,
         status: 'pending',
         notes: s.instructions ?? null,
-        code: s.pickup_code ?? null,
+        code: baseRetirada,
         packageDriverLeg: 'base_pickup',
       });
       out.push({
@@ -1100,10 +1107,17 @@ async function enrichShipmentPackageCodes(stops: TripStop[]): Promise<TripStop[]
   if (missing.size === 0) return stops;
   const { data } = await supabase
     .from('shipments')
-    .select('id, pickup_code, delivery_code')
+    .select('id, pickup_code, delivery_code, base_to_driver_code, base_id')
     .in('id', [...missing]);
-  const byId = new Map<string, { pickup_code?: string | null; delivery_code?: string | null }>();
-  for (const row of (data ?? []) as { id: string; pickup_code?: string | null; delivery_code?: string | null }[]) {
+  type Row = {
+    id: string;
+    pickup_code?: string | null;
+    delivery_code?: string | null;
+    base_to_driver_code?: string | null;
+    base_id?: string | null;
+  };
+  const byId = new Map<string, Row>();
+  for (const row of (data ?? []) as Row[]) {
     byId.set(row.id, row);
   }
   return stops.map((s) => {
@@ -1111,8 +1125,14 @@ async function enrichShipmentPackageCodes(stops: TripStop[]): Promise<TripStop[]
     if (!s.entityId || onlyDigits(s.code ?? '').length === 4) return s;
     const r = byId.get(String(s.entityId));
     if (!r) return s;
-    // Retirada/coleta usa pickup_code; entrega usa delivery_code.
-    const raw = s.stopType === 'package_pickup' ? r.pickup_code : r.delivery_code;
+    // PDF cenário 3 (com base): retirada do motorista valida base_to_driver_code (PIN C).
+    // PDF cenário 4 (sem base): retirada usa pickup_code. Entrega: delivery_code (PIN D).
+    let raw: string | null | undefined;
+    if (s.stopType === 'package_pickup') {
+      raw = r.base_id ? (r.base_to_driver_code ?? r.pickup_code) : r.pickup_code;
+    } else {
+      raw = r.delivery_code;
+    }
     const next = String(raw ?? '').trim();
     return next ? { ...s, code: next } : s;
   });

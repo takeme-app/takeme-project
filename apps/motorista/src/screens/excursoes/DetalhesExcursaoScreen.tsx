@@ -10,6 +10,7 @@ import {
   Switch,
 } from 'react-native';
 import { Text } from '../../components/Text';
+import { DriverLocationFocusButton } from '../../components/DriverLocationFocusButton';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -817,24 +818,24 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
                 ]}
               </GoogleMapsMap>
               <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
-                <TouchableOpacity
-                  style={[styles.excMapFab, { top: 10, left: 10 }]}
-                  activeOpacity={0.85}
-                  onPress={() => {
-                    if (!userLngLat) return;
-                    const [lng, lat] = userLngLat;
-                    if (!isValidGlobeCoordinate(lat, lng)) return;
-                    setFollowMyLocation(true);
-                  }}
-                  disabled={!userLngLat}
-                >
-                  <MaterialIcons name="my-location" size={22} color="#111827" />
-                </TouchableOpacity>
-                <MapZoomControls
-                  mapRef={excursionMapRef}
-                  floating
-                  onBeforeZoom={() => setFollowMyLocation(false)}
-                />
+                <View style={styles.excMapControlCol} pointerEvents="box-none">
+                  <MapZoomControls
+                    mapRef={excursionMapRef}
+                    floating={false}
+                    onBeforeZoom={() => setFollowMyLocation(false)}
+                  />
+                  <DriverLocationFocusButton
+                    following={followMyLocation}
+                    disabled={!userLngLat}
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      if (!userLngLat) return;
+                      const [lng, lat] = userLngLat;
+                      if (!isValidGlobeCoordinate(lat, lng)) return;
+                      setFollowMyLocation(true);
+                    }}
+                  />
+                </View>
               </View>
               {routeEtaSec != null && routeCoords.length >= 2 ? (
                 <View style={styles.mapEtaPill} pointerEvents="none">
@@ -1130,19 +1131,12 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   mapWrap: { width: '100%', backgroundColor: '#F0EDE8', position: 'relative' },
-  excMapFab: {
+  excMapControlCol: {
     position: 'absolute',
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#fff',
+    right: 10,
+    bottom: 10,
+    gap: 10,
     alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
   },
   mapEtaPill: {
     position: 'absolute',
