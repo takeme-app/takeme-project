@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -18,6 +18,7 @@ import { formatCpf, onlyDigits, validateCpf } from '../../utils/formatCpf';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { supabase } from '../../lib/supabase';
 import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
+import { bookingTotalPassengers, maxBagsForTrip } from '../../lib/tripCapacityLimits';
 
 type Props = NativeStackScreenProps<TripStackParamList, 'ConfirmDetails'>;
 
@@ -34,11 +35,45 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
   const driver = route.params?.driver;
   const origin = route.params?.origin;
   const destination = route.params?.destination;
-  const [bags, setBags] = useState(2);
+  const [bags, setBags] = useState(1);
   /** Passageiros *adicionais* (o solicitante já conta como 1 lugar). */
   const [extraPassengers, setExtraPassengers] = useState(0);
   const [passengerData, setPassengerData] = useState<Record<number, { name: string; cpf: string }>>({});
   const [confirmBusy, setConfirmBusy] = useState(false);
+
+  /** Total de passageiros na reserva (titular + extras). */
+  const totalPassengers = bookingTotalPassengers(extraPassengers);
+
+  /** Lugares totais na oferta (`scheduled_trips.seats_available`); titular conta como 1. */
+  const maxExtraPassengers = useMemo(() => {
+    if (driver?.seats == null) return 999;
+    const s = Math.max(1, Math.floor(Number(driver.seats)));
+    return Math.max(0, s - 1);
+  }, [driver?.seats]);
+
+  const maxBags = useMemo(
+    () => maxBagsForTrip(totalPassengers, driver?.bags),
+    [driver?.bags, totalPassengers],
+  );
+
+  const prevMaxBagsRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setExtraPassengers((e) => Math.min(e, maxExtraPassengers));
+  }, [maxExtraPassengers]);
+
+  useEffect(() => {
+    const prev = prevMaxBagsRef.current;
+    prevMaxBagsRef.current = maxBags;
+    setBags((b) => {
+      const capped = Math.min(b, maxBags);
+      // Recupera quando o teto deixou de ser 0 por dados incorretos de `bags_available`: antes prendia em 0 malas.
+      if (prev === 0 && maxBags > 0 && capped === 0) {
+        return Math.min(1, maxBags);
+      }
+      return capped;
+    });
+  }, [maxBags]);
 
   const updatePassenger = (index: number, field: 'name' | 'cpf', value: string) => {
     setPassengerData((prev) => ({
@@ -76,6 +111,44 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
         });
         if (dupMsg) {
           showAlert('Limite', dupMsg);
+          return;
+        }
+      }
+      const totalPax = bookingTotalPassengers(extraPassengers);
+      if (bags > totalPax) {
+        showAlert('Malas', 'O número de malas não pode ser maior que o de passageiros (1 mala por pessoa).');
+        return;
+      }
+      if (driver?.bags != null) {
+        const tripBags = Math.max(0, Math.floor(Number(driver.bags)));
+        if (tripBags > 0 && bags > tripBags) {
+          showAlert('Malas', `Esta viagem permite no máximo ${tripBags} mala(s).`);
+          return;
+        }
+      }
+      if (tripId) {
+        const { data: capRow } = await supabase
+          .from('scheduled_trips')
+          .select('seats_available')
+          .eq('id', tripId)
+          .maybeSingle();
+        const avail = Math.floor(Number((capRow as { seats_available?: number } | null)?.seats_available ?? 0));
+        if (Number.isFinite(avail) && totalPax > avail) {
+          showAlert(
+            'Passageiros',
+            avail <= 0
+              ? 'Não há lugares disponíveis nesta viagem.'
+              : `Esta viagem tem apenas ${avail} lugar(es) disponível(is). Reduza passageiros extras ou escolha outro horário.`,
+          );
+          return;
+        }
+      } else if (driver?.seats != null) {
+        const cap = Math.max(1, Math.floor(Number(driver.seats)));
+        if (totalPax > cap) {
+          showAlert(
+            'Passageiros',
+            `Esta opção permite no máximo ${cap} passageiro(es) no total (incluindo você).`,
+          );
           return;
         }
       }
@@ -131,27 +204,7 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
         >
         <Text style={styles.title}>Confirme os detalhes da sua viagem</Text>
 
-        <Text style={styles.sectionLabel}>Quantas malas você vai levar?</Text>
-        <View style={styles.stepperRow}>
-          <TouchableOpacity
-            style={styles.stepperButton}
-            onPress={() => setBags((b) => Math.max(0, b - 1))}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.stepperSymbol}>−</Text>
-          </TouchableOpacity>
-          <Text style={styles.stepperValue}>{bags} malas</Text>
-          <TouchableOpacity
-            style={styles.stepperButton}
-            onPress={() => setBags((b) => b + 1)}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.stepperSymbol}>+</Text>
-          </TouchableOpacity>
-        </View>
-        <Text style={styles.hint}>Inclua quantas malas serão levadas</Text>
-
-        <Text style={[styles.sectionLabel, { marginTop: 24 }]}>Quantos passageiros extras vão com você?</Text>
+        <Text style={styles.sectionLabel}>Quantos passageiros extras vão com você?</Text>
         <View style={styles.stepperRow}>
           <TouchableOpacity
             style={styles.stepperButton}
@@ -168,8 +221,9 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
                 : `${extraPassengers} passageiros extras`}
           </Text>
           <TouchableOpacity
-            style={styles.stepperButton}
-            onPress={() => setExtraPassengers((p) => p + 1)}
+            style={[styles.stepperButton, extraPassengers >= maxExtraPassengers && styles.stepperButtonDisabled]}
+            onPress={() => setExtraPassengers((p) => Math.min(maxExtraPassengers, p + 1))}
+            disabled={extraPassengers >= maxExtraPassengers}
             activeOpacity={0.8}
           >
             <Text style={styles.stepperSymbol}>+</Text>
@@ -177,6 +231,38 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
         </View>
         <Text style={styles.hint}>
           Você já conta como passageiro principal; inclua aqui só quem viaja com você (nome e CPF).
+          {driver?.seats != null ? (
+            <>
+              {' '}
+              Esta oferta tem {driver.seats} lugar(es) no total: você + até {maxExtraPassengers} acompanhante(s).
+            </>
+          ) : null}
+        </Text>
+
+        <Text style={[styles.sectionLabel, { marginTop: 24 }]}>Quantas malas você vai levar?</Text>
+        <View style={styles.stepperRow}>
+          <TouchableOpacity
+            style={styles.stepperButton}
+            onPress={() => setBags((b) => Math.max(0, b - 1))}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.stepperSymbol}>−</Text>
+          </TouchableOpacity>
+          <Text style={styles.stepperValue}>{bags} malas</Text>
+          <TouchableOpacity
+            style={[styles.stepperButton, bags >= maxBags && styles.stepperButtonDisabled]}
+            onPress={() => setBags((b) => Math.min(maxBags, b + 1))}
+            disabled={bags >= maxBags}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.stepperSymbol}>+</Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.hint}>
+          Até 1 mala por passageiro ({totalPassengers} {totalPassengers === 1 ? 'pessoa no total' : 'pessoas no total'}).
+          {driver?.bags != null && Number(driver.bags) > 0
+            ? ` Limite desta viagem: ${driver.bags} mala(s); no máximo ${maxBags} para este grupo.`
+            : ` No máximo ${maxBags} mala(s).`}
         </Text>
 
         {Array.from({ length: extraPassengers }, (_, i) => (
@@ -254,6 +340,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  stepperButtonDisabled: { opacity: 0.35 },
   stepperSymbol: { fontSize: 22, fontWeight: '600', color: COLORS.black },
   stepperValue: { fontSize: 20, fontWeight: '700', color: COLORS.black, flex: 1, textAlign: 'center' },
   hint: { fontSize: 13, color: COLORS.neutral700, marginTop: 8 },

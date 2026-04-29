@@ -23,6 +23,7 @@ import {
   type PricingResult,
 } from '@take-me/shared';
 import { snapshotFromPricingResult } from '../../lib/orderPricingSnapshot';
+import { dependentShipmentTotalPassengers, maxBagsForTrip } from '../../lib/tripCapacityLimits';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'ConfirmDependentShipment'>;
 
@@ -54,11 +55,13 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     fullName,
     contactPhone,
     bagsCount,
+    extraPassengers,
     instructions,
     dependentId,
     amountCents,
     photoUri,
   } = route.params;
+  const driver = route.params.driver;
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [pricingPreview, setPricingPreview] = useState<PricingResult | null>(null);
@@ -159,6 +162,9 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   const amountFormatted = `R$ ${(displayTotalCents / 100).toFixed(2).replace('.', ',')}`;
   const formatBRL = (cents: number) => `R$ ${(cents / 100).toFixed(2).replace('.', ',')}`;
   const contactDisplay = formatPhoneDisplay(contactPhone);
+  const companions = extraPassengers ?? 0;
+  const totalPassengersInGroup = dependentShipmentTotalPassengers(companions);
+  const maxBagsAllowed = maxBagsForTrip(totalPassengersInGroup, driver?.bags);
 
   const pricingInsertRow = useMemo(() => {
     if (!pricingPreview) return null;
@@ -180,6 +186,59 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           showAlert('Erro', 'Faça login para continuar.');
           setSubmitting(false);
           return;
+        }
+        const totalPax = dependentShipmentTotalPassengers(extraPassengers ?? 0);
+        if (bagsCount > totalPax) {
+          showAlert('Malas', 'O número de malas não pode ser maior que o de passageiros (1 mala por pessoa).');
+          setSubmitting(false);
+          return;
+        }
+        const allowedBags = maxBagsForTrip(totalPax, driver?.bags);
+        if (bagsCount > allowedBags) {
+          showAlert(
+            'Malas',
+            driver?.bags != null && Number(driver.bags) > 0
+              ? `No máximo ${allowedBags} mala(s): 1 por passageiro e limite desta viagem (${driver.bags} mala(s)).`
+              : `No máximo ${allowedBags} mala(s) (1 por passageiro).`,
+          );
+          setSubmitting(false);
+          return;
+        }
+        if (driver != null && totalPax > driver.seats) {
+          showAlert(
+            'Passageiros',
+            `Esta viagem comporta no máximo ${driver.seats} passageiro(es); seu grupo tem ${totalPax}.`,
+          );
+          setSubmitting(false);
+          return;
+        }
+        const scheduledTripId = driver?.id;
+        if (scheduledTripId) {
+          const { data: capRow } = await supabase
+            .from('scheduled_trips')
+            .select('seats_available, bags_available')
+            .eq('id', scheduledTripId)
+            .maybeSingle();
+          const availSeats = Math.floor(Number((capRow as { seats_available?: number })?.seats_available ?? 0));
+          const availBags = Math.floor(Number((capRow as { bags_available?: number })?.bags_available ?? 0));
+          if (Number.isFinite(availSeats) && totalPax > availSeats) {
+            showAlert(
+              'Passageiros',
+              availSeats <= 0
+                ? 'Não há lugares suficientes nesta viagem.'
+                : `Esta viagem tem apenas ${availSeats} lugar(es) disponível(is). Ajuste passageiros ou escolha outro motorista.`,
+            );
+            setSubmitting(false);
+            return;
+          }
+          if (Number.isFinite(availBags) && availBags > 0 && bagsCount > availBags) {
+            showAlert(
+              'Malas',
+              `Só há espaço para ${availBags} mala(s) nesta viagem. Reduza as malas ou escolha outra opção.`,
+            );
+            setSubmitting(false);
+            return;
+          }
         }
         const paymentMethodDb =
           params.method === 'credito'
@@ -286,10 +345,12 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
       whenOption,
       amountCents,
       navigation,
+      extraPassengers,
       showAlert,
       pricingInsertRow,
       photoUri,
       uploadPhotoAndGetPath,
+      driver,
     ]
   );
 
@@ -310,9 +371,16 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.summaryCard}>
-          <Text style={styles.summaryLabel}>Destinatário</Text>
+          <Text style={styles.summaryLabel}>Destinatário (dependente)</Text>
           <Text style={styles.summaryText}>{fullName} • {contactDisplay}</Text>
-          <Text style={styles.summaryMeta}>Bagagens: {bagsCount} {bagsCount === 1 ? 'mala' : 'malas'}</Text>
+          <Text style={styles.summaryMeta}>
+            Passageiros no grupo: {totalPassengersInGroup} (você + dependente
+            {companions > 0 ? ` + ${companions} acompanhante(s)` : ''})
+          </Text>
+          <Text style={styles.summaryMeta}>
+            Bagagens: {bagsCount} {bagsCount === 1 ? 'mala' : 'malas'}
+            {driver ? ` · máx. ${maxBagsAllowed} (regra da viagem)` : ` · máx. ${maxBagsAllowed} (1 por pessoa)`}
+          </Text>
           {instructions ? <Text style={styles.summaryMeta}>Instruções: {instructions}</Text> : null}
           <View style={styles.divider} />
           <Text style={styles.summaryMeta}>De: {origin.address}</Text>

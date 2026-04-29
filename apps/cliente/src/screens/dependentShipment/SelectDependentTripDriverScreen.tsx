@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -14,7 +14,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { DependentShipmentStackParamList, TripDriverParam } from '../../navigation/types';
 import { loadShipmentDriversForRoute } from '../../lib/loadShipmentDriversForRoute';
-import type { ClientScheduledTripItem } from '../../lib/clientScheduledTrips';
+import {
+  tripFitsPassengersAndBags,
+  type ClientScheduledTripItem,
+} from '../../lib/clientScheduledTrips';
+import { dependentShipmentTotalPassengers } from '../../lib/tripCapacityLimits';
 import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 
@@ -63,7 +67,11 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
     dependentId,
     photoUri,
     photoUris,
+    extraPassengers,
   } = route.params;
+
+  const companions = extraPassengers ?? 0;
+  const totalPassengersInTrip = dependentShipmentTotalPassengers(companions);
 
   const legParams = {
     origin,
@@ -73,6 +81,7 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
     fullName,
     contactPhone,
     bagsCount,
+    extraPassengers: companions,
     instructions,
     dependentId,
     ...(photoUris?.length ? { photoUris } : {}),
@@ -83,6 +92,16 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const visibleItems = useMemo(
+    () =>
+      items.filter((t) => tripFitsPassengersAndBags(t, totalPassengersInTrip, bagsCount)),
+    [items, totalPassengersInTrip, bagsCount],
+  );
+
+  useEffect(() => {
+    setSelectedId((prev) => (prev && visibleItems.some((v) => v.id === prev) ? prev : null));
+  }, [visibleItems]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -153,10 +172,20 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
             <Text style={styles.retryBtnText}>Voltar</Text>
           </TouchableOpacity>
         </View>
+      ) : visibleItems.length === 0 ? (
+        <View style={styles.centered}>
+          <Text style={styles.errText}>
+            Nenhuma viagem disponível comporta {totalPassengersInTrip} passageiro(es) e {bagsCount}{' '}
+            {bagsCount === 1 ? 'mala' : 'malas'}. Reduza acompanhantes ou malas e tente de novo.
+          </Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => navigation.goBack()}>
+            <Text style={styles.retryBtnText}>Voltar</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
         <>
           <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-            {items.map((t) => {
+            {visibleItems.map((t) => {
               const selected = selectedId === t.id;
               const avatarUri = t.driverAvatarUrl?.startsWith('http')
                 ? t.driverAvatarUrl

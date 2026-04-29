@@ -27,6 +27,7 @@ import type {
   TripDriverParam,
   PaymentConfirmedBookingParam,
   TripLiveDriverDisplay,
+  TripPassengerParam,
 } from '../../navigation/types';
 import { getRoutePolyline, type RoutePoint } from '../../lib/route';
 import { supabase } from '../../lib/supabase';
@@ -50,8 +51,33 @@ import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmPa
 import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { waitForShipmentStripePaymentIntentId } from '../../lib/waitForShipmentStripePaymentIntentId';
+import { displayCpf } from '../../utils/formatCpf';
+import { bookingTotalPassengers, maxBagsForTrip } from '../../lib/tripCapacityLimits';
 
 const supabasePublicUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+
+/** Titular (perfil) + extras; `passenger_count` = tamanho total. */
+async function buildBookingPassengersPayload(
+  userId: string,
+  extras: TripPassengerParam[],
+): Promise<{ passenger_data: { name: string; cpf: string; bags: string }[]; passenger_count: number }> {
+  const { data: prof } = await supabase
+    .from('profiles')
+    .select('full_name, cpf')
+    .eq('id', userId)
+    .maybeSingle();
+  const primaryName = String(prof?.full_name ?? '').trim() || 'Passageiro principal';
+  const primaryCpf = String(prof?.cpf ?? '').trim();
+  const passenger_data = [
+    { name: primaryName, cpf: primaryCpf, bags: '' },
+    ...extras.map((p) => ({
+      name: p.name ?? '',
+      cpf: p.cpf ?? '',
+      bags: p.bags ?? '',
+    })),
+  ];
+  return { passenger_data, passenger_count: passenger_data.length };
+}
 
 function resolveAvatarUri(avatarUrl: string | null | undefined): string | null {
   if (!avatarUrl?.trim()) return null;
@@ -126,7 +152,12 @@ export function CheckoutScreen({ navigation, route }: Props) {
   const origin = route.params?.origin;
   const destination = route.params?.destination;
   const passengersParam = route.params?.passengers ?? [];
-  const bagsCount = route.params?.bags_count ?? driver.bags ?? 0;
+  const totalBookingPassengers = bookingTotalPassengers(passengersParam.length);
+  const maxBagsForBooking = maxBagsForTrip(totalBookingPassengers, driver.bags);
+  const bagsCount =
+    route.params?.bags_count !== undefined
+      ? route.params.bags_count
+      : Math.min(1, maxBagsForBooking);
   const scheduledTripId = route.params?.scheduled_trip_id;
   const immediateTrip = route.params?.immediateTrip === true;
   const routePriceCents = resolvedFareCents ?? driver.amount_cents ?? null;
@@ -139,6 +170,25 @@ export function CheckoutScreen({ navigation, route }: Props) {
         : '—';
   const [tripDateLabel, setTripDateLabel] = useState<string | null>(null);
   const [driverAvatarFailed, setDriverAvatarFailed] = useState(false);
+  /** Titular da reserva (lista completa na UI = você + extras). */
+  const [primaryPassenger, setPrimaryPassenger] = useState<{ name: string; cpf: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || cancelled) return;
+      const { data } = await supabase.from('profiles').select('full_name, cpf').eq('id', user.id).maybeSingle();
+      if (cancelled) return;
+      setPrimaryPassenger({
+        name: String(data?.full_name ?? '').trim() || 'Passageiro principal',
+        cpf: String(data?.cpf ?? '').trim(),
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     setDriverAvatarFailed(false);
@@ -361,12 +411,25 @@ export function CheckoutScreen({ navigation, route }: Props) {
           );
           return;
         }
-        const passenger_data = passengersParam.map((p) => ({
-          name: p.name ?? '',
-          cpf: p.cpf ?? '',
-          bags: p.bags ?? '',
-        }));
-        const passenger_count = Math.max(1, passengersParam.length);
+        const { passenger_data, passenger_count } = await buildBookingPassengersPayload(user.id, passengersParam);
+
+        if (scheduledTripId) {
+          const { data: tripCap } = await supabase
+            .from('scheduled_trips')
+            .select('seats_available')
+            .eq('id', scheduledTripId)
+            .maybeSingle();
+          const avail = Math.floor(Number((tripCap as { seats_available?: number } | null)?.seats_available ?? 0));
+          if (Number.isFinite(avail) && passenger_count > avail) {
+            showAlert(
+              'Passageiros',
+              avail <= 0
+                ? 'Não há lugares disponíveis nesta viagem.'
+                : `Esta viagem tem apenas ${avail} lugar(es) disponível(is). Volte e ajuste os passageiros ou escolha outro horário.`,
+            );
+            return;
+          }
+        }
 
         // Recompute pricing server-side authority, mas também materializa o
         // snapshot localmente para o INSERT no caso de fluxo sem Stripe.
@@ -760,27 +823,30 @@ export function CheckoutScreen({ navigation, route }: Props) {
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Passageiros</Text>
-          {passengersParam.length > 0 ? (
-            <>
-              {passengersParam.map((p, i) => (
-                <View key={i} style={styles.passengerRow}>
-                  <MaterialIcons name="person-outline" size={20} color={COLORS.neutral700} />
-                  <Text style={styles.passengerText}>
-                    {p.name || `Passageiro ${i + 1}`}{p.cpf ? ` · CPF: ${p.cpf}` : ''}
-                  </Text>
-                </View>
-              ))}
-              <Text style={styles.bagsNote}>{bagsCount} malas adicionadas</Text>
-            </>
-          ) : (
-            <>
-              <View style={styles.passengerRow}>
-                <MaterialIcons name="person-outline" size={20} color={COLORS.neutral700} />
-                <Text style={styles.passengerText}>Passageiros não informados</Text>
-              </View>
-              <Text style={styles.bagsNote}>{bagsCount} malas</Text>
-            </>
-          )}
+          <View style={styles.passengerRow}>
+            <MaterialIcons name="person-outline" size={20} color={COLORS.neutral700} />
+            <Text style={styles.passengerText}>
+              {!primaryPassenger ? (
+                'Carregando seus dados…'
+              ) : (
+                <Text>
+                  {primaryPassenger.name}
+                  {primaryPassenger.cpf ? ` · CPF: ${displayCpf(primaryPassenger.cpf)}` : ''}
+                  <Text style={styles.passengerPrimaryHint}> (você)</Text>
+                </Text>
+              )}
+            </Text>
+          </View>
+          {passengersParam.map((p, i) => (
+            <View key={`extra-${i}`} style={styles.passengerRow}>
+              <MaterialIcons name="person-outline" size={20} color={COLORS.neutral700} />
+              <Text style={styles.passengerText}>
+                {p.name?.trim() || `Passageiro extra ${i + 1}`}
+                {p.cpf?.trim() ? ` · CPF: ${displayCpf(p.cpf)}` : ''}
+              </Text>
+            </View>
+          ))}
+          <Text style={styles.bagsNote}>{bagsCount} malas adicionadas</Text>
         </View>
 
         {pricingPreview ? (
@@ -880,6 +946,7 @@ const styles = StyleSheet.create({
   dynamicPriceNote: { fontSize: 12, color: COLORS.neutral700, fontStyle: 'italic', marginTop: 6 },
   passengerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
   passengerText: { flex: 1, fontSize: 14, color: COLORS.black },
+  passengerPrimaryHint: { fontSize: 14, color: COLORS.neutral700 },
   bagsNote: { fontSize: 13, color: COLORS.neutral700, marginTop: 4 },
   breakdownRow: {
     flexDirection: 'row',

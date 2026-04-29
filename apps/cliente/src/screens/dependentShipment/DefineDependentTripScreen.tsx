@@ -51,7 +51,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const { showAlert } = useAppAlert();
   const { currentPlace, refreshLocation } = useCurrentLocation();
-  const { fullName, contactPhone, bagsCount, instructions, dependentId, photoUri } = route.params;
+  const { fullName, contactPhone, bagsCount, instructions, dependentId, photoUri, extraPassengers } = route.params;
 
   const [originAddress, setOriginAddress] = useState('Obtendo sua localização...');
   const [originLat, setOriginLat] = useState(DEFAULT_COORDS.latitude);
@@ -188,6 +188,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
       bagsCount,
       instructions,
       dependentId,
+      extraPassengers,
       amountCents: PLACEHOLDER_AMOUNT_CENTS,
       photoUri,
     });
@@ -206,6 +207,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
     bagsCount,
     instructions,
     dependentId,
+    extraPassengers,
     navigation,
     showAlert,
   ]);

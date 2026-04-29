@@ -1,4 +1,5 @@
 import type { NavigatorScreenParams } from '@react-navigation/native';
+import type { MainTabParamList } from './MainTabs';
 
 export type RootStackParamList = {
   Splash: undefined;
@@ -17,7 +18,7 @@ export type RootStackParamList = {
   AddPaymentMethod: undefined;
   AddCard: { paymentType: 'credit' | 'debit' };
   CardRegisteredSuccess: undefined;
-  Main: undefined;
+  Main: NavigatorScreenParams<MainTabParamList> | undefined;
   ForgotPassword: undefined;
   ForgotPasswordEmailSent: { email: string };
   ResetPassword: undefined;
@@ -133,6 +134,8 @@ export type DependentShipmentFormParams = {
   fullName: string;
   contactPhone: string;
   bagsCount: number;
+  /** Acompanhantes na mesma viagem além de você e do dependente (cada um conta como passageiro). */
+  extraPassengers?: number;
   instructions?: string;
   dependentId?: string;
   photoUri?: string;
@@ -151,6 +154,7 @@ export type DependentShipmentStackParamList = {
     fullName: string;
     contactPhone: string;
     bagsCount: number;
+    extraPassengers?: number;
     instructions?: string;
     dependentId?: string;
     photoUri?: string;
@@ -164,6 +168,7 @@ export type DependentShipmentStackParamList = {
     fullName: string;
     contactPhone: string;
     bagsCount: number;
+    extraPassengers?: number;
     instructions?: string;
     dependentId?: string;
     amountCents: number;
