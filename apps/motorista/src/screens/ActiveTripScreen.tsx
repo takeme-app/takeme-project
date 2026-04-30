@@ -16,6 +16,8 @@ import {
   BackHandler,
   Vibration,
   Linking,
+  Clipboard,
+  Share,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar, setStatusBarHidden } from 'expo-status-bar';
@@ -316,7 +318,12 @@ function isPackage(s: Stop) { return s.stopType === 'package_pickup' || s.stopTy
  *   - passageiro: apenas embarque (desembarque é livre — cenário 1 do PDF).
  *   - dependente: embarque E desembarque (cenário 2 do PDF, etapas 1-3 e 5-7).
  */
-function requiresDriverEnteredPin(s: Stop): boolean {
+/**
+ * @param basePickupManual — retirada na base (PIN C): por defeito o motorista
+ *   não digita; só se ativar o fallback "Base fora do ar".
+ */
+function requiresDriverEnteredPin(s: Stop, basePickupManual = false): boolean {
+  if (isPackagePickupAtBase(s) && !basePickupManual) return false;
   if (isPackage(s)) return true;
   return (
     s.stopType === 'passenger_pickup' ||
@@ -327,6 +334,13 @@ function requiresDriverEnteredPin(s: Stop): boolean {
 
 function isPackagePickupAtBase(s: Stop | null | undefined): boolean {
   return !!s && s.stopType === 'package_pickup' && s.packageDriverLeg === 'base_pickup';
+}
+
+/** Um carácter por chip (PIN gravado no BD, normalmente 4 dígitos). */
+function pinCharsForDisplay(code: string | null | undefined): string[] {
+  const s = (code ?? '').trim();
+  if (!s) return ['-', '-', '-', '-'];
+  return s.split('').slice(0, 4);
 }
 
 function isRouteWaypointStop(s: Stop) {
@@ -486,12 +500,14 @@ function confirmPickupTitle(stop: Stop | null | undefined): string {
   return 'Confirmar embarque';
 }
 
-function confirmPickupSubtitle(stop: Stop | null | undefined): string {
+function confirmPickupSubtitle(stop: Stop | null | undefined, basePickupPinManual = false): string {
   if (!stop) return '';
   if (stop.stopType === 'package_pickup') {
     if (isPackagePickupAtBase(stop)) {
-      // PDF cenário 3, etapas 10-11: motorista solicita o código à base e digita.
-      return 'Solicite o código de 4 dígitos à base e digite abaixo para retirar a encomenda.';
+      if (basePickupPinManual) {
+        return 'Solicite o código de 4 dígitos à base e digite abaixo (fallback quando o painel admin não está disponível).';
+      }
+      return 'O seu PIN de retirada está abaixo — informe-o ao operador da base. Quando o admin validar no painel, toque em «Atualizar estado».';
     }
     return 'Insira o código informado pelo passageiro para confirmar a coleta.';
   }
@@ -515,14 +531,17 @@ function confirmPickupSubtitle(stop: Stop | null | undefined): string {
   return 'Confirme o embarque do passageiro.';
 }
 
-function confirmPickupButtonLabel(stop: Stop | null | undefined): string {
+function confirmPickupButtonLabel(stop: Stop | null | undefined, basePickupPinManual = false): string {
   if (!stop) return 'Confirmar';
   if (stop.stopType === 'passenger_dropoff' || stop.stopType === 'dependent_dropoff') {
     return 'Confirmar desembarque';
   }
   if (isRouteWaypointStop(stop)) return 'Concluir';
   if (stop.stopType === 'package_pickup') {
-    return isPackagePickupAtBase(stop) ? 'Confirmar retirada' : 'Confirmar coleta';
+    if (isPackagePickupAtBase(stop)) {
+      return basePickupPinManual ? 'Confirmar retirada' : 'Atualizar estado';
+    }
+    return 'Confirmar coleta';
   }
   return 'Confirmar embarque';
 }
@@ -1072,6 +1091,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const [confirmError, setConfirmError] = useState('');
   /** Snapshot da parada ao abrir o sheet — o modal NÃO deve usar `currentStop` (realtime pode alterar a lista/índice). */
   const [confirmUiStop, setConfirmUiStop] = useState<Stop | null>(null);
+  /** Retirada na base: fallback para o motorista digitar o PIN C (complete_trip_stop) se o admin estiver indisponível. */
+  const [basePickupPinManual, setBasePickupPinManual] = useState(false);
 
   // Finalize — comprovantes (fotos): `base64` vem do picker para upload sem depender de fetch(uri).
   const [tripExpenseFiles, setTripExpenseFiles] = useState<
@@ -2336,6 +2357,31 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     Animated.spring(finalizeSlide, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
   };
 
+  /** Retirada na base (PIN C): após o admin validar, recarrega paradas e fecha o sheet se a parada já está `completed`. */
+  const handleBasePickupRefreshAndMaybeAdvance = useCallback(async () => {
+    const targetId = confirmTargetStopRef.current?.id ?? null;
+    if (!targetId) return;
+    const fresh = await reloadTripStops();
+    const row = fresh.find((s) => s.id === targetId);
+    if (row && String(row.status).toLowerCase() === 'completed') {
+      confirmTargetStopRef.current = null;
+      setConfirmUiStop(null);
+      setConfirmError('');
+      setConfirmCode('');
+      setBasePickupPinManual(false);
+      confirmSheetSlide.setValue(600);
+      setConfirmPickupVisible(false);
+      syncCloseDetailOnly();
+      const nextIndex = computeFirstIncompleteStopIndex(fresh);
+      setCurrentStopIndex(nextIndex);
+      if (nextIndex >= fresh.length) {
+        setTimeout(() => openFinalize(), 120);
+      }
+    } else {
+      setConfirmError('Ainda a aguardar validação na base. Peça ao operador para confirmar no painel admin.');
+    }
+  }, [reloadTripStops, confirmSheetSlide]);
+
   const closeFinalize = () => {
     Animated.timing(finalizeSlide, { toValue: 600, duration: 250, useNativeDriver: false }).start(() => {
       setFinalizeVisible(false);
@@ -2523,6 +2569,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     const stopForFlow = detailViewStop ?? currentStop;
     confirmTargetStopRef.current = stopForFlow;
     setConfirmUiStop(stopForFlow);
+    setBasePickupPinManual(false);
     setConfirmCode('');
     setConfirmError('');
     detailSlide.setValue(600);
@@ -2562,6 +2609,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     const backStop = confirmUiStop ?? confirmTargetStopRef.current;
     confirmTargetStopRef.current = null;
     setConfirmUiStop(null);
+    setBasePickupPinManual(false);
     setConfirmCode('');
     setConfirmError('');
     Animated.timing(confirmSheetSlide, { toValue: 600, duration: 250, useNativeDriver: false }).start(() => {
@@ -2577,6 +2625,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     const backStop = confirmUiStop ?? confirmTargetStopRef.current;
     confirmTargetStopRef.current = null;
     setConfirmUiStop(null);
+    setBasePickupPinManual(false);
     setConfirmCode('');
     setConfirmError('');
     Animated.timing(confirmSheetSlide, { toValue: 600, duration: 250, useNativeDriver: false }).start(() => {
@@ -2591,6 +2640,35 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!confirmPickupVisible || basePickupPinManual) return;
+    const st = confirmUiStop ?? confirmTargetStopRef.current;
+    if (!st || !isPackagePickupAtBase(st)) return;
+    const entityId = String(st.entityId ?? '').trim();
+    if (!entityId) return;
+    const channel = supabase
+      .channel(`motorista-base-pickup-${entityId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'shipments',
+          filter: `id=eq.${entityId}`,
+        },
+        (payload) => {
+          const next = (payload.new ?? {}) as { picked_up_by_driver_from_base_at?: string | null };
+          if (next.picked_up_by_driver_from_base_at) {
+            void handleBasePickupRefreshAndMaybeAdvance();
+          }
+        },
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [confirmPickupVisible, confirmUiStop?.id, confirmUiStop?.entityId, basePickupPinManual, handleBasePickupRefreshAndMaybeAdvance]);
 
   const confirmStopInFlightRef = useRef(false);
 
@@ -2607,7 +2685,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         return;
       }
 
-      if (requiresDriverEnteredPin(stop)) {
+      if (isPackagePickupAtBase(stop) && !basePickupPinManual) {
+        return;
+      }
+
+      if (requiresDriverEnteredPin(stop, basePickupPinManual)) {
         const digitsIn = onlyDigits(confirmCode);
         if (digitsIn.length !== 4) {
           setConfirmError('O código deve ter 4 dígitos.');
@@ -2642,7 +2724,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           'complete_trip_stop' as never,
           {
             p_trip_stop_id: stopId,
-            p_confirmation_code: requiresDriverEnteredPin(stop) ? confirmCode.trim() : null,
+            p_confirmation_code: requiresDriverEnteredPin(stop, basePickupPinManual) ? confirmCode.trim() : null,
           } as never,
         );
 
@@ -3534,9 +3616,65 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                     <MaterialIcons name="close" size={20} color={DARK} />
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.confirmSheetSubtitle}>{confirmPickupSubtitle(confirmSheetStop)}</Text>
+                <Text style={styles.confirmSheetSubtitle}>
+                  {confirmPickupSubtitle(confirmSheetStop, basePickupPinManual)}
+                </Text>
                 <View style={styles.confirmSheetDivider} />
-                {confirmSheetStop && requiresDriverEnteredPin(confirmSheetStop) ? (
+                {confirmSheetStop && isPackagePickupAtBase(confirmSheetStop) && !basePickupPinManual ? (
+                  <>
+                    <Text style={styles.fieldLabel}>O seu PIN (informar à base)</Text>
+                    <View style={styles.pinChipsWrap}>
+                      {pinCharsForDisplay(confirmSheetStop.code).map((ch, i) => (
+                        <View key={`bpcc-${i}`} style={styles.pinChip}>
+                          <Text style={styles.pinChipText}>{ch}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    <View style={styles.pinRowActions}>
+                      <TouchableOpacity
+                        style={styles.iconCircleBtn}
+                        onPress={() => {
+                          const t = String(confirmSheetStop.code ?? '').trim();
+                          if (t) Clipboard.setString(t);
+                        }}
+                        accessibilityLabel="Copiar PIN"
+                      >
+                        <MaterialIcons name="content-copy" size={22} color={DARK} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.iconCircleBtn}
+                        onPress={() => {
+                          void (async () => {
+                            const t = String(confirmSheetStop.code ?? '').trim();
+                            if (!t) return;
+                            try {
+                              await Share.share({ message: `PIN de retirada na base TakeMe: ${t}` });
+                            } catch {
+                              /* ignore */
+                            }
+                          })();
+                        }}
+                        accessibilityLabel="Partilhar PIN"
+                      >
+                        <MaterialIcons name="share" size={22} color={DARK} />
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={styles.basePickupHint}>
+                      Quando o operador confirmar no painel admin, esta parada fecha automaticamente ou toque em «Atualizar estado».
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.basePickupLinkBtn}
+                      onPress={() => {
+                        setBasePickupPinManual(true);
+                        setConfirmError('');
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.basePickupLinkText}>Base fora do ar — digitar PIN manualmente</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : null}
+                {confirmSheetStop && requiresDriverEnteredPin(confirmSheetStop, basePickupPinManual) ? (
                   <>
                     <Text style={styles.fieldLabel}>
                       {confirmSheetStop.stopType === 'passenger_pickup'
@@ -3568,10 +3706,23 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
                 <TouchableOpacity
                   style={styles.actionBtn}
-                  onPress={() => void handleConfirmStop()}
+                  onPress={() => {
+                    if (
+                      confirmSheetStop &&
+                      confirmSheetStop.stopType === 'package_pickup' &&
+                      isPackagePickupAtBase(confirmSheetStop) &&
+                      !basePickupPinManual
+                    ) {
+                      void handleBasePickupRefreshAndMaybeAdvance();
+                    } else {
+                      void handleConfirmStop();
+                    }
+                  }}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.actionBtnText}>{confirmPickupButtonLabel(confirmSheetStop)}</Text>
+                  <Text style={styles.actionBtnText}>
+                    {confirmPickupButtonLabel(confirmSheetStop, basePickupPinManual)}
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.sheetBackBtn}
@@ -4238,6 +4389,40 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   errorText: { fontSize: 13, color: '#EF4444', marginTop: 4, marginBottom: 4, textAlign: 'center' },
+
+  pinChipsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  pinChip: {
+    minWidth: 44,
+    height: 48,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  pinChipText: { fontSize: 20, fontWeight: '700', color: DARK },
+  pinRowActions: { flexDirection: 'row', gap: 12, justifyContent: 'center', marginBottom: 8 },
+  basePickupHint: {
+    fontSize: 13,
+    color: '#6B7280',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 8,
+    paddingHorizontal: 8,
+  },
+  basePickupLinkBtn: { paddingVertical: 10, alignItems: 'center', marginBottom: 4 },
+  basePickupLinkText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2563EB',
+    textDecorationLine: 'underline',
+  },
 
   // ── Finalize summary card ─────────────────────────────────
   finalizeSummaryCard: {

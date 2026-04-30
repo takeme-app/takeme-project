@@ -10,6 +10,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   useWindowDimensions,
+  Clipboard,
+  Share,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { DriverLocationFocusButton } from '../../components/DriverLocationFocusButton';
@@ -109,6 +111,12 @@ type Shipment = {
   coletaLetter: string;
 };
 
+function pinCharsForDisplay(code: string | null | undefined): string[] {
+  const s = (code ?? '').trim();
+  if (!s) return ['-', '-', '-', '-'];
+  return s.split('').slice(0, 4);
+}
+
 function haversineKm(a: Coord, b: Coord): number {
   const R = 6371;
   const dLat = ((b.latitude - a.latitude) * Math.PI) / 180;
@@ -172,6 +180,8 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
   const [deliveryCode, setDeliveryCode] = useState('');
   const [deliveryObs, setDeliveryObs] = useState('');
   const [deliveryLoading, setDeliveryLoading] = useState(false);
+  /** Com base: por defeito o admin valida PIN B; fallback para o preparador digitar (RPC). */
+  const [deliveryPinManual, setDeliveryPinManual] = useState(false);
 
   // Summary modal
   const [summaryVisible, setSummaryVisible] = useState(false);
@@ -824,13 +834,92 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     }
   };
 
-  // PDF cenário 3 (com base): preparador valida PIN B (preparer_to_base_code)
-  // ao chegar na base. RPC `complete_shipment_preparer_to_base` valida e seta
-  // `delivered_to_base_at`.
-  // PDF cenário 4 (sem base): comportamento legado — preparador digita
-  // `delivery_code` para concluir entrega ao destinatário.
+  const finalizeBaseDeliverySuccess = useCallback(async () => {
+    const cur = shipment;
+    if (!cur) return;
+    if (deliveryObs.trim()) {
+      await supabase
+        .from('shipments')
+        .update({ delivery_notes: deliveryObs.trim() } as never)
+        .eq('id', cur.id);
+    }
+    await closeShipmentConversation(cur.id);
+    setDeliveryVisible(false);
+    setDeliveryCode('');
+    setDeliveryObs('');
+    setDeliveryPinManual(false);
+    setSummaryVisible(true);
+  }, [shipment, deliveryObs]);
+
+  const refreshDeliveryAtBase = useCallback(async () => {
+    if (!shipment?.hasPreparerBase) return;
+    setDeliveryLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('shipments')
+        .select('delivered_to_base_at')
+        .eq('id', shipment.id)
+        .maybeSingle();
+      if (error || !data) {
+        showAlert('Erro', 'Não foi possível verificar o depósito. Tente novamente.');
+        return;
+      }
+      const row = data as { delivered_to_base_at: string | null };
+      if (row.delivered_to_base_at) {
+        await finalizeBaseDeliverySuccess();
+      } else {
+        showAlert(
+          'A aguardar',
+          'O operador ainda não confirmou no painel admin. Peça para validar o PIN B.',
+        );
+      }
+    } finally {
+      setDeliveryLoading(false);
+    }
+  }, [shipment, finalizeBaseDeliverySuccess]);
+
+  useEffect(() => {
+    if (!deliveryVisible || !shipment?.hasPreparerBase || deliveryPinManual) return;
+    const id = shipment.id;
+    const channel = supabase
+      .channel(`preparer-base-delivery-${id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'shipments',
+          filter: `id=eq.${id}`,
+        },
+        (payload) => {
+          const next = (payload.new ?? {}) as { delivered_to_base_at?: string | null };
+          if (next.delivered_to_base_at) {
+            void finalizeBaseDeliverySuccess();
+          }
+        },
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [deliveryVisible, shipment?.id, shipment?.hasPreparerBase, deliveryPinManual, finalizeBaseDeliverySuccess]);
+
+  useEffect(() => {
+    if (!deliveryVisible) setDeliveryPinManual(false);
+  }, [deliveryVisible]);
+
+  // PDF cenário 3 (com base): PIN B — o preparador informa verbalmente ao admin;
+  // o admin valida no painel. Fallback: preparador digita (RPC `complete_shipment_preparer_to_base`).
+  // PDF cenário 4 (sem base): preparador digita `delivery_code` para concluir entrega ao destinatário.
   const confirmDelivery = async () => {
-    if (!deliveryCode.trim() || !shipment) return;
+    if (!shipment) return;
+
+    if (shipment.hasPreparerBase && !deliveryPinManual) {
+      await refreshDeliveryAtBase();
+      return;
+    }
+
+    if (!deliveryCode.trim()) return;
 
     if (shipment.hasPreparerBase) {
       setDeliveryLoading(true);
@@ -862,17 +951,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
           }
           return;
         }
-        if (deliveryObs.trim()) {
-          await supabase
-            .from('shipments')
-            .update({ delivery_notes: deliveryObs.trim() } as never)
-            .eq('id', shipment.id);
-        }
-        await closeShipmentConversation(shipment.id);
-        setDeliveryVisible(false);
-        setDeliveryCode('');
-        setDeliveryObs('');
-        setSummaryVisible(true);
+        await finalizeBaseDeliverySuccess();
       } finally {
         setDeliveryLoading(false);
       }
@@ -1345,7 +1424,9 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                   </Text>
                   <Text style={styles.sheetSub}>
                     {shipment.hasPreparerBase
-                      ? 'Solicite o código à base e digite abaixo para registrar o depósito.\nA entrega ao destinatário é feita pelo motorista.'
+                      ? deliveryPinManual
+                        ? 'Solicite o código à base e digite abaixo (fallback).\nA entrega ao destinatário é feita pelo motorista.'
+                        : 'O seu PIN está abaixo — informe-o ao operador da base. Quando o admin validar no painel, o depósito fecha automaticamente ou toque em «Atualizar estado».\nA entrega ao destinatário é feita pelo motorista.'
                       : `Insira o código de confirmação da entrega\npara registrar a conclusão.`}
                   </Text>
                 </View>
@@ -1355,21 +1436,75 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
               </View>
               <View style={styles.divider} />
               <ScrollView keyboardShouldPersistTaps="handled">
-                <Text style={styles.fieldLabel}>
-                  {shipment.hasPreparerBase
-                    ? 'Código informado pela base'
-                    : 'Código de entrega'}
-                </Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder={shipment.hasPreparerBase ? 'Ex: 1234' : 'Ex: BASE132'}
-                  placeholderTextColor="#9CA3AF"
-                  value={deliveryCode}
-                  onChangeText={setDeliveryCode}
-                  autoCapitalize="characters"
-                  keyboardType={shipment.hasPreparerBase ? 'number-pad' : 'default'}
-                  maxLength={shipment.hasPreparerBase ? 4 : undefined}
-                />
+                {shipment.hasPreparerBase && !deliveryPinManual ? (
+                  <>
+                    <Text style={styles.fieldLabel}>O seu PIN (informar à base)</Text>
+                    <View style={styles.pinChipsWrap}>
+                      {pinCharsForDisplay(shipment.preparerToBaseCode).map((ch, i) => (
+                        <View key={`pbtb-${i}`} style={styles.pinChip}>
+                          <Text style={styles.pinChipText}>{ch}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    <View style={styles.pinRowActions}>
+                      <TouchableOpacity
+                        style={styles.closeBtn}
+                        onPress={() => {
+                          const t = String(shipment.preparerToBaseCode ?? '').trim();
+                          if (t) Clipboard.setString(t);
+                        }}
+                        accessibilityLabel="Copiar PIN"
+                      >
+                        <MaterialIcons name="content-copy" size={20} color="#374151" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.closeBtn}
+                        onPress={() => {
+                          void (async () => {
+                            const t = String(shipment.preparerToBaseCode ?? '').trim();
+                            if (!t) return;
+                            try {
+                              await Share.share({ message: `PIN de depósito na base TakeMe: ${t}` });
+                            } catch {
+                              /* ignore */
+                            }
+                          })();
+                        }}
+                        accessibilityLabel="Partilhar PIN"
+                      >
+                        <MaterialIcons name="share" size={20} color="#374151" />
+                      </TouchableOpacity>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.basePickupLinkBtn}
+                      onPress={() => {
+                        setDeliveryPinManual(true);
+                        setDeliveryCode('');
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.basePickupLinkText}>Base fora do ar — digitar PIN manualmente</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.fieldLabel}>
+                      {shipment.hasPreparerBase
+                        ? 'Código informado pela base'
+                        : 'Código de entrega'}
+                    </Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder={shipment.hasPreparerBase ? 'Ex: 1234' : 'Ex: BASE132'}
+                      placeholderTextColor="#9CA3AF"
+                      value={deliveryCode}
+                      onChangeText={setDeliveryCode}
+                      autoCapitalize="characters"
+                      keyboardType={shipment.hasPreparerBase ? 'number-pad' : 'default'}
+                      maxLength={shipment.hasPreparerBase ? 4 : undefined}
+                    />
+                  </>
+                )}
                 <View style={styles.obsRow}>
                   <Text style={styles.fieldLabel}>Observações</Text>
                   <Text style={styles.optional}>Opcional</Text>
@@ -1385,16 +1520,26 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                   textAlignVertical="top"
                 />
                 <TouchableOpacity
-                  style={[styles.primaryBtn, !deliveryCode.trim() && styles.btnDisabled]}
+                  style={[
+                    styles.primaryBtn,
+                    !(shipment.hasPreparerBase && !deliveryPinManual) && !deliveryCode.trim() && styles.btnDisabled,
+                  ]}
                   onPress={confirmDelivery}
-                  disabled={!deliveryCode.trim() || deliveryLoading}
+                  disabled={
+                    deliveryLoading
+                    || (!(shipment.hasPreparerBase && !deliveryPinManual) && !deliveryCode.trim())
+                  }
                   activeOpacity={0.85}
                 >
                   {deliveryLoading
                     ? <ActivityIndicator size="small" color="#FFF" />
                     : (
                       <Text style={styles.primaryBtnText}>
-                        {shipment.hasPreparerBase ? 'Confirmar depósito' : 'Confirmar entrega'}
+                        {shipment.hasPreparerBase && !deliveryPinManual
+                          ? 'Atualizar estado'
+                          : shipment.hasPreparerBase
+                            ? 'Confirmar depósito'
+                            : 'Confirmar entrega'}
                       </Text>
                     )
                   }

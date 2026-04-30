@@ -29,7 +29,8 @@
     "db:push": "supabase db push",
     "deploy:delete-account": "npx supabase functions deploy delete-account --no-verify-jwt",
     "deploy:functions": "npx supabase functions deploy send-email-verification-code --no-verify-jwt && npx supabase functions deploy verify-email-code --no-verify-jwt && npx supabase functions deploy create-motorista-account --no-verify-jwt && npx supabase functions deploy send-welcome-email --no-verify-jwt && npx supabase functions deploy delete-account --no-verify-jwt",
-    "resize-map-markers": "node scripts/resize-map-markers.js"
+    "resize-map-markers": "node scripts/resize-map-markers.js",
+    "sync-lucasandrade": "bash scripts/sync-lucasandrade.sh"
   },
   "engines": {
     "node": ">=18"
