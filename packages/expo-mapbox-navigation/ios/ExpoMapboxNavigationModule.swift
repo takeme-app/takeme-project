@@ -73,6 +73,24 @@ public class ExpoMapboxNavigationModule: Module {
       Prop("hideBottomPanel") { (view: ExpoMapboxNavigationView, hidden: Bool) in
         view.updateHideBottomPanel(hidden)
       }
+      Prop("followingPaddingTop") { (view: ExpoMapboxNavigationView, value: Double?) in
+        view.updateFollowingPaddingTop(value)
+      }
+      Prop("followingPaddingBottom") { (view: ExpoMapboxNavigationView, value: Double?) in
+        view.updateFollowingPaddingBottom(value)
+      }
+      Prop("followingPaddingLeft") { (view: ExpoMapboxNavigationView, value: Double?) in
+        view.updateFollowingPaddingLeft(value)
+      }
+      Prop("followingPaddingRight") { (view: ExpoMapboxNavigationView, value: Double?) in
+        view.updateFollowingPaddingRight(value)
+      }
+      Prop("followingZoom") { (view: ExpoMapboxNavigationView, value: Double?) in
+        view.updateFollowingZoom(value)
+      }
+      Prop("recenterRequestKey") { (view: ExpoMapboxNavigationView, value: Int?) in
+        view.updateRecenterRequestKey(value)
+      }
     }
   }
 }

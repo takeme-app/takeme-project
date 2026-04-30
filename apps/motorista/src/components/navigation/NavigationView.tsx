@@ -60,6 +60,13 @@ export type NavigationViewProps = {
   }) => React.ReactNode;
   /** Região inicial para o `<GoogleMapsMap>` legado. Ignorada quando o nativo está ativo. */
   legacyInitialRegion: MapRegion;
+  /** Padding (pt ≈ dp) modo `following` no SDK nativo — ex.: espaço livre sobre o modal flutuante. */
+  followingPaddingTop?: number;
+  followingPaddingBottom?: number;
+  followingPaddingLeft?: number;
+  followingPaddingRight?: number;
+  followingZoom?: number;
+  recenterRequestKey?: number;
 };
 
 /**
@@ -93,6 +100,12 @@ export const NavigationView = React.forwardRef<GoogleMapsMapRef, NavigationViewP
       onNativeUnavailable,
       legacyRender,
       legacyInitialRegion,
+      followingPaddingTop,
+      followingPaddingBottom,
+      followingPaddingLeft,
+      followingPaddingRight,
+      followingZoom,
+      recenterRequestKey,
     },
     ref,
   ) {
@@ -121,6 +134,12 @@ export const NavigationView = React.forwardRef<GoogleMapsMapRef, NavigationViewP
         mute={mute}
         simulateRoute={simulateRoute}
         cameraMode="following"
+        {...(followingPaddingTop != null ? { followingPaddingTop } : {})}
+        {...(followingPaddingBottom != null ? { followingPaddingBottom } : {})}
+        {...(followingPaddingLeft != null ? { followingPaddingLeft } : {})}
+        {...(followingPaddingRight != null ? { followingPaddingRight } : {})}
+        {...(followingZoom != null ? { followingZoom } : {})}
+        {...(recenterRequestKey != null ? { recenterRequestKey } : {})}
         onRouteProgress={(e: { nativeEvent: RouteProgressEvent }) => onProgress?.(e.nativeEvent)}
         onWaypointArrival={(e: { nativeEvent: ArrivalEvent }) =>
           onWaypointArrival?.(e.nativeEvent.waypointIndex)

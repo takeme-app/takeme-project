@@ -80,6 +80,22 @@ export type ExpoMapboxNavigationProps = ViewProps & {
   mute?: boolean;
   /** Modo da câmera; default `following` (heading-up). */
   cameraMode?: MapboxNavigationCameraMode;
+  /**
+   * Padding lógico (dp/pt) ao centrar o usuário no modo `following`,
+   * para manter o puck acima do UI nativo/React (ex.: sheet flutuante).
+   */
+  followingPaddingTop?: number;
+  followingPaddingBottom?: number;
+  followingPaddingLeft?: number;
+  followingPaddingRight?: number;
+  /** Zoom fixo opcional no modo `following`. Maior = mais perto do motorista. */
+  followingZoom?: number;
+  /**
+   * Incremente este número para pedir ao SDK que volte ao modo `following`,
+   * centralizando novamente na direção da rota.
+   */
+  recenterRequestKey?: number;
+
   /** Cor do traço da rota (hex `#RRGGBB` ou `#RRGGBBAA`). */
   routeLineColor?: string;
   /** Esconder o banner de manobras nativo (útil quando o app desenha o próprio). */

@@ -34,6 +34,13 @@ public class ExpoMapboxNavigationView: ExpoView {
   private var pendingRouteLineColor: String?
   private var pendingHideManeuverBanner: Bool = false
   private var pendingHideBottomPanel: Bool = false
+  /** Reservados (pt ≈ dp) quando alinharmos a câmera iOS ao sheet React; Android já aplica na view Kotlin. */
+  private var pendingFollowingPaddingTop: Double?
+  private var pendingFollowingPaddingBottom: Double?
+  private var pendingFollowingPaddingLeft: Double?
+  private var pendingFollowingPaddingRight: Double?
+  private var pendingFollowingZoom: Double?
+  private var pendingRecenterRequestKey: Int?
 
   #if canImport(MapboxNavigationCore) && canImport(MapboxNavigationUIKit)
   private var navigationProvider: MapboxNavigationProvider?
@@ -139,6 +146,34 @@ public class ExpoMapboxNavigationView: ExpoView {
     pendingHideBottomPanel = hidden
     #if canImport(MapboxNavigationCore) && canImport(MapboxNavigationUIKit)
     navigationViewController?.navigationView?.bottomBannerContainerView.isHidden = hidden
+    #endif
+  }
+
+  func updateFollowingPaddingTop(_ value: Double?) {
+    pendingFollowingPaddingTop = value
+  }
+
+  func updateFollowingPaddingBottom(_ value: Double?) {
+    pendingFollowingPaddingBottom = value
+  }
+
+  func updateFollowingPaddingLeft(_ value: Double?) {
+    pendingFollowingPaddingLeft = value
+  }
+
+  func updateFollowingPaddingRight(_ value: Double?) {
+    pendingFollowingPaddingRight = value
+  }
+
+  func updateFollowingZoom(_ value: Double?) {
+    pendingFollowingZoom = value
+  }
+
+  func updateRecenterRequestKey(_ value: Int?) {
+    guard let value, value != pendingRecenterRequestKey else { return }
+    pendingRecenterRequestKey = value
+    #if canImport(MapboxNavigationCore) && canImport(MapboxNavigationUIKit)
+    navigationViewController?.navigationMapView?.navigationCamera.follow()
     #endif
   }
 

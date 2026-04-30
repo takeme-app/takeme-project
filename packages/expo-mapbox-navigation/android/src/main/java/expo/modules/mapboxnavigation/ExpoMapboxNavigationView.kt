@@ -71,6 +71,14 @@ class ExpoMapboxNavigationView(context: Context, appContext: AppContext) :
   private var pendingHideManeuverBanner: Boolean = false
   private var pendingHideBottomPanel: Boolean = false
 
+  /** Padding lógico em **dp** (valores vindos do RN; multiplicamos por `density`). */
+  private var followingPadTopDp: Double = 120.0
+  private var followingPadStartDp: Double = 40.0
+  private var followingPadBottomDp: Double = 220.0
+  private var followingPadEndDp: Double = 40.0
+  private var pendingFollowingZoom: Double? = null
+  private var lastRecenterRequestKey: Int? = null
+
   private var mapView: MapView? = null
   private var mapboxNavigation: MapboxNavigation? = null
   private var viewportDataSource: MapboxNavigationViewportDataSource? = null
@@ -78,6 +86,8 @@ class ExpoMapboxNavigationView(context: Context, appContext: AppContext) :
   private var routeLineApi: MapboxRouteLineApi? = null
   private var routeLineView: MapboxRouteLineView? = null
   private val navigationLocationProvider = NavigationLocationProvider()
+  private var lastEnhancedLocation: com.mapbox.common.location.Location? = null
+  private var driverFocusModeEnabled = false
   private var lastCompletedLegIndex: Int? = null
   private var didEmitOffRoute = false
   private var hasSetInitialRoute = false
@@ -96,7 +106,7 @@ class ExpoMapboxNavigationView(context: Context, appContext: AppContext) :
     }
     viewportDataSource?.onRouteChanged(routes.first())
     viewportDataSource?.evaluate()
-    navigationCamera?.requestNavigationCameraToFollowing()
+    if (!driverFocusModeEnabled) navigationCamera?.requestNavigationCameraToFollowing()
   }
 
   private val locationObserver = object : LocationObserver {
@@ -104,13 +114,18 @@ class ExpoMapboxNavigationView(context: Context, appContext: AppContext) :
 
     override fun onNewLocationMatcherResult(locationMatcherResult: LocationMatcherResult) {
       val enhancedLocation = locationMatcherResult.enhancedLocation
+      lastEnhancedLocation = enhancedLocation
       navigationLocationProvider.changePosition(
         location = enhancedLocation,
         keyPoints = locationMatcherResult.keyPoints,
       )
       viewportDataSource?.onLocationChanged(enhancedLocation)
       viewportDataSource?.evaluate()
-      if (pendingCameraMode == "following") navigationCamera?.requestNavigationCameraToFollowing()
+      if (driverFocusModeEnabled) {
+        applyDriverFocusCamera(enhancedLocation)
+      } else if (pendingCameraMode == "following") {
+        navigationCamera?.requestNavigationCameraToFollowing()
+      }
     }
   }
 
@@ -203,6 +218,7 @@ class ExpoMapboxNavigationView(context: Context, appContext: AppContext) :
 
   fun updateCameraMode(mode: String) {
     pendingCameraMode = mode
+    if (mode != "idle") driverFocusModeEnabled = false
     when (mode) {
       "following" -> navigationCamera?.requestNavigationCameraToFollowing()
       "overview" -> navigationCamera?.requestNavigationCameraToOverview()
@@ -223,9 +239,114 @@ class ExpoMapboxNavigationView(context: Context, appContext: AppContext) :
     // navigationView?.customizeViewOptions { showInfoPanelInFreeDrive = !hidden }
   }
 
+  fun updateFollowingPaddingTopDp(value: Double?) {
+    if (value != null) followingPadTopDp = value
+    applyFollowingPaddingInsets()
+  }
+
+  fun updateFollowingPaddingBottomDp(value: Double?) {
+    if (value != null) followingPadBottomDp = value
+    applyFollowingPaddingInsets()
+  }
+
+  fun updateFollowingPaddingLeftDp(value: Double?) {
+    if (value != null) followingPadStartDp = value
+    applyFollowingPaddingInsets()
+  }
+
+  fun updateFollowingPaddingRightDp(value: Double?) {
+    if (value != null) followingPadEndDp = value
+    applyFollowingPaddingInsets()
+  }
+
+  fun updateFollowingZoom(value: Double?) {
+    pendingFollowingZoom = value
+    applyFollowingZoom()
+  }
+
+  fun updateRecenterRequestKey(value: Int?) {
+    if (value == null || value == lastRecenterRequestKey) return
+    lastRecenterRequestKey = value
+    driverFocusModeEnabled = true
+    pendingCameraMode = "idle"
+    applyFollowingZoom()
+    viewportDataSource?.evaluate()
+    recenterNavigationCamera()
+  }
+
   // ----------------------------------------------------------------------
   // SDK lifecycle
   // ----------------------------------------------------------------------
+
+  private fun applyFollowingPaddingInsets() {
+    val ds = viewportDataSource ?: return
+    val d = resources.displayMetrics.density.toDouble()
+    ds.followingPadding =
+      EdgeInsets(
+        followingPadTopDp * d,
+        followingPadStartDp * d,
+        followingPadBottomDp * d,
+        followingPadEndDp * d,
+      )
+    ds.evaluate()
+    if (pendingCameraMode == "following") {
+      recenterNavigationCamera()
+    }
+  }
+
+  private fun applyFollowingZoom() {
+    val ds = viewportDataSource ?: return
+    ds.followingZoomPropertyOverride(pendingFollowingZoom)
+    ds.evaluate()
+    if (driverFocusModeEnabled) {
+      lastEnhancedLocation?.let { applyDriverFocusCamera(it) }
+    } else if (pendingCameraMode == "following") {
+      recenterNavigationCamera()
+    }
+  }
+
+  private fun recenterNavigationCamera() {
+    if (driverFocusModeEnabled) {
+      lastEnhancedLocation?.let { applyDriverFocusCamera(it) }
+      return
+    }
+    val mv = mapView
+    val loc = lastEnhancedLocation
+    if (mv != null && loc != null) {
+      mv.mapboxMap.setCamera(
+        CameraOptions.Builder()
+          .center(Point.fromLngLat(loc.longitude, loc.latitude))
+          .zoom(pendingFollowingZoom ?: 19.4)
+          .padding(currentFollowingInsets())
+          .build(),
+      )
+    }
+    navigationCamera?.requestNavigationCameraToFollowing()
+  }
+
+  private fun applyDriverFocusCamera(location: com.mapbox.common.location.Location) {
+    val mv = mapView ?: return
+    mv.mapboxMap.setCamera(
+      CameraOptions.Builder()
+        .center(Point.fromLngLat(location.longitude, location.latitude))
+        .zoom(pendingFollowingZoom ?: 19.3)
+        .pitch(58.0)
+        // Foco manual: o motorista deve ficar no centro físico da tela,
+        // sem o recorte usado pelo SDK para desviar do card inferior.
+        .padding(EdgeInsets(0.0, 0.0, 0.0, 0.0))
+        .build(),
+    )
+  }
+
+  private fun currentFollowingInsets(): EdgeInsets {
+    val d = resources.displayMetrics.density.toDouble()
+    return EdgeInsets(
+      followingPadTopDp * d,
+      followingPadStartDp * d,
+      followingPadBottomDp * d,
+      followingPadEndDp * d,
+    )
+  }
 
   private fun attachNavigationViewIfNeeded() {
     if (mapView != null) return
@@ -253,17 +374,13 @@ class ExpoMapboxNavigationView(context: Context, appContext: AppContext) :
       setLocationProvider(navigationLocationProvider)
       locationPuck = createDefault2DPuck()
       enabled = true
+      pulsingEnabled = false
+      showAccuracyRing = false
     }
 
-    viewportDataSource = MapboxNavigationViewportDataSource(mv.mapboxMap).apply {
-      val density = resources.displayMetrics.density.toDouble()
-      followingPadding = EdgeInsets(
-        120.0 * density,
-        40.0 * density,
-        220.0 * density,
-        40.0 * density,
-      )
-    }
+    viewportDataSource = MapboxNavigationViewportDataSource(mv.mapboxMap)
+    applyFollowingPaddingInsets()
+    applyFollowingZoom()
     navigationCamera = NavigationCamera(mv.mapboxMap, mv.camera, viewportDataSource!!)
     routeLineApi = MapboxRouteLineApi(MapboxRouteLineApiOptions.Builder().build())
     routeLineView = MapboxRouteLineView(MapboxRouteLineViewOptions.Builder(context).build())

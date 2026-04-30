@@ -164,6 +164,14 @@ type Props = NativeStackScreenProps<RootStackParamList, 'ActiveTrip'>;
 
 const DARK = '#111827';
 const GOLD = '#C9A227';
+/**
+ * Padding inferior (pt ≈ dp) entre o centro “útil” do mapa SDK e o fundo seguro —
+ * espaço ocupado pelo mini sheet flutuante + folga (~igual aos estilos do card).
+ */
+const SDK_NATIVE_FLOATING_CARD_PADDING = 300;
+/** Zoom fixo do SDK no modo following. Maior = mais perto da posição do motorista. */
+const SDK_NATIVE_FOLLOWING_ZOOM = 19.3;
+const SDK_NATIVE_CONTROL_GAP = 12;
 /** Trecho imediato no mapa (GPS → próxima etapa): preto, distinto do ouro contínuo. */
 const ROUTE_IMMEDIATE_LEG_COLOR = DARK;
 /** Âncora compartilhada dos marcadores do mapa (centralizados no ponto). Referência estável
@@ -854,6 +862,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const hasFramedDriverOnMap = useRef(false);
   const [followMyLocation, setFollowMyLocation] = useState(false);
   const [nativeNavigationRequested, setNativeNavigationRequested] = useState(false);
+  const [nativeRecenterRequestKey, setNativeRecenterRequestKey] = useState(0);
+  const [miniSheetVisible, setMiniSheetVisible] = useState(true);
   const nativeNavigationActiveRef = useRef(false);
   const locationPermissionWarned = useRef(false);
   const locationModuleWarned = useRef(false);
@@ -2137,6 +2147,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   }, [trip?.id, tripDestLL, stops]);
 
   const overlayTop = insets.top + 56;
+  const nativeSdkToggleBottom = miniSheetVisible
+    ? effectiveBottomInset + 12 + SDK_NATIVE_FLOATING_CARD_PADDING + 14
+    : effectiveBottomInset + 16;
+  const nativeSdkRecenterBottom = nativeSdkToggleBottom + 46 + SDK_NATIVE_CONTROL_GAP;
 
   /** Centraliza o mapa na parada correspondente ao ícone da lateral (mesmo fallback de coord. dos markers). */
   const focusMapOnSidebarStop = useCallback(
@@ -3043,6 +3057,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         accessToken={getMapboxAccessToken()}
         voiceLanguage="pt-BR"
         nativeNavigationActive={nativeNavigationActive}
+        followingPaddingTop={overlayTop}
+        followingPaddingBottom={effectiveBottomInset + 12 + SDK_NATIVE_FLOATING_CARD_PADDING}
+        followingPaddingLeft={14}
+        followingPaddingRight={14}
+        followingZoom={SDK_NATIVE_FOLLOWING_ZOOM}
+        recenterRequestKey={nativeRecenterRequestKey}
         onProgress={handleNativeRouteProgress}
         onWaypointArrival={handleNativeWaypointArrival}
         onArrival={() => handleNativeWaypointArrival(navigationWaypoints.length - 1)}
@@ -3271,6 +3291,30 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           }}
         />
 
+        {nativeNavigationActive && (
+          <>
+            <TouchableOpacity
+              style={[styles.sdkFloatingBtn, { right: 14, bottom: nativeSdkRecenterBottom }]}
+              onPress={() => setNativeRecenterRequestKey((v) => v + 1)}
+              activeOpacity={0.82}
+              accessibilityRole="button"
+              accessibilityLabel="Centralizar na direção da corrida"
+            >
+              <MaterialIcons name="near-me" size={22} color="#fff" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.sdkFloatingBtn, { right: 14, bottom: nativeSdkToggleBottom }]}
+              onPress={() => setMiniSheetVisible((visible) => !visible)}
+              activeOpacity={0.82}
+              accessibilityRole="button"
+              accessibilityLabel={miniSheetVisible ? 'Ocultar informações da próxima parada' : 'Mostrar informações da próxima parada'}
+            >
+              <MaterialIcons name={miniSheetVisible ? 'keyboard-arrow-down' : 'keyboard-arrow-up'} size={26} color="#fff" />
+            </TouchableOpacity>
+          </>
+        )}
+
         {(stops.length > 0 || showSidebarTripEndFlag) && (
           <View style={[styles.sidebar, { top: overlayTop, right: 14 }]} pointerEvents="box-none">
             {(stops.length + (showSidebarTripEndFlag ? 1 : 0)) > 1 && (
@@ -3311,7 +3355,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         )}
 
         {/* Mini bottom card — sempre visível quando há viagem ativa */}
-        {cardInfo && !detailVisible && !allDone && (
+        {cardInfo && !detailVisible && !allDone && miniSheetVisible && (
           <TouchableOpacity
             style={[styles.miniSheet, { bottom: effectiveBottomInset + 12 }]}
             onPress={openDetailFromMiniSheet}
@@ -4040,6 +4084,22 @@ const styles = StyleSheet.create({
 
   myLocationBtn: {
     position: 'absolute',
+  },
+  sdkFloatingBtn: {
+    position: 'absolute',
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: DARK,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2.5,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 8,
   },
 
   networkBadgeWrap: {
