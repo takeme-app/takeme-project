@@ -48,7 +48,7 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
   const [fullName, setFullName] = useState('');
   const [contactPhone, setContactPhone] = useState('');
   const [bagsCount, setBagsCount] = useState(1);
-  /** Pessoas extras na mesma viagem além de você e do dependente. */
+  /** Outras pessoas que embarcam no veículo com o dependente (titular não conta). */
   const [extraPassengers, setExtraPassengers] = useState(0);
   const [instructions, setInstructions] = useState('');
   const [dependentId, setDependentId] = useState<string | undefined>(undefined);
@@ -200,9 +200,10 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
             keyboardType="phone-pad"
           />
 
-          <Text style={[styles.label, { marginTop: 8 }]}>Passageiros na viagem</Text>
+          <Text style={[styles.label, { marginTop: 8 }]}>Quem embarca na viagem</Text>
           <Text style={styles.passengersExplain}>
-            Você (titular) e {fullName.trim() ? `"${fullName.trim()}"` : 'o dependente'} contam como passageiros; aqui inclua apenas acompanhantes extras na mesma viagem.
+            Contamos apenas quem vai no veículo: o dependente e, se precisar, outras pessoas na mesma corrida com ele.
+            Você (quem solicita o envio) não embarca: não ocupa lugar nem aparece aqui.
           </Text>
           <View style={styles.compactStepperRow}>
             <TouchableOpacity
@@ -225,8 +226,10 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
             </TouchableOpacity>
           </View>
           <Text style={styles.passengersMeta}>
-            Total no grupo: {totalPassengers} passageiros (você + dependente
-            {extraPassengers > 0 ? ` + ${extraPassengers} acompanhante(s)` : ''}).
+            Total embarcado(s): {totalPassengers}{' '}
+            {extraPassengers === 0
+              ? '(apenas o dependente).'
+              : `(dependente + ${extraPassengers} ${extraPassengers === 1 ? 'acompanhante' : 'acompanhantes'}).`}
           </Text>
 
           <View style={styles.separator}>

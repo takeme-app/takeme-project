@@ -35,6 +35,8 @@ import {
   type GoogleMapsMapRef,
   type LatLng,
 } from '../../components/googleMaps';
+import { NavigationView, latLngToWaypoint } from '../../components/navigation';
+import { useNativeNavigationEnabled } from '../../lib/navigationFeatureFlag';
 import { getGoogleMapsApiKey, getMapboxAccessToken } from '../../lib/googleMapsConfig';
 import {
   buildNavigationPadding,
@@ -205,6 +207,39 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     pts.push(shipment.pickupCoord, shipment.deliveryCoord);
     return regionFromLatLngPoints(pts);
   }, [shipment, driverPos, step]);
+
+  /**
+   * Feature flag — quando ON, a tela usa `<ExpoMapboxNavigationView>` (Mapbox
+   * Navigation SDK v3) por baixo do `<NavigationView>`. Quando OFF, o caminho
+   * legado do `<GoogleMapsMap>` continua intacto.
+   */
+  const useNativeNav = useNativeNavigationEnabled();
+
+  /**
+   * Waypoints do SDK nativo. Em encomendas o motorista sempre faz pickup →
+   * delivery; quando o pickup já foi concluído (`step === 'to_delivery'`), o
+   * SDK recebe só `[motorista, delivery]` e re-roteia automaticamente
+   * (transição de leg sem destruir a sessão de navegação).
+   */
+  const navigationWaypoints = useMemo(() => {
+    if (!useNativeNav || !shipment) return [];
+    const dp = driverPos ?? null;
+    const points: { coord: LatLng; name?: string }[] = [];
+    if (dp && isValidGlobeCoordinate(dp.latitude, dp.longitude)) {
+      points.push({ coord: dp, name: 'Você' });
+    }
+    if (step === 'to_pickup') {
+      points.push({ coord: shipment.pickupCoord, name: 'Coleta' });
+      points.push({ coord: shipment.deliveryCoord, name: 'Entrega' });
+    } else {
+      points.push({ coord: shipment.deliveryCoord, name: 'Entrega' });
+    }
+    return points
+      .filter((p) => isValidGlobeCoordinate(p.coord.latitude, p.coord.longitude))
+      .map((p, i, arr) =>
+        latLngToWaypoint(p.coord, p.name, i > 0 && i < arr.length - 1),
+      );
+  }, [useNativeNav, shipment, driverPos, step]);
 
   const applyHeadingUpCamera = useCallback(() => {
     if (!followNavRef.current || !mapRef.current) return;
@@ -994,27 +1029,34 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     <View style={styles.root}>
       <StatusBar style="dark" />
 
-      {/* Mapa em tela cheia — mesmo padrão do ActiveTrip (motorista) */}
-      <GoogleMapsMap
+      {/* Mapa em tela cheia — wrapper Mapbox Navigation SDK (flag ON) ou GoogleMapsMap legado (flag OFF). */}
+      <NavigationView
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
-        initialRegion={mapInitialRegion}
-        onUserAdjustedMap={() => {
-          setFollowMyLocation(false);
-          const fix = latestDriverFixRef.current;
-          if (fix && mapRef.current && isValidGlobeCoordinate(fix.latitude, fix.longitude)) {
-            mapRef.current.easeToRegionNorthUp(
-              {
-                latitude: fix.latitude,
-                longitude: fix.longitude,
-                latitudeDelta: MY_LOCATION_NAV_DELTA,
-                longitudeDelta: MY_LOCATION_NAV_DELTA,
-              },
-              400,
-            );
-          }
-        }}
-      >
+        waypoints={navigationWaypoints}
+        voiceLanguage="pt-BR"
+        legacyInitialRegion={mapInitialRegion}
+        legacyRender={({ mapRef: legacyMapRef, initialRegion }) => (
+          <GoogleMapsMap
+            ref={legacyMapRef}
+            style={StyleSheet.absoluteFillObject}
+            initialRegion={initialRegion}
+            onUserAdjustedMap={() => {
+              setFollowMyLocation(false);
+              const fix = latestDriverFixRef.current;
+              if (fix && mapRef.current && isValidGlobeCoordinate(fix.latitude, fix.longitude)) {
+                mapRef.current.easeToRegionNorthUp(
+                  {
+                    latitude: fix.latitude,
+                    longitude: fix.longitude,
+                    latitudeDelta: MY_LOCATION_NAV_DELTA,
+                    longitudeDelta: MY_LOCATION_NAV_DELTA,
+                  },
+                  400,
+                );
+              }
+            }}
+          >
         {navRoutePresentation.showDark && navRoutePresentation.darkLine.length >= 2 && (
           <MapPolyline id="driver" coordinates={navRoutePresentation.darkLine} strokeColor={DARK} strokeWidth={3} />
         )}
@@ -1066,7 +1108,9 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             following={false}
           />
         )}
-      </GoogleMapsMap>
+          </GoogleMapsMap>
+        )}
+      />
 
       {followMyLocation &&
         driverPos &&

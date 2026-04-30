@@ -39,6 +39,8 @@ export function SelectShipmentAddressScreen({ navigation }: Props) {
         },
         whenOption: when.whenOption,
         whenLabel: when.whenLabel,
+        ...(when.scheduledDateId ? { scheduledDateId: when.scheduledDateId } : {}),
+        ...(when.scheduledTimeSlot ? { scheduledTimeSlot: when.scheduledTimeSlot } : {}),
         packageSize,
         packageSizeLabel,
       });

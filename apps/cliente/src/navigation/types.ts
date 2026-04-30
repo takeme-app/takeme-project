@@ -65,6 +65,10 @@ export type ShipmentStackParamList = {
     destination: ShipmentPlaceParam;
     whenOption: 'now' | 'later';
     whenLabel?: string;
+    /** YYYY-MM-DD no fuso local; usado para filtrar viagens dos motoristas (alinhado ao fluxo de passageiro). */
+    scheduledDateId?: string;
+    /** Janela horária opcional quando o UI passar a enviar (ex.: slot string). */
+    scheduledTimeSlot?: string;
     packageSize: 'pequeno' | 'medio' | 'grande';
     packageSizeLabel: string;
   };
@@ -73,6 +77,8 @@ export type ShipmentStackParamList = {
     destination: ShipmentPlaceParam;
     whenOption: 'now' | 'later';
     whenLabel?: string;
+    scheduledDateId?: string;
+    scheduledTimeSlot?: string;
     packageSize: 'pequeno' | 'medio' | 'grande';
     packageSizeLabel: string;
     /** FK do trecho do catálogo (ou null quando veio de override do preparador). */
@@ -92,6 +98,8 @@ export type ShipmentStackParamList = {
     destination: ShipmentPlaceParam;
     whenOption: 'now' | 'later';
     whenLabel?: string;
+    scheduledDateId?: string;
+    scheduledTimeSlot?: string;
     packageSize: 'pequeno' | 'medio' | 'grande';
     packageSizeLabel: string;
     recipient: ShipmentRecipientParam;
@@ -134,7 +142,7 @@ export type DependentShipmentFormParams = {
   fullName: string;
   contactPhone: string;
   bagsCount: number;
-  /** Acompanhantes na mesma viagem além de você e do dependente (cada um conta como passageiro). */
+  /** Outras pessoas que embarcam na mesma corrida **com** o dependente (quem solicita não viaja). */
   extraPassengers?: number;
   instructions?: string;
   dependentId?: string;
@@ -151,6 +159,8 @@ export type DependentShipmentStackParamList = {
     destination: ShipmentPlaceParam;
     whenOption: 'now' | 'later';
     whenLabel?: string;
+    scheduledDateId?: string;
+    scheduledTimeSlot?: string;
     fullName: string;
     contactPhone: string;
     bagsCount: number;

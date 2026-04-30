@@ -24,12 +24,20 @@ allprojects {
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"
 
-// SDK nativo Mapbox (downloads) — requer RNMAPBOX_MAPS_DOWNLOAD_TOKEN ou MAPBOX_DOWNLOADS_TOKEN em gradle.properties / env.
+// SDK nativo Mapbox (downloads) — Maps SDK (rnmapbox) E Navigation SDK v3
+// (`@take-me/expo-mapbox-navigation`) compartilham o mesmo registry Maven
+// privado. O token vem de:
+//   1) `MAPBOX_DOWNLOADS_TOKEN` em ~/.gradle/gradle.properties (recomendado)
+//   2) env var `RNMAPBOX_MAPS_DOWNLOAD_TOKEN` (compat com rnmapbox/maps)
+//   3) env var `MAPBOX_DOWNLOADS_TOKEN` (CI / EAS)
+// Sem token os builds falham em `Could not GET 'https://api.mapbox.com/downloads/...'`.
 allprojects {
   repositories {
     maven {
       url 'https://api.mapbox.com/downloads/v2/releases/maven'
-      def token = project.properties['MAPBOX_DOWNLOADS_TOKEN'] ?: System.getenv('RNMAPBOX_MAPS_DOWNLOAD_TOKEN')
+      def token = project.properties['MAPBOX_DOWNLOADS_TOKEN']
+        ?: System.getenv('MAPBOX_DOWNLOADS_TOKEN')
+        ?: System.getenv('RNMAPBOX_MAPS_DOWNLOAD_TOKEN')
       if (token) {
         authentication { basic(BasicAuthentication) }
         credentials {

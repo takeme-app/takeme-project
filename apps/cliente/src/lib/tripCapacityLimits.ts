@@ -1,7 +1,7 @@
 /**
  * Regras compartilhadas entre corrida comum e envio de dependente:
  * — máximo de malas: 1 por passageiro, sem ultrapassar o teto da viagem (`bags_available`);
- * — contagens de passageiros diferem no modelo de negócio (ver funções abaixo).
+ * — contagens de passageiros diferem entre corrida titular (`bookingTotalPassengers`) e envio de dependente (`dependentShipmentTotalPassengers`: só embarcados).
  */
 
 /** Corrida normal: titular + passageiros extras informados na confirmação. */
@@ -10,10 +10,11 @@ export function bookingTotalPassengers(extraPassengers: number): number {
 }
 
 /**
- * Envio de dependente: contratante (titular) + dependente transportado + acompanhantes extras na mesma viagem.
+ * Envio de dependente: só conta quem **embarca** na corrida — o dependente e,
+ * opcionalmente, outras pessoas na mesma viagem **com ele**. Quem solicita o envio não viaja e não ocupa lugar.
  */
-export function dependentShipmentTotalPassengers(extraCompanions: number): number {
-  return 2 + Math.max(0, Math.floor(extraCompanions));
+export function dependentShipmentTotalPassengers(extraCompanionsOnTrip: number): number {
+  return 1 + Math.max(0, Math.floor(extraCompanionsOnTrip));
 }
 
 /**

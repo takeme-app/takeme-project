@@ -207,7 +207,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         if (driver != null && totalPax > driver.seats) {
           showAlert(
             'Passageiros',
-            `Esta viagem comporta no máximo ${driver.seats} passageiro(es); seu grupo tem ${totalPax}.`,
+            `Esta viagem comporta no máximo ${driver.seats} lugar(es); este envio precisa de ${totalPax} (dependente${companions > 0 ? ` + ${companions} acompanhante(s)` : ''}).`,
           );
           setSubmitting(false);
           return;
@@ -284,6 +284,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
             scheduled_at: whenOption === 'later' ? null : null,
             payment_method: paymentMethodDb,
             ...pricingFields,
+            ...(scheduledTripId ? { scheduled_trip_id: scheduledTripId } : {}),
             status,
             photo_url: photoUrl,
           })
@@ -374,8 +375,10 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           <Text style={styles.summaryLabel}>Destinatário (dependente)</Text>
           <Text style={styles.summaryText}>{fullName} • {contactDisplay}</Text>
           <Text style={styles.summaryMeta}>
-            Passageiros no grupo: {totalPassengersInGroup} (você + dependente
-            {companions > 0 ? ` + ${companions} acompanhante(s)` : ''})
+            Embarcados na corrida: {totalPassengersInGroup}{' '}
+            {companions === 0
+              ? '(apenas o dependente; quem solicita não viaja)'
+              : `(dependente + ${companions} ${companions === 1 ? 'acompanhante' : 'acompanhantes'})`}
           </Text>
           <Text style={styles.summaryMeta}>
             Bagagens: {bagsCount} {bagsCount === 1 ? 'mala' : 'malas'}

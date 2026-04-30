@@ -1,0 +1,33 @@
+{
+  "name": "@take-me/expo-mapbox-navigation",
+  "version": "0.1.0",
+  "description": "Expo Module bridging Mapbox Navigation SDK v3 (iOS + Android) for the TakeMe motorista app.",
+  "private": true,
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "expo",
+    "mapbox",
+    "navigation",
+    "react-native"
+  ],
+  "license": "UNLICENSED",
+  "dependencies": {
+    "expo-modules-core": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.10",
+    "expo": "^54.0.33",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "~5.9.2"
+  },
+  "peerDependencies": {
+    "expo": ">=52.0.0",
+    "react": "*",
+    "react-native": "*"
+  }
+}

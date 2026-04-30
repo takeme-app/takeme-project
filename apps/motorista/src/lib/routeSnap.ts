@@ -1,3 +1,11 @@
+/**
+ * Map-matching simples (snap do GPS na polyline mais próxima).
+ *
+ * @deprecated Substituído pelo map-matching nativo do Mapbox Navigation SDK v3
+ * (`packages/expo-mapbox-navigation`) quando `EXPO_PUBLIC_USE_NATIVE_NAVIGATION=1`.
+ * Manter até a flag ficar 100% verde em produção por 2 semanas. Plano em
+ * `docs/MIGRATION_MAPBOX_NAVIGATION_SDK.md`.
+ */
 import type { LatLng } from '../components/googleMaps/geometry';
 import { haversineMeters, bearingBetweenLatLng } from './navigationCamera';
 

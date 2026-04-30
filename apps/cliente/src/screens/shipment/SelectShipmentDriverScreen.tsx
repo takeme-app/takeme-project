@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -14,7 +14,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ShipmentStackParamList } from '../../navigation/types';
 import { loadShipmentDriversForRoute } from '../../lib/loadShipmentDriversForRoute';
-import type { ClientScheduledTripItem } from '../../lib/clientScheduledTrips';
+import {
+  filterScheduledTripsByWhenSelection,
+  type ClientScheduledTripItem,
+} from '../../lib/clientScheduledTrips';
+import type { WhenTimeResult } from '../../hooks/useWhenTimeSelection';
 import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
 import { quoteShipmentForClient, type ShipmentQuoteOk } from '../../lib/shipmentQuote';
 import { resolveShipmentBaseId } from '../../lib/resolveShipmentBase';
@@ -37,6 +41,8 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
     destination,
     whenOption,
     whenLabel,
+    scheduledDateId,
+    scheduledTimeSlot,
     packageSize,
     packageSizeLabel,
   } = route.params;
@@ -69,6 +75,27 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
     setItems(list);
     setDriversLoading(false);
   }, [origin.latitude, origin.longitude, destination.latitude, destination.longitude]);
+
+  const whenForTrips: WhenTimeResult = useMemo(
+    () => ({
+      whenOption,
+      whenLabel: whenLabel ?? (whenOption === 'now' ? 'Agora' : ''),
+      scheduledDateId,
+      scheduledTimeSlot,
+    }),
+    [whenOption, whenLabel, scheduledDateId, scheduledTimeSlot],
+  );
+
+  const filteredItems = useMemo(
+    () => filterScheduledTripsByWhenSelection(items, whenForTrips),
+    [items, whenForTrips],
+  );
+
+  useEffect(() => {
+    if (selectedId && !filteredItems.some((t) => t.id === selectedId)) {
+      setSelectedId(null);
+    }
+  }, [filteredItems, selectedId]);
 
   useEffect(() => {
     void loadDrivers();
@@ -127,7 +154,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
   // na hierarquia do shipmentQuote. Antes da seleção, mantém o quote genérico (preview).
   useEffect(() => {
     const preparerId = selectedId
-      ? items.find((i) => i.id === selectedId)?.driver_id ?? null
+      ? filteredItems.find((i) => i.id === selectedId)?.driver_id ?? null
       : null;
     if (!preparerId) {
       setSelectedQuote(null);
@@ -156,7 +183,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
     };
   }, [
     selectedId,
-    items,
+    filteredItems,
     origin.address,
     origin.latitude,
     origin.longitude,
@@ -169,13 +196,15 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
   const effectiveQuote = selectedQuote ?? quote;
 
   const handleContinue = () => {
-    const sel = items.find((i) => i.id === selectedId);
+    const sel = filteredItems.find((i) => i.id === selectedId);
     if (!sel || !effectiveQuote) return;
     navigation.navigate('Recipient', {
       origin,
       destination,
       whenOption,
       whenLabel,
+      ...(scheduledDateId ? { scheduledDateId } : {}),
+      ...(scheduledTimeSlot ? { scheduledTimeSlot } : {}),
       packageSize,
       packageSizeLabel,
       amountCents: effectiveQuote.amountCents,
@@ -193,6 +222,12 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
 
   const loading = driversLoading || quoteLoading;
   const blockingError = quoteError;
+  const emptyDriversHint =
+    items.length > 0 && filteredItems.length === 0
+      ? whenOption === 'later' && whenLabel
+        ? `Nenhum motorista nesta rota para ${whenLabel}. Altere o dia ou volte para ajustar origem e destino.`
+        : 'Nenhum motorista nesta rota para hoje. Você pode tentar outro dia ou revisar origem e destino.'
+      : 'Nenhum motorista disponível nesta rota no momento.';
 
   return (
     <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}>
@@ -232,9 +267,9 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
             <Text style={styles.retryBtnText}>Tentar de novo</Text>
           </TouchableOpacity>
         </View>
-      ) : items.length === 0 ? (
+      ) : filteredItems.length === 0 ? (
         <View style={styles.centered}>
-          <Text style={styles.errText}>Nenhum motorista disponível nesta rota no momento.</Text>
+          <Text style={styles.errText}>{emptyDriversHint}</Text>
           <TouchableOpacity style={styles.retryBtn} onPress={() => navigation.goBack()}>
             <Text style={styles.retryBtnText}>Voltar</Text>
           </TouchableOpacity>
@@ -242,7 +277,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
       ) : (
         <>
           <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-            {items.map((t) => {
+            {filteredItems.map((t) => {
               const selected = selectedId === t.id;
               const avatarUri = t.driverAvatarUrl?.startsWith('http')
                 ? t.driverAvatarUrl

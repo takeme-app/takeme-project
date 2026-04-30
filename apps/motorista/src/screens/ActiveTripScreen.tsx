@@ -36,6 +36,8 @@ import {
   latLngFromDbColumns,
   MY_LOCATION_NAV_DELTA,
 } from '../components/googleMaps';
+import { NavigationView, latLngToWaypoint, type RouteProgressEvent } from '../components/navigation';
+import { useNativeNavigationEnabled } from '../lib/navigationFeatureFlag';
 import { supabase } from '../lib/supabase';
 import { tripDisplayEarningsCents } from '../lib/driverTripEarnings';
 import { closeConversationsForScheduledTrip } from '../lib/closeTripConversations';
@@ -851,6 +853,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const mapRef = useRef<GoogleMapsMapRef>(null);
   const hasFramedDriverOnMap = useRef(false);
   const [followMyLocation, setFollowMyLocation] = useState(false);
+  const [nativeNavigationRequested, setNativeNavigationRequested] = useState(false);
+  const nativeNavigationActiveRef = useRef(false);
   const locationPermissionWarned = useRef(false);
   const locationModuleWarned = useRef(false);
 
@@ -1056,6 +1060,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     driverUiLastFlushRef.current = null;
     driverPositionRef.current = null;
     setDriverPosition(null);
+    setNativeNavigationRequested(false);
   }, [tripId]);
 
   // UI state
@@ -1169,15 +1174,16 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   }, [applyHeadingUpCamera]);
 
   useLayoutEffect(() => {
-    followNavRef.current = followMyLocation;
-    if (followMyLocation) {
+    const legacyFollow = followMyLocation && !nativeNavigationActiveRef.current;
+    followNavRef.current = legacyFollow;
+    if (legacyFollow) {
       navBearingStateRef.current = createInitialBearingState(0);
       requestAnimationFrame(() => scheduleNavFrame());
     } else if (navRafRef.current != null) {
       cancelAnimationFrame(navRafRef.current);
       navRafRef.current = null;
     }
-  }, [followMyLocation, scheduleNavFrame]);
+  }, [followMyLocation, nativeNavigationRequested, scheduleNavFrame]);
 
   useEffect(
     () => () => {
@@ -1205,7 +1211,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
    *     para cobrir o próximo tick — câmera sempre em movimento.
    */
   useEffect(() => {
-    if (!followMyLocation) {
+    if (!followMyLocation || nativeNavigationActiveRef.current) {
       if (drIntervalRef.current != null) {
         clearInterval(drIntervalRef.current);
         drIntervalRef.current = null;
@@ -1248,7 +1254,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         drIntervalRef.current = null;
       }
     };
-  }, [followMyLocation]);
+  }, [followMyLocation, nativeNavigationRequested]);
 
   // ---------------------------------------------------------------------------
   // Location tracking
@@ -1335,6 +1341,19 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             // "apagar" o último heading válido enquanto a bússola publica.
             if (headingDeg != null && (speedMps ?? 0) >= COMPASS_HEADING_MAX_SPEED_MPS) {
               flushDriverHeadingToUi(headingDeg);
+            }
+            if (nativeNavigationActiveRef.current) {
+              if (isOffRouteSoftRef.current) {
+                isOffRouteSoftRef.current = false;
+                setIsOffRouteSoft(false);
+              }
+              if (isWrongDirectionRef.current) {
+                isWrongDirectionRef.current = false;
+                wrongDirectionEnterAtRef.current = null;
+                wrongDirectionLeaveAtRef.current = null;
+                setIsWrongDirection(false);
+              }
+              return;
             }
             // Detecção off-route: visual (badge + opacidade) funciona mesmo sem velocidade válida;
             // o TRIGGER de recálculo exige speedMps >= REROUTE_MIN_SPEED_MPS para evitar loops parados.
@@ -1692,6 +1711,89 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
   /** Índice destacado no mapa e na barra lateral: com GPS = parada geograficamente mais próxima; senão = sequencial. */
   const mapHighlightStopIndex = nearestNavStopIndex ?? currentStopIndex;
+
+  /**
+   * Feature flag: quando `EXPO_PUBLIC_USE_NATIVE_NAVIGATION=1` e o módulo nativo
+   * (`@take-me/expo-mapbox-navigation`) está disponível, a tela usa o
+   * `<ExpoMapboxNavigationView>` (Mapbox Navigation SDK v3) por baixo do
+   * `<NavigationView>`. Caso contrário, o caminho legado (`<GoogleMapsMap>`) é
+   * preservado intacto via `legacyRender` — zero regressão quando OFF.
+   */
+  const useNativeNav = useNativeNavigationEnabled();
+
+  /**
+   * Waypoints derivados das paradas restantes (usados apenas quando o caminho
+   * nativo está ativo). Origem = posição do motorista; intermediárias =
+   * paradas pendentes; destino = última parada (ou `finalDestination`).
+   */
+  const navigationWaypoints = useMemo(() => {
+    if (!useNativeNav) return [];
+    if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) {
+      return [];
+    }
+    const stopPts = collectRemainingStopPoints(stops, currentStopIndex);
+    const points: { coord: LatLng; name?: string }[] = [
+      { coord: driverPosition, name: 'Você' },
+      ...stopPts.map((coord, i) => ({ coord, name: stops[currentStopIndex + i]?.label })),
+    ];
+    if (points.length < 2 && finalDestination) {
+      points.push({ coord: finalDestination, name: trip?.destination_address ?? 'Destino' });
+    }
+    return points
+      .filter((p) => p.coord && isValidGlobeCoordinate(p.coord.latitude, p.coord.longitude))
+      .map((p, i, arr) =>
+        latLngToWaypoint(p.coord, p.name, i > 0 && i < arr.length - 1),
+      );
+  }, [useNativeNav, driverPosition, stops, currentStopIndex, finalDestination, trip?.destination_address]);
+
+  const nativeNavigationActive =
+    useNativeNav && nativeNavigationRequested && navigationWaypoints.length >= 2;
+
+  useEffect(() => {
+    nativeNavigationActiveRef.current = nativeNavigationActive;
+    if (nativeNavigationActive) {
+      followNavRef.current = false;
+      if (navRafRef.current != null) {
+        cancelAnimationFrame(navRafRef.current);
+        navRafRef.current = null;
+      }
+      if (drIntervalRef.current != null) {
+        clearInterval(drIntervalRef.current);
+        drIntervalRef.current = null;
+      }
+    }
+  }, [nativeNavigationActive]);
+
+  const handleNativeRouteProgress = useCallback((progress: RouteProgressEvent) => {
+    if (Number.isFinite(progress.durationRemainingSeconds)) {
+      setEtaSeconds(Math.max(0, progress.durationRemainingSeconds));
+    }
+    if (Number.isFinite(progress.distanceTraveledMeters)) {
+      setTraveledMeters(Math.max(0, progress.distanceTraveledMeters));
+    }
+    setRerouteNetworkError(false);
+  }, []);
+
+  const handleNativeOffRoute = useCallback(() => {
+    isOffRouteSoftRef.current = true;
+    setIsOffRouteSoft(true);
+  }, []);
+
+  const handleNativeReroute = useCallback(() => {
+    rerouteStartAtRef.current = Date.now();
+    setRerouteNetworkError(false);
+    setIsOffRouteSoft(false);
+    setIsRerouting(true);
+    setTimeout(() => setIsRerouting(false), REROUTE_BADGE_MIN_VISIBLE_MS);
+  }, []);
+
+  const fallbackToLegacyNavigation = useCallback((message?: string) => {
+    setNativeNavigationRequested(false);
+    if (driverPosition && isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) {
+      setFollowMyLocation(true);
+    }
+    if (message) showAlert('Navegação', message);
+  }, [driverPosition, showAlert]);
 
   /**
    * Card inferior: com GPS, a parada geograficamente mais próxima (rota imediata);
@@ -2901,6 +3003,18 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     coords: stopsRouteCoords,
   });
 
+  const handleNativeWaypointArrival = useCallback((waypointIndex: number) => {
+    const relativeIndex = Math.max(0, waypointIndex - 1);
+    const maxStopIndex = Math.max(stops.length - 1, 0);
+    const stop = stops[Math.min(currentStopIndex + relativeIndex, maxStopIndex)] ?? currentStop;
+    if (stop) {
+      setDetailViewStop(stop);
+      openDetail();
+      return;
+    }
+    if (allDone) openFinalize();
+  }, [allDone, currentStop, currentStopIndex, openDetail, openFinalize, stops]);
+
   // ---------------------------------------------------------------------------
   // Loading
   // ---------------------------------------------------------------------------
@@ -2921,18 +3035,38 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     <View style={styles.root}>
       <StatusBar hidden animated hideTransitionAnimation="fade" style="light" />
 
-      {/* ── Mapa (Google Maps) ───────────────────────────── */}
-      <GoogleMapsMap
+      {/* ── Mapa: wrapper que escolhe entre Mapbox Navigation SDK nativo (flag ON) ou Mapbox Maps legado (flag OFF) ─ */}
+      <NavigationView
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
-        initialRegion={mapInitialRegion}
-        layoutBottomInset={Platform.OS === 'android' ? effectiveBottomInset : 0}
-        onUserAdjustedMap={() => {
-          // Apenas sai do modo seguir — não re-centraliza, para o usuário poder ver o mapa livremente.
-          setFollowMyLocation(false);
+        waypoints={navigationWaypoints}
+        accessToken={getMapboxAccessToken()}
+        voiceLanguage="pt-BR"
+        nativeNavigationActive={nativeNavigationActive}
+        onProgress={handleNativeRouteProgress}
+        onWaypointArrival={handleNativeWaypointArrival}
+        onArrival={() => handleNativeWaypointArrival(navigationWaypoints.length - 1)}
+        onOffRoute={handleNativeOffRoute}
+        onReroute={handleNativeReroute}
+        onCancel={() => fallbackToLegacyNavigation()}
+        onNativeUnavailable={() => {
+          if (nativeNavigationRequested) {
+            fallbackToLegacyNavigation('Navegação nativa indisponível neste build. Mantive o mapa legado.');
+          }
         }}
-      >
-        {(goldLineForMap?.length ?? 0) >= 2 || immediateLegLineForMap.length >= 2 ? (
+        legacyInitialRegion={mapInitialRegion}
+        legacyRender={({ mapRef: legacyMapRef, initialRegion }) => (
+          <GoogleMapsMap
+            ref={legacyMapRef}
+            style={StyleSheet.absoluteFillObject}
+            initialRegion={initialRegion}
+            layoutBottomInset={Platform.OS === 'android' ? effectiveBottomInset : 0}
+            onUserAdjustedMap={() => {
+              setFollowMyLocation(false);
+              setNativeNavigationRequested(false);
+            }}
+          >
+            {(goldLineForMap?.length ?? 0) >= 2 || immediateLegLineForMap.length >= 2 ? (
           <>
             {goldLineForMap && goldLineForMap.length >= 2 && (
               <MapPolyline
@@ -3019,7 +3153,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             targetHeadingDeg={driverHeadingDeg}
           />
         )}
-      </GoogleMapsMap>
+          </GoogleMapsMap>
+        )}
+      />
 
       {!activeTripMapReady && (
         <View style={styles.mapCoordsLoading} pointerEvents="none">
@@ -3100,25 +3236,37 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           </View>
         )}
 
-        <View style={[styles.zoomWrap, { top: overlayTop, left: 14 }]} pointerEvents="box-none">
-          <MapZoomControls
-            mapRef={mapRef}
-            floating={false}
-            onBeforeZoom={() => {
-              // Apenas sai do follow — não re-centraliza para o usuário poder usar os controles livremente.
-              setFollowMyLocation(false);
-            }}
-          />
-        </View>
+        {!nativeNavigationActive && (
+          <View style={[styles.zoomWrap, { top: overlayTop, left: 14 }]} pointerEvents="box-none">
+            <MapZoomControls
+              mapRef={mapRef}
+              floating={false}
+              onBeforeZoom={() => {
+                // Apenas sai do follow — não re-centraliza para o usuário poder usar os controles livremente.
+                setFollowMyLocation(false);
+                setNativeNavigationRequested(false);
+              }}
+            />
+          </View>
+        )}
 
         <DriverLocationFocusButton
-          following={followMyLocation}
+          following={followMyLocation || nativeNavigationActive}
           style={[
             styles.myLocationBtn,
             { top: overlayTop + 44 + 6 + 44 + 10, left: 14 },
           ]}
           onPress={() => {
             if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) return;
+            if (useNativeNav) {
+              if (navigationWaypoints.length < 2) {
+                showAlert('Navegação', 'Ainda não há rota suficiente para iniciar a navegação.');
+                return;
+              }
+              setFollowMyLocation(false);
+              setNativeNavigationRequested(true);
+              return;
+            }
             setFollowMyLocation(true);
           }}
         />

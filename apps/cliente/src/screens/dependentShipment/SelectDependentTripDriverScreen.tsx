@@ -16,8 +16,10 @@ import type { DependentShipmentStackParamList, TripDriverParam } from '../../nav
 import { loadShipmentDriversForRoute } from '../../lib/loadShipmentDriversForRoute';
 import {
   tripFitsPassengersAndBags,
+  filterScheduledTripsByWhenSelection,
   type ClientScheduledTripItem,
 } from '../../lib/clientScheduledTrips';
+import type { WhenTimeResult } from '../../hooks/useWhenTimeSelection';
 import { dependentShipmentTotalPassengers } from '../../lib/tripCapacityLimits';
 import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
 import { useAppAlert } from '../../contexts/AppAlertContext';
@@ -60,6 +62,8 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
     destination,
     whenOption,
     whenLabel,
+    scheduledDateId,
+    scheduledTimeSlot,
     fullName,
     contactPhone,
     bagsCount,
@@ -93,10 +97,26 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  const whenForTrips: WhenTimeResult = useMemo(
+    () => ({
+      whenOption,
+      whenLabel: whenLabel ?? (whenOption === 'now' ? 'Agora' : ''),
+      scheduledDateId,
+      scheduledTimeSlot,
+    }),
+    [whenOption, whenLabel, scheduledDateId, scheduledTimeSlot],
+  );
+
+  const tripsMatchingWhen = useMemo(
+    () => filterScheduledTripsByWhenSelection(items, whenForTrips),
+    [items, whenForTrips],
+  );
+
+  /** Mesmo critério da busca de viagens: lista só por lugares; malas na confirmação do pagamento. */
   const visibleItems = useMemo(
     () =>
-      items.filter((t) => tripFitsPassengersAndBags(t, totalPassengersInTrip, bagsCount)),
-    [items, totalPassengersInTrip, bagsCount],
+      tripsMatchingWhen.filter((t) => tripFitsPassengersAndBags(t, totalPassengersInTrip, 0)),
+    [tripsMatchingWhen, totalPassengersInTrip],
   );
 
   useEffect(() => {
@@ -122,7 +142,7 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
   }, [load]);
 
   const handleContinue = () => {
-    const sel = items.find((i) => i.id === selectedId);
+    const sel = visibleItems.find((i) => i.id === selectedId);
     if (!sel) return;
     const amountCents = sel.amount_cents;
     if (amountCents == null || !Number.isFinite(amountCents) || amountCents < 1) {
@@ -172,11 +192,23 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
             <Text style={styles.retryBtnText}>Voltar</Text>
           </TouchableOpacity>
         </View>
+      ) : tripsMatchingWhen.length === 0 ? (
+        <View style={styles.centered}>
+          <Text style={styles.errText}>
+            {whenOption === 'later' && whenLabel
+              ? `Nenhuma viagem nesta rota para ${whenLabel}. Tente outro dia ou altere origem e destino.`
+              : 'Nenhuma viagem nesta rota para hoje. Você pode tentar agendar outro dia.'}
+          </Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => navigation.goBack()}>
+            <Text style={styles.retryBtnText}>Voltar</Text>
+          </TouchableOpacity>
+        </View>
       ) : visibleItems.length === 0 ? (
         <View style={styles.centered}>
           <Text style={styles.errText}>
-            Nenhuma viagem disponível comporta {totalPassengersInTrip} passageiro(es) e {bagsCount}{' '}
-            {bagsCount === 1 ? 'mala' : 'malas'}. Reduza acompanhantes ou malas e tente de novo.
+            Nenhuma viagem nesta rota tem lugares suficientes para {totalPassengersInTrip}{' '}
+            {totalPassengersInTrip === 1 ? 'passageiro embarcado' : 'passageiros embarcados'}
+            {companions > 0 ? ` (dependente + ${companions} acompanhante(s))` : ' (dependente)'}. Reduza acompanhantes ou escolha outra data/rota.
           </Text>
           <TouchableOpacity style={styles.retryBtn} onPress={() => navigation.goBack()}>
             <Text style={styles.retryBtnText}>Voltar</Text>

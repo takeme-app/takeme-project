@@ -268,7 +268,9 @@ PODS:
     - ExpoModulesCore
   - ExpoLocation (18.0.10):
     - ExpoModulesCore
-  - ExpoModulesCore (3.0.29):
+  - ExpoMapboxNavigation (0.1.0):
+    - ExpoModulesCore
+  - ExpoModulesCore (2.5.0):
     - boost
     - DoubleConversion
     - fast_float
@@ -297,6 +299,8 @@ PODS:
     - ReactCommon/turbomodule/core
     - SocketRocket
     - Yoga
+  - ExpoNetwork (8.0.8):
+    - ExpoModulesCore
   - ExpoSplashScreen (31.0.13):
     - ExpoModulesCore
   - EXUpdatesInterface (2.0.0):
@@ -3019,7 +3023,9 @@ DEPENDENCIES:
   - ExpoLinearGradient (from `../../../node_modules/expo-linear-gradient/ios`)
   - ExpoLinking (from `../../../node_modules/expo-linking/ios`)
   - ExpoLocation (from `../../../node_modules/expo-location/ios`)
-  - ExpoModulesCore (from `../../../node_modules/expo-modules-core`)
+  - ExpoMapboxNavigation (from `../../../packages/expo-mapbox-navigation/ios`)
+  - ExpoModulesCore (from `../../../packages/expo-mapbox-navigation/node_modules/expo-modules-core`)
+  - ExpoNetwork (from `../../../node_modules/expo-network/ios`)
   - ExpoSplashScreen (from `../../../node_modules/expo-splash-screen/ios`)
   - EXUpdatesInterface (from `../../../node_modules/expo-updates-interface/ios`)
   - fast_float (from `../../../node_modules/react-native/third-party-podspecs/fast_float.podspec`)
@@ -3166,8 +3172,12 @@ EXTERNAL SOURCES:
     :path: "../../../node_modules/expo-linking/ios"
   ExpoLocation:
     :path: "../../../node_modules/expo-location/ios"
+  ExpoMapboxNavigation:
+    :path: "../../../packages/expo-mapbox-navigation/ios"
   ExpoModulesCore:
-    :path: "../../../node_modules/expo-modules-core"
+    :path: "../../../packages/expo-mapbox-navigation/node_modules/expo-modules-core"
+  ExpoNetwork:
+    :path: "../../../node_modules/expo-network/ios"
   ExpoSplashScreen:
     :path: "../../../node_modules/expo-splash-screen/ios"
   EXUpdatesInterface:
@@ -3352,7 +3362,9 @@ SPEC CHECKSUMS:
   ExpoLinearGradient: 809102bdb979f590083af49f7fa4805cd931bd58
   ExpoLinking: 8f0aaf69aa56f832913030503b6263dc6f647f37
   ExpoLocation: de58a60756fad907139ec422ccabb1ba734e080d
-  ExpoModulesCore: d86dab8a6c8f1184f9b0b0503ace93919882aa15
+  ExpoMapboxNavigation: 6af1395b7b8e5625923e6a7dd379bdefaec0b16a
+  ExpoModulesCore: 6add940ddf59a191a31dc675459b19e45da3ff22
+  ExpoNetwork: ee1fb67b0de59ab7f36794caf8242955dd8ae046
   ExpoSplashScreen: bc3cffefca2716e5f22350ca109badd7e50ec14d
   EXUpdatesInterface: 5adf50cb41e079c861da6d9b4b954c3db9a50734
   fast_float: b32c788ed9c6a8c584d114d0047beda9664e7cc6

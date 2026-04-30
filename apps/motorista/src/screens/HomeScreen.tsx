@@ -208,99 +208,128 @@ export function HomeScreen({ navigation }: Props) {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user?.id) { setUserId(null); setLoading(false); return; }
-    setUserId(user.id);
+    const uid = user.id;
+    setUserId(uid);
 
-    // Worker profile
-    const { data: wr } = await supabase
-      .from('worker_profiles')
-      .select('cnh_document_url, cnh_document_back_url, is_available_for_requests')
-      .eq('id', user.id)
-      .maybeSingle();
-    const w = wr as {
-      cnh_document_url?: string | null;
-      cnh_document_back_url?: string | null;
-      is_available_for_requests?: boolean | null;
-    } | null;
-    setCnhOk(Boolean(w?.cnh_document_url?.trim()));
-    setCnhBackOk(Boolean(w?.cnh_document_back_url?.trim()));
-    setAvailable(w?.is_available_for_requests ?? false);
+    try {
+      // Fase 1: tudo independente após auth em paralelo (evita ~4 round-trips em série).
+      const [
+        wrRes,
+        vehiclesRes,
+        tripDataRes,
+        tripIdsRowsRes,
+      ] = await Promise.all([
+        supabase
+          .from('worker_profiles')
+          .select('cnh_document_url, cnh_document_back_url, is_available_for_requests')
+          .eq('id', uid)
+          .maybeSingle(),
+        supabase
+          .from('vehicles')
+          .select('model, plate, year, passenger_capacity, vehicle_document_url')
+          .eq('worker_id', uid)
+          .eq('is_active', true),
+        supabase
+          .from('scheduled_trips')
+          .select(
+            'id, origin_address, destination_address, departure_at, trunk_occupancy_pct, origin_lat, origin_lng, destination_lat, destination_lng, route_id, is_active, driver_journey_started_at',
+          )
+          .eq('driver_id', uid)
+          .eq('status', 'active')
+          .not('driver_journey_started_at', 'is', null)
+          .order('departure_at', { ascending: true })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('scheduled_trips')
+          .select('id')
+          .eq('driver_id', uid)
+          .in('status', ['scheduled', 'active']),
+      ]);
 
-    // Documento do veículo (CRLV): só sinaliza se já existe veículo “completo” nos campos básicos mas sem arquivo
-    const { data: vehicles } = await supabase
-      .from('vehicles')
-      .select('model, plate, year, passenger_capacity, vehicle_document_url')
-      .eq('worker_id', user.id)
-      .eq('is_active', true);
-    const vRows = (vehicles ?? []) as {
-      model?: string | null;
-      plate?: string | null;
-      year?: number | null;
-      passenger_capacity?: number | null;
-      vehicle_document_url?: string | null;
-    }[];
-    let missingVDoc = false;
-    for (const v of vRows) {
-      const structOk =
-        Boolean(v.model?.trim()) &&
-        Boolean(v.plate?.trim()) &&
-        Boolean(v.year) &&
-        Boolean(v.passenger_capacity);
-      if (structOk && !v.vehicle_document_url?.trim()) {
-        missingVDoc = true;
-        break;
+      const wr = wrRes.data;
+      const w = wr as {
+        cnh_document_url?: string | null;
+        cnh_document_back_url?: string | null;
+        is_available_for_requests?: boolean | null;
+      } | null;
+      setCnhOk(Boolean(w?.cnh_document_url?.trim()));
+      setCnhBackOk(Boolean(w?.cnh_document_back_url?.trim()));
+      setAvailable(w?.is_available_for_requests ?? false);
+
+      const vehicles = vehiclesRes.data;
+      const vRows = (vehicles ?? []) as {
+        model?: string | null;
+        plate?: string | null;
+        year?: number | null;
+        passenger_capacity?: number | null;
+        vehicle_document_url?: string | null;
+      }[];
+      let missingVDoc = false;
+      for (const v of vRows) {
+        const structOk =
+          Boolean(v.model?.trim()) &&
+          Boolean(v.plate?.trim()) &&
+          Boolean(v.year) &&
+          Boolean(v.passenger_capacity);
+        if (structOk && !v.vehicle_document_url?.trim()) {
+          missingVDoc = true;
+          break;
+        }
       }
-    }
-    setMissingVehicleDocument(missingVDoc);
+      setMissingVehicleDocument(missingVDoc);
 
-    // Active trip
-    const { data: tripData } = await supabase
-      .from('scheduled_trips')
-      .select(
-        'id, origin_address, destination_address, departure_at, trunk_occupancy_pct, origin_lat, origin_lng, destination_lat, destination_lng, route_id, is_active, driver_journey_started_at',
-      )
-      .eq('driver_id', user.id)
-      .eq('status', 'active')
-      .not('driver_journey_started_at', 'is', null)
-      .order('departure_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
+      const tripData = tripDataRes.data;
+      const tripIdsRows = tripIdsRowsRes.data;
+      const myTripIds = (tripIdsRows ?? []).map((r) => (r as { id: string }).id);
+      const tripIdSet = new Set(myTripIds);
 
-    if (tripData) {
-      const t = tripData as {
-        id: string;
-        origin_address: string;
-        destination_address: string;
-        departure_at: string;
-        trunk_occupancy_pct: number | null;
-        origin_lat?: number | null;
-        origin_lng?: number | null;
-        destination_lat?: number | null;
-        destination_lng?: number | null;
-        route_id?: string | null;
-        is_active?: boolean | null;
-      };
-      if (t.route_id != null && t.is_active === false) {
-        setActiveTrip(null);
-      } else {
-      const { data: bkgs } = await supabase
-        .from('bookings')
-        .select('passenger_count, bags_count, origin_lat, origin_lng')
-        .eq('scheduled_trip_id', t.id)
-        .eq('status', 'confirmed');
-      const bkgRows = (bkgs ?? []) as { passenger_count?: number; bags_count?: number; origin_lat?: number | null; origin_lng?: number | null }[];
-      const passengerCount = bkgRows.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
-      const bagsCount = bkgRows.reduce((s, b) => s + (b.bags_count ?? 0), 0);
-
-      const { count: shipCount } = await supabase
-        .from('shipments')
-        .select('id', { count: 'exact', head: true })
-        .eq('scheduled_trip_id' as never, t.id as never)
-        .eq('driver_id', user.id)
-        .in('status', ['confirmed', 'in_progress'] as never);
-
-      const bookingPickups = bkgRows
-        .filter((b) => b.origin_lat != null && b.origin_lng != null)
-        .map((b) => ({ lat: b.origin_lat!, lng: b.origin_lng! }));
+      const fillActiveTrip = async () => {
+        if (!tripData) {
+          setActiveTrip(null);
+          return;
+        }
+        const t = tripData as {
+          id: string;
+          origin_address: string;
+          destination_address: string;
+          departure_at: string;
+          trunk_occupancy_pct: number | null;
+          origin_lat?: number | null;
+          origin_lng?: number | null;
+          destination_lat?: number | null;
+          destination_lng?: number | null;
+          route_id?: string | null;
+          is_active?: boolean | null;
+        };
+        if (t.route_id != null && t.is_active === false) {
+          setActiveTrip(null);
+          return;
+        }
+        const [{ data: bkgs }, { count: shipCount }] = await Promise.all([
+          supabase
+            .from('bookings')
+            .select('passenger_count, bags_count, origin_lat, origin_lng')
+            .eq('scheduled_trip_id', t.id)
+            .eq('status', 'confirmed'),
+          supabase
+            .from('shipments')
+            .select('id', { count: 'exact', head: true })
+            .eq('scheduled_trip_id' as never, t.id as never)
+            .eq('driver_id', uid)
+            .in('status', ['confirmed', 'in_progress'] as never),
+        ]);
+        const bkgRows = (bkgs ?? []) as {
+          passenger_count?: number;
+          bags_count?: number;
+          origin_lat?: number | null;
+          origin_lng?: number | null;
+        }[];
+        const passengerCount = bkgRows.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
+        const bagsCount = bkgRows.reduce((s, b) => s + (b.bags_count ?? 0), 0);
+        const bookingPickups = bkgRows
+          .filter((b) => b.origin_lat != null && b.origin_lng != null)
+          .map((b) => ({ lat: b.origin_lat!, lng: b.origin_lng! }));
         setActiveTrip({
           id: t.id,
           origin_address: t.origin_address,
@@ -316,90 +345,90 @@ export function HomeScreen({ navigation }: Props) {
           destination_lng: t.destination_lng ?? null,
           bookingPickups,
         });
-      }
-    } else {
-      setActiveTrip(null);
+      };
+
+      const fillPendingAndRoute = async () => {
+        const pendingCountsPromise =
+          myTripIds.length === 0
+            ? Promise.resolve({ bCount: 0, sPending: 0, dPending: 0 })
+            : Promise.all([
+                supabase
+                  .from('bookings')
+                  .select('id', { count: 'exact', head: true })
+                  .in('status', ['pending', 'paid'])
+                  .in('scheduled_trip_id', myTripIds),
+                supabase
+                  .from('shipments')
+                  .select('id', { count: 'exact', head: true })
+                  .in('scheduled_trip_id', myTripIds)
+                  .is('driver_id', null)
+                  .in('status', ['pending_review', 'confirmed']),
+                supabase
+                  .from('dependent_shipments')
+                  .select('id', { count: 'exact', head: true })
+                  .in('scheduled_trip_id', myTripIds)
+                  .eq('status', 'pending_review'),
+              ]).then(([bRes, sRes, dRes]) => ({
+                bCount: bRes.count ?? 0,
+                sPending: sRes.count ?? 0,
+                dPending: dRes.count ?? 0,
+              }));
+
+        const [
+          { bCount, sPending, dPending },
+          { data: offerCountRows },
+          { data: prefCountRows },
+          { count: scheduledRouteCount },
+        ] = await Promise.all([
+          pendingCountsPromise,
+          supabase
+            .from('shipments')
+            .select('id, scheduled_trip_id')
+            .eq('current_offer_driver_id', uid)
+            .is('driver_id', null)
+            .in('status', ['pending_review', 'confirmed']),
+          supabase
+            .from('shipments')
+            .select('id, scheduled_trip_id')
+            .eq('client_preferred_driver_id', uid)
+            .is('current_offer_driver_id', null)
+            .is('driver_id', null)
+            .in('status', ['pending_review', 'confirmed']),
+          supabase
+            .from('scheduled_trips')
+            .select('id', { count: 'exact', head: true })
+            .eq('driver_id', uid)
+            .not('route_id', 'is', null)
+            .not('departure_at', 'is', null)
+            .in('status', ['scheduled', 'active']),
+        ]);
+
+        const shipmentOfferCount = (offerCountRows ?? []).filter((r) => {
+          const tid = (r as { scheduled_trip_id?: string | null }).scheduled_trip_id;
+          if (tid == null || tid === '') return true;
+          return tripIdSet.has(tid);
+        }).length;
+
+        const shipmentPreferredWaitCount = (prefCountRows ?? []).filter((r) => {
+          const tid = (r as { scheduled_trip_id?: string | null }).scheduled_trip_id;
+          if (tid == null || tid === '') return true;
+          return tripIdSet.has(tid);
+        }).length;
+
+        setPendingCount(
+          bCount +
+            sPending +
+            dPending +
+            shipmentOfferCount +
+            shipmentPreferredWaitCount,
+        );
+        setHasScheduledRouteWithTime((scheduledRouteCount ?? 0) > 0);
+      };
+
+      await Promise.all([fillActiveTrip(), fillPendingAndRoute()]);
+    } finally {
+      setLoading(false);
     }
-
-    // Solicitações aguardando aceite: só viagens scheduled/active (corrida concluída → zera)
-    const { data: tripIdsRows } = await supabase
-      .from('scheduled_trips')
-      .select('id')
-      .eq('driver_id', user.id)
-      .in('status', ['scheduled', 'active']);
-    const myTripIds = (tripIdsRows ?? []).map((r) => (r as { id: string }).id);
-
-    let bCount = 0;
-    let sPending = 0;
-    let dPending = 0;
-    if (myTripIds.length > 0) {
-      const { count: bCnt } = await supabase
-        .from('bookings')
-        .select('id', { count: 'exact', head: true })
-        .in('status', ['pending', 'paid'])
-        .in('scheduled_trip_id', myTripIds);
-      bCount = bCnt ?? 0;
-
-      const { count: sCount } = await supabase
-        .from('shipments')
-        .select('id', { count: 'exact', head: true })
-        .in('scheduled_trip_id', myTripIds)
-        .is('driver_id', null)
-        .in('status', ['pending_review', 'confirmed']);
-      sPending = sCount ?? 0;
-
-      const { count: depCount } = await supabase
-        .from('dependent_shipments')
-        .select('id', { count: 'exact', head: true })
-        .in('scheduled_trip_id', myTripIds)
-        .eq('status', 'pending_review');
-      dPending = depCount ?? 0;
-    }
-
-    const tripIdSet = new Set(myTripIds);
-    const { data: offerCountRows } = await supabase
-      .from('shipments')
-      .select('id, scheduled_trip_id')
-      .eq('current_offer_driver_id', user.id)
-      .is('driver_id', null)
-      .in('status', ['pending_review', 'confirmed']);
-    const shipmentOfferCount = (offerCountRows ?? []).filter((r) => {
-      const tid = (r as { scheduled_trip_id?: string | null }).scheduled_trip_id;
-      if (tid == null || tid === '') return true;
-      return tripIdSet.has(tid);
-    }).length;
-
-    const { data: prefCountRows } = await supabase
-      .from('shipments')
-      .select('id, scheduled_trip_id')
-      .eq('client_preferred_driver_id', user.id)
-      .is('current_offer_driver_id', null)
-      .is('driver_id', null)
-      .in('status', ['pending_review', 'confirmed']);
-    const shipmentPreferredWaitCount = (prefCountRows ?? []).filter((r) => {
-      const tid = (r as { scheduled_trip_id?: string | null }).scheduled_trip_id;
-      if (tid == null || tid === '') return true;
-      return tripIdSet.has(tid);
-    }).length;
-
-    setPendingCount(
-      bCount +
-        sPending +
-        dPending +
-        shipmentOfferCount +
-        shipmentPreferredWaitCount,
-    );
-
-    const { count: scheduledRouteCount } = await supabase
-      .from('scheduled_trips')
-      .select('id', { count: 'exact', head: true })
-      .eq('driver_id', user.id)
-      .not('route_id', 'is', null)
-      .not('departure_at', 'is', null)
-      .in('status', ['scheduled', 'active']);
-    setHasScheduledRouteWithTime((scheduledRouteCount ?? 0) > 0);
-
-    setLoading(false);
   }, []);
 
   useFocusEffect(
