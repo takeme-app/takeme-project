@@ -7,6 +7,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  adminCompleteBaseToDriver,
+  adminCompletePreparerToBase,
+  adminOpenSupportTicketForEntity,
   fetchApprovedDriversForEncomendaUI,
   fetchEncomendaEditDetail,
   formatCurrencyBRL,
@@ -21,6 +24,8 @@ import { DETAIL_TRIP_MAP_HEIGHT, webStyles } from '../styles/webStyles';
 import { useTripStops } from '../hooks/useTripStops';
 import { useEncomendaMapCoords } from '../hooks/useEncomendaMapCoords';
 import { geocodeAddress } from '../lib/googleGeocoding';
+import { MaskedPinValue } from '../components/MaskedPinValue';
+import { getDependentOperationalStageLabel, getShipmentOperationalStageLabel } from '../lib/handoffStages';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 const encomendaPlacesInputStyle: React.CSSProperties = {
@@ -88,9 +93,15 @@ const checkSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0
 const infoSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
   React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#cba04b', strokeWidth: 2 }),
   React.createElement('path', { d: 'M12 16v-4M12 8h.01', stroke: '#cba04b', strokeWidth: 2, strokeLinecap: 'round' }));
-const headphoneSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-  React.createElement('path', { d: 'M3 18v-6a9 9 0 0118 0v6', stroke: '#cba04b', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-  React.createElement('path', { d: 'M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3v5zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3v5z', stroke: '#cba04b', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+/** Ícone de atendimento (mesma leitura que a lista de encomendas) — traço escuro para contraste no badge bege. */
+const atendimentoChatBubbleSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', {
+    d: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z',
+    stroke: '#0d0d0d',
+    strokeWidth: 2,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+  }));
 const calendarSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block', flexShrink: 0 } },
   React.createElement('rect', { x: 3, y: 4, width: 18, height: 18, rx: 2, stroke: '#767676', strokeWidth: 2 }),
   React.createElement('path', { d: 'M16 2v4M8 2v4M3 10h18', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round' }));
@@ -230,6 +241,172 @@ const editField = (label: string, value: string, onChange: (v: string) => void) 
       },
     }));
 
+function fmtHandoffTs(iso: string | null): string {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString('pt-BR');
+  } catch {
+    return iso;
+  }
+}
+
+function pinHandoffRow(
+  title: string,
+  subtitle: string,
+  code: string | null,
+  validatedAt: string | null,
+): React.ReactNode {
+  return React.createElement(
+    'div',
+    {
+      key: title,
+      style: {
+        display: 'flex',
+        flexDirection: 'column' as const,
+        gap: 8,
+        paddingBottom: 16,
+        marginBottom: 8,
+        borderBottom: '1px solid #e8e8e8',
+      },
+    },
+    React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#0d0d0d', ...font } }, title),
+    React.createElement('span', { style: { fontSize: 12, color: '#767676', lineHeight: 1.45, ...font } }, subtitle),
+    React.createElement(
+      'div',
+      { style: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const } },
+      React.createElement(MaskedPinValue, { value: code, label: title }),
+      React.createElement(
+        'span',
+        { style: { fontSize: 12, color: '#767676', ...font } },
+        validatedAt ? `Validado: ${fmtHandoffTs(validatedAt)}` : 'Ainda não validado',
+      ),
+    ),
+  );
+}
+
+type AdminHandoffPinRowProps = {
+  title: string;
+  subtitle: string;
+  code: string | null;
+  validatedAt: string | null;
+  actionEnabled: boolean;
+  actionButtonLabel: string;
+  codeInput: string;
+  onCodeChange: (v: string) => void;
+  onSubmit: () => void;
+  submitting: boolean;
+  error: string | null;
+};
+
+/** PIN B/C com base: operador admin digita o código informado pelo preparador / motorista. */
+function adminHandoffPinRow(p: AdminHandoffPinRowProps): React.ReactNode {
+  const digitsOnly = (v: string) => v.replace(/\D/g, '').slice(0, 4);
+  return React.createElement(
+    'div',
+    {
+      key: p.title,
+      style: {
+        display: 'flex',
+        flexDirection: 'column' as const,
+        gap: 10,
+        paddingBottom: 16,
+        marginBottom: 8,
+        borderBottom: '1px solid #e8e8e8',
+      },
+    },
+    React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#0d0d0d', ...font } }, p.title),
+    React.createElement('span', { style: { fontSize: 12, color: '#767676', lineHeight: 1.45, ...font } }, p.subtitle),
+    React.createElement(
+      'div',
+      { style: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const } },
+      React.createElement(MaskedPinValue, { value: p.code, label: p.title }),
+      React.createElement(
+        'span',
+        { style: { fontSize: 12, color: '#767676', ...font } },
+        p.validatedAt ? `Validado: ${fmtHandoffTs(p.validatedAt)}` : 'Ainda não validado',
+      ),
+    ),
+    p.actionEnabled
+      ? React.createElement(
+        'div',
+        { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, marginTop: 4 } },
+        React.createElement('input', {
+          type: 'text',
+          inputMode: 'numeric',
+          pattern: '[0-9]*',
+          maxLength: 4,
+          placeholder: '4 dígitos',
+          value: p.codeInput,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => p.onCodeChange(digitsOnly(e.target.value)),
+          disabled: p.submitting,
+          style: {
+            maxWidth: 140,
+            height: 40,
+            borderRadius: 8,
+            border: '1px solid #e2e2e2',
+            padding: '0 12px',
+            fontSize: 16,
+            letterSpacing: 4,
+            ...font,
+          },
+        }),
+        p.error
+          ? React.createElement('span', { style: { fontSize: 12, color: '#b53838', ...font } }, p.error)
+          : null,
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            disabled: p.submitting || p.codeInput.length !== 4,
+            onClick: () => { void p.onSubmit(); },
+            style: {
+              alignSelf: 'flex-start',
+              height: 40,
+              padding: '0 20px',
+              borderRadius: 999,
+              border: 'none',
+              background: '#0d0d0d',
+              color: '#fff',
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: p.submitting || p.codeInput.length !== 4 ? 'not-allowed' : 'pointer',
+              opacity: p.submitting || p.codeInput.length !== 4 ? 0.6 : 1,
+              ...font,
+            },
+          },
+          p.submitting ? 'A validar…' : p.actionButtonLabel,
+        ),
+      )
+      : null,
+  );
+}
+
+function hasTs(v: string | null | undefined): boolean {
+  return v != null && String(v).trim() !== '';
+}
+
+function directDeliveryRepasseLabel(pickedUpAt: string | null, deliveredAt: string | null): string {
+  if (hasTs(deliveredAt)) return 'Entrega concluída';
+  if (hasTs(pickedUpAt)) return 'Após coleta: repasse do PIN de entrega ao destinatário (fora do app)';
+  return 'Aguardando coleta no cliente';
+}
+
+function rpcErrPt(code: string | undefined): string {
+  const m: Record<string, string> = {
+    forbidden: 'Sem permissão de admin.',
+    not_authenticated: 'Sessão expirada — faça login de novo.',
+    invalid_code: 'Código incorreto.',
+    code_length: 'Use exatamente 4 dígitos.',
+    missing_code: 'PIN não disponível nesta encomenda.',
+    pickup_not_completed: 'O passageiro ainda não validou o PIN A.',
+    no_base: 'Esta encomenda não tem base.',
+    not_at_base: 'A encomenda ainda não foi registada na base (PIN B).',
+    missing_entity: 'Encomenda não encontrada.',
+  };
+  if (code && m[code]) return m[code];
+  return code || 'Erro ao validar.';
+}
+
 function toDatetimeLocalValue(iso: string | null | undefined): string {
   if (!iso) return '';
   const d = new Date(iso);
@@ -238,7 +415,17 @@ function toDatetimeLocalValue(iso: string | null | undefined): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-const encomendaCard = (lead: React.ReactNode, tamanho: string, valor: string, remetente: string, destinatario: string, recolha: string, entrega: string, obs: string) =>
+const encomendaCard = (
+  lead: React.ReactNode,
+  tamanho: string,
+  valor: string,
+  remetente: string,
+  destinatario: string,
+  recolha: string,
+  entrega: string,
+  obs: string,
+  atendimentoControl: React.ReactNode,
+) =>
   React.createElement('div', {
     style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, padding: 20, border: '1px solid #e2e2e2', borderRadius: 16, background: '#fff', alignItems: 'flex-start' },
   },
@@ -266,7 +453,7 @@ const encomendaCard = (lead: React.ReactNode, tamanho: string, valor: string, re
         React.createElement('div', null,
           React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Observações:'),
           React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, obs)))),
-    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: '50%', background: '#faf5eb' } }, headphoneSvg));
+    atendimentoControl);
 
 export default function EncomendaEditScreen() {
   const navigate = useNavigate();
@@ -276,6 +463,14 @@ export default function EncomendaEditScreen() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [atendimentoOpening, setAtendimentoOpening] = useState(false);
+
+  const [adminPinB, setAdminPinB] = useState('');
+  const [adminPinC, setAdminPinC] = useState('');
+  const [adminPinBLoading, setAdminPinBLoading] = useState(false);
+  const [adminPinCLoading, setAdminPinCLoading] = useState(false);
+  const [adminPinBErr, setAdminPinBErr] = useState<string | null>(null);
+  const [adminPinCErr, setAdminPinCErr] = useState<string | null>(null);
 
   const [origem, setOrigem] = useState('');
   const [destino, setDestino] = useState('');
@@ -342,6 +537,58 @@ export default function EncomendaEditScreen() {
     const t = setTimeout(() => setToast(null), 4000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  useEffect(() => {
+    setAdminPinB('');
+    setAdminPinC('');
+    setAdminPinBErr(null);
+    setAdminPinCErr(null);
+  }, [detail?.id]);
+
+  const submitAdminPinB = useCallback(async () => {
+    if (!detail || detail.kind !== 'shipment') return;
+    setAdminPinBLoading(true);
+    setAdminPinBErr(null);
+    const r = await adminCompletePreparerToBase(detail.id, adminPinB);
+    setAdminPinBLoading(false);
+    if (r.ok) {
+      setToast(r.already_completed ? 'PIN B já estava validado.' : 'Receção na base confirmada.');
+      setAdminPinB('');
+      const d2 = await fetchEncomendaEditDetail(detail.id);
+      if (d2) setDetail(d2);
+    } else {
+      setAdminPinBErr(rpcErrPt(r.error));
+    }
+  }, [detail, adminPinB]);
+
+  const submitAdminPinC = useCallback(async () => {
+    if (!detail || detail.kind !== 'shipment') return;
+    setAdminPinCLoading(true);
+    setAdminPinCErr(null);
+    const r = await adminCompleteBaseToDriver(detail.id, adminPinC);
+    setAdminPinCLoading(false);
+    if (r.ok) {
+      setToast(r.already_completed ? 'PIN C já estava validado.' : 'Despacho ao motorista confirmado.');
+      setAdminPinC('');
+      const d2 = await fetchEncomendaEditDetail(detail.id);
+      if (d2) setDetail(d2);
+    } else {
+      setAdminPinCErr(rpcErrPt(r.error));
+    }
+  }, [detail, adminPinC]);
+
+  const copyDirectDeliveryMessage = useCallback(async () => {
+    if (!detail || detail.kind !== 'shipment') return;
+    const name = (recipientName || detail.recipientName || 'Destinatário').trim();
+    const pin = (detail.deliveryCode || '').trim() || '—';
+    const msg = `Olá ${name}, a sua encomenda TakeMe chegará com o motorista. PIN de entrega (4 dígitos): ${pin}. Apresente este código ao motorista na entrega.`;
+    try {
+      await navigator.clipboard.writeText(msg);
+      setToast('Mensagem copiada para a área de transferência.');
+    } catch {
+      setToast('Não foi possível copiar automaticamente.');
+    }
+  }, [detail, recipientName]);
 
   useEffect(() => {
     if (!routeId) {
@@ -588,6 +835,37 @@ export default function EncomendaEditScreen() {
     tripPainelEncerrado,
   ]);
 
+  const onAtendimentoClick = useCallback(async () => {
+    if (!detail) return;
+    const existing = detail.supportConversationId?.trim();
+    if (existing) {
+      navigate(`/atendimentos/${existing}`, { state: { from: 'encomenda-edit' } });
+      return;
+    }
+    setAtendimentoOpening(true);
+    try {
+      const { conversationId, error } = await adminOpenSupportTicketForEntity({
+        shipmentId: detail.kind === 'shipment' ? detail.id : null,
+        dependentShipmentId: detail.kind === 'dependent_shipment' ? detail.id : null,
+        category: 'encomendas',
+        context: {
+          source_screen: 'encomenda_edit',
+          ...(detail.kind === 'shipment' && detail.scheduledTripId
+            ? { scheduled_trip_id: String(detail.scheduledTripId) }
+            : {}),
+        },
+      });
+      if (error || !conversationId) {
+        setToast(error ?? 'Não foi possível criar o ticket de atendimento. Confirme que a função admin_open_support_ticket_for_entity está aplicada no Supabase.');
+        return;
+      }
+      setDetail((prev) => (prev ? { ...prev, supportConversationId: conversationId } : null));
+      navigate(`/atendimentos/${conversationId}`, { state: { from: 'encomenda-edit', createdTicket: true } });
+    } finally {
+      setAtendimentoOpening(false);
+    }
+  }, [detail, navigate]);
+
   if (loading) {
     return React.createElement('div', { style: { padding: 40, ...font } }, 'Carregando…');
   }
@@ -651,6 +929,35 @@ export default function EncomendaEditScreen() {
       lineHeight: 1,
     },
   }, '\u{1F9F3}');
+  const badgeAtendimentoBase: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: '50%',
+    flexShrink: 0,
+    padding: 0,
+    border: 'none',
+  };
+  const hasSupportConv = Boolean(detail.supportConversationId?.trim());
+  const atendimentoControl = React.createElement('button', {
+    type: 'button',
+    disabled: atendimentoOpening,
+    'aria-busy': atendimentoOpening ? true : undefined,
+    title: hasSupportConv
+      ? 'Abrir o ticket de atendimento já ligado a este envio.'
+      : 'Abrir ou criar ticket de atendimento para o cliente deste envio.',
+    'aria-label': hasSupportConv ? 'Abrir atendimento desta encomenda' : 'Criar ou abrir atendimento desta encomenda',
+    onClick: () => { void onAtendimentoClick(); },
+    style: {
+      ...badgeAtendimentoBase,
+      ...(atendimentoOpening ? { opacity: 0.55 } : {}),
+      background: '#faf5eb',
+      cursor: atendimentoOpening ? 'wait' : 'pointer',
+      boxSizing: 'border-box' as const,
+    },
+  }, atendimentoChatBubbleSvg);
   const encomendaPreview = detail.kind === 'shipment'
     ? encomendaCard(
         leadShipment,
@@ -661,6 +968,7 @@ export default function EncomendaEditScreen() {
         origem,
         destino,
         instructions || '—',
+        atendimentoControl,
       )
     : encomendaCard(
         leadDependent,
@@ -671,6 +979,7 @@ export default function EncomendaEditScreen() {
         origem,
         destino,
         instructions || '—',
+        atendimentoControl,
       );
 
   const motoristaNoteCopy =
@@ -835,6 +1144,210 @@ export default function EncomendaEditScreen() {
           style: { flex: 1, border: 'none', background: 'transparent', fontSize: 14, color: '#0d0d0d', ...font },
         })),
       React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Alterar o horário de início atualizará automaticamente o tempo estimado de chegada.')),
+    // PINs e handoffs (detalhe — não aparecem nas listagens)
+    detail.kind === 'shipment'
+      ? React.createElement(
+        'div',
+        {
+          style: {
+            display: 'flex',
+            flexDirection: 'column' as const,
+            gap: 12,
+            padding: '20px 0 24px',
+            borderBottom: '1px solid #e2e2e2',
+          },
+        },
+        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Handoffs e PINs'),
+        React.createElement(
+          'div',
+          {
+            style: {
+              padding: '12px 16px',
+              borderRadius: 10,
+              background: '#f6f6f6',
+              fontSize: 14,
+              fontWeight: 600,
+              color: '#0d0d0d',
+              ...font,
+            },
+          },
+          getShipmentOperationalStageLabel({
+            status: detail.status,
+            baseId: detail.baseId,
+            pickedUpByPreparerAt: detail.pickedUpByPreparerAt,
+            deliveredToBaseAt: detail.deliveredToBaseAt,
+            pickedUpByDriverFromBaseAt: detail.pickedUpByDriverFromBaseAt,
+            pickedUpAt: detail.pickedUpAt,
+            deliveredAt: detail.deliveredAt,
+          }),
+        ),
+        detail.baseId
+          ? React.createElement(
+            React.Fragment,
+            null,
+            pinHandoffRow(
+              'PIN A (passageiro → preparador)',
+              'O passageiro valida no app cliente; corresponde a `picked_up_by_preparer_at`.',
+              detail.passengerToPreparerCode,
+              detail.pickedUpByPreparerAt,
+            ),
+            adminHandoffPinRow({
+              title: 'PIN B (preparador → base)',
+              subtitle:
+                'O preparador informa verbalmente o PIN B ao operador; o admin digita aqui para confirmar a receção na base (`delivered_to_base_at`).',
+              code: detail.preparerToBaseCode,
+              validatedAt: detail.deliveredToBaseAt,
+              actionEnabled:
+                !!detail.pickedUpByPreparerAt
+                && !detail.deliveredToBaseAt
+                && detail.status !== 'cancelled',
+              actionButtonLabel: 'Receber encomenda do preparador',
+              codeInput: adminPinB,
+              onCodeChange: setAdminPinB,
+              onSubmit: submitAdminPinB,
+              submitting: adminPinBLoading,
+              error: adminPinBErr,
+            }),
+            adminHandoffPinRow({
+              title: 'PIN C (motorista → base)',
+              subtitle:
+                'O motorista informa verbalmente o PIN C ao operador; o admin digita aqui para confirmar o despacho (`picked_up_by_driver_from_base_at`).',
+              code: detail.baseToDriverCode,
+              validatedAt: detail.pickedUpByDriverFromBaseAt,
+              actionEnabled:
+                !!detail.deliveredToBaseAt
+                && !detail.pickedUpByDriverFromBaseAt
+                && detail.status !== 'cancelled',
+              actionButtonLabel: 'Despachar ao motorista',
+              codeInput: adminPinC,
+              onCodeChange: setAdminPinC,
+              onSubmit: submitAdminPinC,
+              submitting: adminPinCLoading,
+              error: adminPinCErr,
+            }),
+            pinHandoffRow(
+              'PIN D (motorista → destinatário)',
+              'Entrega final; corresponde a `delivered_at`.',
+              detail.deliveryCode,
+              detail.deliveredAt,
+            ),
+            detail.pickupCode
+              ? pinHandoffRow(
+                'PIN de coleta (`pickup_code`, compat.)',
+                'Gerado por compatibilidade no cenário com base; não entra na validação principal do fluxo 3.',
+                detail.pickupCode,
+                detail.pickedUpAt,
+              )
+              : null,
+          )
+          : React.createElement(
+            React.Fragment,
+            null,
+            React.createElement(
+              'div',
+              {
+                style: {
+                  padding: '14px 16px',
+                  borderRadius: 10,
+                  background: '#f0f7ff',
+                  border: '1px solid #c5daf5',
+                  marginBottom: 16,
+                  display: 'flex',
+                  flexDirection: 'column' as const,
+                  gap: 10,
+                },
+              },
+              React.createElement(
+                'span',
+                { style: { fontSize: 14, fontWeight: 700, color: '#102d57', ...font } },
+                'Entrega direta (sem base)',
+              ),
+              React.createElement(
+                'span',
+                { style: { fontSize: 12, color: '#545454', lineHeight: 1.5, ...font } },
+                'Cliente → motorista (coleta no cliente) → destinatário. O PIN de embarque da viagem comum continua com o passageiro no app cliente.',
+              ),
+              React.createElement(
+                'div',
+                { style: { fontSize: 13, color: '#0d0d0d', ...font } },
+                React.createElement('div', { style: { marginBottom: 6 } },
+                  React.createElement('strong', null, 'Coleta: '),
+                  hasTs(detail.pickedUpAt) ? `Concluída (${fmtHandoffTs(detail.pickedUpAt)})` : 'Pendente'),
+                React.createElement('div', { style: { marginBottom: 6 } },
+                  React.createElement('strong', null, 'Repasse ao destinatário: '),
+                  directDeliveryRepasseLabel(detail.pickedUpAt, detail.deliveredAt)),
+                React.createElement('div', null,
+                  React.createElement('strong', null, 'Contacto destinatário: '),
+                  [recipientPhone || detail.recipientPhone, recipientEmail || detail.recipientEmail].filter(Boolean).join(' · ') || '—'),
+              ),
+              React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  onClick: () => { void copyDirectDeliveryMessage(); },
+                  disabled: !detail.deliveryCode || tripPainelEncerrado,
+                  style: {
+                    alignSelf: 'flex-start',
+                    height: 40,
+                    padding: '0 18px',
+                    borderRadius: 999,
+                    border: '1px solid #102d57',
+                    background: '#fff',
+                    color: '#102d57',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: !detail.deliveryCode || tripPainelEncerrado ? 'not-allowed' : 'pointer',
+                    opacity: !detail.deliveryCode || tripPainelEncerrado ? 0.5 : 1,
+                    ...font,
+                  },
+                },
+                'Copiar mensagem pronta (PIN de entrega)',
+              ),
+            ),
+            pinHandoffRow(
+              'PIN de coleta (cliente → motorista)',
+              'Cenário sem base; corresponde a `picked_up_at`.',
+              detail.pickupCode,
+              detail.pickedUpAt,
+            ),
+            pinHandoffRow(
+              'PIN de entrega (destinatário)',
+              'Cenário sem base; entrega final em `delivered_at`.',
+              detail.deliveryCode,
+              detail.deliveredAt,
+            ),
+          ),
+      )
+      : React.createElement(
+        'div',
+        {
+          style: {
+            display: 'flex',
+            flexDirection: 'column' as const,
+            gap: 12,
+            padding: '20px 0 24px',
+            borderBottom: '1px solid #e2e2e2',
+          },
+        },
+        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'PINs e handoffs (dependente)'),
+        React.createElement(
+          'div',
+          {
+            style: {
+              padding: '12px 16px',
+              borderRadius: 10,
+              background: '#f6f6f6',
+              fontSize: 14,
+              fontWeight: 600,
+              color: '#0d0d0d',
+              ...font,
+            },
+          },
+          getDependentOperationalStageLabel(detail.pickedUpAt, detail.deliveredAt, detail.status),
+        ),
+        pinHandoffRow('PIN de embarque', 'Solicitante → motorista.', detail.pickupCode, detail.pickedUpAt),
+        pinHandoffRow('PIN de desembarque', 'Responsável no destino ↔ motorista.', detail.deliveryCode, detail.deliveredAt),
+      ),
     // Motoristas disponíveis (Figma 1283-34111)
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, paddingBottom: 32, borderBottom: '1px solid #e2e2e2' } },
       motoristasComRota.length === 0

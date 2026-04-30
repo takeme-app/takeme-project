@@ -88,27 +88,30 @@ Referência conceitual: PDF interno *Sequência de Solicitação de Código* (ce
 
 ### 2.3 Encomenda **com** base operacional — quatro handoffs (PIN A–D)
 
-Migration **`20260603120000_shipments_handoff_codes.sql`** (e comentários nas colunas):
+Migration **`20260603120000_shipments_handoff_codes.sql`** (e comentários nas colunas). Fluxo operacional alinhado ao Admin como **operador da base** para PIN B e PIN C — ver também [`codigos-pin-referencia.md`](./codigos-pin-referencia.md) §4.3.
 
 | PIN | Significado | Quem valida / onde |
 |-----|-------------|---------------------|
 | **A** | Passageiro → Preparador | `passenger_to_preparer_code` — passageiro confirma no app cliente o código que o preparador obteve na coleta. |
-| **B** | Preparador → Base | `preparer_to_base_code` — preparador confirma o código informado pela base. |
-| **C** | Base → Motorista | `base_to_driver_code` — motorista/base conforme fluxo; retirada na base pelo motorista. |
+| **B** | Preparador → Base | `preparer_to_base_code` — o **preparador vê o PIN no app** e informa verbalmente ao **Admin**; o Admin digita no painel (`complete_shipment_preparer_to_base_by_admin`). **Fallback:** `complete_shipment_preparer_to_base` (preparador digita) se a base/admin estiver indisponível. |
+| **C** | Base → Motorista | `base_to_driver_code` — o **motorista vê o PIN no app** e informa verbalmente ao **Admin**; o Admin digita no painel (`complete_shipment_base_to_driver_by_admin`), que também conclui a parada de retirada na base quando há `scheduled_trip_id`. **Fallback:** `complete_trip_stop` na parada `package_pickup` (ex.: «Base fora do ar»). |
 | **D** | Motorista → Destinatário | `delivery_code` (já existente) — entrega final. |
 
 Timestamps associados: `picked_up_by_preparer_at`, `delivered_to_base_at`, `picked_up_by_driver_from_base_at`.
 
 Geração: trigger **`generate_shipment_codes`** estendido — para `base_id` preenchido, gera A/B/C **únicos** entre si e em relação a `pickup_code`/`delivery_code`.
 
-### 2.4 RPCs de confirmação (preparador / passageiro)
+### 2.4 RPCs de confirmação (preparador / passageiro / admin)
 
-**`20260603150000_shipment_preparer_handoff_rpcs.sql`**
+**`20260603150000_shipment_preparer_handoff_rpcs.sql`** (e extensões posteriores)
 
 - **`complete_shipment_passenger_to_preparer`** — valida **PIN A** (passageiro digita o código informado pelo preparador).
-- **`complete_shipment_preparer_to_base`** — valida **PIN B** (preparador digita o código informado pela base).
+- **`complete_shipment_preparer_to_base_by_admin`** (migration `20260604100000_shipment_admin_handoff_rpcs.sql`) — valida **PIN B** com utilizador **admin** (`is_admin()`); caminho principal quando a base opera pelo painel Admin.
+- **`complete_shipment_preparer_to_base`** — valida **PIN B** pelo **preparador** (RPC legada; **fallback** operacional).
+- **`complete_shipment_base_to_driver_by_admin`** — valida **PIN C** com utilizador **admin**; caminho principal.
+- **`complete_trip_stop`** (ramo `package_pickup` / encomenda com base) — continua a poder validar **PIN C** pelo motorista quando se usa o fluxo manual de emergência.
 
-Documentação inline nas migrations aponta para o PDF cenário 3 (etapas 1–3 e 6–8).
+Documentação inline nas migrations aponta para o PDF cenário 3 (etapas 1–3 e 6–8); o modelo Admin + verbal foi consolidado em `codigos-pin-referencia.md`.
 
 ### 2.5 Dependente
 

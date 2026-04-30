@@ -32,6 +32,7 @@ import { supabase } from '../lib/supabase';
 import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
 import { useTripMapCoords } from '../hooks/useTripMapCoords';
 import { geocodeAddress } from '../lib/googleGeocoding';
+import { getShipmentOperationalStageLabel } from '../lib/handoffStages';
 import { validateShipmentStopsAlongTripRoute } from '../lib/mapCoordUtils';
 
 // ── Inline SVG icons ────────────────────────────────────────────────────
@@ -322,8 +323,10 @@ export default function ViagemEditScreen() {
       return;
     }
     let cancel = false;
-    fetchShipmentsForScheduledTrip(tripId).then((rows) => {
-      if (!cancel) setTripShipments(rows);
+    fetchShipmentsForScheduledTrip(tripId).then(({ shipments, error }) => {
+      if (cancel) return;
+      setTripShipments(shipments);
+      if (error) console.warn('[admin] fetchShipmentsForScheduledTrip:', error);
     });
     return () => { cancel = true; };
   }, [detail?.listItem?.tripId, detail?.listItem?.bookingId]);
@@ -464,8 +467,8 @@ export default function ViagemEditScreen() {
     if (d2) setDetail(d2);
     const tid = (d2 ?? detail).listItem.tripId;
     if (tid) {
-      const rows = await fetchShipmentsForScheduledTrip(tid);
-      setTripShipments(rows);
+      const { shipments } = await fetchShipmentsForScheduledTrip(tid);
+      setTripShipments(shipments);
     }
     setSaving(false);
     if (recalcFailed) {
@@ -1025,6 +1028,18 @@ export default function ViagemEditScreen() {
 
   const encomendaCard = (enc: typeof encomendas[0], idx: number) => {
     const destinatarioLinha = [enc.destinatario, enc.telefone].filter(Boolean).join(' • ') || '—';
+    const shipRow = tripShipments[idx];
+    const stageOperacional = shipRow
+      ? getShipmentOperationalStageLabel({
+        status: shipRow.status,
+        baseId: shipRow.baseId,
+        pickedUpByPreparerAt: shipRow.pickedUpByPreparerAt,
+        deliveredToBaseAt: shipRow.deliveredToBaseAt,
+        pickedUpByDriverFromBaseAt: shipRow.pickedUpByDriverFromBaseAt,
+        pickedUpAt: shipRow.pickedUpAt,
+        deliveredAt: shipRow.deliveredAt,
+      })
+      : '—';
     return React.createElement('div', {
       key: tripShipments[idx]?.id ?? idx,
       style: {
@@ -1115,6 +1130,7 @@ export default function ViagemEditScreen() {
             }, trashSvg))
           : null),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+        encomendaInfoRowFigma('Estágio operacional:', stageOperacional),
         encomendaInfoRowFigma('Recolha:', enc.recolha),
         encomendaInfoRowFigma('Entrega:', enc.entrega),
         encomendaInfoRowFigma('Destinatário:', destinatarioLinha),
@@ -1434,8 +1450,8 @@ export default function ViagemEditScreen() {
                 else {
                   showToast('Encomenda atualizada');
                   closeEditEncomendaPanel();
-                  const rows = await fetchShipmentsForScheduledTrip(detail.listItem.tripId);
-                  setTripShipments(rows);
+                  const { shipments } = await fetchShipmentsForScheduledTrip(detail.listItem.tripId);
+                  setTripShipments(shipments);
                 }
               },
               style: { width: '100%', height: 48, background: '#0d0d0d', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 16, fontWeight: 500, color: '#fff', ...font },
@@ -1635,8 +1651,8 @@ export default function ViagemEditScreen() {
                 });
                 if (error) { showToast(error.message || 'Erro ao criar encomenda'); } else {
                   showToast('Encomenda adicionada com sucesso');
-                  const rows = await fetchShipmentsForScheduledTrip(tripId);
-                  setTripShipments(rows);
+                  const { shipments } = await fetchShipmentsForScheduledTrip(tripId);
+                  setTripShipments(shipments);
                   setAddEncPlaceOrigin(null);
                   setAddEncPlaceDest(null);
                 }

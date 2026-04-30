@@ -138,6 +138,12 @@ export interface BookingDetailForAdmin {
   bagsAvailable: number | null;
   /** `bookings.created_at` em ISO (histórico mínimo no painel). */
   bookingCreatedAtIso: string | null;
+  /** PIN de embarque — viagem comum (cenário 1). */
+  pickupCode: string | null;
+  /** Legado: deixou de ser gerado para novas reservas; só histórico. */
+  legacyDeliveryCode: string | null;
+  /** Ticket `conversations` suporte activo ligado a `booking_id`. */
+  supportConversationId: string | null;
 }
 
 /** Shipment ligado à viagem (`scheduled_trip_id`) — lista no detalhe da viagem. */
@@ -159,6 +165,25 @@ export interface TripShipmentListItem {
   instructions: string | null;
   photoUrl: string | null;
   status: string;
+  /** Cenário 3: `shipments.base_id` preenchido. */
+  baseId: string | null;
+  pickedUpByPreparerAt: string | null;
+  deliveredToBaseAt: string | null;
+  pickedUpByDriverFromBaseAt: string | null;
+  pickedUpAt: string | null;
+  deliveredAt: string | null;
+  /** PIN coleta cliente → motorista (envio). */
+  pickupCode: string | null;
+  /** PIN entrega ao destinatário (PIN D). */
+  deliveryCode: string | null;
+  /** PIN A — com base; passageiro → preparador. */
+  passengerToPreparerCode: string | null;
+  /** PIN B — com base; preparador → base. */
+  preparerToBaseCode: string | null;
+  /** PIN C — com base; base → motorista. */
+  baseToDriverCode: string | null;
+  /** Ticket `conversations` activo ligado a `shipment_id`. */
+  supportConversationId: string | null;
 }
 
 /** Encomenda para ecrã de edição admin (shipment ou envio de dependente). */
@@ -190,6 +215,21 @@ export type EncomendaEditDetail =
       whenOption: string;
       createdAt: string;
       scheduledAt: string | null;
+      baseId: string | null;
+      preparerId: string | null;
+      driverId: string | null;
+      pickupCode: string | null;
+      deliveryCode: string | null;
+      passengerToPreparerCode: string | null;
+      preparerToBaseCode: string | null;
+      baseToDriverCode: string | null;
+      pickedUpByPreparerAt: string | null;
+      deliveredToBaseAt: string | null;
+      pickedUpByDriverFromBaseAt: string | null;
+      pickedUpAt: string | null;
+      deliveredAt: string | null;
+      /** Atendimento support_backoffice (categoria encomendas) ativo — mesma fonte que a lista admin. */
+      supportConversationId: string | null;
     }
   | {
       kind: 'dependent_shipment';
@@ -210,6 +250,12 @@ export type EncomendaEditDetail =
       createdAt: string;
       bagsCount: number;
       scheduledAt: string | null;
+      pickupCode: string | null;
+      deliveryCode: string | null;
+      pickedUpAt: string | null;
+      deliveredAt: string | null;
+      /** Atendimento support_backoffice (categoria encomendas) ativo — `context.dependent_shipment_id`. */
+      supportConversationId: string | null;
     };
 
 export interface PassageiroListItem {
@@ -458,8 +504,19 @@ export interface PayoutRow {
 
 export interface PagamentoListItem {
   id: string;
+  workerId: string;
   workerName: string;
+  /**
+   * Connect “ativo” no mesmo critério do app motorista e do charge-booking:
+   * `stripe_connect_account_id` preenchido e `stripe_connect_charges_enabled === true`
+   * (espelhado do Stripe em `worker_profiles`).
+   */
+  workerHasConnect: boolean;
   entityType: string;
+  /** Valor cru de `payouts.entity_type` (booking, shipment, …). */
+  entityTypeRaw: string;
+  /** Status DB: pending, processing, paid, failed. */
+  statusRaw: string;
   dataFinalizacao: string;
   /** ISO (paid_at ou created_at) para filtros de período no admin */
   dateAtIso: string;
@@ -467,6 +524,9 @@ export interface PagamentoListItem {
   grossAmountCents: number;
   workerAmountCents: number;
   adminAmountCents: number;
+  stripeTransferId?: string | null;
+  stripeTransferAt?: string | null;
+  stripeTransferError?: string | null;
 }
 
 export interface PagamentoCounts {
