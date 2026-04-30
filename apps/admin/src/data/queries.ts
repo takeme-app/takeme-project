@@ -369,12 +369,11 @@ export async function fetchBookingDetailForAdmin(bookingOrTripId: string): Promi
     id, user_id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng,
     status, created_at,
     passenger_count, bags_count, passenger_data, amount_cents, scheduled_trip_id,
-    pickup_code, delivery_code,
     scheduled_trips ( id, departure_at, arrival_at, driver_id, status, seats_available, bags_available, trunk_occupancy_pct )
   `;
-  let { data: b } = await supabase.from('bookings').select(sel).eq('id', bookingOrTripId).maybeSingle();
-  if (!b) {
-    const r2 = await supabase.from('bookings').select(sel).eq('scheduled_trip_id', bookingOrTripId).limit(1).maybeSingle();
+  let { data: b, error } = await supabase.from('bookings').select(sel).eq('id', bookingOrTripId).maybeSingle();
+  if (error || !b) {
+    const r2 = await supabase.from('bookings').select(sel).eq('scheduled_trip_id', bookingOrTripId).maybeSingle();
     b = r2.data as any;
   }
   if (!b) return null;
@@ -442,21 +441,6 @@ export async function fetchBookingDetailForAdmin(bookingOrTripId: string): Promi
   const bagsAvailable =
     bagsTripRaw != null && Number.isFinite(Number(bagsTripRaw)) ? Math.round(Number(bagsTripRaw)) : null;
   const createdRaw = row.created_at as string | undefined;
-
-  let supportConversationId: string | null = null;
-  const { data: bookConvRows } = await (supabase as any)
-    .from('conversations')
-    .select('id')
-    .eq('conversation_kind', 'support_backoffice')
-    .eq('status', 'active')
-    .eq('booking_id', row.id)
-    .order('created_at', { ascending: false })
-    .limit(1);
-  const bookConvFirst = Array.isArray(bookConvRows) && bookConvRows.length > 0 ? bookConvRows[0] : null;
-  if (bookConvFirst?.id != null && String(bookConvFirst.id).trim()) {
-    supportConversationId = String(bookConvFirst.id);
-  }
-
   return {
     listItem,
     originFull: row.origin_address ?? '',
@@ -479,56 +463,20 @@ export async function fetchBookingDetailForAdmin(bookingOrTripId: string): Promi
     seatsAvailable,
     bagsAvailable,
     bookingCreatedAtIso: createdRaw ? new Date(createdRaw).toISOString() : null,
-    pickupCode:
-      row.pickup_code != null && String(row.pickup_code).trim() !== ''
-        ? String(row.pickup_code).trim()
-        : null,
-    legacyDeliveryCode:
-      row.delivery_code != null && String(row.delivery_code).trim() !== ''
-        ? String(row.delivery_code).trim()
-        : null,
-    supportConversationId,
   };
 }
 
-export type FetchShipmentsForTripResult = { shipments: TripShipmentListItem[]; error: string | null };
-
-const SHIPMENTS_TRIP_SELECT_BASE = [
-  'id, user_id, package_size, amount_cents, recipient_name, recipient_phone',
-  'origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng',
-  'instructions, photo_url, status, base_id',
-  'picked_up_at, delivered_at',
-  'pickup_code, delivery_code',
-].join(', ');
-
-/** Colunas da migration `20260603120000_shipments_handoff_codes.sql` — ausentes se o deploy ainda não correu. */
-const SHIPMENTS_TRIP_SELECT_HANDOFF = [
-  'picked_up_by_preparer_at, delivered_to_base_at, picked_up_by_driver_from_base_at',
-  'passenger_to_preparer_code, preparer_to_base_code, base_to_driver_code',
-].join(', ');
-
-function shipmentsTripMissingColumnError(message: string | undefined): boolean {
-  if (!message) return false;
-  return /does not exist/i.test(message) && /shipments\./i.test(message);
-}
-
 /** Encomendas atribuídas à viagem agendada (`shipments.scheduled_trip_id`). */
-export async function fetchShipmentsForScheduledTrip(tripId: string): Promise<FetchShipmentsForTripResult> {
-  if (!isSupabaseConfigured || !tripId) return { shipments: [], error: null };
-
-  const runSelect = (columnList: string) =>
-    supabase.from('shipments').select(columnList).eq('scheduled_trip_id', tripId).order('created_at', { ascending: true });
-
-  let { data, error } = await runSelect([SHIPMENTS_TRIP_SELECT_BASE, SHIPMENTS_TRIP_SELECT_HANDOFF].join(', '));
-  if (error && shipmentsTripMissingColumnError(error.message)) {
-    const retry = await runSelect(SHIPMENTS_TRIP_SELECT_BASE);
-    data = retry.data;
-    error = retry.error;
-  }
-  if (error) {
-    return { shipments: [], error: error.message || 'Erro ao carregar encomendas da viagem' };
-  }
-  if (!data?.length) return { shipments: [], error: null };
+export async function fetchShipmentsForScheduledTrip(tripId: string): Promise<TripShipmentListItem[]> {
+  if (!isSupabaseConfigured || !tripId) return [];
+  const { data, error } = await supabase
+    .from('shipments')
+    .select(
+      'id, user_id, package_size, amount_cents, recipient_name, recipient_phone, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, instructions, photo_url, status',
+    )
+    .eq('scheduled_trip_id', tripId)
+    .order('created_at', { ascending: true });
+  if (error || !data?.length) return [];
   type Row = {
     id: string;
     user_id: string;
@@ -545,19 +493,8 @@ export async function fetchShipmentsForScheduledTrip(tripId: string): Promise<Fe
     instructions?: string | null;
     photo_url?: string | null;
     status?: string | null;
-    base_id?: string | null;
-    picked_up_by_preparer_at?: string | null;
-    delivered_to_base_at?: string | null;
-    picked_up_by_driver_from_base_at?: string | null;
-    picked_up_at?: string | null;
-    delivered_at?: string | null;
-    pickup_code?: string | null;
-    delivery_code?: string | null;
-    passenger_to_preparer_code?: string | null;
-    preparer_to_base_code?: string | null;
-    base_to_driver_code?: string | null;
   };
-  const rows = data as unknown as Row[];
+  const rows = data as Row[];
   const userIds = [...new Set(rows.map((s) => s.user_id).filter(Boolean))];
   const senderMap: Record<string, string> = {};
   if (userIds.length > 0) {
@@ -566,60 +503,23 @@ export async function fetchShipmentsForScheduledTrip(tripId: string): Promise<Fe
       senderMap[p.id] = p.full_name?.trim() || '—';
     });
   }
-
-  const shipSupportMap = new Map<string, string>();
-  const shipIds = rows.map((s) => s.id).filter(Boolean);
-  if (shipIds.length > 0) {
-    const { data: convRows } = await (supabase as any)
-      .from('conversations')
-      .select('id, shipment_id, created_at')
-      .eq('conversation_kind', 'support_backoffice')
-      .eq('status', 'active')
-      .in('shipment_id', shipIds)
-      .order('created_at', { ascending: false });
-    for (const c of convRows ?? []) {
-      const sid = c?.shipment_id != null ? String(c.shipment_id) : '';
-      if (!sid || shipSupportMap.has(sid)) continue;
-      shipSupportMap.set(sid, String(c.id));
-    }
-  }
-
-  const trimCode = (v: string | null | undefined) => {
-    if (v == null || String(v).trim() === '') return null;
-    return String(v).trim();
-  };
-  return {
-    error: null,
-    shipments: rows.map((s) => ({
-      id: s.id,
-      packageSize: s.package_size ?? null,
-      amountCents: Number(s.amount_cents ?? 0),
-      recipientName: (s.recipient_name && String(s.recipient_name).trim()) || '—',
-      recipientPhone: s.recipient_phone != null && String(s.recipient_phone).trim() ? String(s.recipient_phone).trim() : null,
-      senderName: senderMap[s.user_id] ?? '—',
-      originAddress: s.origin_address ?? '',
-      destinationAddress: s.destination_address ?? '',
-      originLat: s.origin_lat != null && Number.isFinite(Number(s.origin_lat)) ? Number(s.origin_lat) : null,
-      originLng: s.origin_lng != null && Number.isFinite(Number(s.origin_lng)) ? Number(s.origin_lng) : null,
-      destinationLat: s.destination_lat != null && Number.isFinite(Number(s.destination_lat)) ? Number(s.destination_lat) : null,
-      destinationLng: s.destination_lng != null && Number.isFinite(Number(s.destination_lng)) ? Number(s.destination_lng) : null,
-      instructions: s.instructions ?? null,
-      photoUrl: s.photo_url ?? null,
-      status: String(s.status ?? ''),
-      baseId: s.base_id != null && String(s.base_id).trim() !== '' ? String(s.base_id) : null,
-      pickedUpByPreparerAt: (s.picked_up_by_preparer_at as string | null | undefined) ?? null,
-      deliveredToBaseAt: (s.delivered_to_base_at as string | null | undefined) ?? null,
-      pickedUpByDriverFromBaseAt: (s.picked_up_by_driver_from_base_at as string | null | undefined) ?? null,
-      pickedUpAt: (s.picked_up_at as string | null | undefined) ?? null,
-      deliveredAt: (s.delivered_at as string | null | undefined) ?? null,
-      pickupCode: trimCode(s.pickup_code),
-      deliveryCode: trimCode(s.delivery_code),
-      passengerToPreparerCode: trimCode(s.passenger_to_preparer_code),
-      preparerToBaseCode: trimCode(s.preparer_to_base_code),
-      baseToDriverCode: trimCode(s.base_to_driver_code),
-      supportConversationId: shipSupportMap.get(String(s.id)) ?? null,
-    })),
-  };
+  return rows.map((s) => ({
+    id: s.id,
+    packageSize: s.package_size ?? null,
+    amountCents: Number(s.amount_cents ?? 0),
+    recipientName: (s.recipient_name && String(s.recipient_name).trim()) || '—',
+    recipientPhone: s.recipient_phone != null && String(s.recipient_phone).trim() ? String(s.recipient_phone).trim() : null,
+    senderName: senderMap[s.user_id] ?? '—',
+    originAddress: s.origin_address ?? '',
+    destinationAddress: s.destination_address ?? '',
+    originLat: s.origin_lat != null && Number.isFinite(Number(s.origin_lat)) ? Number(s.origin_lat) : null,
+    originLng: s.origin_lng != null && Number.isFinite(Number(s.origin_lng)) ? Number(s.origin_lng) : null,
+    destinationLat: s.destination_lat != null && Number.isFinite(Number(s.destination_lat)) ? Number(s.destination_lat) : null,
+    destinationLng: s.destination_lng != null && Number.isFinite(Number(s.destination_lng)) ? Number(s.destination_lng) : null,
+    instructions: s.instructions ?? null,
+    photoUrl: s.photo_url ?? null,
+    status: String(s.status ?? ''),
+  }));
 }
 
 export async function fetchBookingsForDriver(driverId: string): Promise<ViagemListItem[]> {
@@ -784,30 +684,6 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
       const { data: prof } = await supabase.from('profiles').select('full_name').eq('id', uid).maybeSingle();
       senderName = ((prof as any)?.full_name as string | undefined)?.trim() || '—';
     }
-    const uuidOrNull = (v: unknown): string | null => {
-      if (v == null) return null;
-      const t = String(v).trim();
-      return t === '' ? null : t;
-    };
-    const pinOrNull = (v: unknown): string | null => {
-      if (v == null) return null;
-      const t = String(v).trim();
-      return t === '' ? null : t;
-    };
-    const tsOrNull = (v: unknown): string | null => {
-      if (v == null) return null;
-      const t = String(v).trim();
-      return t === '' ? null : t;
-    };
-    const { data: supShipConv } = await (supabase as any)
-      .from('conversations')
-      .select('id')
-      .eq('conversation_kind', 'support_backoffice')
-      .eq('status', 'active')
-      .eq('shipment_id', r.id)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
     return {
       kind: 'shipment',
       id: r.id,
@@ -833,44 +709,11 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
       whenOption: r.when_option ?? '',
       createdAt: r.created_at ?? '',
       scheduledAt: r.scheduled_at ?? null,
-      baseId: uuidOrNull(r.base_id),
-      preparerId: uuidOrNull(r.preparer_id),
-      driverId: uuidOrNull(r.driver_id),
-      pickupCode: pinOrNull(r.pickup_code),
-      deliveryCode: pinOrNull(r.delivery_code),
-      passengerToPreparerCode: pinOrNull(r.passenger_to_preparer_code),
-      preparerToBaseCode: pinOrNull(r.preparer_to_base_code),
-      baseToDriverCode: pinOrNull(r.base_to_driver_code),
-      pickedUpByPreparerAt: tsOrNull(r.picked_up_by_preparer_at),
-      deliveredToBaseAt: tsOrNull(r.delivered_to_base_at),
-      pickedUpByDriverFromBaseAt: tsOrNull(r.picked_up_by_driver_from_base_at),
-      pickedUpAt: tsOrNull(r.picked_up_at),
-      deliveredAt: tsOrNull(r.delivered_at),
-      supportConversationId: supShipConv && typeof supShipConv.id === 'string' ? supShipConv.id : null,
     };
   }
   const { data: d, error: e2 } = await supabase.from('dependent_shipments').select('*').eq('id', id).maybeSingle();
   if (e2 || !d) return null;
   const r = d as any;
-  const depPin = (v: unknown): string | null => {
-    if (v == null) return null;
-    const t = String(v).trim();
-    return t === '' ? null : t;
-  };
-  const depTs = (v: unknown): string | null => {
-    if (v == null) return null;
-    const t = String(v).trim();
-    return t === '' ? null : t;
-  };
-  const { data: supDepConv } = await (supabase as any)
-    .from('conversations')
-    .select('id')
-    .eq('conversation_kind', 'support_backoffice')
-    .eq('status', 'active')
-    .contains('context', { dependent_shipment_id: r.id })
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
   return {
     kind: 'dependent_shipment',
     id: r.id,
@@ -890,11 +733,6 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
     createdAt: r.created_at ?? '',
     bagsCount: r.bags_count ?? 0,
     scheduledAt: r.scheduled_at ?? null,
-    pickupCode: depPin(r.pickup_code),
-    deliveryCode: depPin(r.delivery_code),
-    pickedUpAt: depTs(r.picked_up_at),
-    deliveredAt: depTs(r.delivered_at),
-    supportConversationId: supDepConv && typeof supDepConv.id === 'string' ? supDepConv.id : null,
   };
 }
 
@@ -945,48 +783,6 @@ export async function updateDependentShipmentFields(
   if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
   const { error } = await (supabase.from('dependent_shipments') as any).update(patch).eq('id', id);
   return { error: error ? (error as Error).message : null };
-}
-
-type ShipmentHandoffRpcResult = { ok: boolean; error?: string; already_completed?: boolean };
-
-function parseShipmentHandoffRpc(data: unknown): ShipmentHandoffRpcResult {
-  if (data == null || typeof data !== 'object') {
-    return { ok: false, error: 'resposta inválida' };
-  }
-  const o = data as Record<string, unknown>;
-  if (o.ok === true) {
-    return { ok: true, already_completed: o.already_completed === true };
-  }
-  const err = o.error != null ? String(o.error) : 'erro desconhecido';
-  return { ok: false, error: err };
-}
-
-/** PIN B — admin digita o código informado pelo preparador (cenário 3 com base). */
-export async function adminCompletePreparerToBase(
-  shipmentId: string,
-  code: string,
-): Promise<ShipmentHandoffRpcResult> {
-  if (!isSupabaseConfigured) return { ok: false, error: 'Supabase not configured' };
-  const { data, error } = await supabase.rpc(
-    'complete_shipment_preparer_to_base_by_admin' as never,
-    { p_shipment_id: shipmentId, p_confirmation_code: code } as never,
-  );
-  if (error) return { ok: false, error: (error as Error).message };
-  return parseShipmentHandoffRpc(data);
-}
-
-/** PIN C — admin digita o código informado pelo motorista (cenário 3 com base). */
-export async function adminCompleteBaseToDriver(
-  shipmentId: string,
-  code: string,
-): Promise<ShipmentHandoffRpcResult> {
-  if (!isSupabaseConfigured) return { ok: false, error: 'Supabase not configured' };
-  const { data, error } = await supabase.rpc(
-    'complete_shipment_base_to_driver_by_admin' as never,
-    { p_shipment_id: shipmentId, p_confirmation_code: code } as never,
-  );
-  if (error) return { ok: false, error: (error as Error).message };
-  return parseShipmentHandoffRpc(data);
 }
 
 export interface DriverTripRow {
@@ -1466,23 +1262,17 @@ export async function fetchEncomendas(): Promise<EncomendaListItem[]> {
       .from('conversations')
       .select('id, shipment_id, context')
       .eq('conversation_kind', 'support_backoffice')
-      .eq('status', 'active')
-      .order('created_at', { ascending: false }),
+      .eq('category', 'encomendas')
+      .eq('status', 'active'),
   ]);
 
   // Mapear shipment_id e dependent_shipment_id para conversation id
   const shipConvMap = new Map<string, string>();
   const depConvMap = new Map<string, string>();
   for (const c of (convRes.data ?? []) as any[]) {
-    if (c.shipment_id) {
-      const sid = String(c.shipment_id);
-      if (!shipConvMap.has(sid)) shipConvMap.set(sid, String(c.id));
-    }
+    if (c.shipment_id) shipConvMap.set(String(c.shipment_id), String(c.id));
     const depId = c.context?.dependent_shipment_id;
-    if (depId) {
-      const did = String(depId);
-      if (!depConvMap.has(did)) depConvMap.set(did, String(c.id));
-    }
+    if (depId) depConvMap.set(String(depId), String(c.id));
   }
 
   const shipments: EncomendaListItem[] = (shipRes.data ?? []).map((s: any) => {
@@ -2470,56 +2260,34 @@ function mapEntityType(t: string): string {
 export async function fetchPagamentos(): Promise<PagamentoListItem[]> {
   const { data, error } = await sb
     .from('payouts')
-    .select(
-      'id, worker_id, entity_type, entity_id, gross_amount_cents, worker_amount_cents, admin_amount_cents, status, paid_at, created_at, stripe_transfer_id, stripe_transfer_at, stripe_transfer_error',
-    )
+    .select('id, worker_id, entity_type, entity_id, gross_amount_cents, worker_amount_cents, admin_amount_cents, status, paid_at, created_at')
     .order('created_at', { ascending: false })
     .limit(200);
 
   if (error || !data) return [];
 
+  // Fetch worker names in bulk
   const payoutRows = data as { worker_id: string }[];
   const workerIds: string[] = [...new Set(payoutRows.map((p) => String(p.worker_id)).filter(Boolean))];
   const nameMap: Record<string, string> = {};
-  const connectMap: Record<string, boolean> = {};
   if (workerIds.length > 0) {
     const { data: workers } = await supabase
       .from('profiles')
       .select('id, full_name')
       .in('id', workerIds);
-    (workers || []).forEach((w: any) => {
-      nameMap[w.id] = w.full_name || 'Sem nome';
-    });
-
-    const { data: wprofiles } = await sb
-      .from('worker_profiles')
-      .select('id, stripe_connect_account_id, stripe_connect_charges_enabled')
-      .in('id', workerIds);
-    for (const wp of wprofiles || []) {
-      const acct = (wp as { stripe_connect_account_id?: string | null }).stripe_connect_account_id;
-      const acctTrim = (typeof acct === 'string' ? acct : '')?.trim() ?? '';
-      const charges = (wp as { stripe_connect_charges_enabled?: boolean | null }).stripe_connect_charges_enabled;
-      connectMap[(wp as { id: string }).id] = Boolean(acctTrim) && charges === true;
-    }
+    (workers || []).forEach((w: any) => { nameMap[w.id] = w.full_name || 'Sem nome'; });
   }
 
   return payoutRows.map((p: any) => ({
     id: p.id,
-    workerId: String(p.worker_id ?? ''),
     workerName: nameMap[p.worker_id] || 'Sem nome',
-    workerHasConnect: connectMap[p.worker_id] ?? false,
     entityType: mapEntityType(p.entity_type),
-    entityTypeRaw: String(p.entity_type ?? ''),
-    statusRaw: String(p.status ?? ''),
     dataFinalizacao: p.paid_at ? fmtDate(p.paid_at) : fmtDate(p.created_at),
     dateAtIso: p.paid_at || p.created_at || '',
     status: mapPayoutStatus(p.status),
     grossAmountCents: p.gross_amount_cents,
     workerAmountCents: p.worker_amount_cents,
     adminAmountCents: p.admin_amount_cents,
-    stripeTransferId: p.stripe_transfer_id ?? null,
-    stripeTransferAt: p.stripe_transfer_at ?? null,
-    stripeTransferError: p.stripe_transfer_error ?? null,
   }));
 }
 
@@ -2748,43 +2516,6 @@ export async function fetchSupportConversationDetail(conversationId: string): Pr
     sla_deadline_at: row.sla_deadline_at ?? null,
     finish_note: row.finish_note ?? null,
   };
-}
-
-/** Admin: reutiliza ticket ativo ou cria novo (`admin_open_support_ticket_for_entity`). */
-export async function adminOpenSupportTicketForEntity(params: {
-  bookingId?: string | null;
-  shipmentId?: string | null;
-  /** Envio dependente: RPC grava `context.dependent_shipment_id`. */
-  dependentShipmentId?: string | null;
-  category?: string | null;
-  context?: Record<string, unknown>;
-}): Promise<{ conversationId: string | null; error: string | null }> {
-  if (!isSupabaseConfigured) return { conversationId: null, error: 'Supabase não configurado.' };
-  const { bookingId, shipmentId, dependentShipmentId, category, context } = params;
-  const hasB = bookingId != null && String(bookingId).trim() !== '';
-  const hasS = shipmentId != null && String(shipmentId).trim() !== '';
-  const hasD = dependentShipmentId != null && String(dependentShipmentId).trim() !== '';
-  const n = (hasB ? 1 : 0) + (hasS ? 1 : 0) + (hasD ? 1 : 0);
-  if (n !== 1) {
-    return {
-      conversationId: null,
-      error: n === 0 ? 'É necessário reserva, envio ou envio dependente.' : 'Indique apenas uma entidade por pedido.',
-    };
-  }
-
-  const { data, error } = await sb.rpc('admin_open_support_ticket_for_entity', {
-    p_booking_id: hasB ? String(bookingId).trim() : null,
-    p_shipment_id: hasS ? String(shipmentId).trim() : null,
-    p_category: category ?? null,
-    p_context: context ?? {},
-    p_dependent_shipment_id: hasD ? String(dependentShipmentId).trim() : null,
-  });
-
-  if (error) return { conversationId: null, error: error.message || 'Erro ao criar ticket.' };
-  const raw = data as string | null | undefined;
-  const id = raw != null ? String(raw).trim() : '';
-  if (!id) return { conversationId: null, error: 'Resposta inesperada do servidor.' };
-  return { conversationId: id, error: null };
 }
 
 export interface SupportHistoryItem {

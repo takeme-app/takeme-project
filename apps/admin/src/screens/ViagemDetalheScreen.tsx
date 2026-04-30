@@ -26,18 +26,12 @@ import {
   type ViagemRow,
   type DetailTimelineItem,
 } from '../styles/webStyles';
-import {
-  adminOpenSupportTicketForEntity,
-  fetchBookingDetailForAdmin,
-  fetchMotoristas,
-  fetchShipmentsForScheduledTrip,
-} from '../data/queries';
+import { fetchBookingDetailForAdmin, fetchMotoristas, fetchShipmentsForScheduledTrip } from '../data/queries';
 import { supabase } from '../lib/supabase';
 import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
-import type { BookingDetailForAdmin, MotoristaListItem, TripShipmentListItem } from '../data/types';
+import type { BookingDetailForAdmin, TripShipmentListItem } from '../data/types';
+import type { MotoristaListItem } from '../data/types';
 import MapView from '../components/MapView';
-import { MaskedPinValue } from '../components/MaskedPinValue';
-import { getShipmentOperationalStageLabel } from '../lib/handoffStages';
 import { useTripStops } from '../hooks/useTripStops';
 import { useTripMapCoords } from '../hooks/useTripMapCoords';
 import { useScheduledTripLiveLocation } from '../hooks/useScheduledTripLiveLocation';
@@ -91,24 +85,7 @@ export default function ViagemDetalheScreen() {
   const [imageZoomOpen, setImageZoomOpen] = useState(false);
   const [acompanharTempoReal, setAcompanharTempoReal] = useState(false);
   const [linkedShipments, setLinkedShipments] = useState<TripShipmentListItem[]>([]);
-  const [shipmentsLoadError, setShipmentsLoadError] = useState<string | null>(null);
-  const [supportCreateBusyKey, setSupportCreateBusyKey] = useState<string | null>(null);
   const [tripCoords] = useTripMapCoords(detail);
-
-  /**
-   * Só em `/encomendas/…/viagem/:id` (e mesmo padrão em preparadores) o `:id` é `scheduled_trips.id`.
-   * Em `/passageiros/…/viagem/:id`, `/motoristas/…/viagem/:id` e `/viagens/:id` é id da **reserva** (booking).
-   */
-  const routeParamIsScheduledTripId = useMemo(
-    () =>
-      /\/encomendas\/[^/]+\/viagem\/[^/]+$/.test(location.pathname)
-      || /\/preparadores\/[^/]+\/viagem\/[^/]+$/.test(location.pathname),
-    [location.pathname],
-  );
-  const resolvedScheduledTripId = useMemo(() => {
-    if (routeParamIsScheduledTripId && id && !id.startsWith('act-')) return id;
-    return detail?.listItem?.tripId ?? null;
-  }, [routeParamIsScheduledTripId, id, detail?.listItem?.tripId]);
 
   const t: ViagemRow | null = useMemo(() => {
     if (detail) return rowFromDetail(detail);
@@ -143,8 +120,8 @@ export default function ViagemDetalheScreen() {
     return () => { c = true; };
   }, [driverStats.avatarUrl]);
 
-  // Multi-ponto: buscar paradas da viagem (trip id do URL ou da reserva carregada)
-  const tripIdForStops = resolvedScheduledTripId;
+  // Multi-ponto: buscar paradas da viagem
+  const tripIdForStops = detail?.listItem?.tripId || null;
   const { coords: liveDriverCoords } = useScheduledTripLiveLocation(tripIdForStops);
   const { waypoints: tripWaypoints, stops: tripStops } = useTripStops(tripIdForStops);
 
@@ -183,65 +160,6 @@ export default function ViagemDetalheScreen() {
   }, [t?.status, liveDriverCoords]);
 
   const onFollowVehicleInterrupted = useCallback(() => setAcompanharTempoReal(false), []);
-
-  const handleBookingSupportClick = useCallback(async () => {
-    const d = detail;
-    if (!d?.listItem?.bookingId) {
-      setDocActionToast('Dados da reserva indisponíveis.');
-      return;
-    }
-    const existing = d.supportConversationId?.trim();
-    if (existing) {
-      navigate(`/atendimentos/${existing}`, { state: { from: 'viagem-detalhe' } });
-      return;
-    }
-    const tripHint = resolvedScheduledTripId ?? d.listItem.tripId ?? '';
-    setSupportCreateBusyKey('booking');
-    try {
-      const { conversationId, error } = await adminOpenSupportTicketForEntity({
-        bookingId: d.listItem.bookingId,
-        category: 'outros',
-        context: {
-          source_screen: 'viagem_detalhe_passageiro',
-          ...(tripHint ? { scheduled_trip_id: String(tripHint) } : {}),
-        },
-      });
-      if (error || !conversationId) {
-        setDocActionToast(error ?? 'Não foi possível criar o ticket.');
-        return;
-      }
-      navigate(`/atendimentos/${conversationId}`, { state: { from: 'viagem-detalhe', createdTicket: true } });
-    } finally {
-      setSupportCreateBusyKey(null);
-    }
-  }, [detail, navigate, resolvedScheduledTripId]);
-
-  const handleShipmentSupportClick = useCallback(async (s: TripShipmentListItem) => {
-    const existing = s.supportConversationId?.trim();
-    if (existing) {
-      navigate(`/atendimentos/${existing}`, { state: { from: 'viagem-detalhe' } });
-      return;
-    }
-    const tripHint = resolvedScheduledTripId ?? detail?.listItem?.tripId ?? '';
-    setSupportCreateBusyKey(`ship:${s.id}`);
-    try {
-      const { conversationId, error } = await adminOpenSupportTicketForEntity({
-        shipmentId: s.id,
-        category: 'encomendas',
-        context: {
-          source_screen: 'viagem_detalhe_encomenda',
-          ...(tripHint ? { scheduled_trip_id: String(tripHint) } : {}),
-        },
-      });
-      if (error || !conversationId) {
-        setDocActionToast(error ?? 'Não foi possível criar o ticket.');
-        return;
-      }
-      navigate(`/atendimentos/${conversationId}`, { state: { from: 'viagem-detalhe', createdTicket: true } });
-    } finally {
-      setSupportCreateBusyKey(null);
-    }
-  }, [detail?.listItem?.tripId, navigate, resolvedScheduledTripId]);
 
   useEffect(() => {
     if (t?.status !== 'em_andamento') setAcompanharTempoReal(false);
@@ -282,42 +200,34 @@ export default function ViagemDetalheScreen() {
     fetchMotoristas().then((m) => setAvailDrivers(m.slice(0, 12)));
   }, [isMotoristas]);
 
+  // Fetch trip coordinates and linked shipments
   useEffect(() => {
-    const driverId = detail?.listItem?.driverId;
-    if (!driverId) return;
+    if (!detail?.listItem?.tripId) return;
     let cancel = false;
-    Promise.all([
-      (supabase as any).from('worker_ratings').select('rating').eq('worker_id', driverId),
-      (supabase as any).from('scheduled_trips').select('id').eq('driver_id', driverId),
-      supabase.from('profiles').select('avatar_url').eq('id', driverId).single(),
-    ]).then(([ratingsRes, tripsRes, profileRes]: any[]) => {
-      if (cancel) return;
-      const ratings = ratingsRes.data || [];
-      const avgRating = ratings.length > 0 ? Math.round(ratings.reduce((s: number, r: any) => s + r.rating, 0) / ratings.length * 10) / 10 : null;
-      setDriverStats({
-        rating: avgRating,
-        totalTrips: tripsRes.data?.length || 0,
-        avatarUrl: profileRes.data?.avatar_url || null,
+    const tripId = detail.listItem.tripId;
+    const driverId = detail.listItem.driverId;
+    // Driver stats (rating + total trips)
+    if (driverId) {
+      Promise.all([
+        (supabase as any).from('worker_ratings').select('rating').eq('worker_id', driverId),
+        (supabase as any).from('scheduled_trips').select('id').eq('driver_id', driverId),
+        supabase.from('profiles').select('avatar_url').eq('id', driverId).single(),
+      ]).then(([ratingsRes, tripsRes, profileRes]: any[]) => {
+        if (cancel) return;
+        const ratings = ratingsRes.data || [];
+        const avgRating = ratings.length > 0 ? Math.round(ratings.reduce((s: number, r: any) => s + r.rating, 0) / ratings.length * 10) / 10 : null;
+        setDriverStats({
+          rating: avgRating,
+          totalTrips: tripsRes.data?.length || 0,
+          avatarUrl: profileRes.data?.avatar_url || null,
+        });
       });
-    });
-    return () => { cancel = true; };
-  }, [detail?.listItem?.driverId]);
-
-  useEffect(() => {
-    if (!resolvedScheduledTripId) {
-      setLinkedShipments([]);
-      setShipmentsLoadError(null);
-      return;
     }
-    let cancel = false;
-    fetchShipmentsForScheduledTrip(resolvedScheduledTripId).then(({ shipments, error }) => {
-      if (cancel) return;
-      setLinkedShipments(shipments);
-      setShipmentsLoadError(error);
-      if (error) console.warn('[admin] fetchShipmentsForScheduledTrip:', error);
+    fetchShipmentsForScheduledTrip(tripId).then((rows) => {
+      if (!cancel) setLinkedShipments(rows);
     });
     return () => { cancel = true; };
-  }, [resolvedScheduledTripId]);
+  }, [detail?.listItem?.tripId]);
 
   /** Alinhado a `bookings.passenger_count`: titular + extras em `passenger_data`, sem duplicar nome do titular. */
   const passengerDisplayRows = useMemo(() => {
@@ -377,7 +287,6 @@ export default function ViagemDetalheScreen() {
   const motoristaNome = detail
     ? (v?.motoristaNome ?? '—')
     : (stateObj?.motoristaNome ?? '—');
-  const motoristaInitial = (motoristaNome.trim().charAt(0) || '?').toUpperCase();
   const motoristaBadge = !detail
     ? 'Motorista TakeMe'
     : (v?.motoristaCategoria === 'motorista' ? 'Motorista Parceiro' : 'Motorista TakeMe');
@@ -399,15 +308,7 @@ export default function ViagemDetalheScreen() {
     driverAvatarSrc
       ? React.createElement('img', { src: driverAvatarSrc, alt: motoristaNome, style: { ...webStyles.detailMotoristaAvatar, objectFit: 'cover' as const } })
       : React.createElement('div', { style: webStyles.detailMotoristaAvatar },
-          React.createElement('span', {
-            style: {
-              color: '#767676',
-              fontSize: 20,
-              fontWeight: 600,
-              fontFamily: 'Inter, sans-serif',
-              lineHeight: 1,
-            },
-          }, motoristaInitial)),
+          React.createElement('span', { style: { color: '#767676', fontSize: 20, fontWeight: 600, fontFamily: 'Inter, sans-serif' } }, motoristaNome.charAt(0))),
     React.createElement('div', { style: webStyles.detailMotoristaDriverInfo },
       React.createElement('div', { style: webStyles.detailMotoristaBadge },
         (detail ? v?.motoristaCategoria !== 'motorista' : true) ? logoArrowSmallSvg : null,
@@ -435,17 +336,6 @@ export default function ViagemDetalheScreen() {
     React.createElement('h2', { style: webStyles.detailSectionTitle }, 'Motorista'),
     motoristaCard);
 
-  const atendimentoIconSvg = React.createElement(
-    'svg',
-    { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-    React.createElement('path', {
-      d: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z',
-      stroke: '#6366f1',
-      strokeWidth: 2,
-      strokeLinecap: 'round',
-      strokeLinejoin: 'round',
-    }),
-  );
   const passageiroCard = (row: { name: string; pData?: { name?: string; cpf?: string; bags?: number } }, idx: number) => {
     const name = row.name;
     const pData = row.pData;
@@ -462,7 +352,7 @@ export default function ViagemDetalheScreen() {
     const cpfLabel = pData?.cpf ? `CPF: ${pData.cpf}` : '';
 
     return React.createElement('div', { key: `pax-${idx}-${name}`, style: { background: '#f6f6f6', borderRadius: 12, padding: 16, minWidth: 280, maxWidth: 330, flex: '1 1 280px', display: 'flex', flexDirection: 'column' as const, gap: 0 } },
-      React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, paddingBottom: 12, borderBottom: '1px solid #e2e2e2', width: '100%', boxSizing: 'border-box' as const } },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, paddingBottom: 12, borderBottom: '1px solid #e2e2e2' } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, flex: 1, minWidth: 0 } },
           idx === 0 && passengerAvatarSrc
             ? React.createElement('img', { src: passengerAvatarSrc, alt: name, style: { width: 48, height: 48, borderRadius: '50%', objectFit: 'cover' as const, flexShrink: 0 } })
@@ -473,26 +363,7 @@ export default function ViagemDetalheScreen() {
             cpfLabel ? React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif', marginTop: 2 } }, cpfLabel) : null,
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 } },
               starFilledSvg,
-              React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#545454', fontFamily: 'Inter, sans-serif' } }, '—')))),
-        idx === 0 && detail
-          ? React.createElement('button', {
-            type: 'button',
-            disabled: supportCreateBusyKey === 'booking',
-            'aria-busy': supportCreateBusyKey === 'booking' ? true : undefined,
-            style: {
-              ...webStyles.viagensActionBtn,
-              ...(supportCreateBusyKey === 'booking' ? { opacity: 0.55 } : {}),
-              cursor: supportCreateBusyKey === 'booking' ? 'wait' : 'pointer',
-            },
-            'aria-label': detail.supportConversationId?.trim()
-              ? 'Abrir atendimento da reserva (passageiro)'
-              : 'Criar ou abrir atendimento da reserva (passageiro)',
-            title: detail.supportConversationId?.trim()
-              ? 'Abrir o ticket de suporte já ligado a esta reserva.'
-              : 'Cria um novo ticket para o cliente desta reserva (ou abre o ativo existente).',
-            onClick: () => { void handleBookingSupportClick(); },
-          }, atendimentoIconSvg)
-          : null),
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#545454', fontFamily: 'Inter, sans-serif' } }, '—'))))),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, paddingTop: 12 } },
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
           React.createElement('span', { style: { fontSize: 14, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Mala'),
@@ -696,9 +567,6 @@ export default function ViagemDetalheScreen() {
       resumoCell(iconChart, 'Km da viagem', distKmLabel),
       resumoCell(iconPeople, '', '', true)));
 
-  /** PIN de embarque/desembarque da reserva (`bookings`) não é exibido no admin — só no app do passageiro. */
-  const viagemPinEmbarqueSection: React.ReactNode = null;
-
   const ocupacaoSection = React.createElement('div', { style: webStyles.detailSection },
     React.createElement('h2', { style: webStyles.detailSectionTitle }, 'Ocupação e desempenho'),
     React.createElement('div', { style: webStyles.detailPerfCards },
@@ -734,40 +602,9 @@ export default function ViagemDetalheScreen() {
         },
       }, value));
 
-  const shipmentMaskedPin = (heading: string, value: string | null) => {
-    if (!value || !value.trim()) return null;
-    return React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
-      React.createElement('span', {
-        style: { fontSize: 12, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' },
-      }, heading),
-      React.createElement(MaskedPinValue, { value, label: heading }));
-  };
-
   const shipmentRow = (s: TripShipmentListItem) => {
     const ps = s.packageSize;
     const sizeLabel = ps === 'pequeno' ? 'Pequeno' : ps === 'medio' ? 'Médio' : ps === 'grande' ? 'Grande' : ps || '—';
-    const stageLabel = getShipmentOperationalStageLabel({
-      status: s.status,
-      baseId: s.baseId,
-      pickedUpByPreparerAt: s.pickedUpByPreparerAt,
-      deliveredToBaseAt: s.deliveredToBaseAt,
-      pickedUpByDriverFromBaseAt: s.pickedUpByDriverFromBaseAt,
-      pickedUpAt: s.pickedUpAt,
-      deliveredAt: s.deliveredAt,
-    });
-    const pinsComBase =
-      !!s.baseId
-        ? [
-          shipmentMaskedPin('PIN coleta — operação cliente / motorista-preparador', s.pickupCode),
-          shipmentMaskedPin('PIN A — passageiro → preparador', s.passengerToPreparerCode),
-          shipmentMaskedPin('PIN B — preparador → base (admin valida na edição)', s.preparerToBaseCode),
-          shipmentMaskedPin('PIN C — base → motorista (admin valida na edição)', s.baseToDriverCode),
-          shipmentMaskedPin('PIN D — motorista → destinatário', s.deliveryCode),
-        ].filter(Boolean)
-        : [
-          shipmentMaskedPin('PIN de coleta (envio)', s.pickupCode),
-          shipmentMaskedPin('PIN de entrega ao destinatário', s.deliveryCode),
-        ].filter(Boolean);
     return React.createElement('div', {
       key: s.id,
       style: { background: '#f6f6f6', borderRadius: 16, padding: '20px 24px', display: 'flex', flexDirection: 'column' as const, gap: 16 },
@@ -780,80 +617,22 @@ export default function ViagemDetalheScreen() {
         encField('Valor:', fmtBRL(s.amountCents)),
         encField('Remetente:', s.senderName),
         encField('Destinatário:', s.recipientName),
-        encField('Status:', shipmentStatusLabel(s.status)),
-        encField('Estágio operacional:', stageLabel, true)),
+        encField('Status:', shipmentStatusLabel(s.status))),
       React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
         encField('Recolha:', s.originAddress || '—', true),
         encField('Entrega:', s.destinationAddress || '—', true),
         s.instructions
           ? encField('Observações:', s.instructions, true)
-          : React.createElement('div', { style: { flex: '1 1 0', minWidth: 0 } })),
-      pinsComBase.length > 0
-        ? React.createElement('div', {
-          style: {
-            borderTop: '1px solid #e8e8e8', paddingTop: 14,
-            display: 'flex', flexDirection: 'column' as const, gap: 12,
-          },
-        },
-          React.createElement('span', {
-            style: { fontSize: 13, fontWeight: 700, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' },
-          }, 'PINs da encomenda'),
-          ...pinsComBase)
-        : null,
-      React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 8, alignItems: 'center' } },
-        (() => {
-          const busyShip = supportCreateBusyKey === `ship:${s.id}`;
-          const hasShip = !!s.supportConversationId?.trim();
-          return React.createElement('button', {
-            type: 'button',
-            disabled: busyShip,
-            'aria-busy': busyShip ? true : undefined,
-            style: {
-              ...webStyles.viagensActionBtn,
-              ...(busyShip ? { opacity: 0.55 } : {}),
-              cursor: busyShip ? 'wait' : 'pointer',
-            },
-            'aria-label': hasShip ? 'Abrir atendimento desta encomenda' : 'Criar ou abrir atendimento desta encomenda',
-            title: hasShip
-              ? 'Abrir o ticket de suporte já ligado a este envio.'
-              : 'Cria um novo ticket para o cliente remetente (ou abre o ativo existente).',
-            onClick: () => { void handleShipmentSupportClick(s); },
-          }, atendimentoIconSvg);
-        })(),
-        React.createElement('button', {
-          type: 'button',
-          onClick: () => navigate(`/encomendas/${s.id}/editar`, { state: { from: 'viagem-detalhe' } }),
-          style: {
-            alignSelf: 'flex-start',
-            padding: '8px 16px',
-            borderRadius: 8,
-            border: '1px solid #0d0d0d',
-            background: '#fff',
-            fontSize: 14,
-            fontWeight: 600,
-            color: '#0d0d0d',
-            cursor: 'pointer',
-            fontFamily: 'Inter, sans-serif',
-          },
-        }, 'Ver ou editar encomenda')));
+          : React.createElement('div', { style: { flex: '1 1 0', minWidth: 0 } })));
   };
 
   const encomendasSection = React.createElement('div', { style: { ...webStyles.detailPassageirosSection, borderBottom: 'none' } },
     React.createElement('h2', { style: webStyles.detailSectionTitle }, 'Encomendas'),
-    shipmentsLoadError
-      ? React.createElement('p', {
-        role: 'alert',
-        style: { fontSize: 14, color: '#b53838', fontFamily: 'Inter, sans-serif', maxWidth: 560, lineHeight: 1.5, marginBottom: 8 },
-      }, shipmentsLoadError)
-      : null,
-    linkedShipments.length === 0 && !shipmentsLoadError
+    linkedShipments.length === 0
       ? React.createElement('p', { style: { fontSize: 14, color: '#767676', fontFamily: 'Inter, sans-serif', maxWidth: 560, lineHeight: 1.5 } },
           'Não há encomendas associadas a esta viagem agendada. Envios aparecem aqui quando estão atribuídos à mesma viagem do motorista.')
-      : null,
-    linkedShipments.length > 0
-      ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
-          ...linkedShipments.map(shipmentRow))
-      : null);
+      : React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+          ...linkedShipments.map(shipmentRow)));
 
   const imageZoomModal = imageZoomOpen
     ? React.createElement('div', {
@@ -994,7 +773,6 @@ export default function ViagemDetalheScreen() {
       firstSection,
       resumoSection,
       ocupacaoSection,
-      viagemPinEmbarqueSection,
       ...contextSections),
     imageZoomModal,
     docToastEl);

@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { CommonActions } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
+import { useRootNavigation } from '../../navigation/RootNavigationContext';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'DependentSuccess'>;
 
@@ -16,38 +17,21 @@ function isInDependentShipmentStack(navigation: Props['navigation']): boolean {
 
 export function DependentSuccessScreen({ navigation }: Props) {
   const inDependentShipmentFlow = isInDependentShipmentStack(navigation);
+  const { navigateToMainTab } = useRootNavigation();
 
-  const goToActivities = () => {
-    if (inDependentShipmentFlow) {
-      const root = navigation.getParent()?.getParent();
-      if (root && typeof (root as any).navigate === 'function') {
-        (root as any).navigate('Main', { screen: 'Activities' });
-      }
-      return;
+  const goToHome = () => {
+    if (!inDependentShipmentFlow) {
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 0,
+          routes: [{ name: 'ProfileMain' }],
+        }),
+      );
     }
-    navigation.dispatch(
-      CommonActions.reset({
-        index: 0,
-        routes: [{ name: 'ProfileMain' }],
-      })
-    );
-    const tab = navigation.getParent();
-    if (tab && typeof (tab as any).navigate === 'function') {
-      (tab as any).navigate('Activities');
-    }
-  };
-
-  const goToProfileStart = () => {
-    if (inDependentShipmentFlow) {
-      navigation.dispatch(CommonActions.popToTop());
-      return;
-    }
-    navigation.dispatch(
-      CommonActions.reset({
-        index: 0,
-        routes: [{ name: 'ProfileMain' }],
-      })
-    );
+    /** Ref raiz do `NavigationContainer`: evita depender de quantos `getParent()` existem até o Tab Navigator. */
+    queueMicrotask(() => {
+      navigateToMainTab('Home');
+    });
   };
 
   return (
@@ -61,12 +45,11 @@ export function DependentSuccessScreen({ navigation }: Props) {
         <Text style={styles.subtitle}>
           Nossa equipe vai verificar os documentos e você receberá uma notificação assim que o processo for concluído.
         </Text>
-        <Text style={styles.hint}>Enquanto isso, você pode acompanhar o status em Atividades.</Text>
-        <TouchableOpacity style={styles.primaryButton} onPress={goToActivities} activeOpacity={0.8}>
-          <Text style={styles.primaryButtonText}>Ver em Atividades</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={goToProfileStart} activeOpacity={0.8}>
-          <Text style={styles.link}>Voltar para Início</Text>
+        <Text style={styles.hint}>
+          Você também poderá acompanhar o status na aba Atividades quando quiser.
+        </Text>
+        <TouchableOpacity style={styles.primaryButton} onPress={goToHome} activeOpacity={0.8}>
+          <Text style={styles.primaryButtonText}>Ir para Início</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -88,14 +71,14 @@ const styles = StyleSheet.create({
   iconText: { fontSize: 40, color: '#FFFFFF', fontWeight: '700' },
   title: { fontSize: 20, fontWeight: '700', color: '#0d0d0d', textAlign: 'center', marginBottom: 16 },
   subtitle: { fontSize: 14, color: '#767676', textAlign: 'center', marginBottom: 8 },
-  hint: { fontSize: 14, color: '#0d0d0d', textAlign: 'center', marginBottom: 24 },
+  hint: { fontSize: 14, color: '#767676', textAlign: 'center', marginBottom: 24 },
   primaryButton: {
     backgroundColor: '#0d0d0d',
     paddingVertical: 14,
     paddingHorizontal: 24,
     borderRadius: 12,
-    marginBottom: 16,
+    alignSelf: 'stretch',
+    alignItems: 'center',
   },
   primaryButtonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
-  link: { fontSize: 15, color: '#0d0d0d', fontWeight: '500' },
 });

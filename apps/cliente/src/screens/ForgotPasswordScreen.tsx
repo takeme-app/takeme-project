@@ -5,6 +5,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
+  Platform,
   ActivityIndicator,
 } from 'react-native';
 import { Text } from '../components/Text';
@@ -17,13 +18,12 @@ import { setLastRecoveryEmail } from '../lib/lastRecoveryEmail';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
 import { parseInvokeData, parseInvokeError } from '../utils/edgeFunctionResponse';
-import { detectPhoneOrEmailChannel, formatPhoneBRMask } from '../utils/phoneOrEmailInput';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPassword'>;
 
 export function ForgotPasswordScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
-  const [identifier, setIdentifier] = useState('');
+  const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
 
   const channel = useMemo(() => detectPhoneOrEmailChannel(identifier), [identifier]);
@@ -39,7 +39,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
   const handleSubmit = async () => {
     const trimmed = identifier.trim();
     if (!trimmed) {
-      showAlert('Atenção', 'Digite seu e-mail ou telefone.');
+      showAlert('Atenção', 'Digite seu e-mail.');
       return;
     }
     if (!isSupabaseConfigured) {
@@ -66,10 +66,9 @@ export function ForgotPasswordScreen({ navigation }: Props) {
   const sendEmailCode = async (emailTrim: string) => {
     setLoading(true);
     try {
-      const { data: sendData, error: fnError } = await supabase.functions.invoke(
-        'send-email-verification-code',
-        { body: { email: emailTrim, purpose: 'password_reset' } }
-      );
+      const { data: sendData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
+        body: { email: trimmed, purpose: 'password_reset' },
+      });
       const payload = parseInvokeData(sendData);
       if (payload?.error != null) {
         showAlert('Erro', String(payload.error));
@@ -81,54 +80,19 @@ export function ForgotPasswordScreen({ navigation }: Props) {
         return;
       }
       await supabase.auth.signOut();
-      setLastRecoveryEmail(emailTrim);
+      setLastRecoveryEmail(trimmed);
       navigation.dispatch(
         CommonActions.reset({
           index: 1,
           routes: [
             { name: 'Welcome' },
-            { name: 'ForgotPasswordVerifyCode', params: { email: emailTrim } },
+            { name: 'ForgotPasswordVerifyCode', params: { email: trimmed } },
           ],
         })
       );
     } catch (e: unknown) {
       const message = getUserErrorMessage(e, 'Não foi possível enviar o e-mail. Tente novamente.');
       showAlert('Erro ao enviar e-mail', message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const sendPhoneCode = async (phoneDigits: string) => {
-    setLoading(true);
-    try {
-      const { data: sendData, error: fnError } = await supabase.functions.invoke(
-        'send-phone-verification-code',
-        { body: { phone: phoneDigits, purpose: 'password_reset' } }
-      );
-      const payload = parseInvokeData(sendData);
-      if (payload?.error != null) {
-        showAlert('Erro', String(payload.error));
-        return;
-      }
-      if (fnError) {
-        const bodyError = await parseInvokeError(fnError);
-        showAlert('Erro', bodyError ?? getUserErrorMessage(fnError, 'Não foi possível enviar o código.'));
-        return;
-      }
-      await supabase.auth.signOut();
-      navigation.dispatch(
-        CommonActions.reset({
-          index: 1,
-          routes: [
-            { name: 'Welcome' },
-            { name: 'ForgotPasswordVerifyCode', params: { phone: phoneDigits } },
-          ],
-        })
-      );
-    } catch (e: unknown) {
-      const message = getUserErrorMessage(e, 'Não foi possível enviar o código. Tente novamente.');
-      showAlert('Erro', message);
     } finally {
       setLoading(false);
     }
@@ -152,7 +116,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
       <View style={styles.content}>
         <Text style={styles.title}>Recuperação de senha</Text>
         <Text style={styles.subtitle}>
-          Digite seu e-mail ou telefone. Enviaremos um código de 4 dígitos para você redefinir a senha.
+          Digite seu e-mail. Enviaremos um código de 4 dígitos para você redefinir a senha.
         </Text>
 
         <TextInput

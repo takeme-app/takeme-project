@@ -84,6 +84,123 @@ async function findAuthUserIdByEmailNorm(
 }
 // --- fim token ---
 
+// --- Token HMAC (password reset) ---
+const _encoder = new TextEncoder();
+
+function _base64UrlEncode(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
+  const b64 = btoa(bin);
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function _hmacSha256Hex(secret: string, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    _encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, _encoder.encode(message));
+  const arr = new Uint8Array(sig);
+  return [...arr].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function getPasswordResetSecret(): string {
+  const a = Deno.env.get("PASSWORD_RESET_TOKEN_SECRET");
+  if (a && a.trim().length >= 16) return a.trim();
+  const b = Deno.env.get("DRIVER_DEFERRED_SIGNUP_SECRET");
+  if (b && b.trim().length >= 16) return b.trim();
+  const c = Deno.env.get("SUPABASE_JWT_SECRET");
+  if (c && c.trim().length >= 16) return c.trim();
+  const d = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (d && d.trim().length >= 32) return d.trim().slice(0, 64);
+  throw new Error("Defina PASSWORD_RESET_TOKEN_SECRET ou SUPABASE_JWT_SECRET (mín. 16 caracteres)");
+}
+
+type RegistrationType = "take_me" | "parceiro" | "preparador_excursões" | "preparador_encomendas";
+
+function parseRegistrationType(raw: unknown): RegistrationType | null {
+  if (raw === "take_me" || raw === "parceiro" || raw === "preparador_excursões" || raw === "preparador_encomendas") {
+    return raw;
+  }
+  return null;
+}
+
+function mapDriverTypeToSubtype(t: RegistrationType): {
+  role: "driver" | "preparer";
+  subtype: "takeme" | "partner" | "excursions" | "shipments";
+} {
+  if (t === "take_me") return { role: "driver", subtype: "takeme" };
+  if (t === "parceiro") return { role: "driver", subtype: "partner" };
+  if (t === "preparador_excursões") return { role: "preparer", subtype: "excursions" };
+  return { role: "preparer", subtype: "shipments" };
+}
+
+type AuthUserLike = {
+  id: string;
+  email?: string | null;
+  new_email?: string | null;
+  user_metadata?: Record<string, unknown> | null;
+  app_metadata?: Record<string, unknown> | null;
+  identities?: Array<{ email?: string | null; identity_data?: Record<string, unknown> }>;
+};
+
+function metaEmail(meta: Record<string, unknown> | null | undefined): string | undefined {
+  const e = meta?.email;
+  return typeof e === "string" ? e : undefined;
+}
+
+function authUserMatchesEmailNorm(u: AuthUserLike, emailNorm: string): boolean {
+  const set = new Set<string>();
+  const add = (raw: string | null | undefined) => {
+    const t = (raw ?? "").trim().toLowerCase();
+    if (t) set.add(t);
+  };
+  add(u.email ?? undefined);
+  add(u.new_email ?? undefined);
+  add(metaEmail(u.user_metadata ?? undefined));
+  add(metaEmail(u.app_metadata ?? undefined));
+  for (const id of u.identities ?? []) {
+    if (typeof id.email === "string") add(id.email);
+    const em = id.identity_data?.email;
+    if (typeof em === "string") add(em);
+  }
+  return set.has(emailNorm);
+}
+
+async function findAuthUserIdByEmailNorm(
+  admin: ReturnType<typeof createClient>,
+  emailNorm: string,
+): Promise<string | null> {
+  const { data: rpcId, error: rpcErr } = await admin.rpc("lookup_auth_user_id_by_normalized_email", {
+    p_email: emailNorm,
+  });
+  if (!rpcErr && rpcId != null && String(rpcId).length > 0) {
+    return String(rpcId);
+  }
+  if (rpcErr) {
+    console.warn("[verify-email-code] rpc lookup_auth_user_id_by_normalized_email", rpcErr);
+  }
+
+  const perPage = 1000;
+  const maxPages = 500;
+  for (let page = 1; page <= maxPages; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+    if (error) {
+      console.error("[verify-email-code] listUsers", { page, error });
+      return null;
+    }
+    const users = data?.users ?? [];
+    const hit = users.find((u) => authUserMatchesEmailNorm(u as AuthUserLike, emailNorm));
+    if (hit?.id) return hit.id;
+    if (users.length < perPage) return null;
+  }
+  return null;
+}
+// --- fim token ---
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -239,7 +356,17 @@ Deno.serve(async (req) => {
         });
       }
       try {
-        const token = await createPasswordResetToken(uid, emailNorm);
+        const secret = getPasswordResetSecret();
+        const exp = Math.floor(Date.now() / 1000) + 15 * 60;
+        const payloadJson = JSON.stringify({
+          sub: uid,
+          email: emailNorm,
+          exp,
+          typ: "pwd_reset",
+        });
+        const payloadB64 = _base64UrlEncode(_encoder.encode(payloadJson));
+        const sig = await _hmacSha256Hex(secret, payloadB64);
+        const token = `${payloadB64}.${sig}`;
         return new Response(JSON.stringify({ ok: true, password_reset_token: token }), {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },

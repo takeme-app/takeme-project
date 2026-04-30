@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -14,7 +14,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { DependentShipmentStackParamList, TripDriverParam } from '../../navigation/types';
 import { loadShipmentDriversForRoute } from '../../lib/loadShipmentDriversForRoute';
-import type { ClientScheduledTripItem } from '../../lib/clientScheduledTrips';
+import {
+  tripFitsPassengersAndBags,
+  filterScheduledTripsByWhenSelection,
+  type ClientScheduledTripItem,
+} from '../../lib/clientScheduledTrips';
+import type { WhenTimeResult } from '../../hooks/useWhenTimeSelection';
+import { dependentShipmentTotalPassengers } from '../../lib/tripCapacityLimits';
 import { formatVehicleDescription } from '../../lib/tripDriverDisplay';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 
@@ -56,6 +62,8 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
     destination,
     whenOption,
     whenLabel,
+    scheduledDateId,
+    scheduledTimeSlot,
     fullName,
     contactPhone,
     bagsCount,
@@ -63,7 +71,11 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
     dependentId,
     photoUri,
     photoUris,
+    extraPassengers,
   } = route.params;
+
+  const companions = extraPassengers ?? 0;
+  const totalPassengersInTrip = dependentShipmentTotalPassengers(companions);
 
   const legParams = {
     origin,
@@ -73,6 +85,7 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
     fullName,
     contactPhone,
     bagsCount,
+    extraPassengers: companions,
     instructions,
     dependentId,
     ...(photoUris?.length ? { photoUris } : {}),
@@ -83,6 +96,32 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const whenForTrips: WhenTimeResult = useMemo(
+    () => ({
+      whenOption,
+      whenLabel: whenLabel ?? (whenOption === 'now' ? 'Agora' : ''),
+      scheduledDateId,
+      scheduledTimeSlot,
+    }),
+    [whenOption, whenLabel, scheduledDateId, scheduledTimeSlot],
+  );
+
+  const tripsMatchingWhen = useMemo(
+    () => filterScheduledTripsByWhenSelection(items, whenForTrips),
+    [items, whenForTrips],
+  );
+
+  /** Mesmo critério da busca de viagens: lista só por lugares; malas na confirmação do pagamento. */
+  const visibleItems = useMemo(
+    () =>
+      tripsMatchingWhen.filter((t) => tripFitsPassengersAndBags(t, totalPassengersInTrip, 0)),
+    [tripsMatchingWhen, totalPassengersInTrip],
+  );
+
+  useEffect(() => {
+    setSelectedId((prev) => (prev && visibleItems.some((v) => v.id === prev) ? prev : null));
+  }, [visibleItems]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -103,7 +142,7 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
   }, [load]);
 
   const handleContinue = () => {
-    const sel = items.find((i) => i.id === selectedId);
+    const sel = visibleItems.find((i) => i.id === selectedId);
     if (!sel) return;
     const amountCents = sel.amount_cents;
     if (amountCents == null || !Number.isFinite(amountCents) || amountCents < 1) {
@@ -153,10 +192,32 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
             <Text style={styles.retryBtnText}>Voltar</Text>
           </TouchableOpacity>
         </View>
+      ) : tripsMatchingWhen.length === 0 ? (
+        <View style={styles.centered}>
+          <Text style={styles.errText}>
+            {whenOption === 'later' && whenLabel
+              ? `Nenhuma viagem nesta rota para ${whenLabel}. Tente outro dia ou altere origem e destino.`
+              : 'Nenhuma viagem nesta rota para hoje. Você pode tentar agendar outro dia.'}
+          </Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => navigation.goBack()}>
+            <Text style={styles.retryBtnText}>Voltar</Text>
+          </TouchableOpacity>
+        </View>
+      ) : visibleItems.length === 0 ? (
+        <View style={styles.centered}>
+          <Text style={styles.errText}>
+            Nenhuma viagem nesta rota tem lugares suficientes para {totalPassengersInTrip}{' '}
+            {totalPassengersInTrip === 1 ? 'passageiro embarcado' : 'passageiros embarcados'}
+            {companions > 0 ? ` (dependente + ${companions} acompanhante(s))` : ' (dependente)'}. Reduza acompanhantes ou escolha outra data/rota.
+          </Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => navigation.goBack()}>
+            <Text style={styles.retryBtnText}>Voltar</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
         <>
           <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-            {items.map((t) => {
+            {visibleItems.map((t) => {
               const selected = selectedId === t.id;
               const avatarUri = t.driverAvatarUrl?.startsWith('http')
                 ? t.driverAvatarUrl

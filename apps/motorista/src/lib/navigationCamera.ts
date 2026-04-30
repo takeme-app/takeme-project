@@ -1,5 +1,10 @@
 /**
  * Helpers para câmera estilo Waze (heading-up): bearing, zoom/pitch por velocidade, padding.
+ *
+ * @deprecated Substituído pelo Mapbox Navigation SDK v3 nativo
+ * (`packages/expo-mapbox-navigation`) quando `EXPO_PUBLIC_USE_NATIVE_NAVIGATION=1`.
+ * Manter até a flag ficar 100% verde em produção por 2 semanas. Plano em
+ * `docs/MIGRATION_MAPBOX_NAVIGATION_SDK.md`.
  */
 
 const EARTH_R_M = 6371000;

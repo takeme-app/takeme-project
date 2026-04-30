@@ -16,8 +16,6 @@ import {
   BackHandler,
   Vibration,
   Linking,
-  Clipboard,
-  Share,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar, setStatusBarHidden } from 'expo-status-bar';
@@ -38,6 +36,8 @@ import {
   latLngFromDbColumns,
   MY_LOCATION_NAV_DELTA,
 } from '../components/googleMaps';
+import { NavigationView, latLngToWaypoint, type RouteProgressEvent } from '../components/navigation';
+import { useNativeNavigationEnabled } from '../lib/navigationFeatureFlag';
 import { supabase } from '../lib/supabase';
 import { tripDisplayEarningsCents } from '../lib/driverTripEarnings';
 import { closeConversationsForScheduledTrip } from '../lib/closeTripConversations';
@@ -164,6 +164,14 @@ type Props = NativeStackScreenProps<RootStackParamList, 'ActiveTrip'>;
 
 const DARK = '#111827';
 const GOLD = '#C9A227';
+/**
+ * Padding inferior (pt ≈ dp) entre o centro “útil” do mapa SDK e o fundo seguro —
+ * espaço ocupado pelo mini sheet flutuante + folga (~igual aos estilos do card).
+ */
+const SDK_NATIVE_FLOATING_CARD_PADDING = 300;
+/** Zoom fixo do SDK no modo following. Maior = mais perto da posição do motorista. */
+const SDK_NATIVE_FOLLOWING_ZOOM = 19.3;
+const SDK_NATIVE_CONTROL_GAP = 12;
 /** Trecho imediato no mapa (GPS → próxima etapa): preto, distinto do ouro contínuo. */
 const ROUTE_IMMEDIATE_LEG_COLOR = DARK;
 /** Âncora compartilhada dos marcadores do mapa (centralizados no ponto). Referência estável
@@ -318,12 +326,7 @@ function isPackage(s: Stop) { return s.stopType === 'package_pickup' || s.stopTy
  *   - passageiro: apenas embarque (desembarque é livre — cenário 1 do PDF).
  *   - dependente: embarque E desembarque (cenário 2 do PDF, etapas 1-3 e 5-7).
  */
-/**
- * @param basePickupManual — retirada na base (PIN C): por defeito o motorista
- *   não digita; só se ativar o fallback "Base fora do ar".
- */
-function requiresDriverEnteredPin(s: Stop, basePickupManual = false): boolean {
-  if (isPackagePickupAtBase(s) && !basePickupManual) return false;
+function requiresDriverEnteredPin(s: Stop): boolean {
   if (isPackage(s)) return true;
   return (
     s.stopType === 'passenger_pickup' ||
@@ -334,13 +337,6 @@ function requiresDriverEnteredPin(s: Stop, basePickupManual = false): boolean {
 
 function isPackagePickupAtBase(s: Stop | null | undefined): boolean {
   return !!s && s.stopType === 'package_pickup' && s.packageDriverLeg === 'base_pickup';
-}
-
-/** Um carácter por chip (PIN gravado no BD, normalmente 4 dígitos). */
-function pinCharsForDisplay(code: string | null | undefined): string[] {
-  const s = (code ?? '').trim();
-  if (!s) return ['-', '-', '-', '-'];
-  return s.split('').slice(0, 4);
 }
 
 function isRouteWaypointStop(s: Stop) {
@@ -500,14 +496,12 @@ function confirmPickupTitle(stop: Stop | null | undefined): string {
   return 'Confirmar embarque';
 }
 
-function confirmPickupSubtitle(stop: Stop | null | undefined, basePickupPinManual = false): string {
+function confirmPickupSubtitle(stop: Stop | null | undefined): string {
   if (!stop) return '';
   if (stop.stopType === 'package_pickup') {
     if (isPackagePickupAtBase(stop)) {
-      if (basePickupPinManual) {
-        return 'Solicite o código de 4 dígitos à base e digite abaixo (fallback quando o painel admin não está disponível).';
-      }
-      return 'O seu PIN de retirada está abaixo — informe-o ao operador da base. Quando o admin validar no painel, toque em «Atualizar estado».';
+      // PDF cenário 3, etapas 10-11: motorista solicita o código à base e digita.
+      return 'Solicite o código de 4 dígitos à base e digite abaixo para retirar a encomenda.';
     }
     return 'Insira o código informado pelo passageiro para confirmar a coleta.';
   }
@@ -531,17 +525,14 @@ function confirmPickupSubtitle(stop: Stop | null | undefined, basePickupPinManua
   return 'Confirme o embarque do passageiro.';
 }
 
-function confirmPickupButtonLabel(stop: Stop | null | undefined, basePickupPinManual = false): string {
+function confirmPickupButtonLabel(stop: Stop | null | undefined): string {
   if (!stop) return 'Confirmar';
   if (stop.stopType === 'passenger_dropoff' || stop.stopType === 'dependent_dropoff') {
     return 'Confirmar desembarque';
   }
   if (isRouteWaypointStop(stop)) return 'Concluir';
   if (stop.stopType === 'package_pickup') {
-    if (isPackagePickupAtBase(stop)) {
-      return basePickupPinManual ? 'Confirmar retirada' : 'Atualizar estado';
-    }
-    return 'Confirmar coleta';
+    return isPackagePickupAtBase(stop) ? 'Confirmar retirada' : 'Confirmar coleta';
   }
   return 'Confirmar embarque';
 }
@@ -870,6 +861,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const mapRef = useRef<GoogleMapsMapRef>(null);
   const hasFramedDriverOnMap = useRef(false);
   const [followMyLocation, setFollowMyLocation] = useState(false);
+  const [nativeNavigationRequested, setNativeNavigationRequested] = useState(false);
+  const [nativeRecenterRequestKey, setNativeRecenterRequestKey] = useState(0);
+  const [miniSheetVisible, setMiniSheetVisible] = useState(true);
+  const nativeNavigationActiveRef = useRef(false);
   const locationPermissionWarned = useRef(false);
   const locationModuleWarned = useRef(false);
 
@@ -1075,6 +1070,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     driverUiLastFlushRef.current = null;
     driverPositionRef.current = null;
     setDriverPosition(null);
+    setNativeNavigationRequested(false);
   }, [tripId]);
 
   // UI state
@@ -1091,8 +1087,6 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const [confirmError, setConfirmError] = useState('');
   /** Snapshot da parada ao abrir o sheet — o modal NÃO deve usar `currentStop` (realtime pode alterar a lista/índice). */
   const [confirmUiStop, setConfirmUiStop] = useState<Stop | null>(null);
-  /** Retirada na base: fallback para o motorista digitar o PIN C (complete_trip_stop) se o admin estiver indisponível. */
-  const [basePickupPinManual, setBasePickupPinManual] = useState(false);
 
   // Finalize — comprovantes (fotos): `base64` vem do picker para upload sem depender de fetch(uri).
   const [tripExpenseFiles, setTripExpenseFiles] = useState<
@@ -1190,17 +1184,16 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   }, [applyHeadingUpCamera]);
 
   useLayoutEffect(() => {
-    followNavRef.current = followMyLocation;
-    if (followMyLocation) {
-      if (!navBearingStateRef.current) {
-        navBearingStateRef.current = createInitialBearingState(0);
-      }
+    const legacyFollow = followMyLocation && !nativeNavigationActiveRef.current;
+    followNavRef.current = legacyFollow;
+    if (legacyFollow) {
+      navBearingStateRef.current = createInitialBearingState(0);
       requestAnimationFrame(() => scheduleNavFrame());
     } else if (navRafRef.current != null) {
       cancelAnimationFrame(navRafRef.current);
       navRafRef.current = null;
     }
-  }, [followMyLocation, scheduleNavFrame]);
+  }, [followMyLocation, nativeNavigationRequested, scheduleNavFrame]);
 
   useEffect(
     () => () => {
@@ -1228,7 +1221,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
    *     para cobrir o próximo tick — câmera sempre em movimento.
    */
   useEffect(() => {
-    if (!followMyLocation) {
+    if (!followMyLocation || nativeNavigationActiveRef.current) {
       if (drIntervalRef.current != null) {
         clearInterval(drIntervalRef.current);
         drIntervalRef.current = null;
@@ -1271,7 +1264,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         drIntervalRef.current = null;
       }
     };
-  }, [followMyLocation]);
+  }, [followMyLocation, nativeNavigationRequested]);
 
   // ---------------------------------------------------------------------------
   // Location tracking
@@ -1358,6 +1351,19 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             // "apagar" o último heading válido enquanto a bússola publica.
             if (headingDeg != null && (speedMps ?? 0) >= COMPASS_HEADING_MAX_SPEED_MPS) {
               flushDriverHeadingToUi(headingDeg);
+            }
+            if (nativeNavigationActiveRef.current) {
+              if (isOffRouteSoftRef.current) {
+                isOffRouteSoftRef.current = false;
+                setIsOffRouteSoft(false);
+              }
+              if (isWrongDirectionRef.current) {
+                isWrongDirectionRef.current = false;
+                wrongDirectionEnterAtRef.current = null;
+                wrongDirectionLeaveAtRef.current = null;
+                setIsWrongDirection(false);
+              }
+              return;
             }
             // Detecção off-route: visual (badge + opacidade) funciona mesmo sem velocidade válida;
             // o TRIGGER de recálculo exige speedMps >= REROUTE_MIN_SPEED_MPS para evitar loops parados.
@@ -1717,6 +1723,89 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const mapHighlightStopIndex = nearestNavStopIndex ?? currentStopIndex;
 
   /**
+   * Feature flag: quando `EXPO_PUBLIC_USE_NATIVE_NAVIGATION=1` e o módulo nativo
+   * (`@take-me/expo-mapbox-navigation`) está disponível, a tela usa o
+   * `<ExpoMapboxNavigationView>` (Mapbox Navigation SDK v3) por baixo do
+   * `<NavigationView>`. Caso contrário, o caminho legado (`<GoogleMapsMap>`) é
+   * preservado intacto via `legacyRender` — zero regressão quando OFF.
+   */
+  const useNativeNav = useNativeNavigationEnabled();
+
+  /**
+   * Waypoints derivados das paradas restantes (usados apenas quando o caminho
+   * nativo está ativo). Origem = posição do motorista; intermediárias =
+   * paradas pendentes; destino = última parada (ou `finalDestination`).
+   */
+  const navigationWaypoints = useMemo(() => {
+    if (!useNativeNav) return [];
+    if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) {
+      return [];
+    }
+    const stopPts = collectRemainingStopPoints(stops, currentStopIndex);
+    const points: { coord: LatLng; name?: string }[] = [
+      { coord: driverPosition, name: 'Você' },
+      ...stopPts.map((coord, i) => ({ coord, name: stops[currentStopIndex + i]?.label })),
+    ];
+    if (points.length < 2 && finalDestination) {
+      points.push({ coord: finalDestination, name: trip?.destination_address ?? 'Destino' });
+    }
+    return points
+      .filter((p) => p.coord && isValidGlobeCoordinate(p.coord.latitude, p.coord.longitude))
+      .map((p, i, arr) =>
+        latLngToWaypoint(p.coord, p.name, i > 0 && i < arr.length - 1),
+      );
+  }, [useNativeNav, driverPosition, stops, currentStopIndex, finalDestination, trip?.destination_address]);
+
+  const nativeNavigationActive =
+    useNativeNav && nativeNavigationRequested && navigationWaypoints.length >= 2;
+
+  useEffect(() => {
+    nativeNavigationActiveRef.current = nativeNavigationActive;
+    if (nativeNavigationActive) {
+      followNavRef.current = false;
+      if (navRafRef.current != null) {
+        cancelAnimationFrame(navRafRef.current);
+        navRafRef.current = null;
+      }
+      if (drIntervalRef.current != null) {
+        clearInterval(drIntervalRef.current);
+        drIntervalRef.current = null;
+      }
+    }
+  }, [nativeNavigationActive]);
+
+  const handleNativeRouteProgress = useCallback((progress: RouteProgressEvent) => {
+    if (Number.isFinite(progress.durationRemainingSeconds)) {
+      setEtaSeconds(Math.max(0, progress.durationRemainingSeconds));
+    }
+    if (Number.isFinite(progress.distanceTraveledMeters)) {
+      setTraveledMeters(Math.max(0, progress.distanceTraveledMeters));
+    }
+    setRerouteNetworkError(false);
+  }, []);
+
+  const handleNativeOffRoute = useCallback(() => {
+    isOffRouteSoftRef.current = true;
+    setIsOffRouteSoft(true);
+  }, []);
+
+  const handleNativeReroute = useCallback(() => {
+    rerouteStartAtRef.current = Date.now();
+    setRerouteNetworkError(false);
+    setIsOffRouteSoft(false);
+    setIsRerouting(true);
+    setTimeout(() => setIsRerouting(false), REROUTE_BADGE_MIN_VISIBLE_MS);
+  }, []);
+
+  const fallbackToLegacyNavigation = useCallback((message?: string) => {
+    setNativeNavigationRequested(false);
+    if (driverPosition && isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) {
+      setFollowMyLocation(true);
+    }
+    if (message) showAlert('Navegação', message);
+  }, [driverPosition, showAlert]);
+
+  /**
    * Card inferior: com GPS, a parada geograficamente mais próxima (rota imediata);
    * sem GPS, próxima parada sequencial; sem paradas no roteiro, destino da viagem.
    */
@@ -2058,39 +2147,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   }, [trip?.id, tripDestLL, stops]);
 
   const overlayTop = insets.top + 56;
-
-  const startNavigationMode = useCallback(() => {
-    const fix = latestDriverFixRef.current;
-    const fallbackPos = driverPositionRef.current ?? driverPosition;
-    const latitude = fix?.latitude ?? fallbackPos?.latitude;
-    const longitude = fix?.longitude ?? fallbackPos?.longitude;
-
-    if (
-      typeof latitude !== 'number' ||
-      typeof longitude !== 'number' ||
-      !isValidGlobeCoordinate(latitude, longitude)
-    ) {
-      showAlert(
-        'Localização',
-        'Aguardando o GPS do motorista. Assim que a posição estiver disponível, toque em Navegar novamente.',
-      );
-      return;
-    }
-
-    const heading =
-      fix?.headingDeg != null && fix.headingDeg >= 0 && fix.headingDeg <= 360
-        ? fix.headingDeg
-        : driverHeadingDeg != null && driverHeadingDeg >= 0 && driverHeadingDeg <= 360
-          ? driverHeadingDeg
-          : compassHeadingRef.current != null && Number.isFinite(compassHeadingRef.current)
-            ? compassHeadingRef.current
-            : 0;
-
-    navBearingStateRef.current = createInitialBearingState(heading);
-    lastNavDRRef.current = null;
-    Vibration.vibrate(20);
-    setFollowMyLocation(true);
-  }, [driverHeadingDeg, driverPosition, showAlert]);
+  const nativeSdkToggleBottom = miniSheetVisible
+    ? effectiveBottomInset + 12 + SDK_NATIVE_FLOATING_CARD_PADDING + 14
+    : effectiveBottomInset + 16;
+  const nativeSdkRecenterBottom = nativeSdkToggleBottom + 46 + SDK_NATIVE_CONTROL_GAP;
 
   /** Centraliza o mapa na parada correspondente ao ícone da lateral (mesmo fallback de coord. dos markers). */
   const focusMapOnSidebarStop = useCallback(
@@ -2357,31 +2417,6 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     Animated.spring(finalizeSlide, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
   };
 
-  /** Retirada na base (PIN C): após o admin validar, recarrega paradas e fecha o sheet se a parada já está `completed`. */
-  const handleBasePickupRefreshAndMaybeAdvance = useCallback(async () => {
-    const targetId = confirmTargetStopRef.current?.id ?? null;
-    if (!targetId) return;
-    const fresh = await reloadTripStops();
-    const row = fresh.find((s) => s.id === targetId);
-    if (row && String(row.status).toLowerCase() === 'completed') {
-      confirmTargetStopRef.current = null;
-      setConfirmUiStop(null);
-      setConfirmError('');
-      setConfirmCode('');
-      setBasePickupPinManual(false);
-      confirmSheetSlide.setValue(600);
-      setConfirmPickupVisible(false);
-      syncCloseDetailOnly();
-      const nextIndex = computeFirstIncompleteStopIndex(fresh);
-      setCurrentStopIndex(nextIndex);
-      if (nextIndex >= fresh.length) {
-        setTimeout(() => openFinalize(), 120);
-      }
-    } else {
-      setConfirmError('Ainda a aguardar validação na base. Peça ao operador para confirmar no painel admin.');
-    }
-  }, [reloadTripStops, confirmSheetSlide]);
-
   const closeFinalize = () => {
     Animated.timing(finalizeSlide, { toValue: 600, duration: 250, useNativeDriver: false }).start(() => {
       setFinalizeVisible(false);
@@ -2569,7 +2604,6 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     const stopForFlow = detailViewStop ?? currentStop;
     confirmTargetStopRef.current = stopForFlow;
     setConfirmUiStop(stopForFlow);
-    setBasePickupPinManual(false);
     setConfirmCode('');
     setConfirmError('');
     detailSlide.setValue(600);
@@ -2609,7 +2643,6 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     const backStop = confirmUiStop ?? confirmTargetStopRef.current;
     confirmTargetStopRef.current = null;
     setConfirmUiStop(null);
-    setBasePickupPinManual(false);
     setConfirmCode('');
     setConfirmError('');
     Animated.timing(confirmSheetSlide, { toValue: 600, duration: 250, useNativeDriver: false }).start(() => {
@@ -2625,7 +2658,6 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     const backStop = confirmUiStop ?? confirmTargetStopRef.current;
     confirmTargetStopRef.current = null;
     setConfirmUiStop(null);
-    setBasePickupPinManual(false);
     setConfirmCode('');
     setConfirmError('');
     Animated.timing(confirmSheetSlide, { toValue: 600, duration: 250, useNativeDriver: false }).start(() => {
@@ -2640,35 +2672,6 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
-
-  useEffect(() => {
-    if (!confirmPickupVisible || basePickupPinManual) return;
-    const st = confirmUiStop ?? confirmTargetStopRef.current;
-    if (!st || !isPackagePickupAtBase(st)) return;
-    const entityId = String(st.entityId ?? '').trim();
-    if (!entityId) return;
-    const channel = supabase
-      .channel(`motorista-base-pickup-${entityId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'shipments',
-          filter: `id=eq.${entityId}`,
-        },
-        (payload) => {
-          const next = (payload.new ?? {}) as { picked_up_by_driver_from_base_at?: string | null };
-          if (next.picked_up_by_driver_from_base_at) {
-            void handleBasePickupRefreshAndMaybeAdvance();
-          }
-        },
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [confirmPickupVisible, confirmUiStop?.id, confirmUiStop?.entityId, basePickupPinManual, handleBasePickupRefreshAndMaybeAdvance]);
 
   const confirmStopInFlightRef = useRef(false);
 
@@ -2685,11 +2688,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         return;
       }
 
-      if (isPackagePickupAtBase(stop) && !basePickupPinManual) {
-        return;
-      }
-
-      if (requiresDriverEnteredPin(stop, basePickupPinManual)) {
+      if (requiresDriverEnteredPin(stop)) {
         const digitsIn = onlyDigits(confirmCode);
         if (digitsIn.length !== 4) {
           setConfirmError('O código deve ter 4 dígitos.');
@@ -2724,7 +2723,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           'complete_trip_stop' as never,
           {
             p_trip_stop_id: stopId,
-            p_confirmation_code: requiresDriverEnteredPin(stop, basePickupPinManual) ? confirmCode.trim() : null,
+            p_confirmation_code: requiresDriverEnteredPin(stop) ? confirmCode.trim() : null,
           } as never,
         );
 
@@ -3018,6 +3017,18 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     coords: stopsRouteCoords,
   });
 
+  const handleNativeWaypointArrival = useCallback((waypointIndex: number) => {
+    const relativeIndex = Math.max(0, waypointIndex - 1);
+    const maxStopIndex = Math.max(stops.length - 1, 0);
+    const stop = stops[Math.min(currentStopIndex + relativeIndex, maxStopIndex)] ?? currentStop;
+    if (stop) {
+      setDetailViewStop(stop);
+      openDetail();
+      return;
+    }
+    if (allDone) openFinalize();
+  }, [allDone, currentStop, currentStopIndex, openDetail, openFinalize, stops]);
+
   // ---------------------------------------------------------------------------
   // Loading
   // ---------------------------------------------------------------------------
@@ -3038,18 +3049,44 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     <View style={styles.root}>
       <StatusBar hidden animated hideTransitionAnimation="fade" style="light" />
 
-      {/* ── Mapa (Google Maps) ───────────────────────────── */}
-      <GoogleMapsMap
+      {/* ── Mapa: wrapper que escolhe entre Mapbox Navigation SDK nativo (flag ON) ou Mapbox Maps legado (flag OFF) ─ */}
+      <NavigationView
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
-        initialRegion={mapInitialRegion}
-        layoutBottomInset={Platform.OS === 'android' ? effectiveBottomInset : 0}
-        onUserAdjustedMap={() => {
-          // Apenas sai do modo seguir — não re-centraliza, para o usuário poder ver o mapa livremente.
-          setFollowMyLocation(false);
+        waypoints={navigationWaypoints}
+        accessToken={getMapboxAccessToken()}
+        voiceLanguage="pt-BR"
+        nativeNavigationActive={nativeNavigationActive}
+        followingPaddingTop={overlayTop}
+        followingPaddingBottom={effectiveBottomInset + 12 + SDK_NATIVE_FLOATING_CARD_PADDING}
+        followingPaddingLeft={14}
+        followingPaddingRight={14}
+        followingZoom={SDK_NATIVE_FOLLOWING_ZOOM}
+        recenterRequestKey={nativeRecenterRequestKey}
+        onProgress={handleNativeRouteProgress}
+        onWaypointArrival={handleNativeWaypointArrival}
+        onArrival={() => handleNativeWaypointArrival(navigationWaypoints.length - 1)}
+        onOffRoute={handleNativeOffRoute}
+        onReroute={handleNativeReroute}
+        onCancel={() => fallbackToLegacyNavigation()}
+        onNativeUnavailable={() => {
+          if (nativeNavigationRequested) {
+            fallbackToLegacyNavigation('Navegação nativa indisponível neste build. Mantive o mapa legado.');
+          }
         }}
-      >
-        {(goldLineForMap?.length ?? 0) >= 2 || immediateLegLineForMap.length >= 2 ? (
+        legacyInitialRegion={mapInitialRegion}
+        legacyRender={({ mapRef: legacyMapRef, initialRegion }) => (
+          <GoogleMapsMap
+            ref={legacyMapRef}
+            style={StyleSheet.absoluteFillObject}
+            initialRegion={initialRegion}
+            layoutBottomInset={Platform.OS === 'android' ? effectiveBottomInset : 0}
+            onUserAdjustedMap={() => {
+              setFollowMyLocation(false);
+              setNativeNavigationRequested(false);
+            }}
+          >
+            {(goldLineForMap?.length ?? 0) >= 2 || immediateLegLineForMap.length >= 2 ? (
           <>
             {goldLineForMap && goldLineForMap.length >= 2 && (
               <MapPolyline
@@ -3136,7 +3173,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             targetHeadingDeg={driverHeadingDeg}
           />
         )}
-      </GoogleMapsMap>
+          </GoogleMapsMap>
+        )}
+      />
 
       {!activeTripMapReady && (
         <View style={styles.mapCoordsLoading} pointerEvents="none">
@@ -3217,27 +3256,64 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           </View>
         )}
 
-        <View style={[styles.zoomWrap, { top: overlayTop, left: 14 }]} pointerEvents="box-none">
-          <MapZoomControls
-            mapRef={mapRef}
-            floating={false}
-            onBeforeZoom={() => {
-              // Apenas sai do follow — não re-centraliza para o usuário poder usar os controles livremente.
-              setFollowMyLocation(false);
-            }}
-          />
-        </View>
+        {!nativeNavigationActive && (
+          <View style={[styles.zoomWrap, { top: overlayTop, left: 14 }]} pointerEvents="box-none">
+            <MapZoomControls
+              mapRef={mapRef}
+              floating={false}
+              onBeforeZoom={() => {
+                // Apenas sai do follow — não re-centraliza para o usuário poder usar os controles livremente.
+                setFollowMyLocation(false);
+                setNativeNavigationRequested(false);
+              }}
+            />
+          </View>
+        )}
 
         <DriverLocationFocusButton
-          following={followMyLocation}
-          label={followMyLocation ? 'Navegando' : 'Navegar'}
-          accessibilityLabel={followMyLocation ? 'Navegação ativa' : 'Navegar até o próximo destino'}
+          following={followMyLocation || nativeNavigationActive}
           style={[
             styles.myLocationBtn,
             { top: overlayTop + 44 + 6 + 44 + 10, left: 14 },
           ]}
-          onPress={startNavigationMode}
+          onPress={() => {
+            if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) return;
+            if (useNativeNav) {
+              if (navigationWaypoints.length < 2) {
+                showAlert('Navegação', 'Ainda não há rota suficiente para iniciar a navegação.');
+                return;
+              }
+              setFollowMyLocation(false);
+              setNativeNavigationRequested(true);
+              return;
+            }
+            setFollowMyLocation(true);
+          }}
         />
+
+        {nativeNavigationActive && (
+          <>
+            <TouchableOpacity
+              style={[styles.sdkFloatingBtn, { right: 14, bottom: nativeSdkRecenterBottom }]}
+              onPress={() => setNativeRecenterRequestKey((v) => v + 1)}
+              activeOpacity={0.82}
+              accessibilityRole="button"
+              accessibilityLabel="Centralizar na direção da corrida"
+            >
+              <MaterialIcons name="near-me" size={22} color="#fff" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.sdkFloatingBtn, { right: 14, bottom: nativeSdkToggleBottom }]}
+              onPress={() => setMiniSheetVisible((visible) => !visible)}
+              activeOpacity={0.82}
+              accessibilityRole="button"
+              accessibilityLabel={miniSheetVisible ? 'Ocultar informações da próxima parada' : 'Mostrar informações da próxima parada'}
+            >
+              <MaterialIcons name={miniSheetVisible ? 'keyboard-arrow-down' : 'keyboard-arrow-up'} size={26} color="#fff" />
+            </TouchableOpacity>
+          </>
+        )}
 
         {(stops.length > 0 || showSidebarTripEndFlag) && (
           <View style={[styles.sidebar, { top: overlayTop, right: 14 }]} pointerEvents="box-none">
@@ -3279,7 +3355,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         )}
 
         {/* Mini bottom card — sempre visível quando há viagem ativa */}
-        {cardInfo && !detailVisible && !allDone && (
+        {cardInfo && !detailVisible && !allDone && miniSheetVisible && (
           <TouchableOpacity
             style={[styles.miniSheet, { bottom: effectiveBottomInset + 12 }]}
             onPress={openDetailFromMiniSheet}
@@ -3616,65 +3692,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                     <MaterialIcons name="close" size={20} color={DARK} />
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.confirmSheetSubtitle}>
-                  {confirmPickupSubtitle(confirmSheetStop, basePickupPinManual)}
-                </Text>
+                <Text style={styles.confirmSheetSubtitle}>{confirmPickupSubtitle(confirmSheetStop)}</Text>
                 <View style={styles.confirmSheetDivider} />
-                {confirmSheetStop && isPackagePickupAtBase(confirmSheetStop) && !basePickupPinManual ? (
-                  <>
-                    <Text style={styles.fieldLabel}>O seu PIN (informar à base)</Text>
-                    <View style={styles.pinChipsWrap}>
-                      {pinCharsForDisplay(confirmSheetStop.code).map((ch, i) => (
-                        <View key={`bpcc-${i}`} style={styles.pinChip}>
-                          <Text style={styles.pinChipText}>{ch}</Text>
-                        </View>
-                      ))}
-                    </View>
-                    <View style={styles.pinRowActions}>
-                      <TouchableOpacity
-                        style={styles.iconCircleBtn}
-                        onPress={() => {
-                          const t = String(confirmSheetStop.code ?? '').trim();
-                          if (t) Clipboard.setString(t);
-                        }}
-                        accessibilityLabel="Copiar PIN"
-                      >
-                        <MaterialIcons name="content-copy" size={22} color={DARK} />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.iconCircleBtn}
-                        onPress={() => {
-                          void (async () => {
-                            const t = String(confirmSheetStop.code ?? '').trim();
-                            if (!t) return;
-                            try {
-                              await Share.share({ message: `PIN de retirada na base TakeMe: ${t}` });
-                            } catch {
-                              /* ignore */
-                            }
-                          })();
-                        }}
-                        accessibilityLabel="Partilhar PIN"
-                      >
-                        <MaterialIcons name="share" size={22} color={DARK} />
-                      </TouchableOpacity>
-                    </View>
-                    <Text style={styles.basePickupHint}>
-                      Quando o operador confirmar no painel admin, esta parada fecha automaticamente ou toque em «Atualizar estado».
-                    </Text>
-                    <TouchableOpacity
-                      style={styles.basePickupLinkBtn}
-                      onPress={() => {
-                        setBasePickupPinManual(true);
-                        setConfirmError('');
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.basePickupLinkText}>Base fora do ar — digitar PIN manualmente</Text>
-                    </TouchableOpacity>
-                  </>
-                ) : null}
-                {confirmSheetStop && requiresDriverEnteredPin(confirmSheetStop, basePickupPinManual) ? (
+                {confirmSheetStop && requiresDriverEnteredPin(confirmSheetStop) ? (
                   <>
                     <Text style={styles.fieldLabel}>
                       {confirmSheetStop.stopType === 'passenger_pickup'
@@ -3706,23 +3726,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
                 <TouchableOpacity
                   style={styles.actionBtn}
-                  onPress={() => {
-                    if (
-                      confirmSheetStop &&
-                      confirmSheetStop.stopType === 'package_pickup' &&
-                      isPackagePickupAtBase(confirmSheetStop) &&
-                      !basePickupPinManual
-                    ) {
-                      void handleBasePickupRefreshAndMaybeAdvance();
-                    } else {
-                      void handleConfirmStop();
-                    }
-                  }}
+                  onPress={() => void handleConfirmStop()}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.actionBtnText}>
-                    {confirmPickupButtonLabel(confirmSheetStop, basePickupPinManual)}
-                  </Text>
+                  <Text style={styles.actionBtnText}>{confirmPickupButtonLabel(confirmSheetStop)}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.sheetBackBtn}
@@ -4078,6 +4085,22 @@ const styles = StyleSheet.create({
   myLocationBtn: {
     position: 'absolute',
   },
+  sdkFloatingBtn: {
+    position: 'absolute',
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: DARK,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2.5,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 8,
+  },
 
   networkBadgeWrap: {
     position: 'absolute',
@@ -4389,40 +4412,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   errorText: { fontSize: 13, color: '#EF4444', marginTop: 4, marginBottom: 4, textAlign: 'center' },
-
-  pinChipsWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  pinChip: {
-    minWidth: 44,
-    height: 48,
-    borderRadius: 10,
-    backgroundColor: '#F3F4F6',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 10,
-  },
-  pinChipText: { fontSize: 20, fontWeight: '700', color: DARK },
-  pinRowActions: { flexDirection: 'row', gap: 12, justifyContent: 'center', marginBottom: 8 },
-  basePickupHint: {
-    fontSize: 13,
-    color: '#6B7280',
-    textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: 8,
-    paddingHorizontal: 8,
-  },
-  basePickupLinkBtn: { paddingVertical: 10, alignItems: 'center', marginBottom: 4 },
-  basePickupLinkText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#2563EB',
-    textDecorationLine: 'underline',
-  },
 
   // ── Finalize summary card ─────────────────────────────────
   finalizeSummaryCard: {

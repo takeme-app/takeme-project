@@ -36,6 +36,9 @@ const mapboxAccessToken = (
   process.env.EXPO_PUBLIC_MAPBOX_ACESS_TOKEN ||
   ''
 ).trim();
+const useNativeNavigationFlag = (
+  process.env.EXPO_PUBLIC_USE_NATIVE_NAVIGATION ?? '1'
+).trim();
 
 if (!mapboxAccessToken) {
   console.warn(
@@ -75,6 +78,7 @@ module.exports = {
       ...(appJson.expo.extra || {}),
       EXPO_PUBLIC_GOOGLE_MAPS_API_KEY: googleMapsKey,
       EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN: mapboxAccessToken,
+      EXPO_PUBLIC_USE_NATIVE_NAVIGATION: useNativeNavigationFlag,
     },
   },
 };

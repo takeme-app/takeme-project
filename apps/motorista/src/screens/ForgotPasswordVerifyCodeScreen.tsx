@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   TextInput,
@@ -24,7 +24,6 @@ import { supabase } from '../lib/supabase';
 import { getUserErrorMessage } from '../utils/errorMessage';
 import { parseInvokeData, parseInvokeError } from '../utils/edgeFunctionResponse';
 import { setLastRecoveryEmail } from '../lib/lastRecoveryEmail';
-import { formatPhoneBRMask } from '../utils/phoneOrEmailInput';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPasswordVerifyCode'>;
 
@@ -41,14 +40,7 @@ function getOtpBoxSize(): number {
 }
 
 export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
-  const emailParam = route.params?.email?.trim() ?? '';
-  const phoneParam = (route.params?.phone ?? '').replace(/\D/g, '');
-  const channel: 'email' | 'phone' = phoneParam ? 'phone' : 'email';
-  const identifierMasked = useMemo(
-    () => (channel === 'phone' ? formatPhoneBRMask(phoneParam) : emailParam),
-    [channel, emailParam, phoneParam]
-  );
-
+  const email = route.params.email.trim();
   const { showAlert } = useAppAlert();
   const [digits, setDigits] = useState<string[]>(() => Array.from({ length: CODE_LENGTH }, () => ''));
   const [focusedIndex, setFocusedIndex] = useState(0);
@@ -64,10 +56,8 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
   const canResend = countdown <= 0 && !resendLoading;
 
   useEffect(() => {
-    if (channel === 'email' && emailParam) {
-      setLastRecoveryEmail(emailParam);
-    }
-  }, [channel, emailParam]);
+    setLastRecoveryEmail(email);
+  }, [email]);
 
   useEffect(() => {
     const t = setTimeout(() => inputRefs.current[0]?.focus(), 400);
@@ -115,13 +105,13 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
     if (!isComplete) return;
     setLoading(true);
     try {
-      const fnName = channel === 'phone' ? 'verify-phone-code' : 'verify-email-code';
-      const fnBody: Record<string, unknown> =
-        channel === 'phone'
-          ? { phone: phoneParam, code, password_reset: true }
-          : { email: emailParam, code, password_reset: true };
-
-      const { data: fnData, error: fnError } = await supabase.functions.invoke(fnName, { body: fnBody });
+      const { data: fnData, error: fnError } = await supabase.functions.invoke('verify-email-code', {
+        body: {
+          email,
+          code,
+          password_reset: true,
+        },
+      });
 
       const payload = parseInvokeData(fnData);
 
@@ -140,7 +130,7 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
       if (typeof token !== 'string' || !token) {
         showAlert(
           'Erro',
-          `Não foi possível continuar a redefinição. Atualize o app e confira o deploy das Edge Functions (${fnName}).`
+          'Não foi possível continuar a redefinição. Atualize o app e confira o deploy das Edge Functions (verify-email-code).',
         );
         return;
       }
@@ -158,14 +148,9 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
     if (!canResend) return;
     setResendLoading(true);
     try {
-      const fnName =
-        channel === 'phone' ? 'send-phone-verification-code' : 'send-email-verification-code';
-      const fnBody =
-        channel === 'phone'
-          ? { phone: phoneParam, purpose: 'password_reset' as const }
-          : { email: emailParam, purpose: 'password_reset' as const };
-
-      const { data: resendData, error: fnError } = await supabase.functions.invoke(fnName, { body: fnBody });
+      const { data: resendData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
+        body: { email, purpose: 'password_reset' },
+      });
       const resendPayload = parseInvokeData(resendData);
       if (resendPayload?.error != null) {
         showAlert('Erro', String(resendPayload.error));
@@ -180,21 +165,13 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
       setFocusedIndex(0);
       setCountdown(RESEND_COOLDOWN_SEC);
       inputRefs.current[0]?.focus();
-      showAlert(
-        'Código enviado',
-        channel === 'phone'
-          ? 'Enviamos um novo código de 4 dígitos para seu WhatsApp.'
-          : 'Enviamos um novo código de 4 dígitos para seu e-mail.'
-      );
+      showAlert('Código enviado', 'Enviamos um novo código de 4 dígitos para seu e-mail.');
     } catch (err: unknown) {
       showAlert('Erro', getUserErrorMessage(err, 'Não foi possível reenviar o código.'));
     } finally {
       setResendLoading(false);
     }
-  }, [canResend, channel, emailParam, phoneParam, showAlert]);
-
-  const title = channel === 'phone' ? 'Código no WhatsApp' : 'Código no e-mail';
-  const subtitleLine = channel === 'phone' ? 'enviamos para o WhatsApp' : 'que enviamos para';
+  }, [canResend, email, showAlert]);
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
@@ -212,10 +189,10 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
           showsVerticalScrollIndicator={false}
         >
           <View style={[styles.content, { paddingTop: insets.top + 96 }]}>
-            <Text style={styles.title}>{title}</Text>
+            <Text style={styles.title}>Código no e-mail</Text>
             <Text style={styles.subtitle}>
-              Digite o código de 4 dígitos {subtitleLine}{'\n'}
-              <Text style={styles.emailEmphasis}>{identifierMasked}</Text>
+              Digite o código de 4 dígitos que enviamos para{'\n'}
+              <Text style={styles.emailEmphasis}>{email}</Text>
             </Text>
 
             <View style={styles.otpWrapper}>

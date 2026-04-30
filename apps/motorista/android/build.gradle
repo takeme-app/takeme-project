@@ -24,12 +24,49 @@ allprojects {
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"
 
-// SDK nativo Mapbox (downloads) — requer RNMAPBOX_MAPS_DOWNLOAD_TOKEN ou MAPBOX_DOWNLOADS_TOKEN em gradle.properties / env.
+/**
+ * `@rnmapbox/maps` resolve Maps/Common sem sufixo `-ndk27`; Navigation SDK 3.x traz `*-ndk27`.
+ * Com ambos no mesmo APK, :app:checkDebugDuplicateClasses quebra com milhares de classes duplicadas.
+ * Forçamos a linha NDK27 / versões alinhadas ao transitivo do Navigation.
+ */
+subprojects { sub ->
+  sub.configurations.configureEach { cfg ->
+    cfg.resolutionStrategy.eachDependency { details ->
+      def r = details.requested
+      if (r.group == 'com.mapbox.common' && r.name == 'common') {
+        details.useTarget('com.mapbox.common:common-ndk27:24.16.2')
+        details.because('Mapbox: uma única variant NDK27 (Navigation + rnmapbox)')
+      }
+      if (r.group == 'com.mapbox.maps') {
+        if (r.name == 'android') {
+          details.useTarget('com.mapbox.maps:android-ndk27:11.16.2')
+        } else if (r.name == 'android-core') {
+          details.useTarget('com.mapbox.maps:android-core-ndk27:11.16.2')
+        } else if (r.name == 'base') {
+          details.useTarget('com.mapbox.maps:base-ndk27:11.16.2')
+        }
+      }
+      if (r.group == 'com.mapbox.module' && r.name == 'maps-telemetry') {
+        details.useTarget('com.mapbox.module:maps-telemetry-ndk27:11.16.2')
+      }
+    }
+  }
+}
+
+// SDK nativo Mapbox (downloads) — Maps SDK (rnmapbox) E Navigation SDK v3
+// (`@take-me/expo-mapbox-navigation`) compartilham o mesmo registry Maven
+// privado. O token vem de:
+//   1) `MAPBOX_DOWNLOADS_TOKEN` em ~/.gradle/gradle.properties (recomendado)
+//   2) env var `RNMAPBOX_MAPS_DOWNLOAD_TOKEN` (compat com rnmapbox/maps)
+//   3) env var `MAPBOX_DOWNLOADS_TOKEN` (CI / EAS)
+// Sem token os builds falham em `Could not GET 'https://api.mapbox.com/downloads/...'`.
 allprojects {
   repositories {
     maven {
       url 'https://api.mapbox.com/downloads/v2/releases/maven'
-      def token = project.properties['MAPBOX_DOWNLOADS_TOKEN'] ?: System.getenv('RNMAPBOX_MAPS_DOWNLOAD_TOKEN')
+      def token = project.properties['MAPBOX_DOWNLOADS_TOKEN']
+        ?: System.getenv('MAPBOX_DOWNLOADS_TOKEN')
+        ?: System.getenv('RNMAPBOX_MAPS_DOWNLOAD_TOKEN')
       if (token) {
         authentication { basic(BasicAuthentication) }
         credentials {

@@ -481,10 +481,6 @@ export default function AtendimentoDetalheScreen() {
   const hideCadastroAprovarReprovar =
     rawCategory === 'cadastro_transporte' && Boolean(motoristaDocWorkerId) && cadastroWorkerDecidido;
 
-  /** Só tickets de aprovação de cadastro/autorização — não mostrar para `outros`, reembolso, encomendas genéricas, etc. */
-  const showCadastroOrMenoresApprovalFooter =
-    rawCategory === 'cadastro_transporte' || rawCategory === 'autorizar_menores';
-
   const encomendaDecidido = encomendaShipmentStatus === 'confirmed' || encomendaShipmentStatus === 'cancelled';
   const hideEncomendaAprovarReprovar = isEncomenda && encomendaDecidido;
 
@@ -757,9 +753,7 @@ export default function AtendimentoDetalheScreen() {
                   background: '#0d8344', color: '#fff8e6', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
                 },
               }, 'Aprovar encomenda')))
-      : !showCadastroOrMenoresApprovalFooter
-        ? null
-        : hideCadastroAprovarReprovar
+      : hideCadastroAprovarReprovar
           ? React.createElement('div', { style: { padding: 16 } }, cadastroDecididoBanner)
           : React.createElement('div', { style: { display: 'flex', gap: 16, padding: 16 } },
               React.createElement('button', {

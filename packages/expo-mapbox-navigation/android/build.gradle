@@ -1,0 +1,46 @@
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+group = 'expo.modules.mapboxnavigation'
+version = '0.1.0'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useExpoPublishing()
+
+android {
+  namespace "expo.modules.mapboxnavigation"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+    minSdkVersion safeExtGet("minSdkVersion", 24)
+    targetSdkVersion safeExtGet("targetSdkVersion", 34)
+  }
+  buildFeatures {
+    viewBinding false
+    buildConfig false
+  }
+  compileSdkVersion safeExtGet("compileSdkVersion", 34)
+  sourceSets {
+    main {
+      java.srcDirs += ['src/main/java']
+    }
+  }
+  kotlinOptions {
+    jvmTarget = JavaVersion.VERSION_17.toString()
+  }
+}
+
+dependencies {
+  // Mapbox Navigation SDK Android v3. Requer `MAPBOX_DOWNLOADS_TOKEN` em
+  // `~/.gradle/gradle.properties` ou nas envs do EAS para autenticar com
+  // o registry Maven `https://api.mapbox.com/downloads/v2/releases/maven`.
+  implementation "com.mapbox.navigationcore:android:3.5.0"
+  implementation "com.mapbox.navigationcore:ui-maps:3.5.0"
+  implementation "com.mapbox.navigationcore:navigation:3.5.0"
+  implementation "com.mapbox.navigationcore:ui-components:3.5.0"
+  implementation "com.mapbox.navigationcore:tripdata:3.5.0"
+  implementation "com.mapbox.navigationcore:voice:3.5.0"
+}

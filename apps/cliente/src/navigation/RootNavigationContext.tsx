@@ -8,6 +8,11 @@ type DependentShipmentScreenName = keyof DependentShipmentStackParamList;
 type ExcursionScreenName = keyof ExcursionStackParamList;
 
 type RootNavigationContextValue = {
+  /**
+   * Abas do app principal (`Main` no stack raiz). Usa `navigationRef` — funciona de dentro de qualquer stack
+   * (Perfil, TripStack, DependentShipmentStack, etc.), onde `getParent()` nem sempre chega ao Tab Navigator.
+   */
+  navigateToMainTab: (screen: 'Home' | 'Services' | 'Activities' | 'Profile') => void;
   /** Navega para o TripStack (stack irmão de Main). Usar na Home e em qualquer tela dentro de Main. */
   navigateToTripStack: (screen: 'SearchTrip' | 'PlanRide' | 'PlanTrip', params?: object) => void;
   /** Navega para o ShipmentStack (fluxo Envios na guia Serviços). */
@@ -46,6 +51,20 @@ export function RootNavigationProvider({
   navigationRef: React.RefObject<NavigationContainerRef<RootStackParamList> | null>;
   children: React.ReactNode;
 }) {
+  const navigateToMainTab = useCallback(
+    (screen: 'Home' | 'Services' | 'Activities' | 'Profile') => {
+      const nav = navigationRef.current;
+      if (!nav) return;
+      nav.dispatch(
+        CommonActions.navigate({
+          name: 'Main',
+          params: { screen },
+        }),
+      );
+    },
+    [navigationRef],
+  );
+
   const navigateToTripStack = useCallback(
     (screen: 'SearchTrip' | 'PlanRide' | 'PlanTrip', params?: object) => {
       const nav = navigationRef.current;
@@ -128,7 +147,16 @@ export function RootNavigationProvider({
   }, [navigationRef]);
 
   return (
-    <RootNavigationContext.Provider value={{ navigateToTripStack, navigateToShipmentStack, navigateToDependentShipmentStack, navigateToExcursionStack, resetToSplash }}>
+    <RootNavigationContext.Provider
+      value={{
+        navigateToMainTab,
+        navigateToTripStack,
+        navigateToShipmentStack,
+        navigateToDependentShipmentStack,
+        navigateToExcursionStack,
+        resetToSplash,
+      }}
+    >
       {children}
     </RootNavigationContext.Provider>
   );

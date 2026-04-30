@@ -622,7 +622,7 @@ export default function EncomendasScreen() {
           type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
           onClick: () => { if (item) navigate(`/encomendas/${item.id}/editar`, { state: { from: 'encomendas' } }); },
         }, pencilActionSvg),
-        item?.supportConversationId ? React.createElement('button', {
+        row.rawStatus === 'pending_review' && item?.supportConversationId ? React.createElement('button', {
           type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Ver atendimento',
           title: 'Abrir atendimento vinculado',
           onClick: () => navigate(`/atendimentos/${item.supportConversationId}`),

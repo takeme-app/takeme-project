@@ -5,15 +5,9 @@
 //   + senha. O telefone real fica em `user_metadata.phone` e é replicado para
 //   `profiles.phone` por trigger. Dessa forma, `login-with-phone` encontra o e-mail
 //   real via `profiles.phone → auth.users.email` e faz signIn normal.
-// - Quando `password_reset: true`, não cria conta — apenas valida o OTP e devolve um
-//   token HMAC compatível com `complete-password-reset` (mesmo formato do e-mail).
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import {
-  createPasswordResetToken,
-  findAuthUserIdByPhone,
-} from "../_shared/passwordResetToken.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -60,13 +54,6 @@ function phoneToFakeEmail(digits: string): string {
   return `${digits}@takeme.com`;
 }
 
-function jsonResponse(status: number, body: Record<string, unknown>): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
-}
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -79,51 +66,59 @@ Deno.serve(async (req) => {
       password?: string;
       fullName?: string;
       driver_type?: string;
-      password_reset?: boolean | string | number;
     };
-    const { phone, code, password, fullName, driver_type, password_reset } = body;
-    const wantsPasswordReset =
-      password_reset === true || password_reset === "true" || password_reset === 1;
+    const { phone, code, password, fullName, driver_type } = body;
     const registrationType = parseRegistrationType(driver_type);
 
     const phoneDigits = normalizePhoneBR(phone);
     if (!phoneDigits) {
-      return jsonResponse(400, { error: "Telefone inválido." });
+      return new Response(
+        JSON.stringify({ error: "Telefone inválido." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
     if (!code || typeof code !== "string") {
-      return jsonResponse(400, { error: "Código é obrigatório." });
+      return new Response(
+        JSON.stringify({ error: "Código é obrigatório." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
-    if (
-      !wantsPasswordReset &&
-      (!password || typeof password !== "string" || password.length < 6)
-    ) {
-      return jsonResponse(400, { error: "Senha é obrigatória (mínimo 6 caracteres)." });
+    if (!password || typeof password !== "string" || password.length < 6) {
+      return new Response(
+        JSON.stringify({ error: "Senha é obrigatória (mínimo 6 caracteres)." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     const codeTrim = code.replace(/\D/g, "").slice(0, 4);
     if (codeTrim.length !== 4) {
-      return jsonResponse(400, { error: "Código inválido." });
+      return new Response(
+        JSON.stringify({ error: "Código inválido." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const admin = createClient(supabaseUrl, serviceRoleKey);
 
-    const purpose = wantsPasswordReset ? "password_reset" : "signup";
     const nowIso = new Date().toISOString();
 
     const { data: candidates, error: selectError } = await admin
       .from("phone_verification_codes")
       .select("id, code, user_id")
       .eq("phone", phoneDigits)
-      .eq("purpose", purpose)
+      .eq("purpose", "signup")
       .gt("expires_at", nowIso)
       .order("created_at", { ascending: false })
       .limit(20);
 
     if (selectError) {
       console.error("[verify-phone-code] select codes", selectError);
-      return jsonResponse(400, { error: "Código inválido ou expirado." });
+      return new Response(
+        JSON.stringify({ error: "Código inválido ou expirado." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     const normalizeOtp = (raw: unknown) =>
@@ -137,29 +132,13 @@ Deno.serve(async (req) => {
       ) ?? null;
 
     if (!matched?.id) {
-      return jsonResponse(400, { error: "Código inválido ou expirado." });
+      return new Response(
+        JSON.stringify({ error: "Código inválido ou expirado." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     await admin.from("phone_verification_codes").delete().eq("id", matched.id);
-
-    if (wantsPasswordReset) {
-      const userId =
-        matched.user_id ??
-        (await findAuthUserIdByPhone(admin, phoneDigits));
-      if (!userId) {
-        return jsonResponse(400, { error: "Conta não encontrada." });
-      }
-      try {
-        const token = await createPasswordResetToken(userId, phoneToFakeEmail(phoneDigits));
-        return jsonResponse(200, { ok: true, password_reset_token: token });
-      } catch (e) {
-        console.error("[verify-phone-code] password reset token", e);
-        return jsonResponse(500, {
-          error:
-            "Configuração do servidor incompleta (token de redefinição). Defina PASSWORD_RESET_TOKEN_SECRET ou SUPABASE_JWT_SECRET.",
-        });
-      }
-    }
 
     const { data: existingProfile } = await admin
       .from("profiles")
@@ -169,7 +148,10 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (existingProfile) {
-      return jsonResponse(400, { error: "Este telefone já está cadastrado." });
+      return new Response(
+        JSON.stringify({ error: "Este telefone já está cadastrado." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     const fakeEmail = phoneToFakeEmail(phoneDigits);
@@ -191,7 +173,10 @@ Deno.serve(async (req) => {
           : msg.includes("password") || msg.includes("senha")
           ? "Senha inválida. Use no mínimo 6 caracteres."
           : "Erro ao criar conta. Tente novamente.";
-      return jsonResponse(400, { error: userMsg });
+      return new Response(JSON.stringify({ error: userMsg }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const newUserId = createData?.user?.id;
@@ -211,11 +196,14 @@ Deno.serve(async (req) => {
         } catch (delErr) {
           console.error("[verify-phone-code] rollback auth.admin.deleteUser:", delErr);
         }
-        return jsonResponse(500, {
-          error:
-            "Não foi possível concluir seu cadastro agora. Tente novamente em instantes; se persistir, contate o suporte.",
-          debug: wpErr.message,
-        });
+        return new Response(
+          JSON.stringify({
+            error:
+              "Não foi possível concluir seu cadastro agora. Tente novamente em instantes; se persistir, contate o suporte.",
+            debug: wpErr.message,
+          }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
       }
     }
 
@@ -228,9 +216,15 @@ Deno.serve(async (req) => {
       });
     }
 
-    return jsonResponse(200, { ok: true, user_id: newUserId ?? null });
+    return new Response(
+      JSON.stringify({ ok: true, user_id: newUserId ?? null }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
   } catch (err) {
     console.error("[verify-phone-code] exceção:", err);
-    return jsonResponse(500, { error: "Erro interno" });
+    return new Response(JSON.stringify({ error: "Erro interno" }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });

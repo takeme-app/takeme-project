@@ -140,8 +140,9 @@ Splash → Welcome → Login/SignUp/VerifyEmail → AddPaymentPrompt → Main
 | `DependentShipmentForm` | Nome, telefone, malas, instrucoes |
 | `AddDependent` | Cadastro de novo dependente |
 | `DependentSuccess` | Dependente cadastrado |
-| `DefineDependentTrip` | Origem, destino, data da viagem |
-| `ConfirmDependentShipment` | Resumo e confirmacao |
+| `DefineDependentTrip` | Origem, destino, quando (agora ou **dia** via sheet «Escolha o dia», mesmo padrao que viagens/envio); ate 3 **destinos recentes** (`useRecentDestinationsSorted`) |
+| `SelectDependentTripDriver` | Escolha do motorista na rota (filtra por data/hora como nas viagens; capacidade malas/passageiros) |
+| `ConfirmDependentShipment` | Resumo, pagamento e confirmacao |
 | `DependentShipmentSuccess` | Confirmacao com ID |
 
 ### 3.6 Excursion Stack (Excursoes)
@@ -262,7 +263,10 @@ Splash → Welcome → Login/SignUp/VerifyEmail → AddPaymentPrompt → Main
 ### 4.5 Envio de Dependentes
 
 - Formulario com dados do dependente (nome, telefone, malas, instrucoes)
-- Vincula a `dependents` existente ou cadastra novo
+- Vincula a `dependents` existente ou cadastra novo (`AddDependent` / `DependentSuccess`)
+- **Fluxo de telas:** `DefineDependentTrip` (define rota e quando) → `SelectDependentTripDriver` (motorista + preco da `scheduled_trip`) → `ConfirmDependentShipment` (checkout). Ao confirmar o destino em `DefineDependentTrip`, o endereco entra no historico de recentes (mesmo hook das buscas de viagem/envio).
+- Na escolha do motorista, lista filtrada por rota com `filterScheduledTripsByWhenSelection` (**dia civil** agendado ou «hoje» em «Agora»; sem filtro por faixa horaria neste fluxo).
+- Capacidade na lista de motoristas e validações de malas/lugares usam `dependentShipmentTotalPassengers`: **1** lugar para o dependente embarcado + opcionalmente `extraPassengers` (outras pessoas que viajam **no veículo com ele**). Quem solicita o envio **não** conta como passageiro.
 - `INSERT` em `dependent_shipments`
 - Gorjeta e avaliacao gravadas diretamente na tabela (`tip_cents`, `rating`)
 
@@ -284,6 +288,7 @@ Splash → Welcome → Login/SignUp/VerifyEmail → AddPaymentPrompt → Main
 
 - Tabela `recent_destinations` por usuario
 - Hook `useRecentDestinationsSorted` para exibir na Home
+- Mesmo hook alimenta ate 3 destinos recentes na `DefineDependentTrip` e na selecao de endereco das telas de viagem/envio (`AddressSelectionScreen`)
 
 ### 4.9 Exclusao de Conta (LGPD)
 
@@ -492,7 +497,7 @@ Splash → Welcome → Login/SignUp/VerifyEmail → AddPaymentPrompt → Main
 - [x] Navegacao com 4 tabs + stacks dedicados para cada servico
 - [x] Fluxo completo de viagens (busca, selecao, checkout, pagamento, acompanhamento, avaliacao)
 - [x] Fluxo completo de envio de encomendas (cotacao, confirmacao, pagamento, rastreamento)
-- [x] Fluxo completo de envio de dependentes (formulario, confirmacao, gorjeta, avaliacao)
+- [x] Fluxo completo de envio de dependentes (formulario, definicao de rota com recentes, escolha de motorista, confirmacao, gorjeta, avaliacao)
 - [x] Fluxo de excursoes (solicitacao, acompanhamento via Atividades)
 - [x] Pagamento com cartao via Stripe (viagens e envios)
 - [x] Carteira com cartoes salvos (adicionar, listar, remover)

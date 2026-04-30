@@ -1,7 +1,5 @@
 # Códigos de 4 dígitos — Referência completa
 
-> **Nome do ficheiro:** `codigos-pin-referencia.md` (PIN de quatro dígitos; não “ping”).
-
 > Documento técnico de referência sobre o sistema de **códigos de 4 dígitos**
 > usados como prova de handoff entre os atores do produto (passageiro,
 > preparador, base, motorista, destinatário, responsável por dependente).
@@ -60,9 +58,9 @@ Os PINs do mesmo registro são garantidamente distintos entre si.
 | Coluna | Significado | Cenário |
 |---|---|---|
 | `pickup_code` | PIN de coleta direta (motorista coleta no cliente) | 4 |
-| `passenger_to_preparer_code` | **PIN A** — preparador informa ao passageiro (este valida no app) | 3 |
-| `preparer_to_base_code` | **PIN B** — preparador informa ao operador da base; **admin** valida no painel (fallback: preparador digita via RPC legada) | 3 |
-| `base_to_driver_code` | **PIN C** — motorista informa ao operador da base; **admin** valida no painel (fallback: motorista digita em `complete_trip_stop`) | 3 |
+| `passenger_to_preparer_code` | **PIN A** — preparador → passageiro | 3 |
+| `preparer_to_base_code` | **PIN B** — base → preparador | 3 |
+| `base_to_driver_code` | **PIN C** — base → motorista | 3 |
 | `delivery_code` | **PIN D** — motorista → destinatário | 3 e 4 |
 
 > Para encomendas **sem base** (`base_id IS NULL`): apenas `pickup_code` + `delivery_code` são preenchidos.
@@ -103,8 +101,8 @@ inspecionar esses campos para reconstruir a linha do tempo da operação.
 | Coluna | Marca o handoff (PIN correspondente) |
 |---|---|
 | `picked_up_by_preparer_at` | **PIN A** validado pelo passageiro |
-| `delivered_to_base_at` | **PIN B** validado pelo **admin** (`complete_shipment_preparer_to_base_by_admin`; fallback: preparador via `complete_shipment_preparer_to_base`) |
-| `picked_up_by_driver_from_base_at` | **PIN C** validado pelo **admin** (`complete_shipment_base_to_driver_by_admin`; fallback: motorista via `complete_trip_stop` em `package_pickup` na base) |
+| `delivered_to_base_at` | **PIN B** validado pelo preparador |
+| `picked_up_by_driver_from_base_at` | **PIN C** validado pelo motorista |
 | `picked_up_at` | Coleta confirmada (cenário 4 ou cenário 3 retirada na base) |
 | `delivered_at` | **PIN D** validado pelo motorista (entrega ao destinatário) |
 
@@ -170,27 +168,24 @@ ETAPA 1: EMBARQUE                              ETAPA 2: DESEMBARQUE
           │
 3. Preparador leva até a base
    ┌─────────────┐    ┌─────────────┐
-   │  Preparador │    │    Admin    │
+   │     Base    │    │  Preparador │
    └──────┬──────┘    └──────┬──────┘
-          │ vê PIN B         │
-          │ ── informa verbalmente ──► digita no painel Admin
+          │ informa PIN B    │
+          │ ────────────────►│ digita no app preparador
           │                  ↓
-          │       RPC complete_shipment_preparer_to_base_by_admin
+          │       RPC complete_shipment_preparer_to_base
           │       ↓ valida e marca delivered_to_base_at
           │
 4. Motorista vai à base buscar
    ┌─────────────┐    ┌─────────────┐
-   │  Motorista  │    │    Admin    │
+   │     Base    │    │   Motorista │
    └──────┬──────┘    └──────┬──────┘
-          │ vê PIN C (app)   │
-          │ ── informa verbalmente ──► digita no painel Admin
+          │ informa PIN C    │
+          │ ────────────────►│ digita no app motorista
           │                  ↓
-          │       RPC complete_shipment_base_to_driver_by_admin
-          │       ↓ valida base_to_driver_code; marca picked_up_by_driver_from_base_at
-          │       ↓ conclui `trip_stops` da retirada na base (quando há `scheduled_trip_id`)
-          │
-          │ Fallback (admin indisponível): motorista usa «Base fora do ar» e
-          │       RPC complete_trip_stop (package_pickup) com PIN C.
+          │       RPC complete_trip_stop (package_pickup)
+          │       ↓ valida base_to_driver_code
+          │       ↓ marca picked_up_by_driver_from_base_at
           │
 5. Motorista entrega ao destinatário
    ┌─────────────┐    ┌─────────────┐
@@ -205,7 +200,7 @@ ETAPA 1: EMBARQUE                              ETAPA 2: DESEMBARQUE
 ```
 
 **Tabelas/colunas**: `shipments.passenger_to_preparer_code`, `preparer_to_base_code`, `base_to_driver_code`, `delivery_code`.
-**RPCs**: `complete_shipment_passenger_to_preparer`, `complete_shipment_preparer_to_base_by_admin`, `complete_shipment_base_to_driver_by_admin`, `complete_trip_stop` (PIN D e fallback PIN C). RPCs legadas ainda disponíveis: `complete_shipment_preparer_to_base` (preparador), `complete_trip_stop` para PIN C pelo motorista.
+**RPCs**: `complete_shipment_passenger_to_preparer`, `complete_shipment_preparer_to_base`, `complete_trip_stop`.
 
 ### 4.4 Cenário 4 — Encomenda **sem** base
 
@@ -224,14 +219,6 @@ ETAPA 1: COLETA                              ETAPA 2: ENTREGA
 
 **Tabelas/colunas**: `shipments.pickup_code` + `delivery_code`.
 **RPC**: `complete_trip_stop` (ramos `shipment_pickup` e `shipment_dropoff`).
-
-### 4.5 Cenário 4 — Apoio no Admin (sem base)
-
-No painel **Admin** → detalhe da encomenda (`EncomendaEditScreen`), quando `base_id` é nulo, existe um bloco **«Entrega direta (sem base)»** com:
-
-- Estado resumido da coleta (`picked_up_at`) e da entrega final (`delivered_at`).
-- Contactos do destinatário (telefone/e-mail) para suporte.
-- Botão **«Copiar mensagem pronta»** — texto com o `delivery_code` para o operador reenviar ao destinatário por canal externo (WhatsApp/SMS/etc.). O **PIN de embarque da viagem comum** (`bookings.pickup_code`) continua apenas no app **Cliente** para passageiros da mesma viagem agregada; não misturar com PINs de encomenda.
 
 ---
 
@@ -252,11 +239,9 @@ Todas com `SECURITY DEFINER`. Retornam `jsonb` no formato `{ ok: bool, error?: t
 
 | RPC | Quem chama | Cenário/PIN | O que faz |
 |---|---|---|---|
-| `complete_trip_stop(p_trip_stop_id, p_confirmation_code)` | Motorista | 1, 2, 3, 4 | Valida PIN da parada (passenger_pickup, dependent_pickup/dropoff, shipment_pickup/dropoff, package_pickup/dropoff). Atualiza `trip_stops.status` e timestamps da entidade. Na retirada na **base**, o fluxo preferencial é validação pelo admin; o app motorista oferece fallback manual (PIN C). |
+| `complete_trip_stop(p_trip_stop_id, p_confirmation_code)` | Motorista | 1, 2, 3, 4 | Valida PIN da parada (passenger_pickup, dependent_pickup/dropoff, shipment_pickup/dropoff, package_pickup/dropoff). Atualiza `trip_stops.status` e timestamps da entidade. |
 | `complete_shipment_passenger_to_preparer(p_shipment_id, p_confirmation_code)` | Passageiro | 3 / PIN A | Valida `passenger_to_preparer_code`. Marca `picked_up_by_preparer_at`. |
-| `complete_shipment_preparer_to_base(p_shipment_id, p_confirmation_code)` | Preparador | 3 / PIN B (fallback) | Valida `preparer_to_base_code`. Marca `delivered_to_base_at`. Exige `picked_up_by_preparer_at` já preenchido. Preferir `…_by_admin` em operação normal. |
-| `complete_shipment_preparer_to_base_by_admin(p_shipment_id, p_confirmation_code)` | Admin (`is_admin()`) | 3 / PIN B | Igual ao preparador, mas quem digita é o operador do painel após o preparador informar o código. |
-| `complete_shipment_base_to_driver_by_admin(p_shipment_id, p_confirmation_code)` | Admin (`is_admin()`) | 3 / PIN C | Valida `base_to_driver_code`; marca `picked_up_by_driver_from_base_at` e `picked_up_at`; conclui paradas `package_pickup`/`shipment_pickup` pendentes da encomenda na viagem. Exige `delivered_to_base_at` já preenchido. |
+| `complete_shipment_preparer_to_base(p_shipment_id, p_confirmation_code)` | Preparador | 3 / PIN B | Valida `preparer_to_base_code`. Marca `delivered_to_base_at`. Exige `picked_up_by_preparer_at` já preenchido. |
 
 ### 5.3 Funções auxiliares de paradas
 
@@ -280,15 +265,14 @@ Padrão `{ ok: false, error: '<código>' }`. Códigos comuns:
 | `error` | Significado |
 |---|---|
 | `not_authenticated` | `auth.uid()` é nulo |
-| `forbidden` | Não autorizado: motorista/preparador/passageiro errado **ou** (RPCs `*_by_admin`) utilizador sem `is_admin()` |
+| `forbidden` | Usuário autenticado não é o dono/responsável esperado |
 | `stop_not_found` / `missing_entity` | Parada ou entidade não existe |
 | `already_completed` | (vem com `ok: true`) já validado anteriormente — idempotente |
 | `code_length` | PIN não tem 4 dígitos |
 | `missing_code` | PIN esperado está vazio no banco |
 | `invalid_code` | PIN digitado não confere |
 | `pickup_not_completed` | (RPC do preparador) tentativa de validar PIN B antes de PIN A |
-| `no_base` | (RPC do preparador / admin) shipment não tem `base_id` |
-| `not_at_base` | (RPC admin PIN C) `delivered_to_base_at` ainda nulo — falta validar PIN B |
+| `no_base` | (RPC do preparador) shipment não tem `base_id` |
 
 ---
 
@@ -304,7 +288,6 @@ Padrão `{ ok: false, error: '<código>' }`. Códigos comuns:
 | 4 | `20260603130000_ensure_shipment_trip_stops_with_base.sql` | 3 | `trip_stops.code` da retirada vira PIN C quando há base. |
 | 5 | `20260603140000_complete_trip_stop_with_base_handoff.sql` | 3 | RPC valida PIN C; marca `picked_up_by_driver_from_base_at`. |
 | 6 | `20260603150000_shipment_preparer_handoff_rpcs.sql` | 3 | RPCs novas para PIN A e PIN B. |
-| 7 | `20260604100000_shipment_admin_handoff_rpcs.sql` | 3 | PIN B e PIN C validados pelo admin (`*_by_admin`). |
 
 ### 7.2 Apps modificados
 
@@ -313,13 +296,13 @@ Padrão `{ ok: false, error: '<código>' }`. Códigos comuns:
 | Cliente | `screens/trip/TripInProgressScreen.tsx` | Removido fluxo/UI de PIN no desembarque (cenário 1). |
 | Cliente | `screens/dependentShipment/DependentShipmentDetailScreen.tsx` | Nova seção mostrando PIN de desembarque para o responsável-destino (cenário 2). |
 | Cliente | `screens/shipment/ShipmentDetailScreen.tsx` | Para com-base: esconde `pickup_code`; novo botão "Validar código do preparador" → RPC. |
-| Motorista | `screens/ActiveTripScreen.tsx` | `dependent_dropoff` exige PIN; retirada na base: mostra PIN C ao motorista; admin valida; fallback «Base fora do ar» para `complete_trip_stop`. |
+| Motorista | `screens/ActiveTripScreen.tsx` | `dependent_dropoff` exige PIN; instruções atualizadas para cenários 2 e 3. |
 | Motorista | `hooks/useTripStops.ts` | `package_pickup` em base usa PIN C como `code`. |
-| Motorista | `screens/encomendas/ActiveShipmentScreen.tsx` (preparador) | Coleta exibe PIN A; depósito na base: mostra PIN B; admin valida; fallback manual para RPC `complete_shipment_preparer_to_base`. |
+| Motorista | `screens/encomendas/ActiveShipmentScreen.tsx` (preparador) | Coleta exibe PIN A; entrega na base valida PIN B via RPC. |
 
 ### 7.3 App Admin
 
-O painel **Admin** (`apps/admin`) expõe, no **detalhe da encomenda** (`EncomendaEditScreen`), os timestamps de handoff e os PINs (A–D, coleta e entrega) com **mascaramento por defeito** e botão **Revelar** (~10 s), alinhado à §10. **Com base:** ações **«Receber encomenda do preparador»** (PIN B) e **«Despachar ao motorista»** (PIN C) chamam as RPCs `complete_shipment_preparer_to_base_by_admin` e `complete_shipment_base_to_driver_by_admin`. **Sem base:** bloco «Entrega direta» + **«Copiar mensagem pronta»** com o PIN de entrega para apoio ao destinatário (§4.5). No **detalhe da viagem** (`ViagemDetalheScreen`), o admin vê o **PIN de embarque** da reserva (`bookings.pickup_code`, mascarado) e, nas encomendas ligadas à viagem, um **rótulo de estágio operacional** (sem PIN nas listagens). A **auditoria de revelações** (§10.2) e a tabela `code_validation_logs` continuam pendentes (fase P2). Detalhe complementar em [`admin-pin-recomendacoes.md`](./admin-pin-recomendacoes.md).
+**Não foi modificado nesta entrega.** Banco está pronto; falta UI. Detalhes em `admin-pin-recomendacoes.md`.
 
 ---
 
@@ -434,8 +417,6 @@ GROUP BY 1
 ORDER BY 1 DESC;
 ```
 
-**Nota sobre `refunded` nas cláusulas `status`:** nas secções 9.2–9.4 usa-se `status NOT IN ('cancelled', 'refunded')`. O `CHECK` habitual de `shipments` / `dependent_shipments` no repositório inclui `pending_review`, `confirmed`, `in_progress`, `delivered`, `cancelled`. **Só inclua `'refunded'`** se o vosso ambiente tiver estendido o enum ou uma coluna equivalente; caso contrário use apenas `'cancelled'`.
-
 ---
 
 ## 10. Mascaramento e segurança na UI Admin
@@ -452,14 +433,13 @@ PINs são **dados sensíveis**. Recomendações para o frontend Admin:
 
 ## 11. Pontos de atenção / dívidas conhecidas
 
-### 11.1 UI da Base (Admin)
-A **Base** passa a ser representada pelo **painel Admin** (operador): valida PIN B e PIN C após o preparador/motorista informarem verbalmente os códigos. Os apps **preparador** e **motorista** mostram os respetivos PINs em chips (com copiar/partilhar) e **Realtime** em `shipments` para avançar quando o admin valida; existe **fallback manual** se o painel estiver indisponível.
+### 11.1 Modo interim da Base
+A "Base" como ator não tem UI dedicada. Hoje o **preparador** atua como interface interina (vê e digita PIN B; motorista digita PIN C que recebe verbalmente do preparador presente na base). Isso é um handoff "cosmético" para PIN B no modo interim. Resolução completa requer construir a UI da Base — ver `admin-pin-recomendacoes.md` §4.
 
 ### 11.2 PINs visíveis nos apps "do mesmo lado do handoff"
 - Passageiro vê seu próprio `delivery_code` no app cliente (PIN D, cenário 3 e 4) — **correto**, pois ele precisa repassar.
 - Passageiro **não vê** `passenger_to_preparer_code` na UI atual — **correto**, o handoff é genuíno.
-- Preparador vê `preparer_to_base_code` no app para **mostrar** ao operador da base — alinhado ao modelo admin; o dígito continua sensível em RLS (§11.3).
-- Motorista vê `base_to_driver_code` (via `trip_stops.code` / UI de retirada na base) para informar ao admin — mesmo raciocínio.
+- Preparador vê `preparer_to_base_code` no app dele — **interim**, derruba o handoff. Remover quando a Base tiver UI.
 
 ### 11.3 RLS column-level
 PostgreSQL não tem RLS por coluna nativo. Hoje, se um cliente fizesse `SELECT *` em `shipments`, traria todos os PINs. Os apps foram disciplinados para selecionar apenas o necessário, mas isso depende de revisão contínua. **Mitigação futura**: criar views `shipments_passenger_view`, `shipments_preparer_view`, `shipments_driver_view` com apenas as colunas que cada papel pode ver.
@@ -478,8 +458,8 @@ Não há tabela `code_validation_logs`. Reconstruir histórico hoje exige cruzar
 ## 12. Checklist para o time Admin
 
 ### Visualização básica (P0)
-- [x] Tela de detalhe do shipment com todos os timestamps e PINs (mascarados).
-- [x] Tela de detalhe do dependent_shipment com `pickup_code`, `delivery_code` e timestamps.
+- [ ] Tela de detalhe do shipment com todos os timestamps e PINs (mascarados).
+- [ ] Tela de detalhe do dependent_shipment com `pickup_code`, `delivery_code` e timestamps.
 - [ ] Lista filtrável de shipments por estágio (usar critérios da §8.1).
 - [ ] Lista de dependentes em trânsito.
 
@@ -489,7 +469,7 @@ Não há tabela `code_validation_logs`. Reconstruir histórico hoje exige cruzar
 - [ ] Visualização da timeline de cada handoff em ordem cronológica.
 
 ### Auditoria/Segurança (P2)
-- [x] Mascaramento + revelar (§10.1); auditoria de cada revelação ainda **não** implementada (§10.2).
+- [ ] Mascaramento + revelar com auditoria (§10).
 - [ ] Tabela `code_validation_logs` + integração nas RPCs.
 - [ ] Relatório diário/semanal de validações por base, por motorista, por preparador.
 
@@ -502,17 +482,16 @@ Não há tabela `code_validation_logs`. Reconstruir histórico hoje exige cruzar
 ## 13. Glossário
 
 - **PIN A**: `shipments.passenger_to_preparer_code` — handoff Passageiro → Preparador (etapas 1-3 do PDF cenário 3).
-- **PIN B**: `shipments.preparer_to_base_code` — preparador informa ao operador da base; **admin** valida no painel (etapas 6-8 do PDF, com UI Admin).
-- **PIN C**: `shipments.base_to_driver_code` — motorista informa ao operador da base; **admin** valida no painel (etapas 10-11).
+- **PIN B**: `shipments.preparer_to_base_code` — handoff Base → Preparador na entrega na base (etapas 6-8).
+- **PIN C**: `shipments.base_to_driver_code` — handoff Base → Motorista na retirada (etapas 10-11).
 - **PIN D**: `shipments.delivery_code` — handoff Motorista → Destinatário na entrega final (etapas 14-17).
 - **Handoff**: transferência física da encomenda/passageiro/dependente entre dois atores, validada pelo PIN correspondente.
 - **`complete_trip_stop`**: RPC que conclui uma parada de viagem combinada (motorista). Multi-cenário.
 - **`complete_shipment_passenger_to_preparer`**: RPC do passageiro (cenário 3, PIN A).
-- **`complete_shipment_preparer_to_base`**: RPC do preparador (cenário 3, PIN B) — fallback; preferir `complete_shipment_preparer_to_base_by_admin`.
-- **`complete_shipment_preparer_to_base_by_admin` / `complete_shipment_base_to_driver_by_admin`**: RPCs do operador Admin (PIN B e PIN C).
+- **`complete_shipment_preparer_to_base`**: RPC do preparador (cenário 3, PIN B).
 
 ---
 
-**Versão**: 1.2 — PIN B/C com validação no Admin; fallbacks nos apps motorista/preparador; apoio cenário 4 no Admin.
-**Última atualização**: 2026-04-30.
+**Versão**: 1.0 — gerada após adequação ao PDF "Sequência de Solicitação de Código".
+**Última atualização**: 2026-04-28.
 **Documentos relacionados**: [`admin-pin-recomendacoes.md`](./admin-pin-recomendacoes.md), [`Sequência de Solicitação de Código.pdf`](./Sequência%20de%20Solicitação%20de%20Código.pdf).

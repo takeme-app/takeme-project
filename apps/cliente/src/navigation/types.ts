@@ -1,4 +1,5 @@
 import type { NavigatorScreenParams } from '@react-navigation/native';
+import type { MainTabParamList } from './MainTabs';
 
 export type RootStackParamList = {
   Splash: undefined;
@@ -17,7 +18,7 @@ export type RootStackParamList = {
   AddPaymentMethod: undefined;
   AddCard: { paymentType: 'credit' | 'debit' };
   CardRegisteredSuccess: undefined;
-  Main: undefined;
+  Main: NavigatorScreenParams<MainTabParamList> | undefined;
   ForgotPassword: undefined;
   ForgotPasswordEmailSent: { email: string };
   /** Verificação do código de redefinição de senha por e-mail OU telefone (BR, só dígitos). */
@@ -66,6 +67,10 @@ export type ShipmentStackParamList = {
     destination: ShipmentPlaceParam;
     whenOption: 'now' | 'later';
     whenLabel?: string;
+    /** YYYY-MM-DD no fuso local; usado para filtrar viagens dos motoristas (alinhado ao fluxo de passageiro). */
+    scheduledDateId?: string;
+    /** Janela horária opcional quando o UI passar a enviar (ex.: slot string). */
+    scheduledTimeSlot?: string;
     packageSize: 'pequeno' | 'medio' | 'grande';
     packageSizeLabel: string;
   };
@@ -74,6 +79,8 @@ export type ShipmentStackParamList = {
     destination: ShipmentPlaceParam;
     whenOption: 'now' | 'later';
     whenLabel?: string;
+    scheduledDateId?: string;
+    scheduledTimeSlot?: string;
     packageSize: 'pequeno' | 'medio' | 'grande';
     packageSizeLabel: string;
     /** FK do trecho do catálogo (ou null quando veio de override do preparador). */
@@ -93,6 +100,8 @@ export type ShipmentStackParamList = {
     destination: ShipmentPlaceParam;
     whenOption: 'now' | 'later';
     whenLabel?: string;
+    scheduledDateId?: string;
+    scheduledTimeSlot?: string;
     packageSize: 'pequeno' | 'medio' | 'grande';
     packageSizeLabel: string;
     recipient: ShipmentRecipientParam;
@@ -135,6 +144,8 @@ export type DependentShipmentFormParams = {
   fullName: string;
   contactPhone: string;
   bagsCount: number;
+  /** Outras pessoas que embarcam na mesma corrida **com** o dependente (quem solicita não viaja). */
+  extraPassengers?: number;
   instructions?: string;
   dependentId?: string;
   photoUri?: string;
@@ -150,9 +161,12 @@ export type DependentShipmentStackParamList = {
     destination: ShipmentPlaceParam;
     whenOption: 'now' | 'later';
     whenLabel?: string;
+    scheduledDateId?: string;
+    scheduledTimeSlot?: string;
     fullName: string;
     contactPhone: string;
     bagsCount: number;
+    extraPassengers?: number;
     instructions?: string;
     dependentId?: string;
     photoUri?: string;
@@ -166,6 +180,7 @@ export type DependentShipmentStackParamList = {
     fullName: string;
     contactPhone: string;
     bagsCount: number;
+    extraPassengers?: number;
     instructions?: string;
     dependentId?: string;
     amountCents: number;

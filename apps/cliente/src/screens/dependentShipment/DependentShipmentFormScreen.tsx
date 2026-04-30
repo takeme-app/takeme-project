@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   View,
   TextInput,
@@ -18,6 +18,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import * as ImagePicker from 'expo-image-picker';
+import { dependentShipmentTotalPassengers, maxBagsForTrip } from '../../lib/tripCapacityLimits';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'DependentShipmentForm'>;
 
@@ -46,12 +47,21 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
   const [fullName, setFullName] = useState('');
   const [contactPhone, setContactPhone] = useState('');
-  const [bagsCount, setBagsCount] = useState(0);
+  const [bagsCount, setBagsCount] = useState(1);
+  /** Outras pessoas que embarcam no veículo com o dependente (titular não conta). */
+  const [extraPassengers, setExtraPassengers] = useState(0);
   const [instructions, setInstructions] = useState('');
   const [dependentId, setDependentId] = useState<string | undefined>(undefined);
   const [dependents, setDependents] = useState<Dependent[]>([]);
   const [loadingDependents, setLoadingDependents] = useState(true);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
+
+  const totalPassengers = dependentShipmentTotalPassengers(extraPassengers);
+  const maxBags = maxBagsForTrip(totalPassengers, null);
+
+  useEffect(() => {
+    setBagsCount((b) => Math.min(b, maxBags));
+  }, [maxBags]);
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -115,10 +125,15 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
       showAlert('Atenção', 'Preencha o contato com DDD e número (ex.: (00) 00000-0000).');
       return;
     }
+    if (bagsCount > totalPassengers) {
+      showAlert('Malas', 'O número de malas não pode ser maior que o de passageiros (1 mala por pessoa).');
+      return;
+    }
     navigation.navigate('DefineDependentTrip', {
       fullName: name,
       contactPhone: phoneDigits,
       bagsCount,
+      extraPassengers,
       instructions: instructions.trim() || undefined,
       dependentId,
       photoUri: photoUri ?? undefined,
@@ -185,6 +200,38 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
             keyboardType="phone-pad"
           />
 
+          <Text style={[styles.label, { marginTop: 8 }]}>Quem embarca na viagem</Text>
+          <Text style={styles.passengersExplain}>
+            Contamos apenas quem vai no veículo: o dependente e, se precisar, outras pessoas na mesma corrida com ele.
+            Você (quem solicita o envio) não embarca: não ocupa lugar nem aparece aqui.
+          </Text>
+          <View style={styles.compactStepperRow}>
+            <TouchableOpacity
+              style={[styles.compactStepperBtn, extraPassengers <= 0 && styles.stepperBtnDisabled]}
+              onPress={() => setExtraPassengers((n) => Math.max(0, n - 1))}
+              disabled={extraPassengers <= 0}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="remove" size={22} color={extraPassengers <= 0 ? COLORS.neutral700 : COLORS.black} />
+            </TouchableOpacity>
+            <Text style={styles.compactStepperValue}>
+              {extraPassengers === 0 ? 'Nenhum extra' : extraPassengers === 1 ? '1 acompanhante' : `${extraPassengers} acompanhantes`}
+            </Text>
+            <TouchableOpacity
+              style={styles.compactStepperBtn}
+              onPress={() => setExtraPassengers((n) => n + 1)}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="add" size={22} color={COLORS.black} />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.passengersMeta}>
+            Total embarcado(s): {totalPassengers}{' '}
+            {extraPassengers === 0
+              ? '(apenas o dependente).'
+              : `(dependente + ${extraPassengers} ${extraPassengers === 1 ? 'acompanhante' : 'acompanhantes'}).`}
+          </Text>
+
           <View style={styles.separator}>
             <View style={styles.separatorLine} />
           </View>
@@ -201,14 +248,17 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
               </TouchableOpacity>
               <Text style={styles.stepperValue}>{bagsCount} {bagsCount === 1 ? 'mala' : 'malas'}</Text>
               <TouchableOpacity
-                style={styles.stepperBtn}
-                onPress={() => setBagsCount((c) => c + 1)}
+                style={[styles.stepperBtn, bagsCount >= maxBags && styles.stepperBtnDisabled]}
+                onPress={() => setBagsCount((c) => Math.min(maxBags, c + 1))}
+                disabled={bagsCount >= maxBags}
                 activeOpacity={0.7}
               >
-                <MaterialIcons name="add" size={24} color={COLORS.black} />
+                <MaterialIcons name="add" size={24} color={bagsCount >= maxBags ? COLORS.neutral700 : COLORS.black} />
               </TouchableOpacity>
             </View>
-            <Text style={styles.stepperHint}>Inclua quantas malas o dependente levará</Text>
+            <Text style={styles.stepperHint}>
+              Até 1 mala por passageiro ({totalPassengers} no total); aqui no máximo {maxBags} mala(s). Ao escolher o motorista, o limite da viagem também se aplica.
+            </Text>
           </View>
           <View style={styles.separator}>
             <View style={styles.separatorLine} />
@@ -330,6 +380,24 @@ const styles = StyleSheet.create({
   chipSelected: { backgroundColor: COLORS.black },
   chipText: { fontSize: 14, color: COLORS.black },
   chipTextSelected: { color: '#FFF' },
+  passengersExplain: { fontSize: 13, color: COLORS.neutral700, marginBottom: 12, lineHeight: 18 },
+  compactStepperRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  compactStepperBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.neutral300,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  compactStepperValue: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '600', color: COLORS.black },
+  passengersMeta: { fontSize: 13, color: COLORS.neutral700, marginBottom: 8 },
   stepperWrap: { marginBottom: 20 },
   stepperRow: {
     flexDirection: 'row',

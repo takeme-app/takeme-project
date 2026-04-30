@@ -2,7 +2,6 @@ import {
   TouchableOpacity,
   View,
   StyleSheet,
-  Text,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
@@ -17,8 +16,6 @@ export type DriverLocationFocusButtonProps = {
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
   activeOpacity?: number;
-  label?: string;
-  accessibilityLabel?: string;
 };
 
 /**
@@ -31,22 +28,15 @@ export function DriverLocationFocusButton({
   disabled,
   style,
   activeOpacity = 0.8,
-  label,
-  accessibilityLabel,
 }: DriverLocationFocusButtonProps) {
   return (
     <TouchableOpacity
-      style={[
-        styles.wrap,
-        label ? styles.wrapWithLabel : null,
-        disabled ? styles.wrapDisabled : null,
-        style,
-      ]}
+      style={[styles.wrap, style]}
       onPress={onPress}
       disabled={disabled}
       activeOpacity={activeOpacity}
       accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel ?? 'Focar na minha localização'}
+      accessibilityLabel="Focar na minha localização"
     >
       <View style={styles.driverMarker}>
         <MaterialIcons
@@ -55,7 +45,6 @@ export function DriverLocationFocusButton({
           color="#fff"
         />
       </View>
-      {label ? <Text style={styles.label}>{label}</Text> : null}
     </TouchableOpacity>
   );
 }
@@ -67,24 +56,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',
-  },
-  wrapWithLabel: {
-    width: 'auto',
-    minWidth: 126,
-    paddingLeft: 4,
-    paddingRight: 14,
-    flexDirection: 'row',
-    gap: 8,
-    borderRadius: 23,
-    backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.18,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  wrapDisabled: {
-    opacity: 0.65,
   },
   driverMarker: {
     width: 38,
@@ -100,10 +71,5 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 5,
     elevation: 6,
-  },
-  label: {
-    color: DARK,
-    fontSize: 14,
-    fontWeight: '800',
   },
 });
